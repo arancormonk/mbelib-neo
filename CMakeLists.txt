@@ -242,6 +242,12 @@ install(FILES "${PROJECT_SOURCE_DIR}/include/mbelib-neo/mbelib.h"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/mbelib-neo)
 install(FILES "${MBELIB_GENERATED_INCLUDE_DIR}/mbelib-neo/version.h"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/mbelib-neo)
+install(FILES
+        "${PROJECT_SOURCE_DIR}/LICENSE"
+        "${PROJECT_SOURCE_DIR}/LICENSES/GPL-2.0-or-later.txt"
+        "${PROJECT_SOURCE_DIR}/LICENSES/ISC.txt"
+        "${PROJECT_SOURCE_DIR}/COPYRIGHT"
+        DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # Exported targets and CMake package config
 install(EXPORT mbe-neoTargets

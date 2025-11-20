@@ -19,6 +19,11 @@ or licensing requirements before compiling or using this source code.
 
 This notice is advisory and does not modify the license. See `LICENSE` for terms.
 
+## License
+
+- mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license.
+- Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `COPYRIGHT` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
+
 ## Overview
 
 - A performance‑enhanced fork of [lwvmobile/mbelib](https://github.com/lwvmobile/mbelib), which is a fork of [szechyjs/mbelib](https://github.com/szechyjs/mbelib)
@@ -250,5 +255,6 @@ cmake --build build --target docs
 
 ## License
 
-- Project license: GPL‑2.0‑or‑later (see `LICENSE`).
-- Portions remain under ISC per the original mbelib author (see `COPYRIGHT`).
+- Project license: GPL‑2.0‑or‑later (see `LICENSE` and `LICENSES/GPL-2.0-or-later.txt`).
+- Original mbelib sources were ISC; mbelib-neo redistributes them under GPL‑2.0‑or‑later with the original ISC text retained for attribution (see `COPYRIGHT` and `LICENSES/ISC.txt`).
+- Source files carry SPDX identifiers reflecting their license.
