@@ -10,3 +10,8 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Log files
+/logs/
+*.log
+*.out

@@ -168,7 +168,7 @@ mbe_decodeImbe4400Parms(char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     int intkl[57];
     int b0, b2, bm;
     float Cik[7][11], rho, flokl[57], deltal[57];
-    float Sum77, Tl[57], Gm[7], Ri[7], sum, c1, c2;
+    float Sum77, Tl[57] = {0.0f}, Gm[7], Ri[7], sum, c1, c2;
     const float *ba1, *ba2;
     char tmpstr[13];
     const int *bo1, *bo2;

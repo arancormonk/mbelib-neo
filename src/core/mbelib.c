@@ -1035,8 +1035,8 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
             float s_prev, c_prev;
             mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
             /* Precompute unvoiced oscillator steps for current (cw0) */
-            float sd_u[64], cd_u[64];
-            float su[64], cu[64];
+            float sd_u[64] = {0.0f}, cd_u[64] = {0.0f};
+            float su[64] = {0.0f}, cu[64] = {0.0f};
             const float base = (float)l - uvoffset;
             for (i = 0; i < uvquality; i++) {
                 float inc = cw0 * (base + ((float)i * uvstep));
@@ -1069,8 +1069,8 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
             float s_cur, c_cur;
             mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
             /* Precompute unvoiced oscillator steps for previous (pw0) */
-            float sd_u[64], cd_u[64];
-            float su[64], cu[64];
+            float sd_u[64] = {0.0f}, cd_u[64] = {0.0f};
+            float su[64] = {0.0f}, cu[64] = {0.0f};
             const float base = (float)l - uvoffset;
             for (i = 0; i < uvquality; i++) {
                 float inc = pw0 * (base + ((float)i * uvstep));
@@ -1144,8 +1144,8 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
                 rphase2[i] = mbe_rand_phase();
             }
             /* Precompute unvoiced oscillator steps for both prev (pw0) and cur (cw0) */
-            float sd_p[64], cd_p[64], sp[64], cp[64];
-            float sd_c[64], cd_c[64], sc[64], cc[64];
+            float sd_p[64] = {0.0f}, cd_p[64] = {0.0f}, sp[64] = {0.0f}, cp[64] = {0.0f};
+            float sd_c[64] = {0.0f}, cd_c[64] = {0.0f}, sc[64] = {0.0f}, cc[64] = {0.0f};
             const float base = (float)l - uvoffset;
             for (i = 0; i < uvquality; i++) {
                 float incp = pw0 * (base + ((float)i * uvstep));

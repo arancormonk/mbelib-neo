@@ -21,7 +21,7 @@ on:
 
 jobs:
   build-test:
-    needs: [format-check, clang-tidy]
+    needs: [format-check, clang-tidy, cppcheck]
     name: ${{ matrix.os }} • preset=${{ matrix.preset }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -39,7 +39,7 @@ jobs:
         run: ctest --preset ${{ matrix.preset }} -V
 
   sanitize-linux:
-    needs: [format-check, clang-tidy]
+    needs: [format-check, clang-tidy, cppcheck]
     name: linux • Debug • sanitizers
     runs-on: ubuntu-latest
     steps:
@@ -98,8 +98,24 @@ jobs:
           fi
           echo "clang-tidy clean for analyzer/bugprone checks."
 
+  cppcheck:
+    name: cppcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6.0.1
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          tools/cppcheck.sh
+
   install-and-consume:
-    needs: [format-check, clang-tidy]
+    needs: [format-check, clang-tidy, cppcheck]
     name: install + consume (pkg-config/CMake)
     runs-on: ${{ matrix.os }}
     strategy:
@@ -161,7 +177,7 @@ jobs:
           ./build/consumer
 
   install-and-consume-win:
-    needs: [format-check, clang-tidy]
+    needs: [format-check, clang-tidy, cppcheck]
     name: install + consume (CMake, Windows)
     runs-on: windows-latest
     steps:
