@@ -109,7 +109,7 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     int intkl[57];
     int b0, b1, b2, b3, b4, b5, b6, b7, b8;
     float f0, Cik[5][18], flokl[57], deltal[57];
-    float Sum42, Sum43, Tl[57], Gm[9], Ri[9], sum, c1, c2;
+    float Sum42, Sum43, Tl[57] = {0}, Gm[9], Ri[9], sum, c1, c2;
     int silence;
     int Ji[5], jl;
     float deltaGamma, BigGamma;
