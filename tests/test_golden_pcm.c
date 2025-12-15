@@ -63,8 +63,8 @@ main(void) {
      * back to deterministic and sanity checks so CI remains green.
      */
     /* Updated to match FFT-based unvoiced synthesis with JMBE algorithms */
-    const uint32_t X86_F32_FNV1A = 0xFBE82EC2u;
-    const uint32_t X86_S16_FNV1A = 0x7C309A12u;
+    const uint32_t X86_F32_FNV1A = 0x7605D48Du;
+    const uint32_t X86_S16_FNV1A = 0x6F2ADAE0u;
 
     float out_f[160];
     short out_s[160];
