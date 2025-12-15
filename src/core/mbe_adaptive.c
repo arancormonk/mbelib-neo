@@ -12,21 +12,12 @@
 #include <string.h>
 
 #include "mbe_adaptive.h"
+#include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Thread-local storage for comfort noise RNG to avoid cross-thread interference.
  * JMBE uses per-synthesizer Random instances; we use thread-local state instead. */
-#if defined(_MSC_VER)
-#define MBE_ADAPTIVE_THREAD_LOCAL __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#define MBE_ADAPTIVE_THREAD_LOCAL __thread
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
-#define MBE_ADAPTIVE_THREAD_LOCAL _Thread_local
-#else
-#error "No thread-local storage support available"
-#endif
-
-static MBE_ADAPTIVE_THREAD_LOCAL uint32_t mbe_comfort_noise_seed = 0x12345678u;
+static MBE_THREAD_LOCAL uint32_t mbe_comfort_noise_seed = 0x12345678u;
 
 /**
  * @brief Check if adaptive smoothing is required based on error rates.
@@ -38,7 +29,7 @@ static MBE_ADAPTIVE_THREAD_LOCAL uint32_t mbe_comfort_noise_seed = 0x12345678u;
  */
 int
 mbe_requiresAdaptiveSmoothing(const mbe_parms* mp) {
-    if (!mp) {
+    if (MBE_UNLIKELY(!mp)) {
         return 0;
     }
     return (mp->errorRate > MBE_ERROR_THRESHOLD_ENTRY) || (mp->errorCountTotal > 4);
@@ -55,7 +46,7 @@ mbe_requiresAdaptiveSmoothing(const mbe_parms* mp) {
  */
 int
 mbe_requiresMuting(const mbe_parms* mp) {
-    if (!mp) {
+    if (MBE_UNLIKELY(!mp)) {
         return 0;
     }
     return mp->errorRate > mp->mutingThreshold;
@@ -69,7 +60,7 @@ mbe_requiresMuting(const mbe_parms* mp) {
  */
 int
 mbe_isMaxFrameRepeat(const mbe_parms* mp) {
-    if (!mp) {
+    if (MBE_UNLIKELY(!mp)) {
         return 0;
     }
     return mp->repeatCount >= MBE_MAX_FRAME_REPEATS;
@@ -85,7 +76,7 @@ mbe_isMaxFrameRepeat(const mbe_parms* mp) {
  */
 void
 mbe_synthesizeComfortNoisef(float* aout_buf) {
-    if (!aout_buf) {
+    if (MBE_UNLIKELY(!aout_buf)) {
         return;
     }
 
@@ -130,7 +121,7 @@ mbe_synthesizeComfortNoisef(float* aout_buf) {
  */
 void
 mbe_synthesizeComfortNoise(short* aout_buf) {
-    if (!aout_buf) {
+    if (MBE_UNLIKELY(!aout_buf)) {
         return;
     }
 
@@ -165,7 +156,7 @@ mbe_synthesizeComfortNoise(short* aout_buf) {
  */
 void
 mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
-    if (!cur_mp || !prev_mp) {
+    if (MBE_UNLIKELY(!cur_mp || !prev_mp)) {
         return;
     }
 
@@ -192,8 +183,8 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
         cur_mp->localEnergy = MBE_MIN_LOCAL_ENERGY;
     }
 
-    /* Check if smoothing is required */
-    if (errorRate <= MBE_ERROR_THRESHOLD_ENTRY && errorTotal <= 4) {
+    /* Check if smoothing is required - usually not needed during clean reception */
+    if (MBE_LIKELY(errorRate <= MBE_ERROR_THRESHOLD_ENTRY && errorTotal <= 4)) {
         cur_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
         return; /* No smoothing needed */
     }

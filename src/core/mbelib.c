@@ -45,22 +45,13 @@
 #endif
 
 #include "mbe_adaptive.h"
+#include "mbe_compiler.h"
 #include "mbe_math.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 #include "mbelib_const.h"
 
 /* Thread-local PRNG state and helpers (xorshift32) */
-#if defined(_MSC_VER)
-#define MBE_THREAD_LOCAL __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#define MBE_THREAD_LOCAL __thread
-#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
-#define MBE_THREAD_LOCAL _Thread_local
-#else
-/* Fallback for non-C11 compilers: most support __thread as an extension */
-#define MBE_THREAD_LOCAL __thread
-#endif
 static MBE_THREAD_LOCAL uint32_t mbe_rng_state = 0x12345678u;
 
 /* Thread-local FFT plan for unvoiced synthesis */
@@ -72,9 +63,10 @@ static MBE_THREAD_LOCAL mbe_fft_plan* mbe_fft_plan_instance = NULL;
  */
 static mbe_fft_plan*
 mbe_get_fft_plan(void) {
-    if (!mbe_fft_plan_instance) {
-        mbe_fft_plan_instance = mbe_fft_plan_alloc();
+    if (MBE_LIKELY(mbe_fft_plan_instance != NULL)) {
+        return mbe_fft_plan_instance;
     }
+    mbe_fft_plan_instance = mbe_fft_plan_alloc();
     return mbe_fft_plan_instance;
 }
 
@@ -1058,7 +1050,7 @@ mbe_init_runtime_dispatch(void) {
 
 void
 mbe_floattoshort(float* restrict float_buf, short* restrict aout_buf) {
-    if (!mbe_floattoshort_impl) {
+    if (MBE_UNLIKELY(!mbe_floattoshort_impl)) {
         mbe_init_runtime_dispatch();
     }
     mbe_floattoshort_impl(float_buf, aout_buf);

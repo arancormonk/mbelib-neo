@@ -12,6 +12,7 @@
 
 #include "kiss_fft.h"
 #include "kiss_fftr.h"
+#include "mbe_compiler.h"
 #include "mbe_unvoiced_fft.h"
 
 #ifndef M_PI
@@ -44,6 +45,17 @@ static const float Ws_synthesis[211] = {
     0.700f, 0.680f, 0.660f, 0.640f, 0.620f, 0.600f, 0.580f, 0.560f, 0.540f, 0.520f, 0.500f, 0.480f, 0.460f, 0.440f,
     0.420f, 0.400f, 0.380f, 0.360f, 0.340f, 0.320f, 0.300f, 0.280f, 0.260f, 0.240f, 0.220f, 0.200f, 0.180f, 0.160f,
     0.140f, 0.120f, 0.100f, 0.080f, 0.060f, 0.040f, 0.020f, 0.000f};
+
+/**
+ * @brief Fast inline window lookup for hot paths.
+ *
+ * Directly indexes the window table without function call overhead.
+ * Caller must ensure n is in [-105, +105] for valid results.
+ */
+static inline float
+mbe_synthesisWindow_fast(int n) {
+    return Ws_synthesis[n + 105];
+}
 
 /**
  * @brief FFT plan structure wrapping KISS FFT configs.
@@ -99,8 +111,8 @@ mbe_synthesisWindow(int n) {
 }
 
 void
-mbe_generate_noise_lcg(float* buffer, int count, float* seed) {
-    if (!buffer || !seed) {
+mbe_generate_noise_lcg(float* restrict buffer, int count, float* restrict seed) {
+    if (MBE_UNLIKELY(!buffer || !seed)) {
         return;
     }
 
@@ -113,8 +125,8 @@ mbe_generate_noise_lcg(float* buffer, int count, float* seed) {
 }
 
 void
-mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap) {
-    if (!buffer || !seed || !overlap) {
+mbe_generate_noise_with_overlap(float* restrict buffer, float* restrict seed, float* restrict overlap) {
+    if (MBE_UNLIKELY(!buffer || !seed || !overlap)) {
         return;
     }
 
@@ -129,13 +141,14 @@ mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap) {
 }
 
 void
-mbe_wola_combine(float* output, const float* prevUw, const float* currUw, int N) {
-    if (!output || !prevUw || !currUw) {
+mbe_wola_combine(float* restrict output, const float* restrict prevUw, const float* restrict currUw, int N) {
+    if (MBE_UNLIKELY(!output || !prevUw || !currUw)) {
         return;
     }
 
     for (int n = 0; n < N; n++) {
-        /* Window positions relative to frame center */
+        /* Window positions relative to frame center
+         * Indices may be outside [-105, +105], use bounds-checked version */
         float w_prev = mbe_synthesisWindow(n);     /* w(n) for previous frame */
         float w_curr = mbe_synthesisWindow(n - N); /* w(n-160) for current frame */
 
@@ -149,12 +162,12 @@ mbe_wola_combine(float* output, const float* prevUw, const float* currUw, int N)
         float curr_sample = 0.0f;
 
         int prev_idx = n + 128;
-        if (prev_idx >= 0 && prev_idx < MBE_FFT_SIZE) {
+        if (MBE_LIKELY(prev_idx >= 0 && prev_idx < MBE_FFT_SIZE)) {
             prev_sample = prevUw[prev_idx];
         }
 
         int curr_idx = n + 128 - N; /* n - 32 for N=160 */
-        if (curr_idx >= 0 && curr_idx < MBE_FFT_SIZE) {
+        if (MBE_LIKELY(curr_idx >= 0 && curr_idx < MBE_FFT_SIZE)) {
             curr_sample = currUw[curr_idx];
         }
 
@@ -163,16 +176,16 @@ mbe_wola_combine(float* output, const float* prevUw, const float* currUw, int N)
         float w_curr_sq = w_curr * w_curr;
         float denom = w_prev_sq + w_curr_sq;
 
-        if (denom > 1e-10f) {
+        if (MBE_LIKELY(denom > 1e-10f)) {
             output[n] += ((w_prev * prev_sample) + (w_curr * curr_sample)) / denom;
         }
     }
 }
 
 void
-mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_fft_plan* plan,
-                                   const float* noise_buffer) {
-    if (!output || !cur_mp || !prev_mp || !plan || !noise_buffer) {
+mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict cur_mp, mbe_parms* restrict prev_mp,
+                                   mbe_fft_plan* restrict plan, const float* restrict noise_buffer) {
+    if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan || !noise_buffer)) {
         return;
     }
 
@@ -187,9 +200,13 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, mbe_parms* 
 
     /* Copy pre-generated noise buffer and apply synthesis window (Algorithm #118 prep)
      * Window is centered at sample 128, indices go from -128 to +127
+     * Use fast inline lookup - all indices are in valid range [-105, 105] after offset
      */
     for (int i = 0; i < MBE_FFT_SIZE; i++) {
-        Uw[i] = noise_buffer[i] * mbe_synthesisWindow(i - 128);
+        int win_idx = i - 128;
+        /* Indices outside [-105, +105] get zero from the window table edges */
+        float w = (win_idx >= -105 && win_idx <= 105) ? mbe_synthesisWindow_fast(win_idx) : 0.0f;
+        Uw[i] = noise_buffer[i] * w;
     }
 
     /* Algorithm #118: 256-point real FFT */
@@ -263,8 +280,9 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, mbe_parms* 
 }
 
 void
-mbe_synthesizeUnvoicedFFT(float* output, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_fft_plan* plan) {
-    if (!output || !cur_mp || !prev_mp || !plan) {
+mbe_synthesizeUnvoicedFFT(float* restrict output, mbe_parms* restrict cur_mp, mbe_parms* restrict prev_mp,
+                          mbe_fft_plan* restrict plan) {
+    if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan)) {
         return;
     }
 
