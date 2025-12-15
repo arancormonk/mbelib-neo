@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 1.0 LANGUAGES C)
+project(mbelib-neo VERSION 1.1 LANGUAGES C)
 
 # Language and build defaults
 set(CMAKE_C_STANDARD 99)
@@ -32,6 +32,12 @@ configure_file(
   @ONLY
 )
 
+# KISS FFT sources (bundled, BSD-3-Clause licensed)
+set(KISS_FFT_SOURCES
+  src/external/kiss_fft/kiss_fft.c
+  src/external/kiss_fft/kiss_fftr.c
+)
+
 # Explicit source list (avoids FILE(GLOB ...))
 set(MBELIB_SOURCES
   src/ambe/ambe3600x2400.c
@@ -42,6 +48,9 @@ set(MBELIB_SOURCES
   src/imbe/imbe7100x4400.c
   src/imbe/imbe7200x4400.c
   src/core/mbelib.c
+  src/core/mbe_adaptive.c
+  src/core/mbe_unvoiced_fft.c
+  ${KISS_FFT_SOURCES}
 )
 
 add_library(mbe-shared SHARED ${MBELIB_SOURCES})
@@ -60,6 +69,7 @@ target_include_directories(mbe-shared
   PRIVATE
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/src/internal
+    ${PROJECT_SOURCE_DIR}/src/external/kiss_fft
 )
 target_include_directories(mbe-static
   PUBLIC
@@ -69,6 +79,7 @@ target_include_directories(mbe-static
   PRIVATE
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/src/internal
+    ${PROJECT_SOURCE_DIR}/src/external/kiss_fft
 )
 
 # Mark static consumption for Windows to avoid dllimport decorations in headers

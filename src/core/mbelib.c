@@ -44,7 +44,9 @@
 #endif
 #endif
 
+#include "mbe_adaptive.h"
 #include "mbe_math.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 #include "mbelib_const.h"
 
@@ -61,6 +63,21 @@
 #endif
 static MBE_THREAD_LOCAL uint32_t mbe_rng_state = 0x12345678u;
 
+/* Thread-local FFT plan for unvoiced synthesis */
+static MBE_THREAD_LOCAL mbe_fft_plan* mbe_fft_plan_instance = NULL;
+
+/**
+ * @brief Get or create the thread-local FFT plan.
+ * @return FFT plan for unvoiced synthesis, or NULL on allocation failure.
+ */
+static mbe_fft_plan*
+mbe_get_fft_plan(void) {
+    if (!mbe_fft_plan_instance) {
+        mbe_fft_plan_instance = mbe_fft_plan_alloc();
+    }
+    return mbe_fft_plan_instance;
+}
+
 void
 mbe_setThreadRngSeed(uint32_t seed) {
     if (seed == 0u) {
@@ -72,7 +89,11 @@ mbe_setThreadRngSeed(uint32_t seed) {
 /**
  * @brief Thread-local xorshift32 PRNG step.
  * @return New 32-bit pseudo-random state value (never 0).
+ * @note Used for comfort noise generation (Box-Muller), not for unvoiced synthesis.
  */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
 static inline uint32_t
 mbe_xorshift32(void) {
     uint32_t x = mbe_rng_state;
@@ -81,278 +102,6 @@ mbe_xorshift32(void) {
     x ^= x << 5;
     mbe_rng_state = x ? x : 0x6d25357bu;
     return mbe_rng_state;
-}
-
-/**
- * @brief Generate a uniform float in [0, 1).
- * @return Pseudo-random float in [0, 1).
- */
-/** @internal @ingroup mbe_internal */
-static float
-mbe_rand(void) {
-    /* Map upper 24 bits to [0,1) */
-    return ((mbe_xorshift32() >> 8) * (1.0f / 16777216.0f));
-}
-
-/**
- * @brief Generate a pseudo-random phase in [-pi, +pi].
- * @return Random float in [-pi, +pi].
- */
-/** @internal @ingroup mbe_internal */
-static float
-mbe_rand_phase(void) {
-    return (mbe_rand() * (((float)M_PI) * 2.0F)) - ((float)M_PI);
-}
-
-/**
- * @brief Accumulate current unvoiced cosine components and advance states.
- *
- * Sums the current cosine terms over a bank of unvoiced oscillators for one
- * sample, adds scaled noise per oscillator when requested, and advances every
- * oscillator state by one step using a sine/cosine recurrence.
- *
- * @param c           In/out cosine register array (size >= count).
- * @param s           In/out sine register array (size >= count).
- * @param cd          Per-oscillator cos(Δθ) increments.
- * @param sd          Per-oscillator sin(Δθ) increments.
- * @param count       Number of oscillators.
- * @param noise_scale Additive random noise scale, 0 to disable.
- * @return Sum of cosine terms for the current sample.
- */
-/** @internal @ingroup mbe_internal */
-#if defined(MBELIB_STRICT_ORDER)
-static inline float
-mbe_unvoiced_mix_accum_update(float* restrict c, float* restrict s, const float* restrict cd, const float* restrict sd,
-                              int count, float noise_scale) {
-    float sum = 0.0f;
-    int i = 0;
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
-    for (; i + 3 < count; i += 4) {
-        __m128 vc = _mm_loadu_ps(c + i);
-        __m128 vs = _mm_loadu_ps(s + i);
-        __m128 vcd = _mm_loadu_ps(cd + i);
-        __m128 vsd = _mm_loadu_ps(sd + i);
-        /* accumulate current cosines before update */
-        float buf[4];
-        _mm_storeu_ps(buf, vc);
-        sum += buf[0] + buf[1] + buf[2] + buf[3];
-        /* advance oscillators */
-        __m128 cpn = _mm_sub_ps(_mm_mul_ps(vc, vcd), _mm_mul_ps(vs, vsd));
-        __m128 spn = _mm_add_ps(_mm_mul_ps(vs, vcd), _mm_mul_ps(vc, vsd));
-        _mm_storeu_ps(c + i, cpn);
-        _mm_storeu_ps(s + i, spn);
-        if (noise_scale != 0.0f) {
-            /* preserve RNG sequence: four scalar draws */
-            sum += noise_scale * mbe_rand();
-            sum += noise_scale * mbe_rand();
-            sum += noise_scale * mbe_rand();
-            sum += noise_scale * mbe_rand();
-        }
-    }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
-    for (; i + 3 < count; i += 4) {
-        float32x4_t vc = vld1q_f32(c + i);
-        float32x4_t vs = vld1q_f32(s + i);
-        float32x4_t vcd = vld1q_f32(cd + i);
-        float32x4_t vsd = vld1q_f32(sd + i);
-        float buf[4];
-        vst1q_f32(buf, vc);
-        sum += buf[0] + buf[1] + buf[2] + buf[3];
-        float32x4_t cpn = vsubq_f32(vmulq_f32(vc, vcd), vmulq_f32(vs, vsd));
-        float32x4_t spn = vaddq_f32(vmulq_f32(vs, vcd), vmulq_f32(vc, vsd));
-        vst1q_f32(c + i, cpn);
-        vst1q_f32(s + i, spn);
-        if (noise_scale != 0.0f) {
-            sum += noise_scale * mbe_rand();
-            sum += noise_scale * mbe_rand();
-            sum += noise_scale * mbe_rand();
-            sum += noise_scale * mbe_rand();
-        }
-    }
-#endif
-#endif /* MBELIB_ENABLE_SIMD */
-    /* scalar tail (or whole loop if SIMD not enabled) */
-    for (; i < count; ++i) {
-        sum += c[i];
-        if (noise_scale != 0.0f) {
-            sum += noise_scale * mbe_rand();
-        }
-        float cpn = (c[i] * cd[i]) - (s[i] * sd[i]);
-        float spn = (s[i] * cd[i]) + (c[i] * sd[i]);
-        c[i] = cpn;
-        s[i] = spn;
-    }
-    return sum;
-}
-#endif /* MBELIB_STRICT_ORDER */
-
-/**
- * @brief Compute four successive unvoiced sums and advance oscillator states.
- *
- * Produces four sums (one per successive sample) of the unvoiced cosine
- * oscillators and advances their states by four steps in total.
- *
- * When MBELIB_STRICT_ORDER is defined, preserves legacy sample-major noise
- * and accumulation ordering; otherwise, uses a faster oscillator-major path
- * (vectorized when available), with noise added after the math.
- *
- * @param c           In/out cosine registers (size >= count).
- * @param s           In/out sine registers   (size >= count).
- * @param cd          Per-oscillator cos(Δθ) increments.
- * @param sd          Per-oscillator sin(Δθ) increments.
- * @param count       Number of oscillators.
- * @param noise_scale Additive random noise scale, 0 to disable.
- * @param sums        Output four sums for the four samples (sums[0..3]).
- */
-/** @internal @ingroup mbe_internal */
-static inline void
-mbe_unvoiced_mix_block4(float* restrict c, float* restrict s, const float* restrict cd, const float* restrict sd,
-                        int count, float noise_scale, float sums[4]) {
-#if defined(MBELIB_STRICT_ORDER)
-    /* Preserve legacy sample-major RNG/accumulation order: 4 passes */
-    sums[0] = 0.0f;
-    sums[1] = 0.0f;
-    sums[2] = 0.0f;
-    sums[3] = 0.0f;
-    for (int t = 0; t < 4; ++t) {
-        sums[t] += mbe_unvoiced_mix_accum_update(c, s, cd, sd, count, noise_scale);
-    }
-#else
-    /* Oscillator-major: faster by processing 4 oscillators per SIMD vector */
-    float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
-    int i = 0;
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
-    __m128 vS0 = _mm_setzero_ps();
-    __m128 vS1 = _mm_setzero_ps();
-    __m128 vS2 = _mm_setzero_ps();
-    __m128 vS3 = _mm_setzero_ps();
-    for (; i + 3 < count; i += 4) {
-        __m128 vc = _mm_loadu_ps(c + i);
-        __m128 vs = _mm_loadu_ps(s + i);
-        const __m128 vcd = _mm_loadu_ps(cd + i);
-        const __m128 vsd = _mm_loadu_ps(sd + i);
-        /* sample 0 */
-        vS0 = _mm_add_ps(vS0, vc);
-        /* step -> sample 1 */
-        __m128 c1 = _mm_sub_ps(_mm_mul_ps(vc, vcd), _mm_mul_ps(vs, vsd));
-        __m128 s1 = _mm_add_ps(_mm_mul_ps(vs, vcd), _mm_mul_ps(vc, vsd));
-        vS1 = _mm_add_ps(vS1, c1);
-        /* step -> sample 2 */
-        __m128 c2 = _mm_sub_ps(_mm_mul_ps(c1, vcd), _mm_mul_ps(s1, vsd));
-        __m128 s2 = _mm_add_ps(_mm_mul_ps(s1, vcd), _mm_mul_ps(c1, vsd));
-        vS2 = _mm_add_ps(vS2, c2);
-        /* step -> sample 3 */
-        __m128 c3 = _mm_sub_ps(_mm_mul_ps(c2, vcd), _mm_mul_ps(s2, vsd));
-        __m128 s3 = _mm_add_ps(_mm_mul_ps(s2, vcd), _mm_mul_ps(c2, vsd));
-        vS3 = _mm_add_ps(vS3, c3);
-        /* step -> advance state to sample 4 and store */
-        __m128 c4 = _mm_sub_ps(_mm_mul_ps(c3, vcd), _mm_mul_ps(s3, vsd));
-        __m128 s4 = _mm_add_ps(_mm_mul_ps(s3, vcd), _mm_mul_ps(c3, vsd));
-        _mm_storeu_ps(c + i, c4);
-        _mm_storeu_ps(s + i, s4);
-    }
-    /* horizontal add */
-    float tmp[4];
-    _mm_storeu_ps(tmp, vS0);
-    sum0 += tmp[0] + tmp[1] + tmp[2] + tmp[3];
-    _mm_storeu_ps(tmp, vS1);
-    sum1 += tmp[0] + tmp[1] + tmp[2] + tmp[3];
-    _mm_storeu_ps(tmp, vS2);
-    sum2 += tmp[0] + tmp[1] + tmp[2] + tmp[3];
-    _mm_storeu_ps(tmp, vS3);
-    sum3 += tmp[0] + tmp[1] + tmp[2] + tmp[3];
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
-    float32x4_t vS0 = vdupq_n_f32(0.0f);
-    float32x4_t vS1 = vdupq_n_f32(0.0f);
-    float32x4_t vS2 = vdupq_n_f32(0.0f);
-    float32x4_t vS3 = vdupq_n_f32(0.0f);
-    for (; i + 3 < count; i += 4) {
-        float32x4_t vc = vld1q_f32(c + i);
-        float32x4_t vs = vld1q_f32(s + i);
-        const float32x4_t vcd = vld1q_f32(cd + i);
-        const float32x4_t vsd = vld1q_f32(sd + i);
-        /* sample 0 */
-        vS0 = vaddq_f32(vS0, vc);
-        /* step -> sample 1 */
-        float32x4_t c1 = vsubq_f32(vmulq_f32(vc, vcd), vmulq_f32(vs, vsd));
-        float32x4_t s1 = vaddq_f32(vmulq_f32(vs, vcd), vmulq_f32(vc, vsd));
-        vS1 = vaddq_f32(vS1, c1);
-        /* step -> sample 2 */
-        float32x4_t c2 = vsubq_f32(vmulq_f32(c1, vcd), vmulq_f32(s1, vsd));
-        float32x4_t s2 = vaddq_f32(vmulq_f32(s1, vcd), vmulq_f32(c1, vsd));
-        vS2 = vaddq_f32(vS2, c2);
-        /* step -> sample 3 */
-        float32x4_t c3 = vsubq_f32(vmulq_f32(c2, vcd), vmulq_f32(s2, vsd));
-        float32x4_t s3 = vaddq_f32(vmulq_f32(s2, vcd), vmulq_f32(c2, vsd));
-        vS3 = vaddq_f32(vS3, c3);
-        /* step -> advance state to sample 4 and store */
-        float32x4_t c4 = vsubq_f32(vmulq_f32(c3, vcd), vmulq_f32(s3, vsd));
-        float32x4_t s4 = vaddq_f32(vmulq_f32(s3, vcd), vmulq_f32(c3, vsd));
-        vst1q_f32(c + i, c4);
-        vst1q_f32(s + i, s4);
-    }
-    float32x4_t vtmp;
-    vtmp = vS0;
-    float tbuf0[4];
-    vst1q_f32(tbuf0, vtmp);
-    sum0 += tbuf0[0] + tbuf0[1] + tbuf0[2] + tbuf0[3];
-    vtmp = vS1;
-    float tbuf1[4];
-    vst1q_f32(tbuf1, vtmp);
-    sum1 += tbuf1[0] + tbuf1[1] + tbuf1[2] + tbuf1[3];
-    vtmp = vS2;
-    float tbuf2[4];
-    vst1q_f32(tbuf2, vtmp);
-    sum2 += tbuf2[0] + tbuf2[1] + tbuf2[2] + tbuf2[3];
-    vtmp = vS3;
-    float tbuf3[4];
-    vst1q_f32(tbuf3, vtmp);
-    sum3 += tbuf3[0] + tbuf3[1] + tbuf3[2] + tbuf3[3];
-#endif
-#endif /* MBELIB_ENABLE_SIMD */
-    /* scalar tail */
-    for (; i < count; ++i) {
-        float ci = c[i];
-        float si = s[i];
-        const float cdi = cd[i];
-        const float sdi = sd[i];
-        sum0 += ci;
-        float c1 = (ci * cdi) - (si * sdi);
-        float s1 = (si * cdi) + (ci * sdi);
-        sum1 += c1;
-        float c2 = (c1 * cdi) - (s1 * sdi);
-        float s2 = (s1 * cdi) + (c1 * sdi);
-        sum2 += c2;
-        float c3 = (c2 * cdi) - (s2 * sdi);
-        float s3 = (s2 * cdi) + (c2 * sdi);
-        sum3 += c3;
-        float c4 = (c3 * cdi) - (s3 * sdi);
-        float s4 = (s3 * cdi) + (c3 * sdi);
-        c[i] = c4;
-        s[i] = s4;
-    }
-    /* add noise contributions after math (different deterministic sequence) */
-    if (noise_scale != 0.0f) {
-        for (int k = 0; k < count; ++k) {
-            sum0 += noise_scale * mbe_rand();
-        }
-        for (int k = 0; k < count; ++k) {
-            sum1 += noise_scale * mbe_rand();
-        }
-        for (int k = 0; k < count; ++k) {
-            sum2 += noise_scale * mbe_rand();
-        }
-        for (int k = 0; k < count; ++k) {
-            sum3 += noise_scale * mbe_rand();
-        }
-    }
-    sums[0] = sum0;
-    sums[1] = sum1;
-    sums[2] = sum2;
-    sums[3] = sum3;
-#endif /* MBELIB_STRICT_ORDER */
 }
 
 /*
@@ -395,7 +144,7 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
     __m128 vC = _mm_loadu_ps(cblk);
     __m128 vW = _mm_loadu_ps(W);
-    __m128 vA = _mm_set1_ps(amp);
+    __m128 vA = _mm_set1_ps(2.0f * amp); /* JMBE multiplies voiced output by 2.0 */
     __m128 vS = _mm_loadu_ps(Ss);
     vS = _mm_add_ps(vS, _mm_mul_ps(_mm_mul_ps(vC, vW), vA));
     _mm_storeu_ps(Ss, vS);
@@ -403,18 +152,18 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
     float32x4_t vC = vld1q_f32(cblk);
     float32x4_t vW = vld1q_f32(W);
-    float32x4_t vA = vdupq_n_f32(amp);
+    float32x4_t vA = vdupq_n_f32(2.0f * amp); /* JMBE multiplies voiced output by 2.0 */
     float32x4_t vS = vld1q_f32(Ss);
     vS = vaddq_f32(vS, vmulq_f32(vmulq_f32(vC, vW), vA));
     vst1q_f32(Ss, vS);
     return;
 #endif
 #endif
-    /* scalar fallback */
-    Ss[0] += W[0] * amp * cblk[0];
-    Ss[1] += W[1] * amp * cblk[1];
-    Ss[2] += W[2] * amp * cblk[2];
-    Ss[3] += W[3] * amp * cblk[3];
+    /* scalar fallback (JMBE multiplies voiced output by 2.0) */
+    Ss[0] += 2.0f * W[0] * amp * cblk[0];
+    Ss[1] += 2.0f * W[1] * amp * cblk[1];
+    Ss[2] += 2.0f * W[2] * amp * cblk[2];
+    Ss[3] += 2.0f * W[3] * amp * cblk[3];
 }
 
 /**
@@ -461,6 +210,22 @@ mbe_moveMbeParms(mbe_parms* in, mbe_parms* out) {
         out->PHIl[l] = in->PHIl[l];
         out->PSIl[l] = in->PSIl[l];
     }
+
+    /* Copy adaptive smoothing state */
+    out->localEnergy = in->localEnergy;
+    out->amplitudeThreshold = in->amplitudeThreshold;
+    out->errorRate = in->errorRate;
+    out->errorCountTotal = in->errorCountTotal;
+    out->errorCount4 = in->errorCount4;
+
+    /* Copy frame repeat state */
+    out->repeatCount = in->repeatCount;
+    out->mutingThreshold = in->mutingThreshold;
+
+    /* Copy FFT-based unvoiced synthesis state */
+    out->noiseSeed = in->noiseSeed;
+    memcpy(out->noiseOverlap, in->noiseOverlap, sizeof(out->noiseOverlap));
+    memcpy(out->previousUw, in->previousUw, sizeof(out->previousUw));
 }
 
 /**
@@ -486,6 +251,22 @@ mbe_useLastMbeParms(mbe_parms* out, mbe_parms* in) {
         out->PHIl[l] = in->PHIl[l];
         out->PSIl[l] = in->PSIl[l];
     }
+
+    /* Copy adaptive smoothing state */
+    out->localEnergy = in->localEnergy;
+    out->amplitudeThreshold = in->amplitudeThreshold;
+    out->errorRate = in->errorRate;
+    out->errorCountTotal = in->errorCountTotal;
+    out->errorCount4 = in->errorCount4;
+
+    /* Copy frame repeat state */
+    out->repeatCount = in->repeatCount;
+    out->mutingThreshold = in->mutingThreshold;
+
+    /* Copy FFT-based unvoiced synthesis state */
+    out->noiseSeed = in->noiseSeed;
+    memcpy(out->noiseOverlap, in->noiseOverlap, sizeof(out->noiseOverlap));
+    memcpy(out->previousUw, in->previousUw, sizeof(out->previousUw));
 }
 
 /**
@@ -511,6 +292,25 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
         prev_mp->PSIl[l] = (M_PI / (float)2);
     }
     prev_mp->repeat = 0;
+
+    /* Initialize adaptive smoothing state */
+    prev_mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
+    prev_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+    prev_mp->errorRate = 0.0f;
+    prev_mp->errorCountTotal = 0;
+    prev_mp->errorCount4 = 0;
+
+    /* Initialize frame repeat state */
+    prev_mp->repeatCount = 0;
+    prev_mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
+
+    /* Initialize FFT-based unvoiced synthesis state
+     * Use fixed seed matching JMBE's MBENoiseSequenceGenerator (mSample = 3147).
+     * The LCG state persists in mbe_parms and advances naturally per frame. */
+    prev_mp->noiseSeed = MBE_LCG_DEFAULT_SEED;
+    memset(prev_mp->noiseOverlap, 0, sizeof(prev_mp->noiseOverlap));
+    memset(prev_mp->previousUw, 0, sizeof(prev_mp->previousUw));
+
     mbe_moveMbeParms(prev_mp, cur_mp);
     mbe_moveMbeParms(prev_mp, prev_mp_enhanced);
 }
@@ -933,50 +733,46 @@ mbe_synthesizeSilence(short* aout_buf) {
 
 /**
  * @brief Synthesize one speech frame into 160 float samples at 8 kHz.
+ *
+ * Uses FFT-based unvoiced synthesis (JMBE Algorithms #117-126) for
+ * high-quality unvoiced audio with proper WOLA frame blending.
+ *
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Unvoiced synthesis quality (ignored, kept for API compatibility).
  */
+/* JMBE-compatible white noise scalar for phase calculation: 2*PI / 53125 */
+#define MBE_WHITE_NOISE_SCALAR (2.0f * (float)M_PI / 53125.0f)
+
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
 
-    int i, l, n, maxl;
-    float *Ss, loguvquality;
+    int l, n, maxl;
+    float* Ss;
     int numUv;
     float cw0, pw0, cw0l, pw0l;
-    float uvsine, uvrand, uvthreshold, uvthresholdf;
-    float uvstep, uvoffset;
-    float qfactor;
-    float rphase[64], rphase2[64];
 
     const int N = 160;
 
-    uvthresholdf = (float)2700;
-    uvthreshold = ((uvthresholdf * M_PI) / (float)4000);
+    /* Silence unused parameter warning - uvquality is kept for API compatibility */
+    (void)uvquality;
 
-    // voiced/unvoiced/gain settings
-    uvsine = (float)1.3591409 * M_E;
-    uvrand = (float)2.0;
-
-    if ((uvquality < 1) || (uvquality > 64)) {
-        fprintf(stderr, "\nmbelib: Error - uvquality must be within the range 1 - 64, setting to default value of 3\n");
-        uvquality = 3;
+    /* Frame muting: generate comfort noise if error rate too high or max repeats exceeded */
+    if (mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp)) {
+        mbe_synthesizeComfortNoisef(aout_buf);
+        /* Copy state from previous frame for potential recovery */
+        mbe_useLastMbeParms(cur_mp, prev_mp);
+        cur_mp->repeatCount = 0; /* Reset repeat count after muting */
+        return;
     }
 
-    // calculate loguvquality
-    if (uvquality == 1) {
-        loguvquality = (float)1 / M_E;
-    } else {
-        loguvquality = logf((float)uvquality) / (float)uvquality;
-    }
+    /* Algorithm #117: Generate 256 white noise samples FIRST (JMBE-compatible)
+     * This buffer is used for both phase calculation and unvoiced synthesis */
+    float noise_buffer[256];
+    mbe_generate_noise_with_overlap(noise_buffer, &cur_mp->noiseSeed, cur_mp->noiseOverlap);
 
-    // calculate unvoiced step and offset values
-    uvstep = (float)1.0 / (float)uvquality;
-    qfactor = loguvquality;
-    uvoffset = (uvstep * (float)(uvquality - 1)) / (float)2;
-
-    // count number of unvoiced bands
+    /* Count number of unvoiced bands */
     numUv = 0;
     for (l = 1; l <= cur_mp->L; l++) {
         if (cur_mp->Vl[l] == 0) {
@@ -987,191 +783,124 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     cw0 = cur_mp->w0;
     pw0 = prev_mp->w0;
 
-    // init aout_buf
-    Ss = aout_buf;
-    for (n = 0; n < N; n++) {
-        *Ss = (float)0;
-        Ss++;
-    }
+    /* Initialize output buffer to zero */
+    memset(aout_buf, 0, N * sizeof(float));
 
-    // eq 128 and 129
+    /* Apply adaptive smoothing (Algorithms #111-116)
+     * JMBE-compatible: Always call to track local energy even if smoothing isn't needed.
+     * The function will return early after updating energy if smoothing is not required. */
+    mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
+
+    /* eq 128 and 129: Handle different L values between frames */
     if (cur_mp->L > prev_mp->L) {
         maxl = cur_mp->L;
         for (l = prev_mp->L + 1; l <= maxl; l++) {
-            prev_mp->Ml[l] = (float)0;
+            prev_mp->Ml[l] = 0.0f;
             prev_mp->Vl[l] = 1;
         }
     } else {
         maxl = prev_mp->L;
         for (l = cur_mp->L + 1; l <= maxl; l++) {
-            cur_mp->Ml[l] = (float)0;
+            cur_mp->Ml[l] = 0.0f;
             cur_mp->Vl[l] = 1;
         }
     }
 
-    // update phil from eq 139,140
+    /* Update phase from eq 139, 140
+     * JMBE-compatible: use noise_buffer[l] for phase randomization instead of separate RNG */
     for (l = 1; l <= 56; l++) {
-        cur_mp->PSIl[l] = prev_mp->PSIl[l] + ((pw0 + cw0) * ((float)(l * N) / (float)2));
+        cur_mp->PSIl[l] = prev_mp->PSIl[l] + ((pw0 + cw0) * ((float)(l * N) / 2.0f));
         if (l <= (cur_mp->L / 4)) {
             cur_mp->PHIl[l] = cur_mp->PSIl[l];
         } else {
-            cur_mp->PHIl[l] = cur_mp->PSIl[l] + ((numUv * mbe_rand_phase()) / cur_mp->L);
+            /* JMBE Algorithm #140: Use noise sample for phase jitter
+             * pl = (2*PI/53125) * u[l] - PI maps noise to [-PI, +PI] */
+            float pl = (MBE_WHITE_NOISE_SCALAR * noise_buffer[l]) - (float)M_PI;
+            cur_mp->PHIl[l] = cur_mp->PSIl[l] + (((float)numUv * pl) / (float)cur_mp->L);
         }
     }
 
+    /* Synthesize voiced components
+     * Use phase/amplitude interpolation (Algorithms #134-138) for low harmonics
+     * when pitch is stable, otherwise use windowed oscillator approach
+     */
     for (l = 1; l <= maxl; l++) {
-        cw0l = (cw0 * (float)l);
-        pw0l = (pw0 * (float)l);
-        if ((cur_mp->Vl[l] == 0) && (prev_mp->Vl[l] == 1)) {
-            Ss = aout_buf;
-            // init random phase
-            for (i = 0; i < uvquality; i++) {
-                rphase[i] = mbe_rand_phase();
-            }
-            /* Recurrence for voiced (prev) component */
-            const float amp_prev = prev_mp->Ml[l];
-            float sd_prev, cd_prev;
-            mbe_sincosf(pw0l, &sd_prev, &cd_prev);
-            float s_prev, c_prev;
-            mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
-            /* Precompute unvoiced oscillator steps for current (cw0) */
-            float sd_u[64] = {0.0f}, cd_u[64] = {0.0f};
-            float su[64] = {0.0f}, cu[64] = {0.0f};
-            const float base = (float)l - uvoffset;
-            for (i = 0; i < uvquality; i++) {
-                float inc = cw0 * (base + ((float)i * uvstep));
-                mbe_sincosf(inc, &sd_u[i], &cd_u[i]);
-                mbe_sincosf(rphase[i], &su[i], &cu[i]);
-            }
-            const float noise_c = (cw0l > uvthreshold) ? ((cw0l - uvthreshold) * uvrand) : 0.0f;
-            for (n = 0; n < N; n += 4) {
-                /* add 4-sample voiced block (prev) */
-                mbe_add_voiced_block4(Ss, Ws + n + N, amp_prev, &c_prev, &s_prev, sd_prev, cd_prev);
-                /* unvoiced 4-sample block */
-                float sumu[4];
-                mbe_unvoiced_mix_block4(cu, su, cd_u, sd_u, uvquality, noise_c, sumu);
-                Ss[0] += (uvsine * Ws[n + 0] * cur_mp->Ml[l] * qfactor) * sumu[0];
-                Ss[1] += (uvsine * Ws[n + 1] * cur_mp->Ml[l] * qfactor) * sumu[1];
-                Ss[2] += (uvsine * Ws[n + 2] * cur_mp->Ml[l] * qfactor) * sumu[2];
-                Ss[3] += (uvsine * Ws[n + 3] * cur_mp->Ml[l] * qfactor) * sumu[3];
-                Ss += 4;
-            }
-        } else if ((cur_mp->Vl[l] == 1) && (prev_mp->Vl[l] == 0)) {
-            Ss = aout_buf;
-            // init random phase
-            for (i = 0; i < uvquality; i++) {
-                rphase[i] = mbe_rand_phase();
-            }
-            /* Recurrence for voiced (current) component */
-            const float amp_cur = cur_mp->Ml[l];
-            float sd_cur, cd_cur;
-            mbe_sincosf(cw0l, &sd_cur, &cd_cur);
-            float s_cur, c_cur;
-            mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
-            /* Precompute unvoiced oscillator steps for previous (pw0) */
-            float sd_u[64] = {0.0f}, cd_u[64] = {0.0f};
-            float su[64] = {0.0f}, cu[64] = {0.0f};
-            const float base = (float)l - uvoffset;
-            for (i = 0; i < uvquality; i++) {
-                float inc = pw0 * (base + ((float)i * uvstep));
-                mbe_sincosf(inc, &sd_u[i], &cd_u[i]);
-                mbe_sincosf(rphase[i], &su[i], &cu[i]);
-            }
-            const float noise_p = (pw0l > uvthreshold) ? ((pw0l - uvthreshold) * uvrand) : 0.0f;
-            for (n = 0; n < N; n += 4) {
-                /* add 4-sample voiced block (cur) */
-                mbe_add_voiced_block4(Ss, Ws + n, amp_cur, &c_cur, &s_cur, sd_cur, cd_cur);
-                /* unvoiced 4-sample block (prev) */
-                float sumu[4];
-                mbe_unvoiced_mix_block4(cu, su, cd_u, sd_u, uvquality, noise_p, sumu);
-                Ss[0] += (uvsine * Ws[n + 0 + N] * prev_mp->Ml[l] * qfactor) * sumu[0];
-                Ss[1] += (uvsine * Ws[n + 1 + N] * prev_mp->Ml[l] * qfactor) * sumu[1];
-                Ss[2] += (uvsine * Ws[n + 2 + N] * prev_mp->Ml[l] * qfactor) * sumu[2];
-                Ss[3] += (uvsine * Ws[n + 3 + N] * prev_mp->Ml[l] * qfactor) * sumu[3];
-                Ss += 4;
+        cw0l = cw0 * (float)l;
+        pw0l = pw0 * (float)l;
+
+        /* Check if this band has any voiced component */
+        int cur_voiced = (cur_mp->Vl[l] == 1);
+        int prev_voiced = (prev_mp->Vl[l] == 1);
+
+        if (cur_voiced || prev_voiced) {
+            /* Use interpolation for low harmonics (l < 8) with stable pitch
+             * This produces smoother transitions per JMBE Algorithms #134-138 */
+            int use_interpolation = (l < 8) && cur_voiced && prev_voiced && (fabsf(cw0 - pw0) < (0.1f * cw0));
+
+            if (use_interpolation) {
+                Ss = aout_buf;
+
+                /* Algorithm #137: Phase deviation */
+                float deltaphil = cur_mp->PHIl[l] - prev_mp->PHIl[l] - (((pw0 + cw0) * (float)(l * N)) / 2.0f);
+
+                /* Algorithm #138: Phase deviation rate (wrap to [-pi, pi]) */
+                float deltawl =
+                    (1.0f / (float)N)
+                    * (deltaphil - (2.0f * (float)M_PI * floorf((deltaphil + (float)M_PI) / (2.0f * (float)M_PI))));
+
+                for (n = 0; n < N; n++) {
+                    /* Algorithm #136: Phase function with quadratic frequency interpolation */
+                    float thetaln = prev_mp->PHIl[l] + ((pw0l + deltawl) * (float)n)
+                                    + (((cw0 - pw0) * (float)(l * n * n)) / (float)(2 * N));
+
+                    /* Algorithm #135: Linear amplitude interpolation */
+                    float aln = prev_mp->Ml[l] + (((float)n / (float)N) * (cur_mp->Ml[l] - prev_mp->Ml[l]));
+
+                    /* Algorithm #134: Synthesize sample (JMBE multiplies by 2.0) */
+                    *Ss += 2.0f * aln * cosf(thetaln);
+                    Ss++;
+                }
+            } else {
+                /* Windowed oscillator approach for higher harmonics or pitch changes */
+                Ss = aout_buf;
+
+                /* Synthesize previous voiced component (fading out) */
+                if (prev_voiced) {
+                    const float amp_prev = prev_mp->Ml[l];
+                    float sd_prev, cd_prev;
+                    mbe_sincosf(pw0l, &sd_prev, &cd_prev);
+                    float s_prev, c_prev;
+                    mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
+
+                    for (n = 0; n < N; n += 4) {
+                        mbe_add_voiced_block4(Ss, Ws + n + N, amp_prev, &c_prev, &s_prev, sd_prev, cd_prev);
+                        Ss += 4;
+                    }
+                }
+
+                /* Synthesize current voiced component (fading in) */
+                if (cur_voiced) {
+                    Ss = aout_buf;
+                    const float amp_cur = cur_mp->Ml[l];
+                    float sd_cur, cd_cur;
+                    mbe_sincosf(cw0l, &sd_cur, &cd_cur);
+                    float s_cur, c_cur;
+                    mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
+
+                    for (n = 0; n < N; n += 4) {
+                        mbe_add_voiced_block4(Ss, Ws + n, amp_cur, &c_cur, &s_cur, sd_cur, cd_cur);
+                        Ss += 4;
+                    }
+                }
             }
         }
-        //      else if (((cur_mp->Vl[l] == 1) || (prev_mp->Vl[l] == 1)) && ((l >= 8) || (fabsf (cw0 - pw0) >= ((float) 0.1 * cw0))))
-        else if ((cur_mp->Vl[l] == 1) || (prev_mp->Vl[l] == 1)) {
-            Ss = aout_buf;
-            const float amp_prev = prev_mp->Ml[l];
-            const float amp_cur = cur_mp->Ml[l];
-            float sd_prev, cd_prev;
-            mbe_sincosf(pw0l, &sd_prev, &cd_prev);
-            float sd_cur, cd_cur;
-            mbe_sincosf(cw0l, &sd_cur, &cd_cur);
-            float s_prev, c_prev;
-            mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
-            float s_cur, c_cur;
-            mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
-            for (n = 0; n < N; n += 4) {
-                /* voiced prev */
-                mbe_add_voiced_block4(Ss, Ws + n + N, amp_prev, &c_prev, &s_prev, sd_prev, cd_prev);
-                /* voiced cur (additive) */
-                mbe_add_voiced_block4(Ss, Ws + n, amp_cur, &c_cur, &s_cur, sd_cur, cd_cur);
-                Ss += 4;
-            }
-        }
-        /*
-      // Alternate phase/amplitude interpolation path (disabled for performance)
-      else if ((cur_mp->Vl[l] == 1) || (prev_mp->Vl[l] == 1))
-        {
-          Ss = aout_buf;
-          // eq 137
-          deltaphil = cur_mp->PHIl[l] - prev_mp->PHIl[l] - (((pw0 + cw0) * (float) (l * N)) / (float) 2);
-          // eq 138
-          deltawl = ((float) 1 / (float) N) * (deltaphil - ((float) 2 * M_PI * (int) ((deltaphil + M_PI) / (M_PI * (float) 2))));
-          for (n = 0; n < N; n++)
-            {
-              // eq 136
-              thetaln = prev_mp->PHIl[l] + ((pw0l + deltawl) * (float) n) + (((cw0 - pw0) * ((float) (l * n * n)) / (float) (2 * N)));
-              // eq 135
-              aln = prev_mp->Ml[l] + (((float) n / (float) N) * (cur_mp->Ml[l] - prev_mp->Ml[l]));
-              // eq 134
-              *Ss = *Ss + (aln * cosf (thetaln));
-              Ss++;
-            }
-        }
-*/
-        else {
-            Ss = aout_buf;
-            // init random phase
-            for (i = 0; i < uvquality; i++) {
-                rphase[i] = mbe_rand_phase();
-            }
-            // init random phase
-            for (i = 0; i < uvquality; i++) {
-                rphase2[i] = mbe_rand_phase();
-            }
-            /* Precompute unvoiced oscillator steps for both prev (pw0) and cur (cw0) */
-            float sd_p[64] = {0.0f}, cd_p[64] = {0.0f}, sp[64] = {0.0f}, cp[64] = {0.0f};
-            float sd_c[64] = {0.0f}, cd_c[64] = {0.0f}, sc[64] = {0.0f}, cc[64] = {0.0f};
-            const float base = (float)l - uvoffset;
-            for (i = 0; i < uvquality; i++) {
-                float incp = pw0 * (base + ((float)i * uvstep));
-                mbe_sincosf(incp, &sd_p[i], &cd_p[i]);
-                mbe_sincosf(rphase[i], &sp[i], &cp[i]);
-                float incc = cw0 * (base + ((float)i * uvstep));
-                mbe_sincosf(incc, &sd_c[i], &cd_c[i]);
-                mbe_sincosf(rphase2[i], &sc[i], &cc[i]);
-            }
-            const float noise_p = (pw0l > uvthreshold) ? ((pw0l - uvthreshold) * uvrand) : 0.0f;
-            const float noise_c = (cw0l > uvthreshold) ? ((cw0l - uvthreshold) * uvrand) : 0.0f;
-            for (n = 0; n < N; n += 4) {
-                float sump[4], sumc[4];
-                mbe_unvoiced_mix_block4(cp, sp, cd_p, sd_p, uvquality, noise_p, sump);
-                mbe_unvoiced_mix_block4(cc, sc, cd_c, sd_c, uvquality, noise_c, sumc);
-                Ss[0] += (uvsine * Ws[n + 0 + N] * prev_mp->Ml[l] * qfactor) * sump[0]
-                         + (uvsine * Ws[n + 0] * cur_mp->Ml[l] * qfactor) * sumc[0];
-                Ss[1] += (uvsine * Ws[n + 1 + N] * prev_mp->Ml[l] * qfactor) * sump[1]
-                         + (uvsine * Ws[n + 1] * cur_mp->Ml[l] * qfactor) * sumc[1];
-                Ss[2] += (uvsine * Ws[n + 2 + N] * prev_mp->Ml[l] * qfactor) * sump[2]
-                         + (uvsine * Ws[n + 2] * cur_mp->Ml[l] * qfactor) * sumc[2];
-                Ss[3] += (uvsine * Ws[n + 3 + N] * prev_mp->Ml[l] * qfactor) * sump[3]
-                         + (uvsine * Ws[n + 3] * cur_mp->Ml[l] * qfactor) * sumc[3];
-                Ss += 4;
-            }
-        }
+    }
+
+    /* Synthesize unvoiced components using FFT method (JMBE Algorithms #117-126)
+     * Use the same noise buffer that was used for phase calculation */
+    mbe_fft_plan* plan = mbe_get_fft_plan();
+    if (plan) {
+        mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
     }
 }
 
@@ -1207,19 +936,21 @@ mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int
 #if defined(MBELIB_ENABLE_SIMD)
 static void
 mbe_floattoshort_scalar(float* restrict float_buf, short* restrict aout_buf) {
+    /* JMBE-compatible soft clipping at 95% of maximum amplitude */
     const float again = 7.0f;
+    const float max_amplitude = 32767.0f * 0.95f; /* ~31128.65 */
     for (int i = 0; i < 160; i++) {
         float audio = again * float_buf[i];
-        if (audio > 32760.0f) {
+        if (audio > max_amplitude) {
 #ifdef MBE_DEBUG
             fprintf(stderr, "audio clip: %f\n", audio);
 #endif
-            audio = 32760.0f;
-        } else if (audio < -32760.0f) {
+            audio = max_amplitude;
+        } else if (audio < -max_amplitude) {
 #ifdef MBE_DEBUG
             fprintf(stderr, "audio clip: %f\n", audio);
 #endif
-            audio = -32760.0f;
+            audio = -max_amplitude;
         }
         aout_buf[i] = (short)(audio);
     }
@@ -1231,9 +962,10 @@ mbe_floattoshort_scalar(float* restrict float_buf, short* restrict aout_buf) {
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
 static void
 mbe_floattoshort_sse2(float* restrict float_buf, short* restrict aout_buf) {
+    /* JMBE-compatible soft clipping at 95% of maximum amplitude */
     const __m128 vscale = _mm_set1_ps(7.0f);
-    const __m128 vmaxv = _mm_set1_ps(32760.0f);
-    const __m128 vminv = _mm_set1_ps(-32760.0f);
+    const __m128 vmaxv = _mm_set1_ps(32767.0f * 0.95f);
+    const __m128 vminv = _mm_set1_ps(-32767.0f * 0.95f);
     for (int i = 0; i < 160; i += 8) {
         __m128 a = _mm_mul_ps(_mm_loadu_ps(float_buf + i), vscale);
         __m128 b = _mm_mul_ps(_mm_loadu_ps(float_buf + i + 4), vscale);
@@ -1253,9 +985,10 @@ mbe_floattoshort_sse2(float* restrict float_buf, short* restrict aout_buf) {
 #if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
 static void
 mbe_floattoshort_neon(float* restrict float_buf, short* restrict aout_buf) {
+    /* JMBE-compatible soft clipping at 95% of maximum amplitude */
     const float32x4_t vscale = vdupq_n_f32(7.0f);
-    const float32x4_t vmaxv = vdupq_n_f32(32760.0f);
-    const float32x4_t vminv = vdupq_n_f32(-32760.0f);
+    const float32x4_t vmaxv = vdupq_n_f32(32767.0f * 0.95f);
+    const float32x4_t vminv = vdupq_n_f32(-32767.0f * 0.95f);
     for (int i = 0; i < 160; i += 8) {
         float32x4_t a = vmulq_f32(vld1q_f32(float_buf + i), vscale);
         float32x4_t b = vmulq_f32(vld1q_f32(float_buf + i + 4), vscale);
@@ -1334,19 +1067,22 @@ mbe_floattoshort(float* restrict float_buf, short* restrict aout_buf) {
 #else /* MBELIB_ENABLE_SIMD not set: keep scalar implementation */
 void
 mbe_floattoshort(float* restrict float_buf, short* restrict aout_buf) {
+    /* JMBE-compatible soft clipping at 95% of maximum amplitude
+     * This provides headroom and prevents harsh clipping artifacts */
     const float again = 7.0f;
+    const float max_amplitude = 32767.0f * 0.95f; /* ~31128.65 */
     for (int i = 0; i < 160; i++) {
         float audio = again * float_buf[i];
-        if (audio > 32760.0f) {
+        if (audio > max_amplitude) {
 #ifdef MBE_DEBUG
             fprintf(stderr, "audio clip: %f\n", audio);
 #endif
-            audio = 32760.0f;
-        } else if (audio < -32760.0f) {
+            audio = max_amplitude;
+        } else if (audio < -max_amplitude) {
 #ifdef MBE_DEBUG
             fprintf(stderr, "audio clip: %f\n", audio);
 #endif
-            audio = -32760.0f;
+            audio = -max_amplitude;
         }
         aout_buf[i] = (short)(audio);
     }

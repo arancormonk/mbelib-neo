@@ -62,9 +62,9 @@ main(void) {
      * On other arches (e.g., AArch64/NEON), rounding order can differ; we fall
      * back to deterministic and sanity checks so CI remains green.
      */
-    /* Updated to match current deterministic synthesis on x86 */
-    const uint32_t X86_F32_FNV1A = 0x5DC4CC83u;
-    const uint32_t X86_S16_FNV1A = 0x823A8FE4u;
+    /* Updated to match FFT-based unvoiced synthesis with JMBE algorithms */
+    const uint32_t X86_F32_FNV1A = 0xFBE82EC2u;
+    const uint32_t X86_S16_FNV1A = 0x7C309A12u;
 
     float out_f[160];
     short out_s[160];
@@ -77,6 +77,8 @@ main(void) {
     uint32_t hf1 = fnv1a32(out_f, sizeof(out_f));
     mbe_floattoshort(out_f, out_s);
     uint32_t hs1 = fnv1a32(out_s, sizeof(out_s));
+    (void)hf1; /* Hash computed for potential debug/regression use */
+    (void)hs1;
 
     /* Determinism check: same seed/params produce identical output */
     float out_f2[160];

@@ -201,6 +201,24 @@ Notes
 - For shared builds, ensure `<prefix>/bin` is on `PATH` (so the DLL is found) or copy the DLL next to your `.exe`.
 - To prefer static linking via pkg-config, you can try `pkg-config --static --libs libmbe-neo` (requires static libs available) or use the CMake package and link `mbe_neo::mbe_static`.
 
+## Audio Quality Improvements
+
+mbelib-neo implements JMBE-compatible audio synthesis algorithms for improved audio quality:
+
+- **FFT-based unvoiced synthesis** (Algorithms #117-126): Uses 256-point FFT with band-level scaling instead of the legacy oscillator bank approach. Provides cleaner, more natural unvoiced sounds with proper spectral shaping.
+
+- **Weighted Overlap-Add (WOLA)** (Algorithm #126): Smooth frame transitions for unvoiced synthesis using a 211-element trapezoidal synthesis window. Eliminates audible discontinuities between frames.
+
+- **Adaptive smoothing** (Algorithms #111-116): Error-rate-based parameter smoothing that gracefully handles corrupted frames. Includes local energy tracking, adaptive voicing thresholds, and amplitude scaling.
+
+- **Voiced phase/amplitude interpolation** (Algorithms #134-138): Smooth interpolation of pitch and amplitude for low-frequency harmonics during stable pitch periods. Reduces "buzzy" artifacts in voiced speech.
+
+- **Frame repeat/muting with comfort noise**: Graceful degradation under high error conditions. Generates low-level white noise during frame muting to maintain audio continuity.
+
+- **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
+
+These improvements bring mbelib-neo's audio quality closer to the reference JMBE (Java Multi-Band Excitation) implementation.
+
 ## API Notes
 
 - Public API is prefixed `mbe_` and declared in `mbelib.h`.
@@ -245,6 +263,7 @@ cmake --build build --target docs
 - Public headers: `include/mbelib-neo/`
 - Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`
 - Internal headers: `src/internal/`
+- External libraries: `src/external/kiss_fft/` (bundled KISS FFT, BSD-3-Clause)
 - Tests: `tests/` • Examples: `examples/`
 
 ## Contributing

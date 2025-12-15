@@ -157,6 +157,7 @@ main(void) {
         derive_parity_positions(data_pos, parity_pos);
         int ok = encode_hamming15_with_generator(hammingGenerator, data_pos, data11, code);
         assert(ok == 1);
+        (void)ok; /* Suppress unused-but-set warning when asserts disabled */
 
         // Extract data bits
         char data_ref[11];
@@ -168,6 +169,7 @@ main(void) {
         char code2[15];
         int errs2 = mbe_hamming1511(code, code2);
         assert(errs2 == 0);
+        (void)errs2; /* Suppress unused-but-set warning when asserts disabled */
         assert(memcmp(code, code2, sizeof(code)) == 0);
 
         // Sanity: bit-level correction in integer domain should restore original block
@@ -208,6 +210,7 @@ main(void) {
             char fixed[15];
             int errs3 = mbe_hamming1511(err, fixed);
             assert(errs3 >= 1);
+            (void)errs3; /* Suppress unused-but-set warning when asserts disabled */
             if (memcmp(code, fixed, sizeof(code)) != 0) {
                 fprintf(stderr, "mismatch at bit %d for standard hamming\n", k);
                 fprintf(stderr, "orig: ");
@@ -249,6 +252,7 @@ main(void) {
         char code[15];
         int ok2 = encode_hamming15_with_generator(imbe7100x4400hammingGenerator, data_pos, data11, code);
         assert(ok2 == 1);
+        (void)ok2; /* Suppress unused-but-set warning when asserts disabled */
 
         char data_ref[11];
         for (int i = 0; i < 11; ++i) {
@@ -258,6 +262,7 @@ main(void) {
         char code2[15];
         int errs2 = mbe_7100x4400hamming1511(code, code2);
         assert(errs2 == 0);
+        (void)errs2; /* Suppress unused-but-set warning when asserts disabled */
         assert(memcmp(code, code2, sizeof(code)) == 0);
 
         for (int k = 0; k < 15; ++k) {
@@ -268,6 +273,7 @@ main(void) {
             char fixed[15];
             int errs3 = mbe_7100x4400hamming1511(err, fixed);
             assert(errs3 >= 1);
+            (void)errs3; /* Suppress unused-but-set warning when asserts disabled */
             if (memcmp(code, fixed, sizeof(code)) != 0) {
                 fprintf(stderr, "mismatch at bit %d for 7100 hamming\n", k);
                 return 3;

@@ -106,15 +106,16 @@ mbe_eccImbe7200x4400C0(char imbe_fr[8][23]) {
 }
 
 /**
- * @brief Apply ECC to IMBE 7200x4400 data and pack parameter bits.
+ * @brief Internal: Apply ECC to IMBE 7200x4400 data with separate C4 error tracking.
  * @param imbe_fr Frame as 8x23 bitplanes.
  * @param imbe_d  Output parameter bits (88).
+ * @param errs_c4 Output: errors in C4 (Hamming coset 4), or NULL if not needed.
  * @return Number of corrected errors in protected fields.
  */
-int
-mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
+static int
+mbe_eccImbe7200x4400DataInternal(char imbe_fr[8][23], char* imbe_d, int* errs_c4) {
 
-    int i, j, errs;
+    int i, j, errs, hamming_errs;
     char *imbe, gin[23], gout[23], hin[15], hout[15];
 
     errs = 0;
@@ -140,7 +141,12 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
         for (j = 0; j < 15; j++) {
             hin[j] = imbe_fr[i][j];
         }
-        errs += mbe_hamming1511(hin, hout);
+        hamming_errs = mbe_hamming1511(hin, hout);
+        errs += hamming_errs;
+        /* Track C4 (first Hamming coset) errors separately for adaptive smoothing */
+        if (i == 4 && errs_c4 != NULL) {
+            *errs_c4 = hamming_errs;
+        }
         for (j = 14; j >= 4; j--) {
             *imbe = hout[j];
             imbe++;
@@ -152,6 +158,17 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
     }
 
     return (errs);
+}
+
+/**
+ * @brief Apply ECC to IMBE 7200x4400 data and pack parameter bits.
+ * @param imbe_fr Frame as 8x23 bitplanes.
+ * @param imbe_d  Output parameter bits (88).
+ * @return Number of corrected errors in protected fields.
+ */
+int
+mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
+    return mbe_eccImbe7200x4400DataInternal(imbe_fr, imbe_d, NULL);
 }
 
 /**
@@ -477,7 +494,13 @@ mbe_processImbe4400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
 
     int i, bad;
-    (void)errs; // currently unused in this implementation
+    (void)errs; // C0 errors tracked separately for repeat decision; total in errs2
+
+    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116).
+     * IIR-filtered error rate: errorRate = 0.95 * prev + 0.000365 * totalErrors
+     * This matches JMBE IMBEModelParameters.setErrors() */
+    cur_mp->errorCountTotal = *errs2;
+    cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.000365f * (float)(*errs2));
 
     for (i = 0; i < *errs2; i++) {
         *err_str = '=';
@@ -488,10 +511,12 @@ mbe_processImbe4400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
     if ((bad == 1) || (*errs2 > 5)) {
         mbe_useLastMbeParms(cur_mp, prev_mp);
         cur_mp->repeat++;
+        cur_mp->repeatCount++;
         *err_str = 'R';
         err_str++;
     } else {
         cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
     }
     if (cur_mp->repeat <= 3) {
         mbe_moveMbeParms(cur_mp, prev_mp);
@@ -534,12 +559,17 @@ mbe_processImbe7200x4400Framef(float* aout_buf, int* errs, int* errs2, char* err
                                char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
                                int uvquality) {
 
+    int errs_c4 = 0;
+
     *errs = 0;
     *errs2 = 0;
     *errs = mbe_eccImbe7200x4400C0(imbe_fr);
     mbe_demodulateImbe7200x4400Data(imbe_fr);
     *errs2 = *errs;
-    *errs2 += mbe_eccImbe7200x4400Data(imbe_fr, imbe_d);
+    *errs2 += mbe_eccImbe7200x4400DataInternal(imbe_fr, imbe_d, &errs_c4);
+
+    /* Set C4 error count for adaptive smoothing (JMBE Algorithm #112 formula selection) */
+    cur_mp->errorCount4 = errs_c4;
 
     mbe_processImbe4400Dataf(aout_buf, errs, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
 }

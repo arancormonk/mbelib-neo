@@ -108,12 +108,16 @@ main(void) {
             int rc = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
             // valid voice frame expected
             assert(rc == 0);
+            (void)rc; /* Suppress unused-but-set warning when asserts disabled */
             float w0_expected = (float)((4.0 * M_PI) / ((double)b0_values[i] + 39.5));
             int L_expected = (int)(0.9254 * (int)((M_PI / w0_expected) + 0.25));
-            int K_expected = (L_expected < 37) ? (int)((L_expected + 2) / 3) : 12;
+            int K_expected = (L_expected < 37) ? ((L_expected + 2) / 3) : 12;
             assert(approx_equal(cur.w0, w0_expected, 1e-6f));
             assert(cur.L == L_expected);
             assert(cur.K == K_expected);
+            (void)w0_expected; /* Suppress unused-but-set warning when asserts disabled */
+            (void)L_expected;
+            (void)K_expected;
         }
     }
 
@@ -141,9 +145,11 @@ main(void) {
             int rc = mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev);
             // For these b0 values we expect normal voice decode (rc == 0)
             assert(rc == 0);
+            (void)rc; /* Suppress unused-but-set warning when asserts disabled */
             float w0_expected = cases[i].f0 * (float)(2.0 * M_PI);
             assert(approx_equal(cur.w0, w0_expected, 1e-6f));
             assert(cur.L == cases[i].L);
+            (void)w0_expected; /* Suppress unused-but-set warning when asserts disabled */
         }
     }
 

@@ -548,6 +548,18 @@ mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
 
     int i, bad;
 
+    /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%).
+     * This matches JMBE AMBEModelParameters.isFrameMuted(). */
+    cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+
+    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116).
+     * IIR-filtered error rate: errorRate = 0.95 * prev + 0.001064 * totalErrors
+     * This matches JMBE AMBEModelParameters constructor.
+     * Note: AMBE uses different coefficient (0.001064) than IMBE (0.000365). */
+    cur_mp->errorCountTotal = *errs + *errs2;
+    cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
+    cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
+
     for (i = 0; i < *errs2; i++) {
         *err_str = '=';
         err_str++;
@@ -560,18 +572,22 @@ mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
         *err_str = 'E';
         err_str++;
         cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
     } else if (bad == 3 || bad == 7) {
         // Tone Frame
         *err_str = 'T';
         err_str++;
         cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
     } else if (*errs2 > 3) {
         mbe_useLastMbeParms(cur_mp, prev_mp);
         cur_mp->repeat++;
+        cur_mp->repeatCount++;
         *err_str = 'R';
         err_str++;
     } else {
         cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
     }
 
     if (bad == 0) {

@@ -87,10 +87,36 @@ struct mbe_parameters {
     float gamma;
     /** Legacy/unused field; retained for ABI compatibility. */
     int un;
-    /** Repeat frame flag. */
+    /** Repeat frame flag (legacy - use repeatCount instead). */
     int repeat;
     /** Sine wave increment for tone synthesis. */
-    int swn; // sine wave increment for tones
+    int swn;
+
+    /* === Adaptive smoothing state (Algorithms #111-116) === */
+    /** Local energy tracking with IIR smoothing (Algorithm #111). */
+    float localEnergy;
+    /** Amplitude threshold for scaling (Algorithm #115). */
+    int amplitudeThreshold;
+    /** Bit error rate for current frame (0.0 to 1.0). */
+    float errorRate;
+    /** Total bit errors detected/corrected in this frame. */
+    int errorCountTotal;
+    /** Coset 4 error count (IMBE-specific). */
+    int errorCount4;
+
+    /* === Frame repeat/muting state === */
+    /** Consecutive repeat count (0 to MAX_FRAME_REPEATS). */
+    int repeatCount;
+    /** Muting threshold for this codec (IMBE: 0.0875, AMBE: 0.096). */
+    float mutingThreshold;
+
+    /* === FFT-based unvoiced synthesis state === */
+    /** Previous frame inverse FFT output for WOLA (256 samples). */
+    float previousUw[256];
+    /** LCG noise generator state (seed). */
+    float noiseSeed;
+    /** Noise buffer overlap for continuity (96 samples). */
+    float noiseOverlap[96];
 };
 
 typedef struct mbe_parameters mbe_parms;
@@ -345,6 +371,60 @@ MBE_API void mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms*
  * @param aout_buf  Output 160 16-bit samples.
  */
 MBE_API void mbe_floattoshort(float* float_buf, short* aout_buf);
+
+/* === Frame repeat and muting functions === */
+
+/** Maximum consecutive frame repeats before muting. */
+#define MBE_MAX_FRAME_REPEATS     4
+
+/** IMBE muting threshold (8.75% error rate). */
+#define MBE_MUTING_THRESHOLD_IMBE 0.0875f
+
+/** AMBE muting threshold (9.6% error rate). */
+#define MBE_MUTING_THRESHOLD_AMBE 0.096f
+
+/**
+ * @brief Check if frame should be muted due to excessive errors.
+ * @param mp Parameter set to check.
+ * @return Non-zero if frame should be muted.
+ */
+MBE_API int mbe_requiresMuting(const mbe_parms* mp);
+
+/**
+ * @brief Check if max repeat threshold has been exceeded.
+ * @param mp Parameter set to check.
+ * @return Non-zero if repeatCount >= MBE_MAX_FRAME_REPEATS.
+ */
+MBE_API int mbe_isMaxFrameRepeat(const mbe_parms* mp);
+
+/**
+ * @brief Generate comfort noise for muted frames.
+ * @param aout_buf Output buffer of 160 float samples.
+ */
+MBE_API void mbe_synthesizeComfortNoisef(float* aout_buf);
+
+/**
+ * @brief Generate comfort noise for muted frames (16-bit).
+ * @param aout_buf Output buffer of 160 16-bit samples.
+ */
+MBE_API void mbe_synthesizeComfortNoise(short* aout_buf);
+
+/* === Adaptive smoothing functions === */
+
+/**
+ * @brief Apply adaptive smoothing to parameters based on error rates.
+ *        Implements JMBE Algorithms #111-116.
+ * @param cur_mp Current frame parameters (modified in-place).
+ * @param prev_mp Previous frame parameters (for local energy).
+ */
+MBE_API void mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp);
+
+/**
+ * @brief Check if adaptive smoothing is required based on error rates.
+ * @param mp Parameter set to check.
+ * @return Non-zero if smoothing should be applied.
+ */
+MBE_API int mbe_requiresAdaptiveSmoothing(const mbe_parms* mp);
 
 #ifdef __cplusplus
 }
