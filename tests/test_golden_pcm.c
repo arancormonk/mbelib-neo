@@ -62,8 +62,8 @@ main(void) {
      * On other arches (e.g., AArch64/NEON), rounding order can differ; we fall
      * back to deterministic and sanity checks so CI remains green.
      */
-    /* Updated to match FFT-based unvoiced synthesis with JMBE algorithms */
-    const uint32_t X86_F32_FNV1A = 0x7605D48Du;
+    /* Updated for PFFFT FFT implementation */
+    const uint32_t X86_F32_FNV1A = 0xDC8D91F8u;
     const uint32_t X86_S16_FNV1A = 0x6F2ADAE0u;
 
     float out_f[160];

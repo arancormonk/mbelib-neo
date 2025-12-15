@@ -32,10 +32,10 @@ configure_file(
   @ONLY
 )
 
-# KISS FFT sources (bundled, BSD-3-Clause licensed)
-set(KISS_FFT_SOURCES
-  src/external/kiss_fft/kiss_fft.c
-  src/external/kiss_fft/kiss_fftr.c
+# PFFFT sources (bundled, BSD-like FFTPACK license)
+set(PFFFT_SOURCES
+  src/external/pffft/pffft.c
+  src/external/pffft/fftpack.c
 )
 
 # Explicit source list (avoids FILE(GLOB ...))
@@ -50,7 +50,7 @@ set(MBELIB_SOURCES
   src/core/mbelib.c
   src/core/mbe_adaptive.c
   src/core/mbe_unvoiced_fft.c
-  ${KISS_FFT_SOURCES}
+  ${PFFFT_SOURCES}
 )
 
 add_library(mbe-shared SHARED ${MBELIB_SOURCES})
@@ -69,7 +69,7 @@ target_include_directories(mbe-shared
   PRIVATE
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/src/internal
-    ${PROJECT_SOURCE_DIR}/src/external/kiss_fft
+    ${PROJECT_SOURCE_DIR}/src/external/pffft
 )
 target_include_directories(mbe-static
   PUBLIC
@@ -79,7 +79,7 @@ target_include_directories(mbe-static
   PRIVATE
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/src/internal
-    ${PROJECT_SOURCE_DIR}/src/external/kiss_fft
+    ${PROJECT_SOURCE_DIR}/src/external/pffft
 )
 
 # Mark static consumption for Windows to avoid dllimport decorations in headers

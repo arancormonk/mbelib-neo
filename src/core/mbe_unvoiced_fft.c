@@ -11,10 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "kiss_fft.h"
-#include "kiss_fftr.h"
 #include "mbe_compiler.h"
 #include "mbe_unvoiced_fft.h"
+#include "pffft.h"
 
 /* LCG integer constants matching the float #defines in the header */
 #define MBE_LCG_A_INT 171u
@@ -77,22 +76,28 @@ mbe_synthesisWindow_fast(int n) {
 #define MBE_FRAME_LEN 160
 
 /**
- * @brief FFT plan structure wrapping KISS FFT configs and scratch buffers.
+ * @brief FFT plan structure wrapping PFFFT setup and scratch buffers.
  *
  * The scratch buffers are allocated once per thread and reused across frames
  * to reduce stack traffic and improve cache locality.
+ *
+ * PFFFT real transform output format for N=256:
+ *   output[0] = DC component (bin 0 real)
+ *   output[1] = Nyquist component (bin 128 real)
+ *   output[2..N-1] = bins 1 to N/2-1 as interleaved (re, im) pairs
  */
 struct mbe_fft_plan {
-    kiss_fftr_cfg fwd; /**< Forward FFT config */
-    kiss_fftr_cfg inv; /**< Inverse FFT config */
+    PFFFT_Setup* setup; /**< PFFFT setup for N=256 real transform */
 
-    /* Scratch buffers for unvoiced synthesis (reused across frames) */
-    float Uw[MBE_FFT_SIZE];                    /**< Windowed noise buffer */
-    kiss_fft_cpx Uw_fft[MBE_FFT_SIZE / 2 + 1]; /**< FFT output bins */
-    float dftBinScalor[MBE_FFT_SIZE / 2 + 1];  /**< Per-bin scaling factors */
-    float Uw_out[MBE_FFT_SIZE];                /**< IFFT output buffer */
-    int a_min[57];                             /**< Band lower bin edges */
-    int b_max[57];                             /**< Band upper bin edges */
+    /* PFFFT-aligned scratch buffers for unvoiced synthesis (reused across frames) */
+    float* Uw;     /**< Windowed noise buffer (256 floats, aligned) */
+    float* Uw_fft; /**< FFT output (256 floats, aligned) */
+    float* Uw_out; /**< IFFT output buffer (256 floats, aligned) */
+    float* work;   /**< PFFFT work buffer (256 floats, aligned) */
+
+    float dftBinScalor[MBE_FFT_SIZE / 2 + 1]; /**< Per-bin scaling factors */
+    int a_min[57];                            /**< Band lower bin edges */
+    int b_max[57];                            /**< Band upper bin edges */
 
     /* Precomputed WOLA weights for n=0..159 (avoids per-sample window lookups) */
     float wola_w_prev[MBE_FRAME_LEN];    /**< w(n) for previous frame */
@@ -111,17 +116,28 @@ mbe_fft_plan_alloc(void) {
         return NULL;
     }
 
-    plan->fwd = kiss_fftr_alloc(MBE_FFT_SIZE, 0, NULL, NULL);
-    plan->inv = kiss_fftr_alloc(MBE_FFT_SIZE, 1, NULL, NULL);
+    /* Initialize pointers to NULL for safe cleanup */
+    plan->setup = NULL;
+    plan->Uw = NULL;
+    plan->Uw_fft = NULL;
+    plan->Uw_out = NULL;
+    plan->work = NULL;
 
-    if (!plan->fwd || !plan->inv) {
-        if (plan->fwd) {
-            kiss_fft_free(plan->fwd);
-        }
-        if (plan->inv) {
-            kiss_fft_free(plan->inv);
-        }
+    /* Create PFFFT setup for 256-point real transform */
+    plan->setup = pffft_new_setup(MBE_FFT_SIZE, PFFFT_REAL);
+    if (!plan->setup) {
         free(plan);
+        return NULL;
+    }
+
+    /* Allocate SIMD-aligned buffers for PFFFT */
+    plan->Uw = (float*)pffft_aligned_malloc(MBE_FFT_SIZE * sizeof(float));
+    plan->Uw_fft = (float*)pffft_aligned_malloc(MBE_FFT_SIZE * sizeof(float));
+    plan->Uw_out = (float*)pffft_aligned_malloc(MBE_FFT_SIZE * sizeof(float));
+    plan->work = (float*)pffft_aligned_malloc(MBE_FFT_SIZE * sizeof(float));
+
+    if (!plan->Uw || !plan->Uw_fft || !plan->Uw_out || !plan->work) {
+        mbe_fft_plan_free(plan);
         return NULL;
     }
 
@@ -148,11 +164,20 @@ mbe_fft_plan_alloc(void) {
 void
 mbe_fft_plan_free(mbe_fft_plan* plan) {
     if (plan) {
-        if (plan->fwd) {
-            kiss_fft_free(plan->fwd);
+        if (plan->setup) {
+            pffft_destroy_setup(plan->setup);
         }
-        if (plan->inv) {
-            kiss_fft_free(plan->inv);
+        if (plan->Uw) {
+            pffft_aligned_free(plan->Uw);
+        }
+        if (plan->Uw_fft) {
+            pffft_aligned_free(plan->Uw_fft);
+        }
+        if (plan->Uw_out) {
+            pffft_aligned_free(plan->Uw_out);
+        }
+        if (plan->work) {
+            pffft_aligned_free(plan->work);
         }
         free(plan);
     }
@@ -416,89 +441,167 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
 }
 
 /**
- * @brief Compute sum of magnitude squared for a range of complex FFT bins.
+ * @brief PFFFT bin accessor helpers.
+ *
+ * PFFFT ordered real transform output format for N=256:
+ *   fft[0] = DC component (bin 0 real)
+ *   fft[1] = Nyquist component (bin 128 real)
+ *   fft[2k], fft[2k+1] = bin k (re, im) for k = 1..127
+ */
+
+/* Get real part of bin (0 <= bin <= 128) */
+static inline float
+pffft_bin_re(const float* fft, int bin) {
+    if (bin == 0) {
+        return fft[0];
+    }
+    if (bin == MBE_FFT_SIZE / 2) {
+        return fft[1];
+    }
+    return fft[2 * bin];
+}
+
+/* Get imaginary part of bin (0 <= bin <= 128) */
+static inline float
+pffft_bin_im(const float* fft, int bin) {
+    if (bin == 0 || bin == MBE_FFT_SIZE / 2) {
+        return 0.0f;
+    }
+    return fft[2 * bin + 1];
+}
+
+/* Set bin value (0 <= bin <= 128) */
+static inline void
+pffft_bin_set(float* fft, int bin, float re, float im) {
+    if (bin == 0) {
+        fft[0] = re;
+    } else if (bin == MBE_FFT_SIZE / 2) {
+        fft[1] = re;
+    } else {
+        fft[2 * bin] = re;
+        fft[2 * bin + 1] = im;
+    }
+}
+
+/* Scale bin by factor (0 <= bin <= 128) */
+static inline void
+pffft_bin_scale(float* fft, int bin, float scale) {
+    if (bin == 0) {
+        fft[0] *= scale;
+    } else if (bin == MBE_FFT_SIZE / 2) {
+        fft[1] *= scale;
+    } else {
+        fft[2 * bin] *= scale;
+        fft[2 * bin + 1] *= scale;
+    }
+}
+
+/**
+ * @brief Compute sum of magnitude squared for a range of FFT bins.
  *
  * Calculates sum(re[i]^2 + im[i]^2) for bins from start to end (exclusive).
- * Uses SIMD when MBELIB_ENABLE_SIMD is defined and the range is large enough.
+ * Handles PFFFT's interleaved format where DC is at [0], Nyquist at [1],
+ * and bins 1-127 are at [2k, 2k+1].
  *
- * @param bins Array of complex FFT bins.
- * @param start First bin index (inclusive).
- * @param end Last bin index (exclusive).
+ * Uses SIMD when MBELIB_ENABLE_SIMD is defined and the range is suitable.
+ *
+ * @param fft PFFFT ordered output array (256 floats).
+ * @param start First bin index (inclusive, 0 to 128).
+ * @param end Last bin index (exclusive, 0 to 129).
  * @return Sum of magnitude squared values.
  */
 static float
-mbe_magnitude_squared_sum(const kiss_fft_cpx* restrict bins, int start, int end) {
+mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
     float sum = 0.0f;
-    int count = end - start;
 
-    if (count <= 0) {
+    if (end <= start) {
         return 0.0f;
     }
 
+    /* Handle bin 0 (DC) separately if in range */
+    if (start == 0) {
+        sum += fft[0] * fft[0]; /* DC has no imaginary part */
+        start = 1;
+    }
+
+    /* Handle bin 128 (Nyquist) separately if in range */
+    int nyquist_bin = MBE_FFT_SIZE / 2; /* 128 */
+    int include_nyquist = (end > nyquist_bin);
+    if (include_nyquist) {
+        end = nyquist_bin; /* Process bins 1-127 with SIMD, Nyquist separately */
+    }
+
+    /* Process bins 1 to end-1 (these are at positions fft[2]..fft[2*(end-1)+1]) */
+    int interior_count = end - start;
+    if (interior_count > 0) {
+        /* Interior bins are stored as interleaved (re,im) pairs at fft[2*start] */
+        const float* ptr = &fft[2 * start];
+
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
-    /* SSE2 path: process 4 complex numbers (8 floats) at a time
-     * Each kiss_fft_cpx is [r, i], so 4 complex = 8 floats
-     * We load as floats and compute r0^2+i0^2 + r1^2+i1^2 + ... */
-    if (count >= 4) {
-        __m128 vsum = _mm_setzero_ps();
-        const float* fptr = (const float*)&bins[start];
-        int i;
-        for (i = 0; i + 4 <= count; i += 4) {
-            /* Load 8 floats: [r0,i0,r1,i1] and [r2,i2,r3,i3] */
-            __m128 v0 = _mm_loadu_ps(fptr);     /* r0,i0,r1,i1 */
-            __m128 v1 = _mm_loadu_ps(fptr + 4); /* r2,i2,r3,i3 */
-            fptr += 8;
+        /* SSE2 path: process 4 bins (8 floats) at a time */
+        if (interior_count >= 4) {
+            __m128 vsum = _mm_setzero_ps();
+            int i;
+            for (i = 0; i + 4 <= interior_count; i += 4) {
+                /* Load 8 floats: [r0,i0,r1,i1] and [r2,i2,r3,i3] */
+                __m128 v0 = _mm_loadu_ps(ptr);
+                __m128 v1 = _mm_loadu_ps(ptr + 4);
+                ptr += 8;
 
-            /* Compute squares and accumulate */
-            __m128 sq0 = _mm_mul_ps(v0, v0);
-            __m128 sq1 = _mm_mul_ps(v1, v1);
-            vsum = _mm_add_ps(vsum, sq0);
-            vsum = _mm_add_ps(vsum, sq1);
+                /* Compute squares and accumulate */
+                __m128 sq0 = _mm_mul_ps(v0, v0);
+                __m128 sq1 = _mm_mul_ps(v1, v1);
+                vsum = _mm_add_ps(vsum, sq0);
+                vsum = _mm_add_ps(vsum, sq1);
+            }
+
+            /* Horizontal sum of vsum */
+            __m128 shuf = _mm_shuffle_ps(vsum, vsum, _MM_SHUFFLE(2, 3, 0, 1));
+            __m128 sums = _mm_add_ps(vsum, shuf);
+            shuf = _mm_shuffle_ps(sums, sums, _MM_SHUFFLE(0, 1, 2, 3));
+            sums = _mm_add_ps(sums, shuf);
+            sum += _mm_cvtss_f32(sums);
+
+            interior_count -= i;
         }
-
-        /* Horizontal sum of vsum */
-        __m128 shuf = _mm_shuffle_ps(vsum, vsum, _MM_SHUFFLE(2, 3, 0, 1));
-        __m128 sums = _mm_add_ps(vsum, shuf);
-        shuf = _mm_shuffle_ps(sums, sums, _MM_SHUFFLE(0, 1, 2, 3));
-        sums = _mm_add_ps(sums, shuf);
-        sum = _mm_cvtss_f32(sums);
-
-        /* Handle remaining bins */
-        start += i;
-    }
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
-    /* NEON path: process 4 complex numbers at a time */
-    if (count >= 4) {
-        float32x4_t vsum = vdupq_n_f32(0.0f);
-        const float* fptr = (const float*)&bins[start];
-        int i;
-        for (i = 0; i + 4 <= count; i += 4) {
-            /* Load 8 floats: [r0,i0,r1,i1] and [r2,i2,r3,i3] */
-            float32x4_t v0 = vld1q_f32(fptr);
-            float32x4_t v1 = vld1q_f32(fptr + 4);
-            fptr += 8;
+        /* NEON path: process 4 bins at a time */
+        if (interior_count >= 4) {
+            float32x4_t vsum = vdupq_n_f32(0.0f);
+            int i;
+            for (i = 0; i + 4 <= interior_count; i += 4) {
+                /* Load 8 floats */
+                float32x4_t v0 = vld1q_f32(ptr);
+                float32x4_t v1 = vld1q_f32(ptr + 4);
+                ptr += 8;
 
-            /* Compute squares and accumulate */
-            vsum = vmlaq_f32(vsum, v0, v0);
-            vsum = vmlaq_f32(vsum, v1, v1);
+                /* Compute squares and accumulate */
+                vsum = vmlaq_f32(vsum, v0, v0);
+                vsum = vmlaq_f32(vsum, v1, v1);
+            }
+
+            /* Horizontal sum */
+            float32x2_t vsum2 = vadd_f32(vget_low_f32(vsum), vget_high_f32(vsum));
+            sum += vget_lane_f32(vpadd_f32(vsum2, vsum2), 0);
+
+            interior_count -= i;
         }
+#endif
+#endif
 
-        /* Horizontal sum */
-        float32x2_t vsum2 = vadd_f32(vget_low_f32(vsum), vget_high_f32(vsum));
-        sum = vget_lane_f32(vpadd_f32(vsum2, vsum2), 0);
-
-        /* Handle remaining bins */
-        start += i;
+        /* Scalar fallback for remaining interior bins */
+        for (int i = 0; i < interior_count; i++) {
+            float re = ptr[0];
+            float im = ptr[1];
+            sum += (re * re) + (im * im);
+            ptr += 2;
+        }
     }
-#endif
-#endif
 
-    /* Scalar fallback for remaining bins */
-    for (int bin = start; bin < end; bin++) {
-        float re = bins[bin].r;
-        float im = bins[bin].i;
-        sum += (re * re) + (im * im);
+    /* Add Nyquist bin if it was in range */
+    if (include_nyquist) {
+        sum += fft[1] * fft[1]; /* Nyquist has no imaginary part */
     }
 
     return sum;
@@ -511,9 +614,9 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
         return;
     }
 
-    /* Use plan's scratch buffers instead of stack-allocated arrays */
+    /* Use plan's scratch buffers */
     float* Uw = plan->Uw;
-    kiss_fft_cpx* Uw_fft = plan->Uw_fft;
+    float* Uw_fft = plan->Uw_fft;
     float* dftBinScalor = plan->dftBinScalor;
     float* Uw_out = plan->Uw_out;
     int* a_min = plan->a_min;
@@ -536,8 +639,8 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
         Uw[i] = noise_buffer[i] * w;
     }
 
-    /* Algorithm #118: 256-point real FFT */
-    kiss_fftr(plan->fwd, Uw, Uw_fft);
+    /* Algorithm #118: 256-point real FFT using PFFFT */
+    pffft_transform_ordered(plan->setup, Uw, Uw_fft, plan->work, PFFFT_FORWARD);
 
     /* Algorithms #122-123: Calculate frequency band edges for each harmonic */
     float multiplier = MBE_256_OVER_2PI * w0;
@@ -575,19 +678,17 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     }
 
     /* Algorithms #119, #120, #124: Apply scaling to FFT bins
-     * Uses SIMD-optimized bin scaling when available.
+     * Scale each bin using PFFFT's interleaved format.
      * Voiced bins get scaled by 0 (zeroed), unvoiced bins get proper scaling.
-     * Note: We need to apply per-bin scalors, so we use a different approach here.
      */
     for (int bin = 0; bin <= MBE_FFT_SIZE / 2; bin++) {
-        Uw_fft[bin].r *= dftBinScalor[bin];
-        Uw_fft[bin].i *= dftBinScalor[bin];
+        pffft_bin_scale(Uw_fft, bin, dftBinScalor[bin]);
     }
 
-    /* Algorithm #125: Inverse FFT */
-    kiss_fftri(plan->inv, Uw_fft, Uw_out);
+    /* Algorithm #125: Inverse FFT using PFFFT */
+    pffft_transform_ordered(plan->setup, Uw_fft, Uw_out, plan->work, PFFFT_BACKWARD);
 
-    /* Normalize IFFT output (KISS FFT doesn't normalize)
+    /* Normalize IFFT output (PFFFT doesn't normalize: BACKWARD(FORWARD(x)) = N*x)
      * Uses SIMD when available for faster scaling */
     {
         const float scale = 1.0f / (float)MBE_FFT_SIZE;
