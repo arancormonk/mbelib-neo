@@ -183,82 +183,27 @@ mbe_versionString(void) {
  * @brief Copy MBE parameter set from input to output.
  * @param in  Source parameter set.
  * @param out Destination parameter set.
+ *
+ * Uses struct assignment for efficiency - the compiler generates optimal
+ * code (typically a single memcpy-like operation) rather than many individual
+ * field copies. The mbe_parms struct contains no pointers, so shallow copy
+ * is correct and safe.
  */
 void
 mbe_moveMbeParms(mbe_parms* in, mbe_parms* out) {
-
-    int l;
-    out->swn = in->swn;
-    out->w0 = in->w0;
-    out->L = in->L;
-    out->K = in->K;
-    out->Ml[0] = (float)0;
-    out->gamma = in->gamma;
-    out->repeat = in->repeat;
-    for (l = 0; l <= 56; l++) {
-        out->Ml[l] = in->Ml[l];
-        out->Vl[l] = in->Vl[l];
-        out->log2Ml[l] = in->log2Ml[l];
-        out->PHIl[l] = in->PHIl[l];
-        out->PSIl[l] = in->PSIl[l];
-    }
-
-    /* Copy adaptive smoothing state */
-    out->localEnergy = in->localEnergy;
-    out->amplitudeThreshold = in->amplitudeThreshold;
-    out->errorRate = in->errorRate;
-    out->errorCountTotal = in->errorCountTotal;
-    out->errorCount4 = in->errorCount4;
-
-    /* Copy frame repeat state */
-    out->repeatCount = in->repeatCount;
-    out->mutingThreshold = in->mutingThreshold;
-
-    /* Copy FFT-based unvoiced synthesis state */
-    out->noiseSeed = in->noiseSeed;
-    memcpy(out->noiseOverlap, in->noiseOverlap, sizeof(out->noiseOverlap));
-    memcpy(out->previousUw, in->previousUw, sizeof(out->previousUw));
+    *out = *in;
 }
 
 /**
  * @brief Replace current parameters with the last known parameters.
  * @param out Destination parameter set to fill.
  * @param in  Source parameter set from previous frame.
+ *
+ * Uses struct assignment for efficiency. See mbe_moveMbeParms() for details.
  */
 void
 mbe_useLastMbeParms(mbe_parms* out, mbe_parms* in) {
-
-    int l;
-    out->swn = in->swn;
-    out->w0 = in->w0;
-    out->L = in->L;
-    out->K = in->K;
-    out->Ml[0] = (float)0;
-    out->gamma = in->gamma;
-    out->repeat = in->repeat;
-    for (l = 0; l <= 56; l++) {
-        out->Ml[l] = in->Ml[l];
-        out->Vl[l] = in->Vl[l];
-        out->log2Ml[l] = in->log2Ml[l];
-        out->PHIl[l] = in->PHIl[l];
-        out->PSIl[l] = in->PSIl[l];
-    }
-
-    /* Copy adaptive smoothing state */
-    out->localEnergy = in->localEnergy;
-    out->amplitudeThreshold = in->amplitudeThreshold;
-    out->errorRate = in->errorRate;
-    out->errorCountTotal = in->errorCountTotal;
-    out->errorCount4 = in->errorCount4;
-
-    /* Copy frame repeat state */
-    out->repeatCount = in->repeatCount;
-    out->mutingThreshold = in->mutingThreshold;
-
-    /* Copy FFT-based unvoiced synthesis state */
-    out->noiseSeed = in->noiseSeed;
-    memcpy(out->noiseOverlap, in->noiseOverlap, sizeof(out->noiseOverlap));
-    memcpy(out->previousUw, in->previousUw, sizeof(out->previousUw));
+    *out = *in;
 }
 
 /**

@@ -85,6 +85,9 @@ mbe_synthesisWindow_fast(int n) {
  *   output[0] = DC component (bin 0 real)
  *   output[1] = Nyquist component (bin 128 real)
  *   output[2..N-1] = bins 1 to N/2-1 as interleaved (re, im) pairs
+ *
+ * Float arrays are aligned to cache line boundaries (64 bytes) to improve
+ * SIMD load/store performance and avoid false sharing.
  */
 struct mbe_fft_plan {
     PFFFT_Setup* setup; /**< PFFFT setup for N=256 real transform */
@@ -95,23 +98,31 @@ struct mbe_fft_plan {
     float* Uw_out; /**< IFFT output buffer (256 floats, aligned) */
     float* work;   /**< PFFFT work buffer (256 floats, aligned) */
 
-    float dftBinScalor[MBE_FFT_SIZE / 2 + 1]; /**< Per-bin scaling factors */
-    int a_min[57];                            /**< Band lower bin edges */
-    int b_max[57];                            /**< Band upper bin edges */
+    /* Per-bin scaling factors - cache line aligned for SIMD access */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float dftBinScalor[MBE_FFT_SIZE / 2 + 1];
 
-    /* Precomputed WOLA weights for n=0..159 (avoids per-sample window lookups) */
-    float wola_w_prev[MBE_FRAME_LEN];    /**< w(n) for previous frame */
-    float wola_w_curr[MBE_FRAME_LEN];    /**< w(n-160) for current frame */
-    float wola_w_prev_sq[MBE_FRAME_LEN]; /**< w_prev^2 */
-    float wola_w_curr_sq[MBE_FRAME_LEN]; /**< w_curr^2 */
-    float wola_denom[MBE_FRAME_LEN];     /**< w_prev^2 + w_curr^2 */
-    int wola_prev_idx[MBE_FRAME_LEN];    /**< n + 128 */
-    int wola_curr_idx[MBE_FRAME_LEN];    /**< n + 128 - 160 = n - 32 */
+    /* Band edge indices (int arrays don't benefit much from alignment) */
+    int a_min[57]; /**< Band lower bin edges */
+    int b_max[57]; /**< Band upper bin edges */
+
+    /* Precomputed WOLA weights for n=0..159 (avoids per-sample window lookups)
+     * Cache line aligned for efficient SIMD loads in hot WOLA combine loop */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev[MBE_FRAME_LEN];    /**< w(n) for previous frame */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr[MBE_FRAME_LEN];    /**< w(n-160) for current frame */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev_sq[MBE_FRAME_LEN]; /**< w_prev^2 */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr_sq[MBE_FRAME_LEN]; /**< w_curr^2 */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_denom[MBE_FRAME_LEN];     /**< w_prev^2 + w_curr^2 */
+
+    /* Index arrays for WOLA (int arrays benefit less from alignment) */
+    int wola_prev_idx[MBE_FRAME_LEN]; /**< n + 128 */
+    int wola_curr_idx[MBE_FRAME_LEN]; /**< n + 128 - 160 = n - 32 */
 };
 
 mbe_fft_plan*
 mbe_fft_plan_alloc(void) {
-    mbe_fft_plan* plan = (mbe_fft_plan*)malloc(sizeof(mbe_fft_plan));
+    /* Allocate plan with 64-byte alignment to satisfy MBE_ALIGNAS(MBE_CACHE_LINE_SIZE)
+     * requirements on struct members. PFFFT's aligned allocator uses 64-byte alignment. */
+    mbe_fft_plan* plan = (mbe_fft_plan*)pffft_aligned_malloc(sizeof(mbe_fft_plan));
     if (!plan) {
         return NULL;
     }
@@ -126,7 +137,7 @@ mbe_fft_plan_alloc(void) {
     /* Create PFFFT setup for 256-point real transform */
     plan->setup = pffft_new_setup(MBE_FFT_SIZE, PFFFT_REAL);
     if (!plan->setup) {
-        free(plan);
+        pffft_aligned_free(plan);
         return NULL;
     }
 
@@ -179,7 +190,7 @@ mbe_fft_plan_free(mbe_fft_plan* plan) {
         if (plan->work) {
             pffft_aligned_free(plan->work);
         }
-        free(plan);
+        pffft_aligned_free(plan);
     }
 }
 
