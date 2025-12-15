@@ -86,7 +86,8 @@ jobs:
       - name: Run clang-tidy
         run: |
           # Analyze both sources and headers; headers are also checked via header-filter from TUs
-          files=$(git ls-files '*.c' '*.h' ':!:build/**')
+          # Exclude src/external/ (third-party code like kiss_fft)
+          files=$(git ls-files '*.c' '*.h' ':!:build/**' ':!:src/external/**')
           if [ -z "$files" ]; then echo "No C files to analyze"; exit 0; fi
           echo "Analyzing: $files"
           # Run clang-tidy using project config
