@@ -19,7 +19,59 @@
 
 #include "ambe3600x2450_const.h"
 #include "ambe_common.h"
+#include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
+
+/**
+ * @brief Thread-local cache for AMBE DCT cosine coefficients.
+ *
+ * Pre-computes the cosine terms used in the Ri inverse DCT and per-block
+ * inverse DCT loops to eliminate repeated cosf() calls per frame.
+ *
+ * Ri DCT: cosf(M_PI * (m-1) * (i-0.5) / 8) for m=1..8, i=1..8
+ * Per-block IDCT: cosf(M_PI * (k-1) * (j-0.5) / ji) for ji=1..17, j=1..ji, k=1..ji
+ */
+struct ambe2450_dct_cache {
+    int inited;
+    float ri_cos[9][9];         /* [m][i] for m=1..8, i=1..8 (index 0 unused) */
+    float idct_cos[18][18][18]; /* [ji][j][k] for ji=1..17, j=1..ji, k=1..ji */
+};
+
+static MBE_THREAD_LOCAL struct ambe2450_dct_cache ambe2450_cache = {0};
+
+/**
+ * @brief Initialize or return the thread-local AMBE 2450 DCT cache.
+ *
+ * Fills the cosine tables on first use. Because the cache is thread-local,
+ * no locking is required.
+ *
+ * @return Pointer to the initialized cache.
+ */
+static struct ambe2450_dct_cache*
+ambe2450_get_dct_cache(void) {
+    if (ambe2450_cache.inited) {
+        return &ambe2450_cache;
+    }
+
+    /* Fill Ri DCT cosine table: cosf(M_PI * (m-1) * (i-0.5) / 8) */
+    for (int m = 1; m <= 8; m++) {
+        for (int i = 1; i <= 8; i++) {
+            ambe2450_cache.ri_cos[m][i] = cosf((M_PI * (float)(m - 1) * ((float)i - 0.5f)) / 8.0f);
+        }
+    }
+
+    /* Fill per-block IDCT cosine table: cosf(M_PI * (k-1) * (j-0.5) / ji) */
+    for (int ji = 1; ji <= 17; ji++) {
+        for (int j = 1; j <= ji; j++) {
+            for (int k = 1; k <= ji; k++) {
+                ambe2450_cache.idct_cos[ji][j][k] = cosf((M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
+            }
+        }
+    }
+
+    ambe2450_cache.inited = 1;
+    return &ambe2450_cache;
+}
 
 /**
  * @brief Print AMBE 2450 parameter bits to stderr (debug aid).
@@ -308,7 +360,8 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
             Gm[3], Gm[4], b4, Gm[5], Gm[6], Gm[7], Gm[8]);
 #endif
 
-    // compute Ri
+    // compute Ri (using cached cosine coefficients)
+    struct ambe2450_dct_cache* cache = ambe2450_get_dct_cache();
     for (i = 1; i <= 8; i++) {
         sum = 0;
         for (m = 1; m <= 8; m++) {
@@ -317,7 +370,7 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
             } else {
                 am = 2;
             }
-            sum = sum + ((float)am * Gm[m] * cosf((M_PI * (float)(m - 1) * ((float)i - (float)0.5)) / (float)8));
+            sum = sum + ((float)am * Gm[m] * cache->ri_cos[m][i]);
         }
         Ri[i] = sum;
 #ifdef AMBE_DEBUG
@@ -426,7 +479,7 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     fprintf(stderr, "\n");
 #endif
 
-    // inverse DCT each Ci,k to give ci,j (Tl)
+    // inverse DCT each Ci,k to give ci,j (Tl) - using cached cosines
     l = 1;
     for (i = 1; i <= 4; i++) {
         ji = Ji[i];
@@ -441,8 +494,7 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 #ifdef AMBE_DEBUG
                 fprintf(stderr, "j: %i Cik[%i][%i]: %f ", j, i, k, Cik[i][k]);
 #endif
-                sum =
-                    sum + ((float)ak * Cik[i][k] * cosf((M_PI * (float)(k - 1) * ((float)j - (float)0.5)) / (float)ji));
+                sum = sum + ((float)ak * Cik[i][k] * cache->idct_cos[ji][j][k]);
             }
             Tl[l] = sum;
 #ifdef AMBE_DEBUG

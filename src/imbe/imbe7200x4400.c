@@ -18,7 +18,59 @@
 #include <stdlib.h>
 
 #include "imbe7200x4400_const.h"
+#include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
+
+/**
+ * @brief Thread-local cache for IMBE DCT cosine coefficients.
+ *
+ * Pre-computes the cosine terms used in the Ri inverse DCT and per-block
+ * inverse DCT loops to eliminate repeated cosf() calls per frame.
+ *
+ * Ri DCT: cosf(M_PI * (m-1) * (i-0.5) / 6) for m=1..6, i=1..6
+ * Per-block IDCT: cosf(M_PI * (k-1) * (j-0.5) / ji) for ji=1..10, j=1..ji, k=1..ji
+ */
+struct imbe_dct_cache {
+    int inited;
+    float ri_cos[7][7];         /* [m][i] for m=1..6, i=1..6 (index 0 unused) */
+    float idct_cos[11][11][11]; /* [ji][j][k] for ji=1..10, j=1..ji, k=1..ji */
+};
+
+static MBE_THREAD_LOCAL struct imbe_dct_cache imbe_cache = {0};
+
+/**
+ * @brief Initialize or return the thread-local IMBE DCT cache.
+ *
+ * Fills the cosine tables on first use. Because the cache is thread-local,
+ * no locking is required.
+ *
+ * @return Pointer to the initialized cache.
+ */
+static struct imbe_dct_cache*
+imbe_get_dct_cache(void) {
+    if (imbe_cache.inited) {
+        return &imbe_cache;
+    }
+
+    /* Fill Ri DCT cosine table: cosf(M_PI * (m-1) * (i-0.5) / 6) */
+    for (int m = 1; m <= 6; m++) {
+        for (int i = 1; i <= 6; i++) {
+            imbe_cache.ri_cos[m][i] = cosf((M_PI * (float)(m - 1) * ((float)i - 0.5f)) / 6.0f);
+        }
+    }
+
+    /* Fill per-block IDCT cosine table: cosf(M_PI * (k-1) * (j-0.5) / ji) */
+    for (int ji = 1; ji <= 10; ji++) {
+        for (int j = 1; j <= ji; j++) {
+            for (int k = 1; k <= ji; k++) {
+                imbe_cache.idct_cos[ji][j][k] = cosf((M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
+            }
+        }
+    }
+
+    imbe_cache.inited = 1;
+    return &imbe_cache;
+}
 
 /**
  * @brief Print IMBE 4400 parameter bits to stderr (debug aid).
@@ -311,7 +363,8 @@ mbe_decodeImbe4400Parms(char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
         ba2 += 2;
     }
 
-    // inverse DCT Gi to give Ri (also known as Ci,1)
+    // inverse DCT Gi to give Ri (also known as Ci,1) - using cached cosines
+    struct imbe_dct_cache* cache = imbe_get_dct_cache();
     for (i = 1; i <= 6; i++) {
         sum = 0;
         for (m = 1; m <= 6; m++) {
@@ -320,7 +373,7 @@ mbe_decodeImbe4400Parms(char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
             } else {
                 am = 2;
             }
-            sum = sum + ((float)am * Gm[m] * cosf((M_PI * (float)(m - 1) * ((float)i - 0.5)) / (float)6));
+            sum = sum + ((float)am * Gm[m] * cache->ri_cos[m][i]);
 #ifdef IMBE_DEBUG
             fprintf(stderr, "sum: %e ", sum);
 #endif
@@ -354,7 +407,7 @@ mbe_decodeImbe4400Parms(char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
         }
     }
 
-    // inverse DCT each Ci,k to give ci,j (Tl)
+    // inverse DCT each Ci,k to give ci,j (Tl) - using cached cosines
     l = 1;
     for (i = 1; i <= 6; i++) {
         ji = ImbeJi[L9][i - 1];
@@ -366,7 +419,7 @@ mbe_decodeImbe4400Parms(char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
                 } else {
                     ak = 2;
                 }
-                sum = sum + ((float)ak * Cik[i][k] * cosf((M_PI * (float)(k - 1) * ((float)j - 0.5)) / (float)ji));
+                sum = sum + ((float)ak * Cik[i][k] * cache->idct_cos[ji][j][k]);
             }
             Tl[l] = sum;
             l++;

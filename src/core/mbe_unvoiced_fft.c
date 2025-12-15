@@ -7,6 +7,7 @@
  */
 
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,11 @@
 #include "kiss_fftr.h"
 #include "mbe_compiler.h"
 #include "mbe_unvoiced_fft.h"
+
+/* LCG integer constants matching the float #defines in the header */
+#define MBE_LCG_A_INT 171u
+#define MBE_LCG_B_INT 11213u
+#define MBE_LCG_M_INT 53125u
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -58,11 +64,22 @@ mbe_synthesisWindow_fast(int n) {
 }
 
 /**
- * @brief FFT plan structure wrapping KISS FFT configs.
+ * @brief FFT plan structure wrapping KISS FFT configs and scratch buffers.
+ *
+ * The scratch buffers are allocated once per thread and reused across frames
+ * to reduce stack traffic and improve cache locality.
  */
 struct mbe_fft_plan {
     kiss_fftr_cfg fwd; /**< Forward FFT config */
     kiss_fftr_cfg inv; /**< Inverse FFT config */
+
+    /* Scratch buffers for unvoiced synthesis (reused across frames) */
+    float Uw[MBE_FFT_SIZE];                    /**< Windowed noise buffer */
+    kiss_fft_cpx Uw_fft[MBE_FFT_SIZE / 2 + 1]; /**< FFT output bins */
+    float dftBinScalor[MBE_FFT_SIZE / 2 + 1];  /**< Per-bin scaling factors */
+    float Uw_out[MBE_FFT_SIZE];                /**< IFFT output buffer */
+    int a_min[57];                             /**< Band lower bin edges */
+    int b_max[57];                             /**< Band upper bin edges */
 };
 
 mbe_fft_plan*
@@ -116,12 +133,16 @@ mbe_generate_noise_lcg(float* restrict buffer, int count, float* restrict seed) 
         return;
     }
 
-    float state = *seed;
+    /* Use integer arithmetic for the LCG to avoid expensive fmodf() calls.
+     * The state is always in [0, 53124] which is exactly representable in float.
+     * This optimization replaces per-sample fmodf() with integer modulo. */
+    uint32_t state = (uint32_t)(*seed) % 53125u;
     for (int i = 0; i < count; i++) {
-        buffer[i] = state;
-        state = fmodf((MBE_LCG_A * state) + MBE_LCG_B, MBE_LCG_M);
+        /* Write current state to buffer BEFORE updating (preserves JMBE sequence) */
+        buffer[i] = (float)state;
+        state = (171u * state + 11213u) % 53125u;
     }
-    *seed = state;
+    *seed = (float)state;
 }
 
 void
@@ -189,14 +210,19 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
         return;
     }
 
-    float Uw[MBE_FFT_SIZE];
-    kiss_fft_cpx Uw_fft[MBE_FFT_SIZE / 2 + 1];
-    float dftBinScalor[MBE_FFT_SIZE / 2 + 1];
+    /* Use plan's scratch buffers instead of stack-allocated arrays */
+    float* Uw = plan->Uw;
+    kiss_fft_cpx* Uw_fft = plan->Uw_fft;
+    float* dftBinScalor = plan->dftBinScalor;
+    float* Uw_out = plan->Uw_out;
+    int* a_min = plan->a_min;
+    int* b_max = plan->b_max;
+
     int L = cur_mp->L;
     float w0 = cur_mp->w0;
 
     /* Initialize scalors to zero (voiced bands stay zeroed) */
-    memset(dftBinScalor, 0, sizeof(dftBinScalor));
+    memset(dftBinScalor, 0, (MBE_FFT_SIZE / 2 + 1) * sizeof(float));
 
     /* Copy pre-generated noise buffer and apply synthesis window (Algorithm #118 prep)
      * Window is centered at sample 128, indices go from -128 to +127
@@ -213,7 +239,6 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     kiss_fftr(plan->fwd, Uw, Uw_fft);
 
     /* Algorithms #122-123: Calculate frequency band edges for each harmonic */
-    int a_min[57], b_max[57];
     float multiplier = MBE_256_OVER_2PI * w0;
 
     for (int l = 1; l <= L; l++) {
@@ -263,7 +288,6 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     }
 
     /* Algorithm #125: Inverse FFT */
-    float Uw_out[MBE_FFT_SIZE];
     kiss_fftri(plan->inv, Uw_fft, Uw_out);
 
     /* Normalize IFFT output (KISS FFT doesn't normalize) */
