@@ -11,6 +11,10 @@
 .DS_Store
 Thumbs.db
 
+# Ignore all markdown files in root directory with exceptions
+/*.md
+!/README.md
+
 # Log files
 /logs/
 *.log
