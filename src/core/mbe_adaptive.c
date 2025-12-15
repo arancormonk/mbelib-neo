@@ -13,6 +13,7 @@
 
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_math.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Thread-local storage for comfort noise RNG to avoid cross-thread interference.
@@ -103,8 +104,10 @@ mbe_synthesizeComfortNoisef(float* aout_buf) {
         /* Box-Muller transform: convert uniform to Gaussian N(0,1) */
         float r = sqrtf(-2.0f * logf(u1));
         float theta = 2.0f * (float)M_PI * u2;
-        float z0 = r * cosf(theta);
-        float z1 = r * sinf(theta);
+        float s, c;
+        mbe_sincosf(theta, &s, &c);
+        float z0 = r * c;
+        float z1 = r * s;
 
         /* Scale and store */
         aout_buf[i] = z0 * gain;
@@ -194,7 +197,10 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     if (errorRate <= MBE_ERROR_THRESHOLD_LOW && errorTotal <= 4) {
         VM = FLT_MAX; /* No smoothing at very low error rates */
     } else {
-        float energy = powf(cur_mp->localEnergy, 0.375f);
+        /* x^(3/8) = (x^(1/8))^3, where x^(1/8) = sqrtf(sqrtf(sqrtf(x)))
+         * Faster than powf() and maintains adequate precision for adaptive smoothing */
+        float x8 = sqrtf(sqrtf(sqrtf(cur_mp->localEnergy)));
+        float energy = x8 * x8 * x8;
         if (errorRate <= MBE_ERROR_THRESHOLD_ENTRY && errorCount4 == 0) {
             /* Formula 1: exponential decay based on error rate */
             VM = (MBE_ADAPTIVE_GAIN * energy) / expf(MBE_ADAPTIVE_EXPONENT * errorRate);
