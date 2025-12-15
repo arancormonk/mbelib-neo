@@ -16,12 +16,14 @@
 
 /* Thread-local storage for comfort noise RNG to avoid cross-thread interference.
  * JMBE uses per-synthesizer Random instances; we use thread-local state instead. */
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(_MSC_VER)
+#define MBE_ADAPTIVE_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
 #define MBE_ADAPTIVE_THREAD_LOCAL __thread
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
 #define MBE_ADAPTIVE_THREAD_LOCAL _Thread_local
 #else
-#define MBE_ADAPTIVE_THREAD_LOCAL __thread
+#error "No thread-local storage support available"
 #endif
 
 static MBE_ADAPTIVE_THREAD_LOCAL uint32_t mbe_comfort_noise_seed = 0x12345678u;
