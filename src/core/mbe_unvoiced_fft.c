@@ -90,20 +90,17 @@ mbe_synthesisWindow_fast(int n) {
  * SIMD load/store performance and avoid false sharing.
  */
 struct mbe_fft_plan {
-    PFFFT_Setup* setup; /**< PFFFT setup for N=256 real transform */
-
-    /* PFFFT-aligned scratch buffers for unvoiced synthesis (reused across frames) */
-    float* Uw;     /**< Windowed noise buffer (256 floats, aligned) */
-    float* Uw_fft; /**< FFT output (256 floats, aligned) */
-    float* Uw_out; /**< IFFT output buffer (256 floats, aligned) */
-    float* work;   /**< PFFFT work buffer (256 floats, aligned) */
-
     /* Per-bin scaling factors - cache line aligned for SIMD access */
     MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float dftBinScalor[MBE_FFT_SIZE / 2 + 1];
 
     /* Band edge indices (int arrays don't benefit much from alignment) */
     int a_min[57]; /**< Band lower bin edges */
-    int b_max[57]; /**< Band upper bin edges */
+
+    PFFFT_Setup* setup; /**< PFFFT setup for N=256 real transform */
+
+    /* PFFFT-aligned scratch buffers for unvoiced synthesis (reused across frames) */
+    float* Uw;     /**< Windowed noise buffer (256 floats, aligned) */
+    float* Uw_fft; /**< FFT output (256 floats, aligned) */
 
     /* Precomputed WOLA weights for n=0..159 (avoids per-sample window lookups)
      * Cache line aligned for efficient SIMD loads in hot WOLA combine loop */
@@ -112,6 +109,11 @@ struct mbe_fft_plan {
     MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev_sq[MBE_FRAME_LEN]; /**< w_prev^2 */
     MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr_sq[MBE_FRAME_LEN]; /**< w_curr^2 */
     MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_denom[MBE_FRAME_LEN];     /**< w_prev^2 + w_curr^2 */
+
+    float* Uw_out; /**< IFFT output buffer (256 floats, aligned) */
+    float* work;   /**< PFFFT work buffer (256 floats, aligned) */
+
+    int b_max[57]; /**< Band upper bin edges */
 
     /* Index arrays for WOLA (int arrays benefit less from alignment) */
     int wola_prev_idx[MBE_FRAME_LEN]; /**< n + 128 */
@@ -469,7 +471,7 @@ pffft_bin_re(const float* fft, int bin) {
     if (bin == MBE_FFT_SIZE / 2) {
         return fft[1];
     }
-    return fft[2 * bin];
+    return fft[2u * (size_t)bin];
 }
 
 /* Get imaginary part of bin (0 <= bin <= 128) */
@@ -478,7 +480,7 @@ pffft_bin_im(const float* fft, int bin) {
     if (bin == 0 || bin == MBE_FFT_SIZE / 2) {
         return 0.0f;
     }
-    return fft[2 * bin + 1];
+    return fft[2u * (size_t)bin + 1u];
 }
 
 /* Set bin value (0 <= bin <= 128) */
@@ -489,8 +491,9 @@ pffft_bin_set(float* fft, int bin, float re, float im) {
     } else if (bin == MBE_FFT_SIZE / 2) {
         fft[1] = re;
     } else {
-        fft[2 * bin] = re;
-        fft[2 * bin + 1] = im;
+        size_t offset = 2u * (size_t)bin;
+        fft[offset] = re;
+        fft[offset + 1u] = im;
     }
 }
 
@@ -502,8 +505,9 @@ pffft_bin_scale(float* fft, int bin, float scale) {
     } else if (bin == MBE_FFT_SIZE / 2) {
         fft[1] *= scale;
     } else {
-        fft[2 * bin] *= scale;
-        fft[2 * bin + 1] *= scale;
+        size_t offset = 2u * (size_t)bin;
+        fft[offset] *= scale;
+        fft[offset + 1u] *= scale;
     }
 }
 
@@ -546,7 +550,7 @@ mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
     int interior_count = end - start;
     if (interior_count > 0) {
         /* Interior bins are stored as interleaved (re,im) pairs at fft[2*start] */
-        const float* ptr = &fft[2 * start];
+        const float* ptr = &fft[2u * (size_t)start];
 
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)

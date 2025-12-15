@@ -59,6 +59,9 @@ CPPCHECK_ARGS=(
   --suppress=missingIncludeSystem
   --inline-suppr
   -I include
+  -I src/internal
+  -I src/external/pffft
+  -i src/external
   -j "$NPROC"
   --error-exitcode=1
 )
@@ -73,6 +76,9 @@ if [[ $STRICT -eq 1 ]]; then
     --suppress=missingIncludeSystem
     --inline-suppr
     -I include
+    -I src/internal
+    -I src/external/pffft
+    -i src/external
     -j "$NPROC"
     --error-exitcode=1
   )
