@@ -310,23 +310,25 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
 /**
  * @brief Apply spectral amplitude enhancement to the current parameters.
  * @param cur_mp In/out parameter set to enhance.
+ *
+ * Uses SIMD optimizations for accumulation and scaling loops when available.
  */
 void
 mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
 
     float Rm0, Rm1, R2m0, R2m1, Wl[57];
     int l;
-    float sum, gamma, M;
+    float sum, gamma;
+    const int L = cur_mp->L;
 
-    // Precompute cos(w0 * l) table via recurrence to avoid repeated cosf
+    /* Precompute cos(w0 * l) table via recurrence to avoid repeated cosf */
     float cos_tab[57];
     {
         const float w0 = cur_mp->w0;
         float s_step, c_step;
         mbe_sincosf(w0, &s_step, &c_step);
-        float c = 1.0f, s = 0.0f; // angle = 0
-        for (l = 1; l <= cur_mp->L; ++l) {
-            // advance by w0
+        float c = 1.0f, s = 0.0f;
+        for (l = 1; l <= L; ++l) {
             float cn = (c * c_step) - (s * s_step);
             float sn = (s * c_step) + (c * s_step);
             c = cn;
@@ -335,26 +337,93 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
         }
     }
 
+    /* Compute Rm0 = sum(Ml^2) and Rm1 = sum(Ml^2 * cos)
+     * Uses SIMD accumulation when available */
     Rm0 = 0.0f;
     Rm1 = 0.0f;
-    for (l = 1; l <= cur_mp->L; l++) {
-        const float Ml2 = cur_mp->Ml[l] * cur_mp->Ml[l];
-        Rm0 += Ml2;
-        Rm1 += Ml2 * cos_tab[l];
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+    if (L >= 4) {
+        __m128 vRm0 = _mm_setzero_ps();
+        __m128 vRm1 = _mm_setzero_ps();
+        int l4;
+        for (l4 = 1; l4 + 3 <= L; l4 += 4) {
+            __m128 vMl = _mm_loadu_ps(&cur_mp->Ml[l4]);
+            __m128 vCos = _mm_loadu_ps(&cos_tab[l4]);
+            __m128 vMl2 = _mm_mul_ps(vMl, vMl);
+            vRm0 = _mm_add_ps(vRm0, vMl2);
+            vRm1 = _mm_add_ps(vRm1, _mm_mul_ps(vMl2, vCos));
+        }
+        /* Horizontal sum */
+        __m128 shuf = _mm_shuffle_ps(vRm0, vRm0, _MM_SHUFFLE(2, 3, 0, 1));
+        __m128 sums = _mm_add_ps(vRm0, shuf);
+        shuf = _mm_movehl_ps(shuf, sums);
+        sums = _mm_add_ss(sums, shuf);
+        Rm0 = _mm_cvtss_f32(sums);
+
+        shuf = _mm_shuffle_ps(vRm1, vRm1, _MM_SHUFFLE(2, 3, 0, 1));
+        sums = _mm_add_ps(vRm1, shuf);
+        shuf = _mm_movehl_ps(shuf, sums);
+        sums = _mm_add_ss(sums, shuf);
+        Rm1 = _mm_cvtss_f32(sums);
+
+        /* Handle remaining elements */
+        for (l = l4; l <= L; l++) {
+            const float Ml2 = cur_mp->Ml[l] * cur_mp->Ml[l];
+            Rm0 += Ml2;
+            Rm1 += Ml2 * cos_tab[l];
+        }
+    } else
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+    if (L >= 4) {
+        float32x4_t vRm0 = vdupq_n_f32(0.0f);
+        float32x4_t vRm1 = vdupq_n_f32(0.0f);
+        int l4;
+        for (l4 = 1; l4 + 3 <= L; l4 += 4) {
+            float32x4_t vMl = vld1q_f32(&cur_mp->Ml[l4]);
+            float32x4_t vCos = vld1q_f32(&cos_tab[l4]);
+            float32x4_t vMl2 = vmulq_f32(vMl, vMl);
+            vRm0 = vaddq_f32(vRm0, vMl2);
+            vRm1 = vmlaq_f32(vRm1, vMl2, vCos);
+        }
+        /* Horizontal sum */
+        float32x2_t sum2 = vadd_f32(vget_low_f32(vRm0), vget_high_f32(vRm0));
+        Rm0 = vget_lane_f32(vpadd_f32(sum2, sum2), 0);
+        sum2 = vadd_f32(vget_low_f32(vRm1), vget_high_f32(vRm1));
+        Rm1 = vget_lane_f32(vpadd_f32(sum2, sum2), 0);
+
+        /* Handle remaining elements */
+        for (l = l4; l <= L; l++) {
+            const float Ml2 = cur_mp->Ml[l] * cur_mp->Ml[l];
+            Rm0 += Ml2;
+            Rm1 += Ml2 * cos_tab[l];
+        }
+    } else
+#endif
+#endif
+    {
+        /* Scalar fallback */
+        for (l = 1; l <= L; l++) {
+            const float Ml2 = cur_mp->Ml[l] * cur_mp->Ml[l];
+            Rm0 += Ml2;
+            Rm1 += Ml2 * cos_tab[l];
+        }
     }
 
     R2m0 = (Rm0 * Rm0);
     R2m1 = (Rm1 * Rm1);
 
-    for (l = 1; l <= cur_mp->L; l++) {
+    /* Compute spectral weight Wl and apply clipping
+     * This loop has complex conditionals that are hard to vectorize effectively */
+    for (l = 1; l <= L; l++) {
         if (cur_mp->Ml[l] != 0.0f) {
             const float cos_w0l = cos_tab[l];
             Wl[l] = sqrtf(cur_mp->Ml[l])
                     * sqrtf(sqrtf(((float)0.96 * (float)M_PI * ((R2m0 + R2m1) - ((float)2 * Rm0 * Rm1 * cos_w0l)))
                                   / (cur_mp->w0 * Rm0 * (R2m0 - R2m1))));
 
-            if ((8 * l) <= cur_mp->L) {
-                // no-op
+            if ((8 * l) <= L) {
+                /* no-op for low harmonics */
             } else if (Wl[l] > 1.2f) {
                 cur_mp->Ml[l] = 1.2f * cur_mp->Ml[l];
             } else if (Wl[l] < 0.5f) {
@@ -365,24 +434,115 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
         }
     }
 
-    // generate scaling factor
+    /* Compute sum of squared magnitudes for scaling factor
+     * Uses SIMD when available */
     sum = 0.0f;
-    for (l = 1; l <= cur_mp->L; l++) {
-        M = cur_mp->Ml[l];
-        if (M < 0.0f) {
-            M = -M;
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+    if (L >= 4) {
+        __m128 vsum = _mm_setzero_ps();
+        __m128 sign_mask = _mm_set1_ps(-0.0f);
+        int l4;
+        for (l4 = 1; l4 + 3 <= L; l4 += 4) {
+            __m128 vMl = _mm_loadu_ps(&cur_mp->Ml[l4]);
+            vMl = _mm_andnot_ps(sign_mask, vMl); /* fabs */
+            vsum = _mm_add_ps(vsum, _mm_mul_ps(vMl, vMl));
         }
-        sum += (M * M);
+        /* Horizontal sum */
+        __m128 shuf = _mm_shuffle_ps(vsum, vsum, _MM_SHUFFLE(2, 3, 0, 1));
+        __m128 sums = _mm_add_ps(vsum, shuf);
+        shuf = _mm_movehl_ps(shuf, sums);
+        sums = _mm_add_ss(sums, shuf);
+        sum = _mm_cvtss_f32(sums);
+
+        /* Handle remaining elements */
+        for (l = l4; l <= L; l++) {
+            float M = cur_mp->Ml[l];
+            if (M < 0.0f) {
+                M = -M;
+            }
+            sum += (M * M);
+        }
+    } else
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+    if (L >= 4) {
+        float32x4_t vsum = vdupq_n_f32(0.0f);
+        int l4;
+        for (l4 = 1; l4 + 3 <= L; l4 += 4) {
+            float32x4_t vMl = vld1q_f32(&cur_mp->Ml[l4]);
+            vMl = vabsq_f32(vMl); /* fabs */
+            vsum = vmlaq_f32(vsum, vMl, vMl);
+        }
+        /* Horizontal sum */
+        float32x2_t sum2 = vadd_f32(vget_low_f32(vsum), vget_high_f32(vsum));
+        sum = vget_lane_f32(vpadd_f32(sum2, sum2), 0);
+
+        /* Handle remaining elements */
+        for (l = l4; l <= L; l++) {
+            float M = cur_mp->Ml[l];
+            if (M < 0.0f) {
+                M = -M;
+            }
+            sum += (M * M);
+        }
+    } else
+#endif
+#endif
+    {
+        /* Scalar fallback */
+        for (l = 1; l <= L; l++) {
+            float M = cur_mp->Ml[l];
+            if (M < 0.0f) {
+                M = -M;
+            }
+            sum += (M * M);
+        }
     }
+
     if (sum == 0.0f) {
         gamma = 1.0f;
     } else {
         gamma = sqrtf(Rm0 / sum);
     }
 
-    // apply scaling factor
-    for (l = 1; l <= cur_mp->L; l++) {
-        cur_mp->Ml[l] = gamma * cur_mp->Ml[l];
+    /* Apply scaling factor to all bands
+     * Uses SIMD when available */
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+    if (L >= 4) {
+        __m128 vgamma = _mm_set1_ps(gamma);
+        int l4;
+        for (l4 = 1; l4 + 3 <= L; l4 += 4) {
+            __m128 vMl = _mm_loadu_ps(&cur_mp->Ml[l4]);
+            vMl = _mm_mul_ps(vMl, vgamma);
+            _mm_storeu_ps(&cur_mp->Ml[l4], vMl);
+        }
+        /* Handle remaining elements */
+        for (l = l4; l <= L; l++) {
+            cur_mp->Ml[l] = gamma * cur_mp->Ml[l];
+        }
+    } else
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+    if (L >= 4) {
+        float32x4_t vgamma = vdupq_n_f32(gamma);
+        int l4;
+        for (l4 = 1; l4 + 3 <= L; l4 += 4) {
+            float32x4_t vMl = vld1q_f32(&cur_mp->Ml[l4]);
+            vMl = vmulq_f32(vMl, vgamma);
+            vst1q_f32(&cur_mp->Ml[l4], vMl);
+        }
+        /* Handle remaining elements */
+        for (l = l4; l <= L; l++) {
+            cur_mp->Ml[l] = gamma * cur_mp->Ml[l];
+        }
+    } else
+#endif
+#endif
+    {
+        /* Scalar fallback */
+        for (l = 1; l <= L; l++) {
+            cur_mp->Ml[l] = gamma * cur_mp->Ml[l];
+        }
     }
 }
 

@@ -25,6 +25,16 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* SIMD headers for vectorized paths */
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#include <emmintrin.h>
+#endif
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#endif
+#endif
+
 /**
  * @brief 211-element synthesis window (indices -105 to +105).
  *
@@ -63,6 +73,9 @@ mbe_synthesisWindow_fast(int n) {
     return Ws_synthesis[n + 105];
 }
 
+/* Frame length for WOLA (always 160 samples) */
+#define MBE_FRAME_LEN 160
+
 /**
  * @brief FFT plan structure wrapping KISS FFT configs and scratch buffers.
  *
@@ -80,6 +93,15 @@ struct mbe_fft_plan {
     float Uw_out[MBE_FFT_SIZE];                /**< IFFT output buffer */
     int a_min[57];                             /**< Band lower bin edges */
     int b_max[57];                             /**< Band upper bin edges */
+
+    /* Precomputed WOLA weights for n=0..159 (avoids per-sample window lookups) */
+    float wola_w_prev[MBE_FRAME_LEN];    /**< w(n) for previous frame */
+    float wola_w_curr[MBE_FRAME_LEN];    /**< w(n-160) for current frame */
+    float wola_w_prev_sq[MBE_FRAME_LEN]; /**< w_prev^2 */
+    float wola_w_curr_sq[MBE_FRAME_LEN]; /**< w_curr^2 */
+    float wola_denom[MBE_FRAME_LEN];     /**< w_prev^2 + w_curr^2 */
+    int wola_prev_idx[MBE_FRAME_LEN];    /**< n + 128 */
+    int wola_curr_idx[MBE_FRAME_LEN];    /**< n + 128 - 160 = n - 32 */
 };
 
 mbe_fft_plan*
@@ -101,6 +123,23 @@ mbe_fft_plan_alloc(void) {
         }
         free(plan);
         return NULL;
+    }
+
+    /* Precompute WOLA weights for n=0..159 (N=160) */
+    for (int n = 0; n < MBE_FRAME_LEN; n++) {
+        /* Window positions relative to frame center */
+        float w_prev = mbe_synthesisWindow(n);                 /* w(n) for previous frame */
+        float w_curr = mbe_synthesisWindow(n - MBE_FRAME_LEN); /* w(n-160) for current frame */
+
+        plan->wola_w_prev[n] = w_prev;
+        plan->wola_w_curr[n] = w_curr;
+        plan->wola_w_prev_sq[n] = w_prev * w_prev;
+        plan->wola_w_curr_sq[n] = w_curr * w_curr;
+        plan->wola_denom[n] = plan->wola_w_prev_sq[n] + plan->wola_w_curr_sq[n];
+
+        /* Precompute buffer indices */
+        plan->wola_prev_idx[n] = n + 128;
+        plan->wola_curr_idx[n] = n + 128 - MBE_FRAME_LEN; /* n - 32 for N=160 */
     }
 
     return plan;
@@ -203,6 +242,268 @@ mbe_wola_combine(float* restrict output, const float* restrict prevUw, const flo
     }
 }
 
+/**
+ * @brief Optimized WOLA combine using precomputed weights.
+ *
+ * Uses the plan's precomputed window weights and denominator values to avoid
+ * per-sample window lookups and redundant squaring operations. Includes SIMD
+ * paths for SSE2 and NEON when MBELIB_ENABLE_SIMD is defined.
+ *
+ * @param output Output buffer of 160 samples.
+ * @param prevUw Previous frame's inverse FFT output (256 samples).
+ * @param currUw Current frame's inverse FFT output (256 samples).
+ * @param plan FFT plan containing precomputed WOLA weights.
+ */
+static void
+mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
+                      const mbe_fft_plan* restrict plan) {
+    if (MBE_UNLIKELY(!output || !prevUw || !currUw || !plan)) {
+        return;
+    }
+
+    const float* w_prev = plan->wola_w_prev;
+    const float* w_curr = plan->wola_w_curr;
+    const float* denom = plan->wola_denom;
+    const int* prev_idx = plan->wola_prev_idx;
+    const int* curr_idx = plan->wola_curr_idx;
+
+    /* Buffer index bounds:
+     * - prev_idx[n] = n + 128, valid when < MBE_FFT_SIZE (256), so n < 128
+     * - curr_idx[n] = n - 32, valid when >= 0, so n >= 32
+     * Therefore:
+     *   - n=0..31: curr_idx invalid (< 0), prev_idx valid
+     *   - n=32..127: both indices valid (SIMD safe)
+     *   - n=128..159: prev_idx invalid (>= 256), curr_idx valid
+     */
+
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+    /* SSE2 path: process 4 samples at a time where both indices are valid */
+
+    /* Process samples n=0..31 with scalar (curr_idx < 0) */
+    for (int n = 0; n < 32; n++) {
+        float prev_sample = prevUw[prev_idx[n]];
+        float curr_sample = 0.0f; /* curr_idx[n] < 0 for n < 32 */
+        float d = denom[n];
+        if (MBE_LIKELY(d > 1e-10f)) {
+            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
+        }
+    }
+
+    /* Process samples n=32..127 with SIMD (both indices valid) */
+    const __m128 threshold = _mm_set1_ps(1e-10f);
+    for (int n = 32; n < 128; n += 4) {
+        /* Load precomputed weights */
+        __m128 vWprev = _mm_loadu_ps(&w_prev[n]);
+        __m128 vWcurr = _mm_loadu_ps(&w_curr[n]);
+        __m128 vDenom = _mm_loadu_ps(&denom[n]);
+
+        /* Gather samples (all indices valid in this range) */
+        __m128 vPrevSamp =
+            _mm_set_ps(prevUw[prev_idx[n + 3]], prevUw[prev_idx[n + 2]], prevUw[prev_idx[n + 1]], prevUw[prev_idx[n]]);
+        __m128 vCurrSamp =
+            _mm_set_ps(currUw[curr_idx[n + 3]], currUw[curr_idx[n + 2]], currUw[curr_idx[n + 1]], currUw[curr_idx[n]]);
+
+        /* Compute weighted samples */
+        __m128 vWeightedPrev = _mm_mul_ps(vWprev, vPrevSamp);
+        __m128 vWeightedCurr = _mm_mul_ps(vWcurr, vCurrSamp);
+        __m128 vSum = _mm_add_ps(vWeightedPrev, vWeightedCurr);
+
+        /* Divide by denominator (skip division for small denominators) */
+        __m128 vMask = _mm_cmpgt_ps(vDenom, threshold);
+        __m128 vResult = _mm_div_ps(vSum, vDenom);
+        vResult = _mm_and_ps(vResult, vMask);
+
+        /* Add to output */
+        __m128 vOut = _mm_loadu_ps(&output[n]);
+        vOut = _mm_add_ps(vOut, vResult);
+        _mm_storeu_ps(&output[n], vOut);
+    }
+
+    /* Process samples n=128..159 with scalar (prev_idx >= MBE_FFT_SIZE) */
+    for (int n = 128; n < MBE_FRAME_LEN; n++) {
+        float prev_sample = 0.0f; /* prev_idx[n] >= 256 for n >= 128 */
+        float curr_sample = currUw[curr_idx[n]];
+        float d = denom[n];
+        if (MBE_LIKELY(d > 1e-10f)) {
+            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
+        }
+    }
+    return;
+
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+    /* NEON path: process 4 samples at a time where both indices are valid */
+
+    /* Process samples n=0..31 with scalar (curr_idx < 0) */
+    for (int n = 0; n < 32; n++) {
+        float prev_sample = prevUw[prev_idx[n]];
+        float curr_sample = 0.0f; /* curr_idx[n] < 0 for n < 32 */
+        float d = denom[n];
+        if (MBE_LIKELY(d > 1e-10f)) {
+            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
+        }
+    }
+
+    /* Process samples n=32..127 with SIMD (both indices valid) */
+    const float32x4_t threshold = vdupq_n_f32(1e-10f);
+    for (int n = 32; n < 128; n += 4) {
+        /* Load precomputed weights */
+        float32x4_t vWprev = vld1q_f32(&w_prev[n]);
+        float32x4_t vWcurr = vld1q_f32(&w_curr[n]);
+        float32x4_t vDenom = vld1q_f32(&denom[n]);
+
+        /* Gather samples (all indices valid in this range) */
+        float prev_samples[4] = {prevUw[prev_idx[n]], prevUw[prev_idx[n + 1]], prevUw[prev_idx[n + 2]],
+                                 prevUw[prev_idx[n + 3]]};
+        float curr_samples[4] = {currUw[curr_idx[n]], currUw[curr_idx[n + 1]], currUw[curr_idx[n + 2]],
+                                 currUw[curr_idx[n + 3]]};
+        float32x4_t vPrevSamp = vld1q_f32(prev_samples);
+        float32x4_t vCurrSamp = vld1q_f32(curr_samples);
+
+        /* Compute weighted samples */
+        float32x4_t vWeightedPrev = vmulq_f32(vWprev, vPrevSamp);
+        float32x4_t vWeightedCurr = vmulq_f32(vWcurr, vCurrSamp);
+        float32x4_t vSum = vaddq_f32(vWeightedPrev, vWeightedCurr);
+
+        /* Divide by denominator (NEON doesn't have direct divide, use reciprocal estimate) */
+        float32x4_t vRecip = vrecpeq_f32(vDenom);
+        vRecip = vmulq_f32(vRecip, vrecpsq_f32(vDenom, vRecip)); /* Newton-Raphson refinement */
+        float32x4_t vResult = vmulq_f32(vSum, vRecip);
+
+        /* Mask out results where denom <= threshold */
+        uint32x4_t vMask = vcgtq_f32(vDenom, threshold);
+        vResult = vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(vResult), vMask));
+
+        /* Add to output */
+        float32x4_t vOut = vld1q_f32(&output[n]);
+        vOut = vaddq_f32(vOut, vResult);
+        vst1q_f32(&output[n], vOut);
+    }
+
+    /* Process samples n=128..159 with scalar (prev_idx >= MBE_FFT_SIZE) */
+    for (int n = 128; n < MBE_FRAME_LEN; n++) {
+        float prev_sample = 0.0f; /* prev_idx[n] >= 256 for n >= 128 */
+        float curr_sample = currUw[curr_idx[n]];
+        float d = denom[n];
+        if (MBE_LIKELY(d > 1e-10f)) {
+            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
+        }
+    }
+    return;
+#endif
+#endif
+
+    /* Scalar fallback with precomputed weights */
+    for (int n = 0; n < MBE_FRAME_LEN; n++) {
+        float prev_sample = 0.0f;
+        float curr_sample = 0.0f;
+
+        int pidx = prev_idx[n];
+        if (MBE_LIKELY(pidx >= 0 && pidx < MBE_FFT_SIZE)) {
+            prev_sample = prevUw[pidx];
+        }
+
+        int cidx = curr_idx[n];
+        if (MBE_LIKELY(cidx >= 0 && cidx < MBE_FFT_SIZE)) {
+            curr_sample = currUw[cidx];
+        }
+
+        float d = denom[n];
+        if (MBE_LIKELY(d > 1e-10f)) {
+            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
+        }
+    }
+}
+
+/**
+ * @brief Compute sum of magnitude squared for a range of complex FFT bins.
+ *
+ * Calculates sum(re[i]^2 + im[i]^2) for bins from start to end (exclusive).
+ * Uses SIMD when MBELIB_ENABLE_SIMD is defined and the range is large enough.
+ *
+ * @param bins Array of complex FFT bins.
+ * @param start First bin index (inclusive).
+ * @param end Last bin index (exclusive).
+ * @return Sum of magnitude squared values.
+ */
+static float
+mbe_magnitude_squared_sum(const kiss_fft_cpx* restrict bins, int start, int end) {
+    float sum = 0.0f;
+    int count = end - start;
+
+    if (count <= 0) {
+        return 0.0f;
+    }
+
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+    /* SSE2 path: process 4 complex numbers (8 floats) at a time
+     * Each kiss_fft_cpx is [r, i], so 4 complex = 8 floats
+     * We load as floats and compute r0^2+i0^2 + r1^2+i1^2 + ... */
+    if (count >= 4) {
+        __m128 vsum = _mm_setzero_ps();
+        const float* fptr = (const float*)&bins[start];
+        int i;
+        for (i = 0; i + 4 <= count; i += 4) {
+            /* Load 8 floats: [r0,i0,r1,i1] and [r2,i2,r3,i3] */
+            __m128 v0 = _mm_loadu_ps(fptr);     /* r0,i0,r1,i1 */
+            __m128 v1 = _mm_loadu_ps(fptr + 4); /* r2,i2,r3,i3 */
+            fptr += 8;
+
+            /* Compute squares and accumulate */
+            __m128 sq0 = _mm_mul_ps(v0, v0);
+            __m128 sq1 = _mm_mul_ps(v1, v1);
+            vsum = _mm_add_ps(vsum, sq0);
+            vsum = _mm_add_ps(vsum, sq1);
+        }
+
+        /* Horizontal sum of vsum */
+        __m128 shuf = _mm_shuffle_ps(vsum, vsum, _MM_SHUFFLE(2, 3, 0, 1));
+        __m128 sums = _mm_add_ps(vsum, shuf);
+        shuf = _mm_shuffle_ps(sums, sums, _MM_SHUFFLE(0, 1, 2, 3));
+        sums = _mm_add_ps(sums, shuf);
+        sum = _mm_cvtss_f32(sums);
+
+        /* Handle remaining bins */
+        start += i;
+    }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+    /* NEON path: process 4 complex numbers at a time */
+    if (count >= 4) {
+        float32x4_t vsum = vdupq_n_f32(0.0f);
+        const float* fptr = (const float*)&bins[start];
+        int i;
+        for (i = 0; i + 4 <= count; i += 4) {
+            /* Load 8 floats: [r0,i0,r1,i1] and [r2,i2,r3,i3] */
+            float32x4_t v0 = vld1q_f32(fptr);
+            float32x4_t v1 = vld1q_f32(fptr + 4);
+            fptr += 8;
+
+            /* Compute squares and accumulate */
+            vsum = vmlaq_f32(vsum, v0, v0);
+            vsum = vmlaq_f32(vsum, v1, v1);
+        }
+
+        /* Horizontal sum */
+        float32x2_t vsum2 = vadd_f32(vget_low_f32(vsum), vget_high_f32(vsum));
+        sum = vget_lane_f32(vpadd_f32(vsum2, vsum2), 0);
+
+        /* Handle remaining bins */
+        start += i;
+    }
+#endif
+#endif
+
+    /* Scalar fallback for remaining bins */
+    for (int bin = start; bin < end; bin++) {
+        float re = bins[bin].r;
+        float im = bins[bin].i;
+        sum += (re * re) + (im * im);
+    }
+
+    return sum;
+}
+
 void
 mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict cur_mp, mbe_parms* restrict prev_mp,
                                    mbe_fft_plan* restrict plan, const float* restrict noise_buffer) {
@@ -253,18 +554,12 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
         }
     }
 
-    /* Algorithm #120: Calculate band-level scaling for unvoiced bands */
+    /* Algorithm #120: Calculate band-level scaling for unvoiced bands
+     * Uses SIMD-optimized magnitude accumulation when available */
     for (int l = 1; l <= L; l++) {
         if (cur_mp->Vl[l] == 0) { /* Unvoiced band */
-            float numerator = 0.0f;
-            int bin_count = 0;
-
-            for (int bin = a_min[l]; bin < b_max[l]; bin++) {
-                float re = Uw_fft[bin].r;
-                float im = Uw_fft[bin].i;
-                numerator += (re * re) + (im * im);
-                bin_count++;
-            }
+            int bin_count = b_max[l] - a_min[l];
+            float numerator = mbe_magnitude_squared_sum(Uw_fft, a_min[l], b_max[l]);
 
             if (bin_count > 0 && numerator > 1e-10f) {
                 float denominator = (float)bin_count;
@@ -280,7 +575,9 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     }
 
     /* Algorithms #119, #120, #124: Apply scaling to FFT bins
-     * Voiced bins get scaled by 0 (zeroed), unvoiced bins get proper scaling
+     * Uses SIMD-optimized bin scaling when available.
+     * Voiced bins get scaled by 0 (zeroed), unvoiced bins get proper scaling.
+     * Note: We need to apply per-bin scalors, so we use a different approach here.
      */
     for (int bin = 0; bin <= MBE_FFT_SIZE / 2; bin++) {
         Uw_fft[bin].r *= dftBinScalor[bin];
@@ -290,14 +587,36 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     /* Algorithm #125: Inverse FFT */
     kiss_fftri(plan->inv, Uw_fft, Uw_out);
 
-    /* Normalize IFFT output (KISS FFT doesn't normalize) */
-    float scale = 1.0f / (float)MBE_FFT_SIZE;
-    for (int i = 0; i < MBE_FFT_SIZE; i++) {
-        Uw_out[i] *= scale;
+    /* Normalize IFFT output (KISS FFT doesn't normalize)
+     * Uses SIMD when available for faster scaling */
+    {
+        const float scale = 1.0f / (float)MBE_FFT_SIZE;
+        int i = 0;
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+        __m128 vscale = _mm_set1_ps(scale);
+        for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+            __m128 v = _mm_loadu_ps(&Uw_out[i]);
+            v = _mm_mul_ps(v, vscale);
+            _mm_storeu_ps(&Uw_out[i], v);
+        }
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+        float32x4_t vscale = vdupq_n_f32(scale);
+        for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+            float32x4_t v = vld1q_f32(&Uw_out[i]);
+            v = vmulq_f32(v, vscale);
+            vst1q_f32(&Uw_out[i], v);
+        }
+#endif
+#endif
+        /* Scalar fallback for remaining samples */
+        for (; i < MBE_FFT_SIZE; i++) {
+            Uw_out[i] *= scale;
+        }
     }
 
-    /* Algorithm #126: WOLA combine with previous frame */
-    mbe_wola_combine(output, prev_mp->previousUw, Uw_out, 160);
+    /* Algorithm #126: WOLA combine with previous frame (using precomputed weights) */
+    mbe_wola_combine_fast(output, prev_mp->previousUw, Uw_out, plan);
 
     /* Save current output for next frame's WOLA */
     memcpy(cur_mp->previousUw, Uw_out, MBE_FFT_SIZE * sizeof(float));
