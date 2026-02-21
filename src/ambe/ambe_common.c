@@ -29,6 +29,18 @@ mbe_eccAmbe3600C0_common(char fr[4][24]) {
     for (j = 0; j < 23; j++) {
         fr[0][j + 1] = out[j];
     }
+    /* JMBE C0 uses Golay24: when the protected 23-bit codeword has no
+     * syndrome, enforce even parity by correcting the extra parity bit. */
+    if (errs == 0) {
+        int ones = 0;
+        for (j = 0; j < 24; j++) {
+            ones += (fr[0][j] & 1);
+        }
+        if ((ones & 1) != 0) {
+            fr[0][0] ^= 1;
+            errs = 1;
+        }
+    }
     return errs;
 }
 
@@ -98,6 +110,7 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
     }
 
     prev_mp->swn = 0;
+    prev_mp->un = 0;
     prev_mp->w0 = (float)M_PI / 32.0f; /* JMBE AMBEFundamentalFrequency.W124 */
     prev_mp->L = 15;
     prev_mp->K = 0;
@@ -128,6 +141,37 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
 
     *cur_mp = *prev_mp;
     *prev_mp_enhanced = *prev_mp;
+}
+
+void
+mbe_setAmbeErasureParms_common(mbe_parms* mp, const mbe_parms* state_src) {
+    if (!mp) {
+        return;
+    }
+
+    const mbe_parms* continuity = state_src ? state_src : mp;
+
+    mp->swn = 0;
+    mp->un = 0;
+    mp->w0 = 0.0f; /* JMBE AMBEFundamentalFrequency.W120..W123 */
+    mp->L = 9;
+    mp->K = 0;
+    mp->gamma = 0.0f;
+
+    for (int l = 0; l <= 56; l++) {
+        mp->Ml[l] = 1.0f;
+        mp->Vl[l] = 0;
+        mp->log2Ml[l] = 0.0f; /* log2(1.0) */
+        mp->PHIl[l] = continuity->PHIl[l];
+        mp->PSIl[l] = continuity->PSIl[l];
+    }
+
+    mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
+    mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+
+    mp->noiseSeed = continuity->noiseSeed;
+    memcpy(mp->noiseOverlap, continuity->noiseOverlap, sizeof(mp->noiseOverlap));
+    memcpy(mp->previousUw, continuity->previousUw, sizeof(mp->previousUw));
 }
 
 void

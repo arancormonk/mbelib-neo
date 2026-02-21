@@ -73,6 +73,23 @@ ambe2450_get_dct_cache(void) {
     return &ambe2450_cache;
 }
 
+static int
+ambe2450_is_valid_tone_id(const char ambe_d[49]) {
+    int id1 = 0;
+    /* AMBE tone ID1 is U1[0..7] (bits 12..19 in ambe_d), not the full 12-bit U1 field. */
+    for (int i = 12; i < 20; i++) {
+        id1 = (id1 << 1) | (int)ambe_d[i];
+    }
+
+    if (id1 == 5 || id1 == 6) {
+        return 1;
+    }
+    if ((id1 >= 7 && id1 <= 122) || (id1 >= 128 && id1 <= 163)) {
+        return 1;
+    }
+    return 0;
+}
+
 /**
  * @brief Print AMBE 2450 parameter bits to stderr (debug aid).
  * @param ambe_d AMBE parameter bits (49).
@@ -637,6 +654,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, int* errs2, char* err_str, ch
         err_str++;
         cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
+        /* JMBE erasure model: W120 defaults carried as previous frame state. */
+        mbe_setAmbeErasureParms_common(cur_mp, prev_mp);
     } else if (bad == 3 || bad == 7) {
         // Tone Frame
         *err_str = 'T';
@@ -678,9 +697,26 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, int* errs2, char* err_str, ch
             mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
         }
     } else if (bad == 7) {
-        //synthesize tone
-        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+        /* JMBE tone behavior:
+         * - valid tone IDs synthesize tone audio without replacing previous voice model
+         * - invalid tone IDs synthesize prior voice frame unless repeat maxed */
+        if (ambe2450_is_valid_tone_id(ambe_d)) {
+            mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+        } else if (!mbe_isMaxFrameRepeat(prev_mp)) {
+            mbe_parms synth_mp;
+            mbe_moveMbeParms(prev_mp, &synth_mp);
+            mbe_synthesizeSpeechf(aout_buf, &synth_mp, prev_mp_enhanced, uvquality);
+            mbe_moveMbeParms(&synth_mp, prev_mp_enhanced);
+        } else {
+            mbe_synthesizeComfortNoisef(aout_buf);
+            mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+        }
+    } else if (bad == 2) {
+        /* JMBE erasure behavior: synthesize white noise and keep ERASURE
+         * parameters as the previous-frame context for recovery. */
+        mbe_synthesizeComfortNoisef(aout_buf);
         mbe_moveMbeParms(cur_mp, prev_mp);
+        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     } else {
         mbe_synthesizeComfortNoisef(aout_buf);
         mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);

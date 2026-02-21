@@ -76,12 +76,15 @@ mbe_setThreadRngSeed(uint32_t seed) {
         seed = 0x6d25357bu; /* avoid zero state */
     }
     mbe_rng_state = seed;
+    mbe_seedComfortNoiseRng(seed);
+    mbe_seedUnvoicedNoiseLcg(seed);
 }
 
 /**
  * @brief Thread-local xorshift32 PRNG step.
  * @return New 32-bit pseudo-random state value (never 0).
- * @note Used for comfort noise generation (Box-Muller), not for unvoiced synthesis.
+ * @note Retained as a lightweight utility; current synthesis paths use
+ *       codec-specific generators seeded via mbe_setThreadRngSeed().
  */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((unused))
@@ -217,6 +220,7 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
 
     int l;
     prev_mp->swn = 0;
+    prev_mp->un = 0;
     prev_mp->w0 = 0.09378;
     prev_mp->L = 30;
     prev_mp->K = 10;
@@ -355,6 +359,9 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
         }
     }
 
+    /* JMBE Algorithm #111 uses pre-enhancement RM0 for local-energy tracking. */
+    mbe_setPreEnhRm0(cur_mp, Rm0);
+
     R2m0 = (Rm0 * Rm0);
     R2m1 = (Rm1 * Rm1);
 
@@ -491,7 +498,245 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
     }
 }
 
-// Tone synthesis mapping adapted from OP25 (Boatbod)
+/* JMBE float-domain soft clip translated to this library's float scale. */
+#define MBE_AUDIO_SOFT_CLIP_FLOAT   ((32767.0f * 0.95f) / 7.0f)
+#define MBE_TONE_PHASE_SCALE        4294967296.0
+#define MBE_TONE_PHASE_RAD_PER_TICK ((2.0 * M_PI) / MBE_TONE_PHASE_SCALE)
+
+static inline float
+mbe_clipFloatSample(float sample) {
+    if (sample > MBE_AUDIO_SOFT_CLIP_FLOAT) {
+        return MBE_AUDIO_SOFT_CLIP_FLOAT;
+    }
+    if (sample < -MBE_AUDIO_SOFT_CLIP_FLOAT) {
+        return -MBE_AUDIO_SOFT_CLIP_FLOAT;
+    }
+    return sample;
+}
+
+static void
+mbe_clipFloatBuffer(float* samples, int count) {
+    for (int i = 0; i < count; i++) {
+        samples[i] = mbe_clipFloatSample(samples[i]);
+    }
+}
+
+static inline uint32_t
+mbe_tonePhaseStep(double freq_hz) {
+    double step = (freq_hz / 8000.0) * MBE_TONE_PHASE_SCALE;
+    if (step <= 0.0) {
+        return 0u;
+    }
+    return (uint32_t)(step + 0.5);
+}
+
+static inline float
+mbe_toneSampleFromPhase(uint32_t phase) {
+    float angle = (float)(((double)phase * MBE_TONE_PHASE_RAD_PER_TICK) - (M_PI / 2.0));
+    return sinf(angle);
+}
+
+static int
+mbe_lookupToneFreqs(int tone_id, float* freq1, float* freq2) {
+    *freq1 = 0.0f;
+    *freq2 = 0.0f;
+
+    switch (tone_id) {
+        case 5:
+            *freq1 = 156.25f;
+            *freq2 = *freq1;
+            break;
+        case 6:
+            *freq1 = 187.5f;
+            *freq2 = *freq1;
+            break;
+        case 128:
+            *freq1 = 1336.0f;
+            *freq2 = 941.0f;
+            break;
+        case 129:
+            *freq1 = 1209.0f;
+            *freq2 = 697.0f;
+            break;
+        case 130:
+            *freq1 = 1336.0f;
+            *freq2 = 697.0f;
+            break;
+        case 131:
+            *freq1 = 1477.0f;
+            *freq2 = 697.0f;
+            break;
+        case 132:
+            *freq1 = 1209.0f;
+            *freq2 = 770.0f;
+            break;
+        case 133:
+            *freq1 = 1336.0f;
+            *freq2 = 770.0f;
+            break;
+        case 134:
+            *freq1 = 1477.0f;
+            *freq2 = 770.0f;
+            break;
+        case 135:
+            *freq1 = 1209.0f;
+            *freq2 = 852.0f;
+            break;
+        case 136:
+            *freq1 = 1336.0f;
+            *freq2 = 852.0f;
+            break;
+        case 137:
+            *freq1 = 1477.0f;
+            *freq2 = 852.0f;
+            break;
+        case 138:
+            *freq1 = 1633.0f;
+            *freq2 = 697.0f;
+            break;
+        case 139:
+            *freq1 = 1633.0f;
+            *freq2 = 770.0f;
+            break;
+        case 140:
+            *freq1 = 1633.0f;
+            *freq2 = 852.0f;
+            break;
+        case 141:
+            *freq1 = 1633.0f;
+            *freq2 = 941.0f;
+            break;
+        case 142:
+            *freq1 = 1209.0f;
+            *freq2 = 941.0f;
+            break;
+        case 143:
+            *freq1 = 1477.0f;
+            *freq2 = 941.0f;
+            break;
+        case 144:
+            *freq1 = 1162.0f;
+            *freq2 = 820.0f;
+            break;
+        case 145:
+            *freq1 = 1052.0f;
+            *freq2 = 606.0f;
+            break;
+        case 146:
+            *freq1 = 1162.0f;
+            *freq2 = 606.0f;
+            break;
+        case 147:
+            *freq1 = 1279.0f;
+            *freq2 = 606.0f;
+            break;
+        case 148:
+            *freq1 = 1052.0f;
+            *freq2 = 672.0f;
+            break;
+        case 149:
+            *freq1 = 1162.0f;
+            *freq2 = 672.0f;
+            break;
+        case 150:
+            *freq1 = 1279.0f;
+            *freq2 = 672.0f;
+            break;
+        case 151:
+            *freq1 = 1052.0f;
+            *freq2 = 743.0f;
+            break;
+        case 152:
+            *freq1 = 1162.0f;
+            *freq2 = 743.0f;
+            break;
+        case 153:
+            *freq1 = 1279.0f;
+            *freq2 = 743.0f;
+            break;
+        case 154:
+            *freq1 = 1430.0f;
+            *freq2 = 606.0f;
+            break;
+        case 155:
+            *freq1 = 1430.0f;
+            *freq2 = 672.0f;
+            break;
+        case 156:
+            *freq1 = 1430.0f;
+            *freq2 = 743.0f;
+            break;
+        case 157:
+            *freq1 = 1430.0f;
+            *freq2 = 820.0f;
+            break;
+        case 158:
+            *freq1 = 1052.0f;
+            *freq2 = 820.0f;
+            break;
+        case 159:
+            *freq1 = 1279.0f;
+            *freq2 = 820.0f;
+            break;
+        case 160:
+            *freq1 = 440.0f;
+            *freq2 = 350.0f;
+            break;
+        case 161:
+            *freq1 = 480.0f;
+            *freq2 = 440.0f;
+            break;
+        case 162:
+            *freq1 = 620.0f;
+            *freq2 = 480.0f;
+            break;
+        case 163:
+            *freq1 = 490.0f;
+            *freq2 = 350.0f;
+            break;
+        case 255: break;
+        default:
+            if ((tone_id >= 7) && (tone_id <= 122)) {
+                *freq1 = 31.25f * (float)tone_id;
+                *freq2 = *freq1;
+            }
+            break;
+    }
+
+    return ((*freq1 > 0.0f) || (*freq2 > 0.0f));
+}
+
+static void
+mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, int amplitude_id) {
+    if (!aout_buf || !cur_mp || freq1 <= 0.0f) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
+
+    const int dual_tone = (freq2 > 0.0f) && (fabsf(freq2 - freq1) > 1e-6f);
+    const float gain = (((amplitude_id < 0) ? 0.0f : (float)amplitude_id) / 127.0f) * MBE_AUDIO_SOFT_CLIP_FLOAT;
+    const uint32_t step1 = mbe_tonePhaseStep((double)freq1);
+    const uint32_t step2 = dual_tone ? mbe_tonePhaseStep((double)freq2) : 0u;
+    uint32_t phase1 = (uint32_t)cur_mp->swn;
+    uint32_t phase2 = (uint32_t)cur_mp->un;
+
+    for (int n = 0; n < 160; n++) {
+        phase1 += step1;
+        float s1 = mbe_toneSampleFromPhase(phase1);
+
+        if (dual_tone) {
+            phase2 += step2;
+            float s2 = mbe_toneSampleFromPhase(phase2);
+            aout_buf[n] = (0.5f * gain * s1) + (0.5f * gain * s2);
+        } else {
+            aout_buf[n] = gain * s1;
+        }
+    }
+
+    cur_mp->swn = (int)phase1;
+    cur_mp->un = (int)phase2;
+}
+
 /**
  * @brief Synthesize a tone frame into 160 float samples at 8 kHz.
  * @param aout_buf Output buffer of 160 float samples.
@@ -500,8 +745,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
  */
 void
 mbe_synthesizeTonef(float* aout_buf, char* ambe_d, mbe_parms* cur_mp) {
-    int i, n;
-    float* aout_buf_p;
+    int i;
 
     int u0, u1, u2, u3;
     u0 = u1 = u2 = u3 = 0;
@@ -534,222 +778,25 @@ mbe_synthesizeTonef(float* aout_buf, char* ambe_d, mbe_parms* cur_mp) {
     ID3 = ((u2 & 0x7f) << 1) + ((u2 >> 13) & 0x1);
     ID4 = ((u3 & 0x1fe0) >> 5);
 
-    // TODO: Cross-validate related ID fields (per OP25). For now, rely on error counts.
-
-    float step1, step2, amplitude;
-    float freq1 = 0, freq2 = 0;
+    float freq1, freq2;
     (void)ID0;
     (void)ID2;
-    (void)ID3;
-    (void)ID4; // parsed for potential validation
+    (void)ID3; /* parsed for potential validation */
+    (void)ID4;
 
 #ifdef DISABLE_AMBE_TONES // generate silence if tones disabled
-    aout_buf_p = aout_buf;
-    for (n = 0; n < 160; n++) {
-        *aout_buf_p = (float)0;
-        aout_buf_p++;
-    }
+    mbe_synthesizeSilencef(aout_buf);
     return;
 #endif
 
-    // Current implementation selects tones solely by ID1
-    switch (ID1) {
-        // single tones, set frequency
-        case 5:
-            freq1 = 156.25;
-            freq2 = freq1;
-            break;
-        case 6:
-            freq1 = 187.5;
-            freq2 = freq1;
-            break;
-        // DTMF
-        case 128:
-            freq1 = 1336;
-            freq2 = 941;
-            break;
-        case 129:
-            freq1 = 1209;
-            freq2 = 697;
-            break;
-        case 130:
-            freq1 = 1336;
-            freq2 = 697;
-            break;
-        case 131:
-            freq1 = 1477;
-            freq2 = 697;
-            break;
-        case 132:
-            freq1 = 1209;
-            freq2 = 770;
-            break;
-        case 133:
-            freq1 = 1336;
-            freq2 = 770;
-            break;
-        case 134:
-            freq1 = 1477;
-            freq2 = 770;
-            break;
-        case 135:
-            freq1 = 1209;
-            freq2 = 852;
-            break;
-        case 136:
-            freq1 = 1336;
-            freq2 = 852;
-            break;
-        case 137:
-            freq1 = 1477;
-            freq2 = 852;
-            break;
-        case 138:
-            freq1 = 1633;
-            freq2 = 697;
-            break;
-        case 139:
-            freq1 = 1633;
-            freq2 = 770;
-            break;
-        case 140:
-            freq1 = 1633;
-            freq2 = 852;
-            break;
-        case 141:
-            freq1 = 1633;
-            freq2 = 941;
-            break;
-        case 142:
-            freq1 = 1209;
-            freq2 = 941;
-            break;
-        case 143:
-            freq1 = 1477;
-            freq2 = 941;
-            break;
-        // KNOX
-        case 144:
-            freq1 = 1162;
-            freq2 = 820;
-            break;
-        case 145:
-            freq1 = 1052;
-            freq2 = 606;
-            break;
-        case 146:
-            freq1 = 1162;
-            freq2 = 606;
-            break;
-        case 147:
-            freq1 = 1279;
-            freq2 = 606;
-            break;
-        case 148:
-            freq1 = 1052;
-            freq2 = 672;
-            break;
-        case 149:
-            freq1 = 1162;
-            freq2 = 672;
-            break;
-        case 150:
-            freq1 = 1279;
-            freq2 = 672;
-            break;
-        case 151:
-            freq1 = 1052;
-            freq2 = 743;
-            break;
-        case 152:
-            freq1 = 1162;
-            freq2 = 743;
-            break;
-        case 153:
-            freq1 = 1279;
-            freq2 = 743;
-            break;
-        case 154:
-            freq1 = 1430;
-            freq2 = 606;
-            break;
-        case 155:
-            freq1 = 1430;
-            freq2 = 672;
-            break;
-        case 156:
-            freq1 = 1430;
-            freq2 = 743;
-            break;
-        case 157:
-            freq1 = 1430;
-            freq2 = 820;
-            break;
-        case 158:
-            freq1 = 1052;
-            freq2 = 820;
-            break;
-        case 159:
-            freq1 = 1279;
-            freq2 = 820;
-            break;
-        // dual tones
-        case 160:
-            freq1 = 440;
-            freq2 = 350;
-            break;
-        case 161:
-            freq1 = 480;
-            freq2 = 440;
-            break;
-        case 162:
-            freq1 = 620;
-            freq2 = 480;
-            break;
-        case 163:
-            freq1 = 490;
-            freq2 = 350;
-            break;
-        // zero amplitude
-        case 255:
-            freq1 = 0;
-            freq2 = 0;
-            break;
-        // single tones, calculated frequency
-        default:
-            if ((ID1 >= 7) && (ID1 <= 122)) {
-                freq1 = 31.25 * ID1;
-                freq2 = freq1;
-            }
-    }
-
-    // Zero amplitude or unimplemented tone IDs
-    if ((freq1 == 0) && (freq2 == 0)) {
-        aout_buf_p = aout_buf;
-        for (n = 0; n < 160; n++) {
-            *aout_buf_p = (float)0;
-            aout_buf_p++;
-        }
+    if (!mbe_lookupToneFreqs(ID1, &freq1, &freq2)) {
+        mbe_synthesizeSilencef(aout_buf);
         return;
     }
 
-    // Debug: uncomment to inspect tone ID and amplitude
-    // fprintf(stderr, "TONE ID = %d AD = %d\n", ID1, AD);
-
-    // Synthesize tones
-    step1 = 2.0f * (float)M_PI * freq1 / 8000.0f;
-    step2 = 2.0f * (float)M_PI * freq2 / 8000.0f;
-    amplitude = AD * 75.0f; //
-    aout_buf_p = aout_buf;
-    for (n = 0; n < 160; n++) {
-        *aout_buf_p = amplitude * (sinf((cur_mp->swn) * step1) / 2.0f + sinf((cur_mp->swn) * step2) / 2.0f);
-        *aout_buf_p = *aout_buf_p / 6.0f;
-        aout_buf_p++;
-        cur_mp->swn++;
-    }
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
 }
 
-// Simplified D-STAR single-frequency tone synthesis based on existing approximations
 /**
  * @brief Synthesize a D-STAR style tone into 160 float samples.
  * @param aout_buf Output buffer of 160 float samples.
@@ -759,20 +806,12 @@ mbe_synthesizeTonef(float* aout_buf, char* ambe_d, mbe_parms* cur_mp) {
  */
 void
 mbe_synthesizeTonefdstar(float* aout_buf, char* ambe_d, mbe_parms* cur_mp, int ID1) {
-    int n;
-    float* aout_buf_p;
-
-    int AD = 103; // nominal amplitude aligned with other tone cases
-    float step1, step2, amplitude;
+    int AD = 103; /* JMBE nominal D-STAR tone amplitude */
     float freq1 = 0, freq2 = 0;
     (void)ambe_d;
 
 #ifdef DISABLE_AMBE_TONES // generate silence if tones disabled
-    aout_buf_p = aout_buf;
-    for (n = 0; n < 160; n++) {
-        *aout_buf_p = (float)0;
-        aout_buf_p++;
-    }
+    mbe_synthesizeSilencef(aout_buf);
     return;
 #endif
 
@@ -789,25 +828,17 @@ mbe_synthesizeTonefdstar(float* aout_buf, char* ambe_d, mbe_parms* cur_mp, int I
         // single tones, calculated frequency
         default:
             if ((ID1 >= 7) && (ID1 <= 122)) {
-                freq1 = 31.25 * ID1;
+                freq1 = 31.25f * (float)ID1;
                 freq2 = freq1;
             }
     }
 
-    // Debug: uncomment to inspect tone ID and amplitude
-    // fprintf(stderr, "TONE ID = %d AD = %d\n", ID1, AD);
-
-    // Synthesize tones
-    step1 = 2.0f * (float)M_PI * freq1 / 8000.0f;
-    step2 = 2.0f * (float)M_PI * freq2 / 8000.0f;
-    amplitude = AD * 75.0f; //
-    aout_buf_p = aout_buf;
-    for (n = 0; n < 160; n++) {
-        *aout_buf_p = amplitude * (sinf((cur_mp->swn) * step1) / 2.0f + sinf((cur_mp->swn) * step2) / 2.0f);
-        *aout_buf_p = *aout_buf_p / 6.0f;
-        aout_buf_p++;
-        cur_mp->swn++;
+    if (freq1 <= 0.0f) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
     }
+
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
 }
 
 /**
@@ -816,6 +847,9 @@ mbe_synthesizeTonefdstar(float* aout_buf, char* ambe_d, mbe_parms* cur_mp, int I
  */
 void
 mbe_synthesizeSilencef(float* aout_buf) {
+    if (aout_buf == NULL) {
+        return;
+    }
     memset(aout_buf, 0, 160 * sizeof(*aout_buf));
 }
 
@@ -825,6 +859,9 @@ mbe_synthesizeSilencef(float* aout_buf) {
  */
 void
 mbe_synthesizeSilence(short* aout_buf) {
+    if (aout_buf == NULL) {
+        return;
+    }
     memset(aout_buf, 0, 160 * sizeof(*aout_buf));
 }
 
@@ -855,15 +892,18 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     /* Silence unused parameter warning - uvquality is kept for API compatibility */
     (void)uvquality;
 
+    /* Apply adaptive smoothing (Algorithms #111-116) before muting checks.
+     * JMBE computes/update smoothing state during parameter preparation even
+     * for frames that are subsequently muted. */
+    mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
+
     /* Frame muting:
      * - JMBE IMBE path mutes on max repeats OR error-rate threshold.
      * - JMBE AMBE path mutes on max repeats only (error-rate muting is not applied in AMBE synth path). */
     int mute_on_error_rate = (fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f);
     if (mbe_isMaxFrameRepeat(cur_mp) || (mute_on_error_rate && mbe_requiresMuting(cur_mp))) {
+        /* Muted frames output comfort noise while preserving model progression. */
         mbe_synthesizeComfortNoisef(aout_buf);
-        /* Copy state from previous frame for potential recovery */
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeatCount = 0; /* Reset repeat count after muting */
         return;
     }
 
@@ -874,7 +914,7 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
 
     /* Count number of unvoiced bands */
     numUv = 0;
-    for (l = 1; l <= cur_mp->L; l++) {
+    for (l = 0; l <= cur_mp->L; l++) {
         if (cur_mp->Vl[l] == 0) {
             numUv++;
         }
@@ -885,11 +925,6 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
 
     /* Initialize output buffer to zero */
     memset(aout_buf, 0, N * sizeof(float));
-
-    /* Apply adaptive smoothing (Algorithms #111-116)
-     * JMBE-compatible: Always call to track local energy even if smoothing isn't needed.
-     * The function will return early after updating energy if smoothing is not required. */
-    mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
 
     /* eq 128 and 129: Handle different L values between frames */
     if (cur_mp->L > prev_mp->L) {
@@ -1002,6 +1037,9 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     if (plan) {
         mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
     }
+
+    /* Match JMBE float-path soft clipping semantics for synthesized speech. */
+    mbe_clipFloatBuffer(aout_buf, N);
 }
 
 /**

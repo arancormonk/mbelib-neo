@@ -49,4 +49,25 @@
 /** Amplitude base constant (Algorithm #115). */
 #define MBE_AMPLITUDE_BASE              6000
 
+/**
+ * @brief Register pre-enhancement RM0 energy for the current frame.
+ *
+ * JMBE Algorithm #111 uses local energy derived from pre-enhanced spectral
+ * amplitudes. This helper allows the spectral-enhancement stage to provide
+ * RM0 to adaptive smoothing without changing the public ABI.
+ *
+ * @param owner Frame-parameter owner for this RM0 handoff.
+ * @param rm0 Sum of squared pre-enhancement amplitudes.
+ */
+void mbe_setPreEnhRm0(const mbe_parms* owner, float rm0);
+
+/**
+ * @brief Seed the comfort-noise RNG used by mbe_synthesizeComfortNoisef().
+ *
+ * Uses Java Random-compatible 48-bit state initialization.
+ *
+ * @param seed Thread-local seed value (0 maps to a fixed non-zero default).
+ */
+void mbe_seedComfortNoiseRng(uint32_t seed);
+
 #endif /* MBEINT_MBE_ADAPTIVE_H */

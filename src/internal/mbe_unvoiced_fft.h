@@ -66,6 +66,15 @@ void mbe_fft_plan_free(mbe_fft_plan* plan);
 void mbe_generate_noise_lcg(float* buffer, int count, float* seed);
 
 /**
+ * @brief Seed the thread-local default LCG state for unvoiced noise.
+ *
+ * Applies to the next cold-start sequence in mbe_generate_noise_with_overlap().
+ *
+ * @param seed Thread-local seed value (0 maps to a fixed non-zero default).
+ */
+void mbe_seedUnvoicedNoiseLcg(uint32_t seed);
+
+/**
  * @brief Generate the next JMBE-style 256-sample noise buffer.
  *
  * State is encoded in existing public fields to preserve ABI:

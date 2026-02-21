@@ -639,6 +639,7 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
         err_str++;
         cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
+        mbe_setAmbeErasureParms_common(cur_mp, prev_mp);
     } else if (bad == 3) {
         // Tone Frame
         *err_str = 'T';
@@ -674,6 +675,10 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
             mbe_synthesizeComfortNoisef(aout_buf);
             mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
         }
+    } else if (bad == 2) {
+        mbe_synthesizeComfortNoisef(aout_buf);
+        mbe_moveMbeParms(cur_mp, prev_mp);
+        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     } else {
         mbe_synthesizeComfortNoisef(aout_buf);
         mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);

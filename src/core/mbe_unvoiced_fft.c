@@ -24,6 +24,10 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* Thread-local seed override for unvoiced-noise cold start. */
+static MBE_THREAD_LOCAL uint32_t mbe_unvoiced_seed_state = (uint32_t)MBE_LCG_DEFAULT_SEED;
+static MBE_THREAD_LOCAL int mbe_unvoiced_seed_override = 0;
+
 /* SIMD headers for vectorized paths */
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
@@ -223,17 +227,31 @@ mbe_generate_noise_lcg(float* restrict buffer, int count, float* restrict seed) 
 }
 
 void
+mbe_seedUnvoicedNoiseLcg(uint32_t seed) {
+    if (seed == 0u) {
+        seed = 0x6d25357bu;
+    }
+    mbe_unvoiced_seed_state = seed % MBE_LCG_M_INT;
+    mbe_unvoiced_seed_override = 1;
+}
+
+void
 mbe_generate_noise_with_overlap(float* restrict buffer, float* restrict seed, float* restrict overlap) {
     if (MBE_UNLIKELY(!buffer || !seed || !overlap)) {
         return;
     }
 
     /* Cold start: match JMBE's initial current buffer (all zeros), then prime
-     * generator state for the next call. */
+     * generator state for the next call (default or externally seeded). */
     if (*seed < 0.0f) {
         memset(buffer, 0, MBE_FFT_SIZE * sizeof(float));
         memset(overlap, 0, MBE_NOISE_OVERLAP * sizeof(float));
-        *seed = MBE_LCG_DEFAULT_SEED;
+        if (mbe_unvoiced_seed_override) {
+            *seed = (float)mbe_unvoiced_seed_state;
+            mbe_unvoiced_seed_override = 0;
+        } else {
+            *seed = MBE_LCG_DEFAULT_SEED;
+        }
         return;
     }
 

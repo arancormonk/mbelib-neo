@@ -44,6 +44,41 @@ struct imbe_dct_cache {
 static MBE_THREAD_LOCAL struct imbe_dct_cache imbe_cache = {0};
 
 /**
+ * @brief Reset IMBE model state after excessive repeat headroom is exceeded.
+ *
+ * Matches JMBE IMBE behavior where repeat overflow falls back to a default
+ * voice model instead of extending repeat/mute indefinitely. Per-frame error
+ * metrics and synthesis continuity state are intentionally preserved.
+ *
+ * @param mp IMBE parameter state to reset.
+ */
+static void
+imbe_reset_headroom_defaults(mbe_parms* mp) {
+    if (!mp) {
+        return;
+    }
+
+    mp->swn = 0;
+    mp->un = 0;
+    mp->w0 = 0.09378f;
+    mp->L = 30;
+    mp->K = 10;
+    mp->gamma = 0.0f;
+
+    for (int l = 0; l <= 56; l++) {
+        mp->Vl[l] = 0;
+        mp->Ml[l] = 1.0f;
+        mp->log2Ml[l] = 0.0f;
+    }
+
+    mp->repeat = 0;
+    mp->repeatCount = 0;
+    mp->localEnergy = 75000.0f;
+    mp->amplitudeThreshold = 20480;
+    mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
+}
+
+/**
  * @brief Initialize or return the thread-local IMBE DCT cache.
  *
  * Fills the cosine tables on first use. Because the cache is thread-local,
@@ -557,6 +592,10 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char
      * This matches JMBE IMBEModelParameters.setErrors() */
     cur_mp->errorCountTotal = *errs2;
     cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.000365f * (float)(*errs2));
+    if (!c0_errors_valid) {
+        /* Dataf callers do not provide C4 context; avoid stale cross-frame state. */
+        cur_mp->errorCount4 = 0;
+    }
 
     for (i = 0; i < *errs2; i++) {
         *err_str = '=';
@@ -577,9 +616,14 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char
     }
 
     if (repeat_required) {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeat++;
-        cur_mp->repeatCount++;
+        if (prev_mp->repeatCount > (MBE_MAX_FRAME_REPEATS - 1)) {
+            /* JMBE IMBE headroom behavior: reset to default model after prolonged repeats. */
+            imbe_reset_headroom_defaults(cur_mp);
+        } else {
+            mbe_useLastMbeParms(cur_mp, prev_mp);
+            cur_mp->repeat++;
+            cur_mp->repeatCount++;
+        }
         *err_str = 'R';
         err_str++;
     } else {
@@ -587,16 +631,18 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char
         cur_mp->repeatCount = 0;
     }
 
-    if (cur_mp->repeat <= 3) {
-        mbe_moveMbeParms(cur_mp, prev_mp);
-        mbe_spectralAmpEnhance(cur_mp);
-        mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
-        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-    } else {
+    int frame_muted = mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp);
+
+    mbe_moveMbeParms(cur_mp, prev_mp);
+    mbe_spectralAmpEnhance(cur_mp);
+    mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+
+    if (frame_muted) {
         *err_str = 'M';
         err_str++;
-        mbe_synthesizeComfortNoisef(aout_buf);
     }
+
+    mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     *err_str = 0;
 }
 

@@ -8,8 +8,9 @@
  * @brief Internal helpers for AMBE 3600x{2400,2450} ECC and demodulation.
  *
  * Declares common routines used by both AMBE 3600x2400 and 3600x2450
- * implementations to correct C0 with Golay(23,12), demodulate C1, and
- * extract the 49-bit parameter vector.
+ * implementations to correct C0 with Golay24-compatible behavior
+ * (Golay(23,12) + parity bit handling), demodulate C1, and extract the
+ * 49-bit parameter vector.
  */
 
 #ifndef MBELIB_NEO_INTERNAL_AMBE_COMMON_H
@@ -18,10 +19,11 @@
 #include "mbelib-neo/mbelib.h"
 
 /**
- * @brief Correct C0 for AMBE 3600x{2400,2450} with Golay(23,12).
+ * @brief Correct C0 for AMBE 3600x{2400,2450} with Golay24 parity behavior.
  *
- * Applies Golay decoding to `fr[0][1..23]` in-place to correct errors
- * in the protected portion of C0.
+ * Applies Golay(23,12) decoding to `fr[0][1..23]` and then applies
+ * Golay24 parity-bit correction on `fr[0][0]` when the protected
+ * 23-bit codeword has zero syndrome.
  *
  * @param fr AMBE frame as 4x24 bitplanes (modified).
  * @return Number of corrected bit errors in C0.
@@ -62,6 +64,19 @@ int mbe_eccAmbe3600Data_common(char fr[4][24], char* out49);
  * @param prev_mp_enhanced Output enhanced previous parameter state.
  */
 void mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
+
+/**
+ * @brief Set AMBE parameters to JMBE-style ERASURE defaults (W120).
+ *
+ * Mirrors AMBEModelParameters.setDefaults(FrameType.ERASURE): w0=0,
+ * L=9, unvoiced bands, unit amplitudes, zero gain term. Keeps phase and
+ * unvoiced overlap/noise state from `state_src` to preserve synthesizer
+ * continuity behavior.
+ *
+ * @param mp Target parameter set to rewrite.
+ * @param state_src Source state for phase/noise continuity (may be NULL).
+ */
+void mbe_setAmbeErasureParms_common(mbe_parms* mp, const mbe_parms* state_src);
 
 /**
  * @brief Ensure AMBE parameter state is initialized with AMBE defaults.

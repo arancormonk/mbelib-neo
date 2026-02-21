@@ -307,8 +307,8 @@ MBE_API void mbe_printVersion(char* str);
 MBE_API const char* mbe_versionString(void);
 
 /**
- * @brief Set the thread-local RNG seed used by unvoiced synthesis noise.
- *        Improves determinism and thread-safety vs. global rand().
+ * @brief Set thread-local RNG seeds used by synthesis noise generators.
+ *        Applies to comfort noise and unvoiced LCG cold-start state.
  * @param seed Any non-zero 32-bit seed value.
  */
 MBE_API void mbe_setThreadRngSeed(uint32_t seed);

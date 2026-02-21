@@ -17,8 +17,60 @@
 #include "mbelib-neo/mbelib.h"
 
 /* Thread-local storage for comfort noise RNG to avoid cross-thread interference.
- * JMBE uses per-synthesizer Random instances; we use thread-local state instead. */
-static MBE_THREAD_LOCAL uint32_t mbe_comfort_noise_seed = 0x12345678u;
+ * JMBE uses per-synthesizer java.util.Random instances. */
+#define MBE_JAVA_RNG_MULT      0x5DEECE66DULL
+#define MBE_JAVA_RNG_ADD       0xBULL
+#define MBE_JAVA_RNG_MASK      ((1ULL << 48) - 1ULL)
+#define MBE_JAVA_RNG_INIT_SEED 0x12345678ULL
+static MBE_THREAD_LOCAL uint64_t mbe_comfort_noise_seed48 = 0;
+static MBE_THREAD_LOCAL int mbe_comfort_noise_seeded = 0;
+/* Thread-local pre-enhancement RM0 handoff from mbe_spectralAmpEnhance(). */
+static MBE_THREAD_LOCAL float mbe_pre_enh_rm0 = 0.0f;
+static MBE_THREAD_LOCAL int mbe_pre_enh_rm0_valid = 0;
+static MBE_THREAD_LOCAL const mbe_parms* mbe_pre_enh_owner = NULL;
+
+void
+mbe_seedComfortNoiseRng(uint32_t seed) {
+    if (seed == 0u) {
+        seed = 0x6d25357bu;
+    }
+    mbe_comfort_noise_seed48 = (((uint64_t)seed) ^ MBE_JAVA_RNG_MULT) & MBE_JAVA_RNG_MASK;
+    mbe_comfort_noise_seeded = 1;
+}
+
+void
+mbe_setPreEnhRm0(const mbe_parms* owner, float rm0) {
+    if (owner && rm0 >= 0.0f) {
+        mbe_pre_enh_rm0 = rm0;
+        mbe_pre_enh_rm0_valid = 1;
+        mbe_pre_enh_owner = owner;
+    } else {
+        mbe_pre_enh_rm0 = 0.0f;
+        mbe_pre_enh_rm0_valid = 0;
+        mbe_pre_enh_owner = NULL;
+    }
+}
+
+/**
+ * @brief Java Random-compatible next(bits) generator for comfort noise.
+ *
+ * Replicates java.util.Random's 48-bit LCG:
+ *   seed = (seed * 0x5DEECE66D + 0xB) & ((1<<48)-1)
+ *   return seed >>> (48 - bits)
+ *
+ * @param bits Number of high-order bits requested (1..32).
+ * @return Pseudorandom value with the requested number of bits.
+ */
+static inline uint32_t
+mbe_java_random_next_bits(int bits) {
+    if (!mbe_comfort_noise_seeded) {
+        mbe_comfort_noise_seed48 = (MBE_JAVA_RNG_INIT_SEED ^ MBE_JAVA_RNG_MULT) & MBE_JAVA_RNG_MASK;
+        mbe_comfort_noise_seeded = 1;
+    }
+
+    mbe_comfort_noise_seed48 = (mbe_comfort_noise_seed48 * MBE_JAVA_RNG_MULT + MBE_JAVA_RNG_ADD) & MBE_JAVA_RNG_MASK;
+    return (uint32_t)(mbe_comfort_noise_seed48 >> (48 - bits));
+}
 
 /**
  * @brief Check if adaptive smoothing is required based on error rates.
@@ -70,8 +122,7 @@ mbe_isMaxFrameRepeat(const mbe_parms* mp) {
 /**
  * @brief Generate comfort noise for muted frames (float version).
  *
- * Generates low-level Gaussian white noise to fill gaps during frame muting.
- * Uses Box-Muller transform for JMBE-compatible Gaussian distribution.
+ * Generates low-level uniform white noise to fill gaps during frame muting.
  *
  * @param aout_buf Output buffer of 160 float samples.
  */
@@ -81,39 +132,14 @@ mbe_synthesizeComfortNoisef(float* aout_buf) {
         return;
     }
 
-    /* JMBE-compatible Gaussian noise using Box-Muller transform
-     * JMBE uses Java's Random.nextGaussian() with gain of 0.003 */
-    const float gain = 0.003f * 32767.0f; /* ~98.3 peak amplitude */
+    /* JMBE muted-noise model: uniform white noise in [-1, +1] with gain 0.003.
+     * Translate to this library's float-domain scale (short path multiplies by 7). */
+    const float gain = (0.003f * 32767.0f) / 7.0f;
 
-    for (int i = 0; i < 160; i += 2) {
-        /* Generate two uniform random numbers in (0, 1) using thread-local xorshift32 */
-        uint32_t x = mbe_comfort_noise_seed;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        mbe_comfort_noise_seed = x ? x : 0x6d25357bu;
-        float u1 = ((float)(mbe_comfort_noise_seed & 0xFFFFFF) + 1.0f) / 16777217.0f; /* (0, 1) to avoid log(0) */
-
-        x = mbe_comfort_noise_seed;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        mbe_comfort_noise_seed = x ? x : 0x6d25357bu;
-        float u2 = (float)(mbe_comfort_noise_seed & 0xFFFFFF) / 16777216.0f; /* [0, 1) */
-
-        /* Box-Muller transform: convert uniform to Gaussian N(0,1) */
-        float r = sqrtf(-2.0f * logf(u1));
-        float theta = 2.0f * (float)M_PI * u2;
-        float s, c;
-        mbe_sincosf(theta, &s, &c);
-        float z0 = r * c;
-        float z1 = r * s;
-
-        /* Scale and store */
-        aout_buf[i] = z0 * gain;
-        if (i + 1 < 160) {
-            aout_buf[i + 1] = z1 * gain;
-        }
+    for (int i = 0; i < 160; i++) {
+        /* JMBE parity: use Java Random-like 24-bit float generation. */
+        float u = ((float)mbe_java_random_next_bits(24) / 16777216.0f) * 2.0f - 1.0f;
+        aout_buf[i] = u * gain;
     }
 }
 
@@ -131,16 +157,8 @@ mbe_synthesizeComfortNoise(short* aout_buf) {
     float float_buf[160];
     mbe_synthesizeComfortNoisef(float_buf);
 
-    /* Convert to 16-bit with clipping */
-    for (int i = 0; i < 160; i++) {
-        float sample = float_buf[i];
-        if (sample > 32760.0f) {
-            sample = 32760.0f;
-        } else if (sample < -32760.0f) {
-            sample = -32760.0f;
-        }
-        aout_buf[i] = (short)sample;
-    }
+    /* Reuse float->short scaling so noise amplitude matches JMBE's 0.003 model. */
+    mbe_floattoshort(float_buf, aout_buf);
 }
 
 /**
@@ -172,8 +190,16 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
 
     /* Algorithm #111: Calculate local energy with IIR smoothing */
     float RM0 = 0.0f;
-    for (int l = 1; l <= L; l++) {
-        RM0 += M[l] * M[l];
+    if (mbe_pre_enh_rm0_valid && mbe_pre_enh_owner == cur_mp) {
+        /* Use pre-enhancement RM0 provided by mbe_spectralAmpEnhance(). */
+        RM0 = mbe_pre_enh_rm0;
+        mbe_pre_enh_rm0_valid = 0;
+        mbe_pre_enh_owner = NULL;
+    } else {
+        /* Fallback for direct callers that bypass spectral enhancement. */
+        for (int l = 1; l <= L; l++) {
+            RM0 += M[l] * M[l];
+        }
     }
 
     float prevEnergy = prev_mp->localEnergy;

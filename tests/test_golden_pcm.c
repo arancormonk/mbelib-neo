@@ -63,8 +63,8 @@ main(void) {
      * back to deterministic and sanity checks so CI remains green.
      */
     /* Updated for PFFFT FFT implementation */
-    const uint32_t X86_F32_FNV1A = 0xB024F5B9u;
-    const uint32_t X86_S16_FNV1A = 0x63F4537Fu;
+    const uint32_t X86_F32_FNV1A = 0x59741032u;
+    const uint32_t X86_S16_FNV1A = 0x4EDB8636u;
 
     float out_f[160];
     short out_s[160];
