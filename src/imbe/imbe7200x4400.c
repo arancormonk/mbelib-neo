@@ -21,6 +21,11 @@
 #include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
 
+/* Internal helper also used by imbe7100x4400.c frame path. */
+void mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
+                                     mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
+                                     int c0_errors_valid);
+
 /**
  * @brief Thread-local cache for IMBE DCT cosine coefficients.
  *
@@ -531,6 +536,71 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
 }
 
 /**
+ * @brief Internal IMBE 4400 synthesis path with optional C0 error context.
+ *
+ * Frame decode paths provide C0 errors for JMBE repeat criteria parity.
+ * Public Dataf calls do not have C0 context and use the historical total-error fallback.
+ */
+void
+mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
+                                mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
+                                int c0_errors_valid) {
+    int i, bad;
+    int repeat_required;
+    float repeat_threshold;
+
+    /* IMBE path always uses IMBE muting threshold, even after AMBE state reuse. */
+    cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
+
+    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116).
+     * IIR-filtered error rate: errorRate = 0.95 * prev + 0.000365 * totalErrors
+     * This matches JMBE IMBEModelParameters.setErrors() */
+    cur_mp->errorCountTotal = *errs2;
+    cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.000365f * (float)(*errs2));
+
+    for (i = 0; i < *errs2; i++) {
+        *err_str = '=';
+        err_str++;
+    }
+
+    bad = mbe_decodeImbe4400Parms(imbe_d, cur_mp, prev_mp);
+    repeat_threshold = 10.0f + (40.0f * cur_mp->errorRate);
+    if (bad == 1) {
+        repeat_required = 1;
+    } else if (c0_errors_valid) {
+        /* JMBE IMBE repeat criteria when C0 errors are available from frame decode:
+         * C0 errors >= 2 && totalErrors >= 10 + 40*errorRate. */
+        repeat_required = ((c0_errors >= 2) && ((float)(*errs2) >= repeat_threshold));
+    } else {
+        /* Dataf callers pass parameter bits only (no C0 context); keep historical total-error fallback. */
+        repeat_required = (*errs2 > 5);
+    }
+
+    if (repeat_required) {
+        mbe_useLastMbeParms(cur_mp, prev_mp);
+        cur_mp->repeat++;
+        cur_mp->repeatCount++;
+        *err_str = 'R';
+        err_str++;
+    } else {
+        cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
+    }
+
+    if (cur_mp->repeat <= 3) {
+        mbe_moveMbeParms(cur_mp, prev_mp);
+        mbe_spectralAmpEnhance(cur_mp);
+        mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+    } else {
+        *err_str = 'M';
+        err_str++;
+        mbe_synthesizeComfortNoisef(aout_buf);
+    }
+    *err_str = 0;
+}
+
+/**
  * @brief Process IMBE 4400 parameters into 160 float samples at 8 kHz.
  * @param aout_buf Output buffer of 160 float samples.
  * @param errs     Output: corrected error count in protected fields.
@@ -545,43 +615,9 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
 void
 mbe_processImbe4400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
-
-    int i, bad;
-    (void)errs; // C0 errors tracked separately for repeat decision; total in errs2
-
-    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116).
-     * IIR-filtered error rate: errorRate = 0.95 * prev + 0.000365 * totalErrors
-     * This matches JMBE IMBEModelParameters.setErrors() */
-    cur_mp->errorCountTotal = *errs2;
-    cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.000365f * (float)(*errs2));
-
-    for (i = 0; i < *errs2; i++) {
-        *err_str = '=';
-        err_str++;
-    }
-
-    bad = mbe_decodeImbe4400Parms(imbe_d, cur_mp, prev_mp);
-    if ((bad == 1) || (*errs2 > 5)) {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeat++;
-        cur_mp->repeatCount++;
-        *err_str = 'R';
-        err_str++;
-    } else {
-        cur_mp->repeat = 0;
-        cur_mp->repeatCount = 0;
-    }
-    if (cur_mp->repeat <= 3) {
-        mbe_moveMbeParms(cur_mp, prev_mp);
-        mbe_spectralAmpEnhance(cur_mp);
-        mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
-        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-    } else {
-        *err_str = 'M';
-        err_str++;
-        mbe_synthesizeComfortNoisef(aout_buf);
-    }
-    *err_str = 0;
+    (void)errs;
+    mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
+                                    0);
 }
 
 /**
@@ -623,7 +659,8 @@ mbe_processImbe7200x4400Framef(float* aout_buf, int* errs, int* errs2, char* err
     /* Set C4 error count for adaptive smoothing (JMBE Algorithm #112 formula selection) */
     cur_mp->errorCount4 = errs_c4;
 
-    mbe_processImbe4400Dataf(aout_buf, errs, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
+                                    *errs, 1);
 }
 
 /**

@@ -13,6 +13,9 @@
  */
 
 #include "ambe_common.h"
+#include <math.h>
+#include <string.h>
+#include "mbe_adaptive.h"
 #include "mbelib-neo/mbelib.h"
 
 int
@@ -86,4 +89,54 @@ mbe_eccAmbe3600Data_common(char fr[4][24], char* out49) {
         ambe++;
     }
     return errs;
+}
+
+void
+mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    if (!cur_mp || !prev_mp || !prev_mp_enhanced) {
+        return;
+    }
+
+    prev_mp->swn = 0;
+    prev_mp->w0 = (float)M_PI / 32.0f; /* JMBE AMBEFundamentalFrequency.W124 */
+    prev_mp->L = 15;
+    prev_mp->K = 0;
+    prev_mp->gamma = 0.0f;
+
+    for (int l = 0; l <= 56; l++) {
+        prev_mp->Ml[l] = 1.0f;
+        prev_mp->Vl[l] = 0;
+        prev_mp->log2Ml[l] = 0.0f; /* log2(1.0) */
+        prev_mp->PHIl[l] = 0.0f;
+        prev_mp->PSIl[l] = (float)M_PI / 2.0f;
+    }
+
+    prev_mp->repeat = 0;
+
+    prev_mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
+    prev_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+    prev_mp->errorRate = 0.0f;
+    prev_mp->errorCountTotal = 0;
+    prev_mp->errorCount4 = 0;
+
+    prev_mp->repeatCount = 0;
+    prev_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+
+    prev_mp->noiseSeed = -1.0f;
+    memset(prev_mp->noiseOverlap, 0, sizeof(prev_mp->noiseOverlap));
+    memset(prev_mp->previousUw, 0, sizeof(prev_mp->previousUw));
+
+    *cur_mp = *prev_mp;
+    *prev_mp_enhanced = *prev_mp;
+}
+
+void
+mbe_ensureAmbeDefaults_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    if (!prev_mp) {
+        return;
+    }
+
+    if (fabsf(prev_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f) {
+        mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+    }
 }

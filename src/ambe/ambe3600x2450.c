@@ -148,14 +148,16 @@ mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
 }
 
 /**
- * @brief Decode AMBE 2450 parameters from demodulated bitstream.
+ * @brief Internal AMBE 2450 parameter decode with optional tone BER gate.
+ *
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
- * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
+ * @param total_errors Total frame error count for JMBE tone gating, or <0 to disable.
+ * @return Tone index or 0 for voice; implementation-specific non-zero for special frames.
  */
-int
-mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+static int
+mbe_decodeAmbe2450ParmsInternal(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp, int total_errors) {
 
     int ji, i, j, k, l, L = 0, L9, m, am, ak;
     int intkl[57];
@@ -221,9 +223,9 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     b0 |= ambe_d[39];
 
     /* JMBE-compatible tone classification:
-     * tone if U0 tone check passes and either U3 tone check is zero
-     * or U1 high/low verification nibbles match. */
-    if (tone_verified) {
+     * - Tone if U0 tone check passes and either U3 check is zero or U1 high/low nibbles match.
+     * - If total BER is known and >= 6, do not classify as tone (JMBE AMBEFrame). */
+    if (tone_verified && (total_errors < 0 || total_errors < 6)) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Tone Frame\n");
 #endif
@@ -245,8 +247,8 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
         silence = 1;
         cur_mp->w0 = ((float)2 * M_PI) / (float)32;
         f0 = (float)1 / (float)32;
-        L = 14;
-        cur_mp->L = 14;
+        L = (b0 == 124) ? 15 : 14; /* JMBE maps W124->L15, W125->L14 */
+        cur_mp->L = L;
         for (l = 1; l <= L; l++) {
             cur_mp->Vl[l] = 0;
         }
@@ -577,12 +579,113 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 }
 
 /**
+ * @brief Decode AMBE 2450 parameters from demodulated bitstream.
+ * @param ambe_d  Demodulated AMBE parameter bits (49).
+ * @param cur_mp  Output: current frame parameters.
+ * @param prev_mp Input: previous frame parameters (for prediction).
+ * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
+ */
+int
+mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    return mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, -1);
+}
+
+/**
  * @brief Demodulate interleaved AMBE 3600x2450 data in-place.
  * @param ambe_fr Frame as 4x24 bitplanes (modified).
  */
 void
 mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]) {
     mbe_demodulateAmbe3600Data_common(ambe_fr);
+}
+
+/**
+ * @brief Internal AMBE 2450 synthesis path with optional C0 error context.
+ *
+ * Frame decode paths provide C0 errors for JMBE repeat criteria parity.
+ * Public Dataf calls do not have C0 context and use the historical total-error fallback.
+ */
+static void
+mbe_processAmbe2450Dataf_internal(float* aout_buf, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
+                                  mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
+                                  int c0_errors_valid) {
+    int i, bad;
+    int repeat_required;
+
+    /* JMBE AMBE starts from W124 defaults; normalize if caller used generic init. */
+    mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
+
+    /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%). */
+    cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+
+    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116). */
+    cur_mp->errorCountTotal = *errs2;
+    cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
+    cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
+
+    for (i = 0; i < *errs2; i++) {
+        *err_str = '=';
+        err_str++;
+    }
+
+    //it should be noted that in this context, 'bad' isn't referring to bad decode, but is a return
+    //value for which type of frame we should synthesize (voice, repeat, silence, erasure, or tone, etc)
+    bad = mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, *errs2);
+    if (bad == 2) {
+        // Erasure frame
+        *err_str = 'E';
+        err_str++;
+        cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
+    } else if (bad == 3 || bad == 7) {
+        // Tone Frame
+        *err_str = 'T';
+        err_str++;
+        cur_mp->repeat = 0;
+        cur_mp->repeatCount = 0;
+    } else {
+        if (c0_errors_valid) {
+            /* JMBE AMBE repeat criteria when C0 errors are known:
+             * errors[0] >= 4 || (errors[0] >= 2 && total >= 6). */
+            repeat_required = ((c0_errors >= 4) || ((c0_errors >= 2) && (*errs2 >= 6)));
+        } else {
+            /* Dataf callers pass parameter bits only (no C0 context); keep historical total-error fallback. */
+            repeat_required = (*errs2 > 3);
+        }
+
+        if (repeat_required) {
+            mbe_useLastMbeParms(cur_mp, prev_mp);
+            cur_mp->repeat++;
+            cur_mp->repeatCount++;
+            *err_str = 'R';
+            err_str++;
+        } else {
+            cur_mp->repeat = 0;
+            cur_mp->repeatCount = 0;
+        }
+    }
+
+    if (bad == 0) {
+        if (cur_mp->repeat <= 3) {
+            mbe_moveMbeParms(cur_mp, prev_mp);
+            mbe_spectralAmpEnhance(cur_mp);
+            mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+            mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+        } else {
+            *err_str = 'M';
+            err_str++;
+            mbe_synthesizeComfortNoisef(aout_buf);
+            mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+        }
+    } else if (bad == 7) {
+        //synthesize tone
+        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+        mbe_moveMbeParms(cur_mp, prev_mp);
+    } else {
+        mbe_synthesizeComfortNoisef(aout_buf);
+        mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+    }
+    *err_str = 0;
 }
 
 /**
@@ -600,76 +703,9 @@ mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]) {
 void
 mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
-
-    int i, bad;
-    (void)errs; // C0 errors tracked separately for repeat decision; total in errs2
-
-    /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%).
-     * This matches JMBE AMBEModelParameters.isFrameMuted(). */
-    cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-
-    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116).
-     * IIR-filtered error rate: errorRate = 0.95 * prev + 0.001064 * totalErrors
-     * This matches JMBE AMBEModelParameters constructor.
-     * Note: AMBE uses different coefficient (0.001064) than IMBE (0.000365). */
-    cur_mp->errorCountTotal = *errs2;
-    cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
-    cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
-
-    for (i = 0; i < *errs2; i++) {
-        *err_str = '=';
-        err_str++;
-    }
-    //it should be noted that in this context, 'bad' isn't referring to bad decode, but is a return
-    //value for which type of frame we should synthesize (voice, repeat, silence, erasure, or tone, etc)
-    bad = mbe_decodeAmbe2450Parms(ambe_d, cur_mp, prev_mp);
-    if (bad == 2) {
-        // Erasure frame
-        *err_str = 'E';
-        err_str++;
-        cur_mp->repeat = 0;
-        cur_mp->repeatCount = 0;
-    } else if (bad == 3 || bad == 7) {
-        // Tone Frame
-        *err_str = 'T';
-        err_str++;
-        cur_mp->repeat = 0;
-        cur_mp->repeatCount = 0;
-    } else if (*errs2 > 3) {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeat++;
-        cur_mp->repeatCount++;
-        *err_str = 'R';
-        err_str++;
-    } else {
-        cur_mp->repeat = 0;
-        cur_mp->repeatCount = 0;
-    }
-
-    if (bad == 0) {
-        if (cur_mp->repeat <= 3) {
-            mbe_moveMbeParms(cur_mp, prev_mp);
-            mbe_spectralAmpEnhance(cur_mp);
-            mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
-            mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-        } else {
-            *err_str = 'M';
-            err_str++;
-            mbe_synthesizeComfortNoisef(aout_buf);
-            mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
-        }
-    }
-
-    else if (bad == 7 && *errs2 < 6) // match JMBE tone gate (errorCount < 6)
-    {
-        //synthesize tone
-        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
-        mbe_moveMbeParms(cur_mp, prev_mp);
-    } else {
-        mbe_synthesizeComfortNoisef(aout_buf);
-        mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
-    }
-    *err_str = 0;
+    (void)errs;
+    mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
+                                      0);
 }
 
 /**
@@ -706,7 +742,8 @@ mbe_processAmbe3600x2450Framef(float* aout_buf, int* errs, int* errs2, char* err
     *errs2 = *errs;
     *errs2 += mbe_eccAmbe3600x2450Data(ambe_fr, ambe_d);
 
-    mbe_processAmbe2450Dataf(aout_buf, errs, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
+                                      *errs, 1);
 }
 
 /**

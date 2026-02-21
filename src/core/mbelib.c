@@ -855,8 +855,11 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     /* Silence unused parameter warning - uvquality is kept for API compatibility */
     (void)uvquality;
 
-    /* Frame muting: generate comfort noise if error rate too high or max repeats exceeded */
-    if (mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp)) {
+    /* Frame muting:
+     * - JMBE IMBE path mutes on max repeats OR error-rate threshold.
+     * - JMBE AMBE path mutes on max repeats only (error-rate muting is not applied in AMBE synth path). */
+    int mute_on_error_rate = (fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f);
+    if (mbe_isMaxFrameRepeat(cur_mp) || (mute_on_error_rate && mbe_requiresMuting(cur_mp))) {
         mbe_synthesizeComfortNoisef(aout_buf);
         /* Copy state from previous frame for potential recovery */
         mbe_useLastMbeParms(cur_mp, prev_mp);

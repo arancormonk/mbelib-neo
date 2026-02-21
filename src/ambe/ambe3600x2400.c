@@ -612,6 +612,9 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
 
     int i, bad;
 
+    /* AMBE family uses W124 defaults in JMBE; normalize generic init state. */
+    mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
+
     /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%).
      * This matches JMBE AMBEModelParameters.isFrameMuted(). */
     cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
@@ -669,11 +672,11 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
             *err_str = 'M';
             err_str++;
             mbe_synthesizeComfortNoisef(aout_buf);
-            mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
+            mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
         }
     } else {
         mbe_synthesizeComfortNoisef(aout_buf);
-        mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
+        mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
     }
     *err_str = 0;
 }
