@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 1.1 LANGUAGES C)
+project(mbelib-neo VERSION 1.2 LANGUAGES C)
 
 # Language and build defaults
 set(CMAKE_C_STANDARD 99)
@@ -21,7 +21,7 @@ option(MBELIB_ENABLE_FAST_MATH "Enable fast-math optimizations (may relax IEEE s
 option(MBELIB_ENABLE_LTO "Enable Link Time Optimization (IPO/LTO) for Release builds" OFF)
 option(MBELIB_ENABLE_SIMD "Enable SIMD optimized routines when available (SSE2/NEON)" OFF)
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
-option(MBELIB_STRICT_ORDER "Preserve legacy sample-major RNG accumulation order (may reduce performance)" OFF)
+option(MBELIB_STRICT_ORDER "Reserved compatibility flag (currently no behavior change)" OFF)
 
 # Generated headers (version)
 include(CMakePackageConfigHelpers)

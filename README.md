@@ -78,9 +78,9 @@ cmake --build . -j
 ctest -V
 
 # Alternative (from anywhere):
-cmake -S . -B build -DMBELIB_BUILD_TESTS=ON -DMBELIB_BUILD_EXAMPLES=ON
-cmake --build build -j
-ctest --test-dir build -V
+cmake -S <repo-path> -B <build-dir> -DMBELIB_BUILD_TESTS=ON -DMBELIB_BUILD_EXAMPLES=ON
+cmake --build <build-dir> -j
+ctest --test-dir <build-dir> -V
 ```
 
 ## Install / Uninstall
@@ -107,9 +107,10 @@ cmake --build build/dev-release --target uninstall
 - `-DMBELIB_BUILD_DOCS=ON` — Add `docs` target (requires Doxygen).
 - `-DMBELIB_ENABLE_FAST_MATH=ON` — Enable fast-math (`-ffast-math`/`/fp:fast`) on library targets.
 - `-DMBELIB_ENABLE_LTO=ON` — Enable IPO/LTO in Release builds when supported.
-- `-DMBELIB_ENABLE_SIMD=ON` — Enable SIMD-accelerated routines (SSE2 on x86/x86_64, NEON on ARM64) for hot paths like float→int16 conversion. Falls back to portable scalar code when unavailable.
+- `-DMBELIB_ENABLE_SIMD=ON` — Enable SIMD-accelerated routines (SSE2 on x86/x86_64, NEON on ARM64) in hot paths (including float→int16 conversion and unvoiced FFT synthesis loops). Falls back to portable scalar code when unavailable.
+- `-DMBELIB_STRICT_ORDER=ON` — Compatibility flag that currently only defines `MBELIB_STRICT_ORDER` at compile time (no behavior change in this tree).
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
-- `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI) under the `bench_` targets.
+- `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, and `bench_convert`.
 
 ## Using The Library
 
@@ -213,9 +214,13 @@ mbelib-neo implements JMBE-compatible audio synthesis algorithms for improved au
 
 - **Voiced phase/amplitude interpolation** (Algorithms #134-138): Smooth interpolation of pitch and amplitude for low-frequency harmonics during stable pitch periods. Reduces "buzzy" artifacts in voiced speech.
 
-- **Frame repeat/muting with comfort noise**: Graceful degradation under high error conditions. Generates low-level white noise during frame muting to maintain audio continuity.
+- **Codec-specific frame repeat/muting parity**: Matches JMBE behavior where IMBE mutes on max repeats or error-rate threshold, while AMBE muting is repeat-driven in the synth path. IMBE prolonged repeat headroom resets to a default model state.
+
+- **AMBE tone/erasure fallback parity**: AMBE 3600x2450 tone classification uses JMBE-style verification plus BER gating (`errorCount < 6`). Unverified/high-BER tone candidates fall back to erasure/repeat behavior, and invalid tone IDs reuse prior voice model until repeat max is reached.
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
+
+- **Comfort-noise parity model**: Muted-frame noise follows JMBE’s low-level uniform white-noise model (`0.003` gain semantics) using Java `Random`-compatible per-thread RNG behavior.
 
 These improvements bring mbelib-neo's audio quality closer to the reference JMBE (Java Multi-Band Excitation) implementation.
 
@@ -225,19 +230,15 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 - Float and 16‑bit PCM variants are provided (e.g., `mbe_processAmbe3600x2400Framef` and `mbe_processAmbe3600x2400Frame`).
 - Version macro `MBELIB_VERSION` is defined in the generated header `mbelib-neo/version.h` and returned by `mbe_printVersion`.
 - `mbe_versionString()` returns a const pointer to the version string.
-- Noise source for unvoiced synthesis uses a fast thread‑local PRNG. Call
-  `mbe_setThreadRngSeed(uint32_t)` in each thread for deterministic output when desired.
+- Unvoiced synthesis uses a JMBE-style LCG state carried in `mbe_parms` (`noiseSeed`/`noiseOverlap`), with per-thread cold-start seeding via `mbe_setThreadRngSeed(uint32_t)`.
 - ABI: shared library `SOVERSION` follows the project major version; minor updates aim to remain ABI compatible.
 
 ### Determinism & RNG
 
-- The unvoiced synthesis path uses a per‑thread xorshift32 PRNG. For reproducible output,
-  set a fixed seed in each thread with `mbe_setThreadRngSeed(seed)`. Different threads must
-  seed independently to avoid correlated sequences.
-- Compile‑time option `-DMBELIB_STRICT_ORDER=ON` preserves the legacy sample‑major RNG draw and
-  accumulation order at a small performance cost. With the default (OFF), a faster oscillator‑major
-  path is used; it remains deterministic for a given seed and platform but is not bit‑identical to
-  the legacy ordering.
+- `mbe_setThreadRngSeed(seed)` seeds both thread-local comfort-noise RNG state and the next unvoiced LCG cold start. For reproducible output, set it per thread before synthesis.
+- Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
+- AMBE/IMBE frame handling intentionally differs for JMBE parity: IMBE uses error-rate muting and repeat-headroom reset behavior, while AMBE tone/erasure/repeat transitions follow AMBE-specific JMBE gating rules.
+- `MBELIB_STRICT_ORDER` is currently a reserved compile-time define in this tree (no ordering-path switch implemented yet).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math on supported CPUs. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
   sanity bounds elsewhere.
@@ -245,7 +246,7 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 ## Tests and Examples
 
 - Run tests with `ctest -V` from the build directory.
-- Included tests: `test_api` (version/headers), `test_ecc` (Golay and Hamming).
+- Included tests: `test_api` (version/headers), `test_ecc` (Golay and Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior), `test_golden_pcm` (golden hash regression checks).
 - Example: `examples/print_version.c` shows linking and header usage.
 
 ## Documentation
@@ -263,7 +264,7 @@ cmake --build build --target docs
 - Public headers: `include/mbelib-neo/`
 - Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`
 - Internal headers: `src/internal/`
-- External libraries: `src/external/kiss_fft/` (bundled KISS FFT, BSD-3-Clause)
+- External libraries: `src/external/pffft/` (bundled PFFFT + FFTPACK sources, BSD-like license)
 - Tests: `tests/` • Examples: `examples/`
 
 ## Contributing
