@@ -223,12 +223,13 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
     int l;
     prev_mp->swn = 0;
     prev_mp->un = 0;
-    prev_mp->w0 = 0.09378;
-    prev_mp->L = 30;
-    prev_mp->K = 10;
+    /* Match JMBE IMBEModelParameters default (IMBEFundamentalFrequency.DEFAULT, index 134). */
+    prev_mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
+    prev_mp->L = (int)(0.9254 * (int)((M_PI / prev_mp->w0) + 0.25));
+    prev_mp->K = (prev_mp->L < 37) ? (int)((float)(prev_mp->L + 2) / (float)3) : 12;
     prev_mp->gamma = (float)0;
     for (l = 0; l <= 56; l++) {
-        prev_mp->Ml[l] = (float)0;
+        prev_mp->Ml[l] = 1.0f;
         prev_mp->Vl[l] = 0;
         prev_mp->log2Ml[l] = (float)0; // log2 of 1 == 0
         prev_mp->PHIl[l] = (float)0;

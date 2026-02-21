@@ -60,9 +60,11 @@ imbe_reset_headroom_defaults(mbe_parms* mp) {
 
     mp->swn = 0;
     mp->un = 0;
-    mp->w0 = 0.09378f;
-    mp->L = 30;
-    mp->K = 10;
+    /* Match JMBE IMBEModelParameters.copy() overflow path:
+     * setMBEFundamentalFrequency(IMBEFundamentalFrequency.DEFAULT), then rebuild model arrays. */
+    mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
+    mp->L = (int)(0.9254 * (int)((M_PI / mp->w0) + 0.25));
+    mp->K = (mp->L < 37) ? (int)((float)(mp->L + 2) / (float)3) : 12;
     mp->gamma = 0.0f;
 
     for (int l = 0; l <= 56; l++) {

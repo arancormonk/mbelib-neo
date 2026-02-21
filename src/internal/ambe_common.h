@@ -55,7 +55,7 @@ int mbe_eccAmbe3600Data_common(char fr[4][24], char* out49);
 /**
  * @brief Initialize AMBE parameter state to JMBE-compatible defaults.
  *
- * AMBE in JMBE starts from fundamental W124 (w0=PI/32, L=15) with
+ * AMBE in JMBE starts from fundamental W124 (w0=(PI/32)*2*PI, L=15) with
  * unvoiced bands and unit spectral amplitudes. This helper mirrors that
  * state for AMBE-family decode paths.
  *

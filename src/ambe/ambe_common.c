@@ -111,7 +111,8 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
 
     prev_mp->swn = 0;
     prev_mp->un = 0;
-    prev_mp->w0 = (float)M_PI / 32.0f; /* JMBE AMBEFundamentalFrequency.W124 */
+    /* JMBE AMBEFundamentalFrequency.W124: constructor uses (frequency * 2*PI), where frequency is PI/32. */
+    prev_mp->w0 = (float)((M_PI / 32.0) * (2.0 * M_PI));
     prev_mp->L = 15;
     prev_mp->K = 0;
     prev_mp->gamma = 0.0f;

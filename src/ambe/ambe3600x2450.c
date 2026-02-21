@@ -262,8 +262,9 @@ mbe_decodeAmbe2450ParmsInternal(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev
         fprintf(stderr, "Silence Frame\n");
 #endif
         silence = 1;
-        cur_mp->w0 = ((float)2 * M_PI) / (float)32;
-        f0 = (float)1 / (float)32;
+        /* JMBE AMBEFundamentalFrequency.W124/W125: constructor uses (frequency * 2*PI), where frequency is PI/32. */
+        f0 = (float)M_PI / 32.0f;
+        cur_mp->w0 = f0 * (float)(2.0 * M_PI);
         L = (b0 == 124) ? 15 : 14; /* JMBE maps W124->L15, W125->L14 */
         cur_mp->L = L;
         for (l = 1; l <= L; l++) {
@@ -704,7 +705,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, int* errs2, char* err_str, ch
             mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
         } else if (!mbe_isMaxFrameRepeat(prev_mp)) {
             mbe_parms synth_mp;
-            mbe_moveMbeParms(prev_mp, &synth_mp);
+            /* JMBE invalid-tone behavior reuses the prior VOICE model (enhanced amplitudes) while still advancing synth state. */
+            mbe_moveMbeParms(prev_mp_enhanced, &synth_mp);
             mbe_synthesizeSpeechf(aout_buf, &synth_mp, prev_mp_enhanced, uvquality);
             mbe_moveMbeParms(&synth_mp, prev_mp_enhanced);
         } else {

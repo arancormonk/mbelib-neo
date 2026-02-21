@@ -271,11 +271,14 @@ main(void) {
         set_ambe2450_b0(ambe_d, 124);
         assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
         assert(cur.L == 15);
+        float w0_silence = (float)((M_PI / 32.0) * (2.0 * M_PI));
+        assert(approx_equal(cur.w0, w0_silence, 1e-6f));
 
         set_bits_zero(ambe_d, 49);
         set_ambe2450_b0(ambe_d, 125);
         assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
         assert(cur.L == 14);
+        assert(approx_equal(cur.w0, w0_silence, 1e-6f));
     }
 
     // AMBE 2450 Dataf: errs is output-only; repeat decision must not depend on preinitialized errs input
@@ -600,8 +603,9 @@ main(void) {
 
         assert(cur.repeat == 0);
         assert(cur.repeatCount == 0);
-        assert(cur.L == 30);
-        assert(approx_equal(cur.w0, 0.09378f, 1e-5f));
+        assert(cur.L == 39);
+        float w0_default = (float)((4.0 * M_PI) / (134.0 + 39.5));
+        assert(approx_equal(cur.w0, w0_default, 1e-5f));
         assert(cur.Vl[1] == 0);
         assert(cur.Ml[1] > 0.0f);
     }
