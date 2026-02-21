@@ -54,12 +54,12 @@ static const float Ws_synthesis[211] = {
     1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
     1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
     1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
+    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
     /* Indices +56 to +105: linear ramp down from ~0.98 to 0.0 */
     0.980f, 0.960f, 0.940f, 0.920f, 0.900f, 0.880f, 0.860f, 0.840f, 0.820f, 0.800f, 0.780f, 0.760f, 0.740f, 0.720f,
     0.700f, 0.680f, 0.660f, 0.640f, 0.620f, 0.600f, 0.580f, 0.560f, 0.540f, 0.520f, 0.500f, 0.480f, 0.460f, 0.440f,
-    0.420f, 0.400f, 0.380f, 0.360f, 0.340f, 0.320f, 0.300f, 0.280f, 0.260f, 0.240f, 0.220f, 0.200f, 0.180f, 0.160f,
-    0.140f, 0.120f, 0.100f, 0.080f, 0.060f, 0.040f, 0.020f, 0.000f};
+    0.420f, 0.400f, 0.380f, 0.360f, 0.340f, 0.320f, 0.300f, 0.300f, 0.280f, 0.260f, 0.240f, 0.220f, 0.200f, 0.180f,
+    0.160f, 0.140f, 0.120f, 0.100f, 0.080f, 0.060f, 0.040f, 0.020f, 0.000f};
 
 /**
  * @brief Fast inline window lookup for hot paths.
@@ -228,13 +228,31 @@ mbe_generate_noise_with_overlap(float* restrict buffer, float* restrict seed, fl
         return;
     }
 
-    /* Copy overlap from previous frame (first 96 samples) */
+    /* Cold start: match JMBE's initial current buffer (all zeros), then prime
+     * generator state for the next call. */
+    if (*seed < 0.0f) {
+        memset(buffer, 0, MBE_FFT_SIZE * sizeof(float));
+        memset(overlap, 0, MBE_NOISE_OVERLAP * sizeof(float));
+        *seed = MBE_LCG_DEFAULT_SEED;
+        return;
+    }
+
+    /* ABI-preserving state representation:
+     * - overlap[0..95] is current buffer head [0..95]
+     * - seed is current tail generator start [96..255]
+     *
+     * Return current buffer, then update for next call:
+     * - overlap <- returned tail samples [160..255]
+     * - seed <- advanced by 160 samples */
     memcpy(buffer, overlap, MBE_NOISE_OVERLAP * sizeof(float));
 
-    /* Generate 160 new samples (256 - 96 = 160) */
-    mbe_generate_noise_lcg(buffer + MBE_NOISE_OVERLAP, MBE_FFT_SIZE - MBE_NOISE_OVERLAP, seed);
+    unsigned int state = ((unsigned int)(*seed)) % 53125u;
+    for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; i++) {
+        buffer[i] = (float)state;
+        state = (171u * state + 11213u) % 53125u;
+    }
+    *seed = (float)state;
 
-    /* Save new overlap for next frame (last 96 samples) */
     memcpy(overlap, buffer + (MBE_FFT_SIZE - MBE_NOISE_OVERLAP), MBE_NOISE_OVERLAP * sizeof(float));
 }
 

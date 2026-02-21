@@ -579,8 +579,7 @@ mbe_processImbe4400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
     } else {
         *err_str = 'M';
         err_str++;
-        mbe_synthesizeSilencef(aout_buf);
-        mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
+        mbe_synthesizeComfortNoisef(aout_buf);
     }
     *err_str = 0;
 }

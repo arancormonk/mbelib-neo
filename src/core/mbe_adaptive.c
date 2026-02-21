@@ -186,12 +186,6 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
         cur_mp->localEnergy = MBE_MIN_LOCAL_ENERGY;
     }
 
-    /* Check if smoothing is required - usually not needed during clean reception */
-    if (MBE_LIKELY(errorRate <= MBE_ERROR_THRESHOLD_ENTRY && errorTotal <= 4)) {
-        cur_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-        return; /* No smoothing needed */
-    }
-
     /* Algorithm #112: Calculate adaptive threshold VM */
     float VM;
     if (errorRate <= MBE_ERROR_THRESHOLD_LOW && errorTotal <= 4) {

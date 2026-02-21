@@ -241,10 +241,10 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
     prev_mp->repeatCount = 0;
     prev_mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
 
-    /* Initialize FFT-based unvoiced synthesis state
-     * Use fixed seed matching JMBE's MBENoiseSequenceGenerator (mSample = 3147).
-     * The LCG state persists in mbe_parms and advances naturally per frame. */
-    prev_mp->noiseSeed = MBE_LCG_DEFAULT_SEED;
+    /* Initialize FFT-based unvoiced synthesis state.
+     * Use seed<0 sentinel so first nextBuffer() returns JMBE's initial all-zero
+     * 256-sample buffer, then primes with MBE_LCG_DEFAULT_SEED. */
+    prev_mp->noiseSeed = -1.0f;
     memset(prev_mp->noiseOverlap, 0, sizeof(prev_mp->noiseOverlap));
     memset(prev_mp->previousUw, 0, sizeof(prev_mp->previousUw));
 

@@ -620,7 +620,7 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
      * IIR-filtered error rate: errorRate = 0.95 * prev + 0.001064 * totalErrors
      * This matches JMBE AMBEModelParameters constructor.
      * Note: AMBE uses different coefficient (0.001064) than IMBE (0.000365). */
-    cur_mp->errorCountTotal = *errs + *errs2;
+    cur_mp->errorCountTotal = *errs2;
     cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
     cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
 
@@ -668,11 +668,11 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
         } else {
             *err_str = 'M';
             err_str++;
-            mbe_synthesizeSilencef(aout_buf);
+            mbe_synthesizeComfortNoisef(aout_buf);
             mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
         }
     } else {
-        mbe_synthesizeSilencef(aout_buf);
+        mbe_synthesizeComfortNoisef(aout_buf);
         mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
     }
     *err_str = 0;

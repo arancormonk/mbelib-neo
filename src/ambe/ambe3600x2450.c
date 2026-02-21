@@ -196,13 +196,15 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
         u3 = u3 | (int)ambe_d[i];
     }
 
-    //bitchin'
-    int bitchk1, bitchk2;
-    bitchk1 = (u0 >> 6) & 0x3f;
-    bitchk2 = (u3 & 0xf);
+    int u0_tone_check = (u0 >> 6) & 0x3f;
+    int u3_tone_check = (u3 & 0xf);
+    int u1_high_tone_verify = (u1 >> 8) & 0xf;
+    int u1_low_tone_verify = u1 & 0xf;
+    int tone_verified = (u0_tone_check == 63) && ((u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify));
 
 #ifdef AMBE_DEBUG
-    fprintf(stderr, "BIT1 = %d BIT2 = %d ", bitchk1, bitchk2);
+    fprintf(stderr, "TONECHK u0=%d u3=%d u1h=%d u1l=%d ", u0_tone_check, u3_tone_check, u1_high_tone_verify,
+            u1_low_tone_verify);
 #endif
 
     // copy repeat from prev_mp
@@ -218,16 +220,17 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     b0 |= ambe_d[38] << 1;
     b0 |= ambe_d[39];
 
-    if (bitchk1 == 63 && bitchk2 == 0) {
+    /* JMBE-compatible tone classification:
+     * tone if U0 tone check passes and either U3 tone check is zero
+     * or U1 high/low verification nibbles match. */
+    if (tone_verified) {
 #ifdef AMBE_DEBUG
-        fprintf(stderr, "Tone Frame 2\n");
+        fprintf(stderr, "Tone Frame\n");
 #endif
         return (7);
     }
 
-    if ((b0 >= 120)
-        && (b0
-            <= 123)) // if w0 bits are 1111000, 1111001, 1111010 or 1111011, frame is erasure --  this is not entirely correct, tones are identified as erasures here
+    if ((b0 >= 120) && (b0 <= 123)) // if w0 bits are 1111000, 1111001, 1111010 or 1111011, frame is erasure
     {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Erasure Frame b0 = %d\n", b0);
@@ -248,13 +251,13 @@ mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
             cur_mp->Vl[l] = 0;
         }
     }
-    //the below check doesn't seem to be entirely representative of all tones (could be entirely wrong)
-    if ((b0 == 126) || (b0 == 127)) // if w0 bits are 1111110 or 1111111, frame is tone
-    {
+    /* If the fundamental decodes as a tone but tone verification failed above,
+     * treat this as erasure to match JMBE's fallback behavior. */
+    if ((b0 == 126) || (b0 == 127)) {
 #ifdef AMBE_DEBUG
-        fprintf(stderr, "Tone Frame 1\n");
+        fprintf(stderr, "Unverified tone fundamental -> erasure\n");
 #endif
-        return (3);
+        return (2);
     }
 
     if (silence == 0) {
@@ -599,6 +602,7 @@ mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
 
     int i, bad;
+    (void)errs; // C0 errors tracked separately for repeat decision; total in errs2
 
     /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%).
      * This matches JMBE AMBEModelParameters.isFrameMuted(). */
@@ -608,7 +612,7 @@ mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
      * IIR-filtered error rate: errorRate = 0.95 * prev + 0.001064 * totalErrors
      * This matches JMBE AMBEModelParameters constructor.
      * Note: AMBE uses different coefficient (0.001064) than IMBE (0.000365). */
-    cur_mp->errorCountTotal = *errs + *errs2;
+    cur_mp->errorCountTotal = *errs2;
     cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
     cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
 
@@ -651,18 +655,18 @@ mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
         } else {
             *err_str = 'M';
             err_str++;
-            mbe_synthesizeSilencef(aout_buf);
+            mbe_synthesizeComfortNoisef(aout_buf);
             mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
         }
     }
 
-    else if (bad == 7 && *errs < 2 && *errs2 < 3) //only run if no more than x errs accumulated
+    else if (bad == 7 && *errs2 < 6) // match JMBE tone gate (errorCount < 6)
     {
         //synthesize tone
         mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
         mbe_moveMbeParms(cur_mp, prev_mp);
     } else {
-        mbe_synthesizeSilencef(aout_buf);
+        mbe_synthesizeComfortNoisef(aout_buf);
         mbe_initMbeParms(cur_mp, prev_mp, prev_mp_enhanced);
     }
     *err_str = 0;

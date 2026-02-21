@@ -66,14 +66,18 @@ void mbe_fft_plan_free(mbe_fft_plan* plan);
 void mbe_generate_noise_lcg(float* buffer, int count, float* seed);
 
 /**
- * @brief Generate noise with overlap from previous frame.
+ * @brief Generate the next JMBE-style 256-sample noise buffer.
  *
- * Copies overlap samples from previous frame, generates new samples,
- * and saves new overlap for next frame.
+ * State is encoded in existing public fields to preserve ABI:
+ * - overlap[0..95] stores current buffer samples [0..95]
+ * - seed stores the current tail generator state for samples [96..255]
+ *
+ * Cold-start convention: seed < 0 emits an all-zero buffer (JMBE's initial
+ * current buffer), then primes state for the next call with MBE_LCG_DEFAULT_SEED.
  *
  * @param buffer Output buffer of 256 samples.
  * @param seed In/out LCG state.
- * @param overlap In/out 96-sample overlap buffer.
+ * @param overlap In/out 96-sample head/tail state buffer.
  */
 void mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap);
 
