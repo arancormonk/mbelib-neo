@@ -254,9 +254,6 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
         Tm = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
     } else {
         Tm = MBE_AMPLITUDE_BASE - (MBE_AMPLITUDE_PENALTY_PER_ERROR * errorTotal) + prevThreshold;
-        if (Tm < 0) {
-            Tm = 0;
-        }
     }
     cur_mp->amplitudeThreshold = Tm;
 

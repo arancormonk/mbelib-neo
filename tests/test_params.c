@@ -217,6 +217,17 @@ main(void) {
         }
     }
 
+    // JMBE parity: phase arrays initialize to zero
+    {
+        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        for (int l = 0; l <= 56; ++l) {
+            assert(approx_equal(prev.PSIl[l], 0.0f, 1e-7f));
+            assert(approx_equal(cur.PSIl[l], 0.0f, 1e-7f));
+            assert(approx_equal(prev_enh.PSIl[l], 0.0f, 1e-7f));
+        }
+    }
+
     // AMBE+2 3600x2450: verify w0/L mapping from table for a couple of b0 values
     // We avoid including internal headers to prevent duplicate symbol definitions; instead we
     // embed expected reference values for select indices taken from the public table in source.
@@ -455,6 +466,51 @@ main(void) {
         float local_before = cur.localEnergy;
         mbe_synthesizeSpeechf(out, &cur, &prev, 8);
         assert(cur.localEnergy != local_before);
+    }
+
+    // JMBE parity: previous voiced phase is wrapped to [0, 2PI) before advancement
+    {
+        float out[160];
+        mbe_parms cur = {0}, prev = {0};
+        seed_speech_params(&cur, &prev);
+
+        const int l_test = 5;
+        const float raw_prev_phase = (20.0f * (float)M_PI) + 0.321f;
+        prev.PSIl[l_test] = raw_prev_phase;
+
+        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+
+        float wrapped_prev = fmodf(raw_prev_phase, (float)(2.0 * M_PI));
+        if (wrapped_prev < 0.0f) {
+            wrapped_prev += (float)(2.0 * M_PI);
+        }
+        float expected_psil = wrapped_prev + ((prev.w0 + cur.w0) * ((float)(l_test * 160) / 2.0f));
+
+        assert(approx_equal(prev.PSIl[l_test], wrapped_prev, 1e-5f));
+        assert(approx_equal(cur.PSIl[l_test], expected_psil, 1e-3f));
+    }
+
+    // JMBE parity: adaptive amplitude threshold Tm is not clamped to non-negative values
+    {
+        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+
+        cur.L = 4;
+        for (int l = 1; l <= cur.L; ++l) {
+            cur.Ml[l] = 10.0f;
+            cur.Vl[l] = 0;
+        }
+
+        cur.errorRate = 0.5f;
+        cur.errorCountTotal = 30;
+        cur.errorCount4 = 2;
+        prev.amplitudeThreshold = 1;
+
+        mbe_applyAdaptiveSmoothing(&cur, &prev);
+
+        assert(cur.amplitudeThreshold == -2999);
+        assert(cur.amplitudeThreshold < 0);
+        assert(cur.Ml[1] < 0.0f);
     }
 
     // Thread RNG seeding must drive comfort-noise and unvoiced-noise generators

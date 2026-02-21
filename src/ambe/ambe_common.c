@@ -121,7 +121,8 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
         prev_mp->Vl[l] = 0;
         prev_mp->log2Ml[l] = 0.0f; /* log2(1.0) */
         prev_mp->PHIl[l] = 0.0f;
-        prev_mp->PSIl[l] = (float)M_PI / 2.0f;
+        /* JMBE previous-phase arrays start at 0.0f. */
+        prev_mp->PSIl[l] = 0.0f;
     }
 
     prev_mp->repeat = 0;

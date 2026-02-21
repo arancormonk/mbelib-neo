@@ -51,6 +51,8 @@
 #include "mbelib-neo/mbelib.h"
 #include "mbelib_const.h"
 
+#define MBE_TWO_PI (2.0f * (float)M_PI)
+
 /* Thread-local PRNG state and helpers (xorshift32) */
 static MBE_THREAD_LOCAL uint32_t mbe_rng_state = 0x12345678u;
 
@@ -230,7 +232,8 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
         prev_mp->Vl[l] = 0;
         prev_mp->log2Ml[l] = (float)0; // log2 of 1 == 0
         prev_mp->PHIl[l] = (float)0;
-        prev_mp->PSIl[l] = (M_PI / (float)2);
+        /* JMBE previous-phase arrays start at 0.0f. */
+        prev_mp->PSIl[l] = 0.0f;
     }
     prev_mp->repeat = 0;
 
@@ -944,7 +947,14 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     /* Update phase from eq 139, 140
      * JMBE-compatible: use noise_buffer[l] for phase randomization instead of separate RNG */
     for (l = 1; l <= 56; l++) {
-        cur_mp->PSIl[l] = prev_mp->PSIl[l] + ((pw0 + cw0) * ((float)(l * N) / 2.0f));
+        /* JMBE parity: wrap previous voiced phase to [0, 2PI) each frame before advancing. */
+        float prev_psil_wrapped = fmodf(prev_mp->PSIl[l], MBE_TWO_PI);
+        if (prev_psil_wrapped < 0.0f) {
+            prev_psil_wrapped += MBE_TWO_PI;
+        }
+        prev_mp->PSIl[l] = prev_psil_wrapped;
+
+        cur_mp->PSIl[l] = prev_psil_wrapped + ((pw0 + cw0) * ((float)(l * N) / 2.0f));
         if (l <= (cur_mp->L / 4)) {
             cur_mp->PHIl[l] = cur_mp->PSIl[l];
         } else {
