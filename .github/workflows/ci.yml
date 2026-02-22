@@ -19,6 +19,9 @@ on:
       - ".github/**/*.yaml"
       - "**/*.md"
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
