@@ -340,6 +340,7 @@ The generated site focuses on the public API (`include/`) and bundled examples.
   - `tools/scan_build.sh` (Clang Static Analyzer via `scan-build`; excludes `src/external`).
   - `tools/semgrep.sh` (additional SAST rules; use `--strict` to fail on findings).
 - Git hooks: `tools/install-git-hooks.sh` enables auto-format on commit and CI-style pre-push checks.
+- Optional full scan-build pre-push/preflight pass: set `MBE_HOOK_RUN_SCAN_BUILD=1`.
 - Manual preflight runner: `tools/preflight_ci.sh` runs the same pre-push checks without pushing.
 - Prefer keeping internal symbols `static` and declarations in headers where shared.
 - Before sending changes: build locally, run `ctest -V`, and ensure examples still link.
