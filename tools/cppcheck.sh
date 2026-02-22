@@ -26,6 +26,10 @@ Options:
 Arguments:
   files...    Optional list of translation units to analyze (e.g., src/foo.c).
               When omitted, analyzes the src/ and include/ trees.
+
+Environment:
+  CPPCHECK_BUILD_DIR   Build/cache directory used by cppcheck
+                       for cross-translation-unit state (default: .cppcheck-build).
 USAGE
 }
 
@@ -68,7 +72,7 @@ cppcheck --version
 
 # Detect number of CPU cores for parallel analysis
 NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-CPPCHECK_BUILD_DIR=".cppcheck-build"
+CPPCHECK_BUILD_DIR="${CPPCHECK_BUILD_DIR:-.cppcheck-build}"
 mkdir -p "$CPPCHECK_BUILD_DIR"
 
 # Build cppcheck arguments
@@ -93,6 +97,7 @@ if [[ $STRICT -eq 1 ]]; then
   echo "Strict mode: enabling all checks and treating warnings as errors"
   CPPCHECK_ARGS=(
     --enable=all
+    --force
     --std=c11
     --std=c++14
     --suppress=missingIncludeSystem
