@@ -68,6 +68,8 @@ cppcheck --version
 
 # Detect number of CPU cores for parallel analysis
 NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+CPPCHECK_BUILD_DIR=".cppcheck-build"
+mkdir -p "$CPPCHECK_BUILD_DIR"
 
 # Build cppcheck arguments
 # Note: cppcheck supports multiple --std flags; it applies the appropriate
@@ -77,6 +79,7 @@ CPPCHECK_ARGS=(
   --std=c11
   --std=c++14
   --suppress=missingIncludeSystem
+  --cppcheck-build-dir="$CPPCHECK_BUILD_DIR"
   --inline-suppr
   -I include
   -I src/internal
@@ -93,6 +96,7 @@ if [[ $STRICT -eq 1 ]]; then
     --std=c11
     --std=c++14
     --suppress=missingIncludeSystem
+    --cppcheck-build-dir="$CPPCHECK_BUILD_DIR"
     --inline-suppr
     -I include
     -I src/internal
@@ -113,8 +117,17 @@ CPPCHECK_ARGS+=(
   --suppress=invalidPrintfArgType_sint
   --suppress=invalidPrintfArgType_uint
   --suppress=normalCheckLevelMaxBranches
+  --suppress=unmatchedSuppression
+  --suppress=unusedFunction
+  --suppress=toomanyconfigs
+  --suppress=checkersReport
   -i src/external
 )
+
+# Include generated public headers (version.h) when present.
+if [[ -d build/dev-debug/include ]]; then
+  CPPCHECK_ARGS+=(-I build/dev-debug/include)
+fi
 
 LOG_FILE=".cppcheck.local.out"
 

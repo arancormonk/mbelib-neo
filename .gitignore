@@ -20,3 +20,4 @@ Thumbs.db
 *.log
 *.out
 /.scan-build.local/
+/.cppcheck-build/

@@ -71,7 +71,7 @@ mbe_checkGolayBlock(long int* block) {
  * @return Number of corrected bit errors in the protected portion.
  */
 int
-mbe_golay2312(char* in, char* out) {
+mbe_golay2312(const char* in, char* out) {
 
     int i, errs;
     uint32_t block = 0u;
@@ -110,10 +110,10 @@ mbe_golay2312(char* in, char* out) {
  * @note Uses a precomputed syndrome→bitmask LUT for thread safety (no lazy init).
  */
 int
-mbe_hamming1511(char* in, char* out) {
+mbe_hamming1511(const char* in, char* out) {
     int i, j, errs;
     uint32_t block = 0u;
-    int syndrome, stmp, stmp2;
+    int syndrome;
 
     errs = 0;
 
@@ -124,8 +124,8 @@ mbe_hamming1511(char* in, char* out) {
 
     syndrome = 0;
     for (i = 0; i < 4; i++) {
-        stmp = (int)(block & (uint32_t)hammingGenerator[i]);
-        stmp2 = (stmp & 1);
+        int stmp = (int)(block & (uint32_t)hammingGenerator[i]);
+        int stmp2 = (stmp & 1);
         for (j = 0; j < 14; j++) {
             stmp >>= 1;
             stmp2 ^= (stmp & 1);
@@ -152,10 +152,10 @@ mbe_hamming1511(char* in, char* out) {
  * @note Uses a precomputed syndrome→bitmask LUT for thread safety (no lazy init).
  */
 int
-mbe_7100x4400hamming1511(char* in, char* out) {
+mbe_7100x4400hamming1511(const char* in, char* out) {
     int i, j, errs;
     uint32_t block = 0u;
-    int syndrome, stmp, stmp2;
+    int syndrome;
 
     errs = 0;
 
@@ -166,8 +166,8 @@ mbe_7100x4400hamming1511(char* in, char* out) {
 
     syndrome = 0;
     for (i = 0; i < 4; i++) {
-        stmp = (int)(block & (uint32_t)imbe7100x4400hammingGenerator[i]);
-        stmp2 = (stmp & 1);
+        int stmp = (int)(block & (uint32_t)imbe7100x4400hammingGenerator[i]);
+        int stmp2 = (stmp & 1);
         for (j = 0; j < 14; j++) {
             stmp >>= 1;
             stmp2 ^= (stmp & 1);

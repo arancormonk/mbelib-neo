@@ -20,19 +20,19 @@
 #include "mbelib-neo/mbelib.h"
 
 /* Internal helper implemented in imbe7200x4400.c to preserve frame-path C0 repeat criteria. */
-void mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
-                                     mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
-                                     int c0_errors_valid);
+void mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
+                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
+                                     int c0_errors, int c0_errors_valid);
 
 /**
  * @brief Print IMBE 7100x4400 parameter bits to stderr (debug aid).
  * @param imbe_d IMBE parameter bits (88).
  */
 void
-mbe_dumpImbe7100x4400Data(char* imbe_d) {
+mbe_dumpImbe7100x4400Data(const char* imbe_d) {
 
     int i;
-    char* imbe;
+    const char* imbe;
 
     imbe = imbe_d;
     for (i = 0; i < 88; i++) {
@@ -49,7 +49,7 @@ mbe_dumpImbe7100x4400Data(char* imbe_d) {
  * @param imbe_fr Frame as 7x24 bitplanes.
  */
 void
-mbe_dumpImbe7100x4400Frame(char imbe_fr[7][24]) {
+mbe_dumpImbe7100x4400Frame(const char imbe_fr[7][24]) {
 
     int i, j;
 
@@ -128,7 +128,7 @@ mbe_eccImbe7100x4400C0(char imbe_fr[7][24]) {
 static int
 mbe_eccImbe7100x4400DataInternal(char imbe_fr[7][24], char* imbe_d, int* errs_c4) {
 
-    int i, j, errs, hamming_errs;
+    int i, j, errs;
     char *imbe, gin[23], gout[23], hin[15], hout[15];
 
     /* initialize errs implicitly via first ECC call below */
@@ -166,7 +166,7 @@ mbe_eccImbe7100x4400DataInternal(char imbe_fr[7][24], char* imbe_d, int* errs_c4
         for (j = 0; j < 15; j++) {
             hin[j] = imbe_fr[i][j];
         }
-        hamming_errs = mbe_7100x4400hamming1511(hin, hout);
+        int hamming_errs = mbe_7100x4400hamming1511(hin, hout);
         errs += hamming_errs;
         /* Track C4 (first Hamming coset) errors separately for adaptive smoothing */
         if (i == 4 && errs_c4 != NULL) {

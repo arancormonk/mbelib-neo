@@ -196,7 +196,7 @@ mbe_versionString(void) {
  * is correct and safe.
  */
 void
-mbe_moveMbeParms(mbe_parms* in, mbe_parms* out) {
+mbe_moveMbeParms(const mbe_parms* in, mbe_parms* out) {
     *out = *in;
 }
 
@@ -208,7 +208,7 @@ mbe_moveMbeParms(mbe_parms* in, mbe_parms* out) {
  * Uses struct assignment for efficiency. See mbe_moveMbeParms() for details.
  */
 void
-mbe_useLastMbeParms(mbe_parms* out, mbe_parms* in) {
+mbe_useLastMbeParms(mbe_parms* out, const mbe_parms* in) {
     *out = *in;
 }
 
@@ -227,7 +227,7 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
     /* Match JMBE IMBEModelParameters default (IMBEFundamentalFrequency.DEFAULT, index 134). */
     prev_mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
     prev_mp->L = (int)(0.9254 * (int)((M_PI / prev_mp->w0) + 0.25));
-    prev_mp->K = (prev_mp->L < 37) ? (int)((float)(prev_mp->L + 2) / (float)3) : 12;
+    prev_mp->K = 12;
     prev_mp->gamma = (float)0;
     for (l = 0; l <= 56; l++) {
         prev_mp->Ml[l] = 1.0f;
@@ -749,7 +749,14 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
  * @param cur_mp   Current parameter set (tone synthesis state).
  */
 void
-mbe_synthesizeTonef(float* aout_buf, char* ambe_d, mbe_parms* cur_mp) {
+mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
+#ifdef DISABLE_AMBE_TONES // generate silence if tones disabled
+    (void)ambe_d;
+    (void)cur_mp;
+    mbe_synthesizeSilencef(aout_buf);
+    return;
+#endif
+
     int i;
 
     int u0, u1, u2, u3;
@@ -789,11 +796,6 @@ mbe_synthesizeTonef(float* aout_buf, char* ambe_d, mbe_parms* cur_mp) {
     (void)ID3; /* parsed for potential validation */
     (void)ID4;
 
-#ifdef DISABLE_AMBE_TONES // generate silence if tones disabled
-    mbe_synthesizeSilencef(aout_buf);
-    return;
-#endif
-
     if (!mbe_lookupToneFreqs(ID1, &freq1, &freq2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
@@ -810,15 +812,18 @@ mbe_synthesizeTonef(float* aout_buf, char* ambe_d, mbe_parms* cur_mp) {
  * @param ID1      Tone index selector.
  */
 void
-mbe_synthesizeTonefdstar(float* aout_buf, char* ambe_d, mbe_parms* cur_mp, int ID1) {
-    int AD = 103; /* JMBE nominal D-STAR tone amplitude */
-    float freq1 = 0, freq2 = 0;
-    (void)ambe_d;
-
+mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp, int ID1) {
 #ifdef DISABLE_AMBE_TONES // generate silence if tones disabled
+    (void)ambe_d;
+    (void)cur_mp;
+    (void)ID1;
     mbe_synthesizeSilencef(aout_buf);
     return;
 #endif
+
+    int AD = 103; /* JMBE nominal D-STAR tone amplitude */
+    float freq1 = 0, freq2 = 0;
+    (void)ambe_d;
 
     switch (ID1) {
         // single tones, set frequency
@@ -890,7 +895,7 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     int l, n, maxl;
     float* Ss;
     int numUv;
-    float cw0, pw0, cw0l, pw0l;
+    float cw0, pw0;
 
     const int N = 160;
 
@@ -972,8 +977,8 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
      * when pitch is stable, otherwise use windowed oscillator approach
      */
     for (l = 1; l <= maxl; l++) {
-        cw0l = cw0 * (float)l;
-        pw0l = pw0 * (float)l;
+        float cw0l = cw0 * (float)l;
+        float pw0l = pw0 * (float)l;
 
         /* Check if this band has any voiced component */
         int cur_voiced = (cur_mp->Vl[l] == 1);
@@ -1085,7 +1090,7 @@ mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int
  */
 #if defined(MBELIB_ENABLE_SIMD)
 static void
-mbe_floattoshort_scalar(float* restrict float_buf, short* restrict aout_buf) {
+mbe_floattoshort_scalar(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
     const float again = 7.0f;
     const float max_amplitude = 32767.0f * 0.95f; /* ~31128.65 */
@@ -1111,7 +1116,7 @@ mbe_floattoshort_scalar(float* restrict float_buf, short* restrict aout_buf) {
  */
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
 static void
-mbe_floattoshort_sse2(float* restrict float_buf, short* restrict aout_buf) {
+mbe_floattoshort_sse2(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
     const __m128 vscale = _mm_set1_ps(7.0f);
     const __m128 vmaxv = _mm_set1_ps(32767.0f * 0.95f);
@@ -1134,7 +1139,7 @@ mbe_floattoshort_sse2(float* restrict float_buf, short* restrict aout_buf) {
  */
 #if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
 static void
-mbe_floattoshort_neon(float* restrict float_buf, short* restrict aout_buf) {
+mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
     const float32x4_t vscale = vdupq_n_f32(7.0f);
     const float32x4_t vmaxv = vdupq_n_f32(32767.0f * 0.95f);
@@ -1154,7 +1159,7 @@ mbe_floattoshort_neon(float* restrict float_buf, short* restrict aout_buf) {
 }
 #endif
 
-typedef void (*mbe_floattoshort_fn)(float*, short*);
+typedef void (*mbe_floattoshort_fn)(const float*, short*);
 static mbe_floattoshort_fn mbe_floattoshort_impl = NULL; /**< Runtime-selected impl pointer. */
 
 /**
@@ -1207,7 +1212,7 @@ mbe_init_runtime_dispatch(void) {
 }
 
 void
-mbe_floattoshort(float* restrict float_buf, short* restrict aout_buf) {
+mbe_floattoshort(const float* restrict float_buf, short* restrict aout_buf) {
     if (MBE_UNLIKELY(!mbe_floattoshort_impl)) {
         mbe_init_runtime_dispatch();
     }
@@ -1216,7 +1221,7 @@ mbe_floattoshort(float* restrict float_buf, short* restrict aout_buf) {
 
 #else /* MBELIB_ENABLE_SIMD not set: keep scalar implementation */
 void
-mbe_floattoshort(float* restrict float_buf, short* restrict aout_buf) {
+mbe_floattoshort(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude
      * This provides headroom and prevents harsh clipping artifacts */
     const float again = 7.0f;

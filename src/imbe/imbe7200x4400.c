@@ -22,9 +22,9 @@
 #include "mbelib-neo/mbelib.h"
 
 /* Internal helper also used by imbe7100x4400.c frame path. */
-void mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
-                                     mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
-                                     int c0_errors_valid);
+void mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
+                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
+                                     int c0_errors, int c0_errors_valid);
 
 /**
  * @brief Thread-local cache for IMBE DCT cosine coefficients.
@@ -64,7 +64,7 @@ imbe_reset_headroom_defaults(mbe_parms* mp) {
      * setMBEFundamentalFrequency(IMBEFundamentalFrequency.DEFAULT), then rebuild model arrays. */
     mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
     mp->L = (int)(0.9254 * (int)((M_PI / mp->w0) + 0.25));
-    mp->K = (mp->L < 37) ? (int)((float)(mp->L + 2) / (float)3) : 12;
+    mp->K = 12;
     mp->gamma = 0.0f;
 
     for (int l = 0; l <= 56; l++) {
@@ -119,10 +119,10 @@ imbe_get_dct_cache(void) {
  * @param imbe_d IMBE parameter bits (88).
  */
 void
-mbe_dumpImbe4400Data(char* imbe_d) {
+mbe_dumpImbe4400Data(const char* imbe_d) {
 
     int i;
-    char* imbe;
+    const char* imbe;
 
     imbe = imbe_d;
     for (i = 0; i < 88; i++) {
@@ -136,10 +136,10 @@ mbe_dumpImbe4400Data(char* imbe_d) {
  * @param imbe_d IMBE parameter bits (88).
  */
 void
-mbe_dumpImbe7200x4400Data(char* imbe_d) {
+mbe_dumpImbe7200x4400Data(const char* imbe_d) {
 
     int i;
-    char* imbe;
+    const char* imbe;
 
     imbe = imbe_d;
     for (i = 0; i < 88; i++) {
@@ -156,7 +156,7 @@ mbe_dumpImbe7200x4400Data(char* imbe_d) {
  * @param imbe_fr Frame as 8x23 bitplanes (last row partial).
  */
 void
-mbe_dumpImbe7200x4400Frame(char imbe_fr[8][23]) {
+mbe_dumpImbe7200x4400Frame(const char imbe_fr[8][23]) {
 
     int i, j;
 
@@ -209,7 +209,7 @@ mbe_eccImbe7200x4400C0(char imbe_fr[8][23]) {
 static int
 mbe_eccImbe7200x4400DataInternal(char imbe_fr[8][23], char* imbe_d, int* errs_c4) {
 
-    int i, j, errs, hamming_errs;
+    int i, j, errs;
     char *imbe, gin[23], gout[23], hin[15], hout[15];
 
     errs = 0;
@@ -235,7 +235,7 @@ mbe_eccImbe7200x4400DataInternal(char imbe_fr[8][23], char* imbe_d, int* errs_c4
         for (j = 0; j < 15; j++) {
             hin[j] = imbe_fr[i][j];
         }
-        hamming_errs = mbe_hamming1511(hin, hout);
+        int hamming_errs = mbe_hamming1511(hin, hout);
         errs += hamming_errs;
         /* Track C4 (first Hamming coset) errors separately for adaptive smoothing */
         if (i == 4 && errs_c4 != NULL) {
@@ -273,7 +273,7 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
  * @return 0 on voice; non-zero for special frames (implementation-specific).
  */
 int
-mbe_decodeImbe4400Parms(char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
     int Bm, ji, b, i, j, k, l, L, K, L9, m, am, ak;
     int intkl[57];
@@ -579,9 +579,9 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
  * Public Dataf calls do not have C0 context and use the historical total-error fallback.
  */
 void
-mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
-                                mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
-                                int c0_errors_valid) {
+mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
+                                mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
+                                int c0_errors, int c0_errors_valid) {
     int i, bad;
     int repeat_required;
     float repeat_threshold;
@@ -661,8 +661,8 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, int* errs2, char* err_str, char
  * @param uvquality Unvoiced synthesis quality (1..64).
  */
 void
-mbe_processImbe4400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
-                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processImbe4400Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char imbe_d[88],
+                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     (void)errs;
     mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
                                     0);
@@ -673,8 +673,8 @@ mbe_processImbe4400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
  * @see mbe_processImbe4400Dataf for parameter details.
  */
 void
-mbe_processImbe4400Data(short* aout_buf, int* errs, int* errs2, char* err_str, char imbe_d[88], mbe_parms* cur_mp,
-                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processImbe4400Data(short* aout_buf, const int* errs, const int* errs2, char* err_str, const char imbe_d[88],
+                        mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     float float_buf[160];
 
     mbe_processImbe4400Dataf(float_buf, errs, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);

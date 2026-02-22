@@ -104,7 +104,7 @@ void mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap)
  * @param prev_mp Previous frame parameters (provides previousUw for WOLA).
  * @param plan FFT plan (reusable).
  */
-void mbe_synthesizeUnvoicedFFT(float* output, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_fft_plan* plan);
+void mbe_synthesizeUnvoicedFFT(float* output, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan);
 
 /**
  * @brief Synthesize unvoiced speech using a pre-generated noise buffer.
@@ -119,7 +119,7 @@ void mbe_synthesizeUnvoicedFFT(float* output, mbe_parms* cur_mp, mbe_parms* prev
  * @param plan FFT plan (reusable).
  * @param noise_buffer Pre-generated 256-sample noise buffer.
  */
-void mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_fft_plan* plan,
+void mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
                                         const float* noise_buffer);
 
 /**

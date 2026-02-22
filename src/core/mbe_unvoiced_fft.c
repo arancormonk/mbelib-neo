@@ -296,7 +296,7 @@ mbe_wola_combine(float* restrict output, const float* restrict prevUw, const flo
         float curr_sample = 0.0f;
 
         int prev_idx = n + 128;
-        if (MBE_LIKELY(prev_idx >= 0 && prev_idx < MBE_FFT_SIZE)) {
+        if (MBE_LIKELY(prev_idx < MBE_FFT_SIZE)) {
             prev_sample = prevUw[prev_idx];
         }
 
@@ -659,8 +659,9 @@ mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
 }
 
 void
-mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict cur_mp, mbe_parms* restrict prev_mp,
-                                   mbe_fft_plan* restrict plan, const float* restrict noise_buffer) {
+mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict cur_mp,
+                                   const mbe_parms* restrict prev_mp, mbe_fft_plan* restrict plan,
+                                   const float* restrict noise_buffer) {
     if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan || !noise_buffer)) {
         return;
     }
@@ -775,7 +776,7 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
 }
 
 void
-mbe_synthesizeUnvoicedFFT(float* restrict output, mbe_parms* restrict cur_mp, mbe_parms* restrict prev_mp,
+mbe_synthesizeUnvoicedFFT(float* restrict output, mbe_parms* restrict cur_mp, const mbe_parms* restrict prev_mp,
                           mbe_fft_plan* restrict plan) {
     if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan)) {
         return;

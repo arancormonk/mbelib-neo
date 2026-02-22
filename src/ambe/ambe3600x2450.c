@@ -95,10 +95,10 @@ ambe2450_is_valid_tone_id(const char ambe_d[49]) {
  * @param ambe_d AMBE parameter bits (49).
  */
 void
-mbe_dumpAmbe2450Data(char* ambe_d) {
+mbe_dumpAmbe2450Data(const char* ambe_d) {
 
     int i;
-    char* ambe;
+    const char* ambe;
 
     ambe = ambe_d;
     for (i = 0; i < 49; i++) {
@@ -113,7 +113,7 @@ mbe_dumpAmbe2450Data(char* ambe_d) {
  * @param ambe_fr Frame as 4x24 bitplanes.
  */
 void
-mbe_dumpAmbe3600x2450Frame(char ambe_fr[4][24]) {
+mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]) {
 
     int j;
 
@@ -174,7 +174,7 @@ mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
  * @return Tone index or 0 for voice; implementation-specific non-zero for special frames.
  */
 static int
-mbe_decodeAmbe2450ParmsInternal(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp, int total_errors) {
+mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp, int total_errors) {
 
     int ji, i, j, k, l, L = 0, L9, m, am, ak;
     int intkl[57];
@@ -242,7 +242,7 @@ mbe_decodeAmbe2450ParmsInternal(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev
     /* JMBE-compatible tone classification:
      * - Tone if U0 tone check passes and either U3 check is zero or U1 high/low nibbles match.
      * - If total BER is known and >= 6, do not classify as tone (JMBE AMBEFrame). */
-    if (tone_verified && (total_errors < 0 || total_errors < 6)) {
+    if (tone_verified && total_errors < 6) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Tone Frame\n");
 #endif
@@ -604,7 +604,7 @@ mbe_decodeAmbe2450ParmsInternal(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev
  * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
  */
 int
-mbe_decodeAmbe2450Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     return mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, -1);
 }
 
@@ -624,9 +624,9 @@ mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]) {
  * Public Dataf calls do not have C0 context and use the historical total-error fallback.
  */
 static void
-mbe_processAmbe2450Dataf_internal(float* aout_buf, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
-                                  mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality, int c0_errors,
-                                  int c0_errors_valid) {
+mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_str, const char ambe_d[49],
+                                  mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
+                                  int c0_errors, int c0_errors_valid) {
     int i, bad;
     int repeat_required;
 
@@ -739,8 +739,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, int* errs2, char* err_str, ch
  * @param uvquality Unvoiced synthesis quality (1..64).
  */
 void
-mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
-                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processAmbe2450Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
+                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     (void)errs;
     mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
                                       0);
@@ -751,8 +751,8 @@ mbe_processAmbe2450Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
  * @see mbe_processAmbe2450Dataf for parameter details.
  */
 void
-mbe_processAmbe2450Data(short* aout_buf, int* errs, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
-                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processAmbe2450Data(short* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
+                        mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     float float_buf[160];
 
     mbe_processAmbe2450Dataf(float_buf, errs, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);

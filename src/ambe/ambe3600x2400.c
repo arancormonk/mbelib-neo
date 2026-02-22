@@ -78,10 +78,10 @@ ambe_get_dct_cache(void) {
  * @param ambe_d AMBE parameter bits (49).
  */
 void
-mbe_dumpAmbe2400Data(char* ambe_d) {
+mbe_dumpAmbe2400Data(const char* ambe_d) {
 
     int i;
-    char* ambe;
+    const char* ambe;
 
     ambe = ambe_d;
     for (i = 0; i < 49; i++) {
@@ -96,7 +96,7 @@ mbe_dumpAmbe2400Data(char* ambe_d) {
  * @param ambe_fr Frame as 4x24 bitplanes.
  */
 void
-mbe_dumpAmbe3600x2400Frame(char ambe_fr[4][24]) {
+mbe_dumpAmbe3600x2400Frame(const char ambe_fr[4][24]) {
 
     int j;
 
@@ -155,7 +155,7 @@ mbe_eccAmbe3600x2400Data(char ambe_fr[4][24], char* ambe_d) {
  * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
  */
 int
-mbe_decodeAmbe2400Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
     int ji, i, j, k, l, L = 0, L9, m, am, ak;
     int intkl[57];
@@ -201,9 +201,9 @@ mbe_decodeAmbe2400Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
         // ton HHHHHHDEF410======......P.................32==...
         // vol             765430                          21
         //DEF indexes the following tables for tone bits 5-7
-        int t7tab[8] = {1, 0, 0, 0, 0, 1, 1, 1};
-        int t6tab[8] = {0, 0, 0, 1, 1, 1, 1, 0};
-        int t5tab[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+        const int t7tab[8] = {1, 0, 0, 0, 0, 1, 1, 1};
+        const int t6tab[8] = {0, 0, 0, 1, 1, 1, 1, 0};
+        const int t5tab[8] = {0, 0, 1, 0, 1, 1, 0, 1};
         //              V V V V V G G G     V = verified, G = guessed (and unused by all normal tone indices)
         b1 = 0;
         b1 |= t7tab[((ambe_d[6] << 2) | (ambe_d[7] << 1) | ambe_d[8])] << 7; //t7 128
@@ -217,17 +217,15 @@ mbe_decodeAmbe2400Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
         /* Tone volume bits were only used for debugging; avoid dead store when not used. */
 #ifdef AMBE_DEBUG
-        b2 = 0;
-        b2 |= ambe_d[12] << 7; //v7 128 h verified
-        b2 |= ambe_d[13] << 6; //v6 64  g verified
-        b2 |= ambe_d[14] << 5; //v5 32  f verified
-        b2 |= ambe_d[15] << 4; //v4 16  e guess based on data
-        b2 |= ambe_d[16] << 3; //v3 8   d guess based on data
-        b2 |= ambe_d[44] << 2; //v2 4   c guess based on data
-        b2 |= ambe_d[45] << 1; //v1 2   b guess based on data
-        b2 |= ambe_d[17];      //v0 1   a guess based on data
-                               // the order of the last 3 bits may really be 17,44,45 not 44,45,17 as above
-                               // fprintf(stderr,"Tone volume: %d; ", b2);
+        int tone_volume = (ambe_d[12] << 7) | //v7 128 h verified
+                          (ambe_d[13] << 6) | //v6 64  g verified
+                          (ambe_d[14] << 5) | //v5 32  f verified
+                          (ambe_d[15] << 4) | //v4 16  e guess based on data
+                          (ambe_d[16] << 3) | //v3 8   d guess based on data
+                          (ambe_d[44] << 2) | //v2 4   c guess based on data
+                          (ambe_d[45] << 1) | //v1 2   b guess based on data
+                          (ambe_d[17]);       //v0 1   a guess based on data
+        (void)tone_volume;                    // the order of the last 3 bits may really be 17,44,45 not 44,45,17
 #endif
 
         /* Collapse repeated branches: valid single tone returns; dual-tone falls through; others -> silence. */
@@ -266,30 +264,26 @@ mbe_decodeAmbe2400Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
     // decode fundamental frequency w0 from b0 is already done
 
-    if (silence == 0) {
-        // w0 from specification document
-        //f0 = AmbeW0table[b0];
-        //cur_mp->w0 = f0 * (float) 2 *M_PI;
-        // w0 from patent filings
-        //f0 = powf (2, ((float) b0 + (float) 195.626) / -(float) 46.368); // was 45.368
-        // w0 guess
-        f0 = exp2f(-4.311767578125f - (2.1336e-2f * ((float)b0 + 0.5f)));
-        cur_mp->w0 = f0 * (float)2 * M_PI;
-    }
+    // w0 from specification document
+    //f0 = AmbeW0table[b0];
+    //cur_mp->w0 = f0 * (float) 2 *M_PI;
+    // w0 from patent filings
+    //f0 = powf (2, ((float) b0 + (float) 195.626) / -(float) 46.368); // was 45.368
+    // w0 guess
+    f0 = exp2f(-4.311767578125f - (2.1336e-2f * ((float)b0 + 0.5f)));
+    cur_mp->w0 = f0 * (float)2 * M_PI;
 
     unvc = (float)0.2046 / sqrtf(cur_mp->w0);
     //unvc = (float) 1;
     //unvc = (float) 0.2046 / sqrtf (f0);
 
     // decode L
-    if (silence == 0) {
-        // L from specification document
-        // lookup L in tabl3
-        L = AmbePlusLtable[b0];
-        // L formula from patent filings
-        //L=(int)((float)0.4627 / f0);
-        cur_mp->L = L;
-    }
+    // L from specification document
+    // lookup L in tabl3
+    L = AmbePlusLtable[b0];
+    // L formula from patent filings
+    //L=(int)((float)0.4627 / f0);
+    cur_mp->L = L;
     L9 = L - 9;
     (void)L9;
 
@@ -308,9 +302,7 @@ mbe_decodeAmbe2400Parms(char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
         // jl from patent filings?
         //jl = (int)(((float)l * (float)16.0 * f0) + 0.25);
 
-        if (silence == 0) {
-            cur_mp->Vl[l] = AmbePlusVuv[b1][jl];
-        }
+        cur_mp->Vl[l] = AmbePlusVuv[b1][jl];
 #ifdef AMBE_DEBUG
         fprintf(stderr, "jl[%i]:%i Vl[%i]:%i\n", l, jl, l, cur_mp->Vl[l]);
 #endif
@@ -607,8 +599,8 @@ mbe_demodulateAmbe3600x2400Data(char ambe_fr[4][24]) {
  * @param uvquality Unvoiced synthesis quality (1..64).
  */
 void
-mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
-                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processAmbe2400Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
+                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
 
     int i, bad;
 
@@ -691,8 +683,8 @@ mbe_processAmbe2400Dataf(float* aout_buf, int* errs, int* errs2, char* err_str, 
  * @see mbe_processAmbe2400Dataf for parameter details.
  */
 void
-mbe_processAmbe2400Data(short* aout_buf, int* errs, int* errs2, char* err_str, char ambe_d[49], mbe_parms* cur_mp,
-                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processAmbe2400Data(short* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
+                        mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     float float_buf[160];
 
     mbe_processAmbe2400Dataf(float_buf, errs, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
