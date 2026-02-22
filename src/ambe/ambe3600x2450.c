@@ -729,14 +729,14 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_s
 /**
  * @brief Process AMBE 2450 parameters into 160 float samples at 8 kHz.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs     Output: corrected error count in protected fields.
- * @param errs2    Output: raw parity mismatch count.
- * @param err_str  Output: human-readable error summary (optional).
+ * @param errs     Reserved input for API compatibility (currently ignored).
+ * @param errs2    Input total/protected-field error count.
+ * @param err_str  Output status trace string.
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
 mbe_processAmbe2450Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
@@ -762,11 +762,13 @@ mbe_processAmbe2450Data(short* aout_buf, const int* errs, const int* errs2, char
 /**
  * @brief Process a complete AMBE 3600x2450 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs,errs2,err_str Error reporting as per Dataf variant.
+ * @param errs     Output corrected C0 error count.
+ * @param errs2    Output total/protected-field error count.
+ * @param err_str  Output status trace string.
  * @param ambe_fr  Input frame as 4x24 bitplanes.
  * @param ambe_d   Scratch/output parameter bits (49).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
 mbe_processAmbe3600x2450Framef(float* aout_buf, int* errs, int* errs2, char* err_str, char ambe_fr[4][24],

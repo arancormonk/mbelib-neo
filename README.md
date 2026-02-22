@@ -23,13 +23,14 @@ This notice is advisory and does not modify the license. See `LICENSE` for terms
 
 - mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license.
 - Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `COPYRIGHT` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
+- Source files carry SPDX identifiers reflecting their license.
 
 ## Overview
 
 - A performance‑enhanced fork of [lwvmobile/mbelib](https://github.com/lwvmobile/mbelib), which is a fork of [szechyjs/mbelib](https://github.com/szechyjs/mbelib)
 - Supports IMBE 7200x4400 (P25 Phase 1), IMBE 7100x4400 (ProVoice), AMBE (D‑STAR), and AMBE+2 (DMR, NXDN, P25 Phase 2, dPMR, etc.).
 - Stable public API in `#include <mbelib-neo/mbelib.h>` with version macro `MBELIB_VERSION`.
-- Ships as both shared and static libraries: `libmbe-neo.{so|dylib|dll}` and `libmbe-neo.a`.
+- Ships as shared and static libraries: `libmbe-neo.{so|dylib}` on Unix-like platforms, and `mbe-neo.dll` + import lib / `mbe-neo-static.lib` on Windows.
 - Installable CMake package (`mbe_neo::mbe_shared` / `mbe_neo::mbe_static`) and pkg-config file (`libmbe-neo`).
 
 ## Build From Source
@@ -61,6 +62,8 @@ ctest --preset asan-ubsan-debug -V
 
 # Disable tone synthesis (AMBE tones)
 cmake --preset notones-debug
+cmake --build --preset notones-debug -j
+ctest --preset notones-debug -V
 ```
 
 Notes
@@ -71,14 +74,13 @@ Notes
 Manual configure/build
 
 ```
-# From the repository root:
-mkdir build && cd build
-cmake -DMBELIB_BUILD_TESTS=ON -DMBELIB_BUILD_EXAMPLES=ON ..
-cmake --build . -j
-ctest -V
+# From the repository root (single-config generators like Ninja/Make):
+cmake -S . -B build/manual-debug -DCMAKE_BUILD_TYPE=Debug -DMBELIB_BUILD_TESTS=ON -DMBELIB_BUILD_EXAMPLES=ON
+cmake --build build/manual-debug -j
+ctest --test-dir build/manual-debug -V
 
-# Alternative (from anywhere):
-cmake -S <repo-path> -B <build-dir> -DMBELIB_BUILD_TESTS=ON -DMBELIB_BUILD_EXAMPLES=ON
+# From anywhere (equivalent):
+cmake -S <repo-path> -B <build-dir> -DCMAKE_BUILD_TYPE=Debug -DMBELIB_BUILD_TESTS=ON -DMBELIB_BUILD_EXAMPLES=ON
 cmake --build <build-dir> -j
 ctest --test-dir <build-dir> -V
 ```
@@ -99,6 +101,8 @@ cmake --build build/dev-release --target uninstall
 ## Configuration Options
 
 - `-DNOTONES=ON` — Disable AMBE/AMBE+2 tone synthesis (adds `-DDISABLE_AMBE_TONES`).
+- `-DMBELIB_BUILD_TESTS=ON` — Build CTest executables (default ON).
+- `-DMBELIB_BUILD_EXAMPLES=ON` — Build `examples/` (default ON).
 - `-DMBELIB_ENABLE_WARNINGS=ON` — Enable common warnings (default ON).
 - `-DMBELIB_WARNINGS_AS_ERRORS=ON` — Treat warnings as errors.
 - `-DMBELIB_ENABLE_ASAN=ON` — Enable AddressSanitizer in Debug builds.
@@ -145,6 +149,24 @@ You can also build and run the bundled example:
 cmake --build build/dev-debug --target example_print_version
 ./build/dev-debug/example_print_version
 ```
+
+### Stateful Decode Workflow
+
+- Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
+- Initialize once before decoding with `mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced)`.
+- Prefer `mbe_process*Frame*` APIs when you have raw vocoder frames. These paths run demod/ECC and write `errs`/`errs2`.
+- Use `mbe_process*Data*` APIs only when you already have unpacked parameter bits:
+  - `errs` and `errs2` are caller-provided inputs for these parameter-only paths.
+  - `mbe_processAmbe2450Data*` and `mbe_processImbe4400Data*` currently ignore `*errs`, but require a valid pointer for API compatibility.
+- `err_str` must be a writable caller-owned buffer. It should be sized for at least `(*errs2 + 2)` bytes (a conservative `char err_str[128]` works well for public entry points).
+- `mbe_printVersion(char *str)` uses a legacy fixed write width of 32 bytes. Pass a buffer of at least 32 bytes, or prefer `mbe_versionString()` when possible.
+
+### Audio Sample Scaling (Float vs int16)
+
+- The library synthesizes 8 kHz audio in 160-sample frames.
+- The `short` entry points write 16-bit PCM with soft clipping (~95% full-scale).
+- The `*f` entry points return mbelib’s historical float scale (not normalized `[-1, +1]`). `mbe_floattoshort()` applies the same `* 7.0` scaling and clipping used by the `short` APIs.
+- To feed a normalized float pipeline, scale each float sample by `(7.0f / 32768.0f)` (range is approximately `[-0.95, +0.95]` after soft clipping).
 
 ## Windows (MSVC) Quickstart
 
@@ -236,12 +258,36 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 ### Determinism & RNG
 
 - `mbe_setThreadRngSeed(seed)` seeds both thread-local comfort-noise RNG state and the next unvoiced LCG cold start. For reproducible output, set it per thread before synthesis.
+- `mbe_setThreadRngSeed(0)` is accepted and remapped internally to a non-zero seed. Use an explicit non-zero seed when exact reproducibility matters across builds.
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
 - AMBE/IMBE frame handling intentionally differs for JMBE parity: IMBE uses error-rate muting and repeat-headroom reset behavior, while AMBE tone/erasure/repeat transitions follow AMBE-specific JMBE gating rules.
 - `MBELIB_STRICT_ORDER` is currently a reserved compile-time define in this tree (no ordering-path switch implemented yet).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math on supported CPUs. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
   sanity bounds elsewhere.
+
+## Benchmarks (Optional)
+
+Build micro-benchmarks:
+
+```
+cmake --preset dev-release-simd -DMBELIB_BUILD_BENCHMARKS=ON
+cmake --build --preset dev-release-simd -j --target bench_synth bench_unvoiced bench_convert
+```
+
+Run benchmark executables:
+
+```
+./build/dev-release-simd/bench_synth
+./build/dev-release-simd/bench_unvoiced
+./build/dev-release-simd/bench_convert
+```
+
+Quick scalar-vs-SIMD comparison helper:
+
+```
+tools/bench_compare.sh
+```
 
 ## Tests and Examples
 
@@ -254,10 +300,12 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 Optional Doxygen documentation can be generated:
 
 ```
-cmake -S . -B build -DMBELIB_BUILD_DOCS=ON
-cmake --build build --target docs
-# Output in docs/html
+cmake --preset dev-debug -DMBELIB_BUILD_DOCS=ON
+cmake --build --preset dev-debug --target docs
+# Output in build/docs/html
 ```
+
+The generated site focuses on the public API (`include/`) and bundled examples.
 
 ## Project Layout
 
@@ -281,9 +329,3 @@ cmake --build build --target docs
 - Manual preflight runner: `tools/preflight_ci.sh` runs the same pre-push checks without pushing.
 - Prefer keeping internal symbols `static` and declarations in headers where shared.
 - Before sending changes: build locally, run `ctest -V`, and ensure examples still link.
-
-## License
-
-- Project license: GPL‑2.0‑or‑later (see `LICENSE` and `LICENSES/GPL-2.0-or-later.txt`).
-- Original mbelib sources were ISC; mbelib-neo redistributes them under GPL‑2.0‑or‑later with the original ISC text retained for attribution (see `COPYRIGHT` and `LICENSES/ISC.txt`).
-- Source files carry SPDX identifiers reflecting their license.

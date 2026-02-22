@@ -651,14 +651,14 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str
 /**
  * @brief Process IMBE 4400 parameters into 160 float samples at 8 kHz.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs     Output: corrected error count in protected fields.
- * @param errs2    Output: raw parity mismatch count.
- * @param err_str  Output: human-readable error summary (optional).
+ * @param errs     Reserved input for API compatibility (currently ignored).
+ * @param errs2    Input total/protected-field error count.
+ * @param err_str  Output status trace string.
  * @param imbe_d   Demodulated parameter bits (88).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
 mbe_processImbe4400Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char imbe_d[88],
@@ -684,11 +684,13 @@ mbe_processImbe4400Data(short* aout_buf, const int* errs, const int* errs2, char
 /**
  * @brief Process a complete IMBE 7200x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs,errs2,err_str Error reporting as per Dataf variant.
+ * @param errs     Output corrected C0 error count.
+ * @param errs2    Output total/protected-field error count.
+ * @param err_str  Output status trace string.
  * @param imbe_fr  Input frame as 8x23 bitplanes.
  * @param imbe_d   Scratch/output parameter bits (88).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
 mbe_processImbe7200x4400Framef(float* aout_buf, int* errs, int* errs2, char* err_str, char imbe_fr[8][23],

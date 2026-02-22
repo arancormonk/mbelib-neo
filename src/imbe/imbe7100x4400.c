@@ -319,11 +319,13 @@ mbe_convertImbe7100to7200(char* imbe_d) {
 /**
  * @brief Process a complete IMBE 7100x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs,errs2,err_str Error reporting as per IMBE 4400 Dataf.
+ * @param errs     Output corrected C0 error count.
+ * @param errs2    Output total/protected-field error count.
+ * @param err_str  Output status trace string.
  * @param imbe_fr  Input frame as 7x24 bitplanes.
  * @param imbe_d   Scratch/output parameter bits (88).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
 mbe_processImbe7100x4400Framef(float* aout_buf, int* errs, int* errs2, char* err_str, char imbe_fr[7][24],

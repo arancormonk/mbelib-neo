@@ -167,6 +167,8 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
 /**
  * @brief Write the library version string into the provided buffer.
  * @param str Output buffer receiving a NUL-terminated version string.
+ *            The current ABI writes up to 31 characters plus NUL; provide at
+ *            least 32 bytes.
  */
 void
 mbe_printVersion(char* str) {
@@ -177,7 +179,7 @@ mbe_printVersion(char* str) {
     (void)snprintf(str, 32, "%s", MBELIB_VERSION);
 }
 
-/* @} end of mbe_internal */
+/** @} */ /* end of mbe_internal */
 
 /* Convenience accessor that avoids buffer management. */
 const char*
@@ -884,7 +886,7 @@ mbe_synthesizeSilence(short* aout_buf) {
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Unvoiced synthesis quality (ignored, kept for API compatibility).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 /* JMBE-compatible white noise scalar for phase calculation: 2*PI / 53125 */
 #define MBE_WHITE_NOISE_SCALAR (2.0f * (float)M_PI / 53125.0f)
@@ -1064,7 +1066,7 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
  * @param aout_buf Output buffer of 160 16-bit samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Unvoiced synthesis quality (1..64).
+ * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
 mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
