@@ -16,6 +16,15 @@
  *       mbe_floattoshort() to convert to `int16_t` PCM, or scale by
  *       `(7.0f / 32768.0f)` for normalized floats (approximately `[-0.95, +0.95]`
  *       after soft clipping).
+ *
+ * @note `err_str` outputs from process APIs are compact status traces:
+ *       `'='` repeated `*errs2` times, optional suffix markers (`E`, `T`,
+ *       `R`, `M` depending on codec/path), then trailing NUL. Provide at
+ *       least `(*errs2 + 3)` writable bytes.
+ *
+ * @note Threading: processing APIs are reentrant when each stream has its own
+ *       `mbe_parms` state. `mbe_setThreadRngSeed()` affects only the calling
+ *       thread's synthesis RNG state.
  */
 
 #ifndef MBELIB_NEO_PUBLIC_MBEBELIB_H
@@ -187,7 +196,7 @@ MBE_API void mbe_demodulateAmbe3600x2400Data(char ambe_fr[4][24]);
  * @param errs     Input corrected C0 error count (used for AMBE 2400 tone gating).
  * @param errs2    Input total/protected-field error count used by repeat handling.
  * @param err_str  Output status trace string. Caller must provide writable storage
- *                 for at least `(*errs2 + 2)` bytes (including trailing NUL).
+ *                 for at least `(*errs2 + 3)` bytes (including trailing NUL).
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
@@ -241,7 +250,7 @@ MBE_API void mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]);
  * @param errs     Reserved input for API compatibility (currently ignored).
  * @param errs2    Input total/protected-field error count used by repeat handling.
  * @param err_str  Output status trace string. Caller must provide writable storage
- *                 for at least `(*errs2 + 2)` bytes (including trailing NUL).
+ *                 for at least `(*errs2 + 3)` bytes (including trailing NUL).
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
@@ -295,7 +304,7 @@ MBE_API void mbe_demodulateImbe7200x4400Data(char imbe[8][23]);
  * @param errs     Reserved input for API compatibility (currently ignored).
  * @param errs2    Input total/protected-field error count used by repeat/muting logic.
  * @param err_str  Output status trace string. Caller must provide writable storage
- *                 for at least `(*errs2 + 2)` bytes (including trailing NUL).
+ *                 for at least `(*errs2 + 3)` bytes (including trailing NUL).
  * @param imbe_d   Demodulated parameter bits (88).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.

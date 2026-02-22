@@ -150,6 +150,17 @@ cmake --build build/dev-debug --target example_print_version
 ./build/dev-debug/example_print_version
 ```
 
+### Frame/Data API Quick Reference
+
+| Codec path | Frame API input | Data API input | Scratch/output bits |
+| --- | --- | --- | --- |
+| AMBE 3600x2400 | `char ambe_fr[4][24]` | `char ambe_d[49]` | `ambe_d[49]` |
+| AMBE 3600x2450 | `char ambe_fr[4][24]` | `char ambe_d[49]` | `ambe_d[49]` |
+| IMBE 7200x4400 | `char imbe_fr[8][23]` | `char imbe_d[88]` | `imbe_d[88]` |
+| IMBE 7100x4400 | `char imbe_fr[7][24]` | n/a (frame-only public path) | `imbe_d[88]` (converted to 7200 layout) |
+
+Use `mbe_process*Frame*` when you have interleaved codec frames, and `mbe_process*Data*` when you already have decoded parameter bits.
+
 ### Stateful Decode Workflow
 
 - Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
@@ -158,7 +169,8 @@ cmake --build build/dev-debug --target example_print_version
 - Use `mbe_process*Data*` APIs only when you already have unpacked parameter bits:
   - `errs` and `errs2` are caller-provided inputs for these parameter-only paths.
   - `mbe_processAmbe2450Data*` and `mbe_processImbe4400Data*` currently ignore `*errs`, but require a valid pointer for API compatibility.
-- `err_str` must be a writable caller-owned buffer. It should be sized for at least `(*errs2 + 2)` bytes (a conservative `char err_str[128]` works well for public entry points).
+- `err_str` is a compact status trace: `'='` repeated `*errs2` times, optional suffix markers (`E`, `T`, `R`, `M` depending on codec/path), then a trailing NUL.
+- Size `err_str` for at least `(*errs2 + 3)` bytes so there is room for up to two suffix markers plus NUL (a conservative `char err_str[128]` works well for public entry points).
 - `mbe_printVersion(char *str)` uses a legacy fixed write width of 32 bytes. Pass a buffer of at least 32 bytes, or prefer `mbe_versionString()` when possible.
 
 ### Audio Sample Scaling (Float vs int16)
@@ -260,8 +272,8 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 - `mbe_setThreadRngSeed(seed)` seeds both thread-local comfort-noise RNG state and the next unvoiced LCG cold start. For reproducible output, set it per thread before synthesis.
 - `mbe_setThreadRngSeed(0)` is accepted and remapped internally to a non-zero seed. Use an explicit non-zero seed when exact reproducibility matters across builds.
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
+- Runtime synthesis helpers (RNG state and FFT plan) are thread-local; do not share mutable decode state (`mbe_parms`) across threads unless you synchronize externally.
 - AMBE/IMBE frame handling intentionally differs for JMBE parity: IMBE uses error-rate muting and repeat-headroom reset behavior, while AMBE tone/erasure/repeat transitions follow AMBE-specific JMBE gating rules.
-- `MBELIB_STRICT_ORDER` is currently a reserved compile-time define in this tree (no ordering-path switch implemented yet).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math on supported CPUs. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
   sanity bounds elsewhere.
@@ -291,9 +303,10 @@ tools/bench_compare.sh
 
 ## Tests and Examples
 
-- Run tests with `ctest -V` from the build directory.
+- Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
 - Included tests: `test_api` (version/headers), `test_ecc` (Golay and Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior), `test_golden_pcm` (golden hash regression checks).
 - Example: `examples/print_version.c` shows linking and header usage.
+- Golden hash helper: `gen_golden` (available when `MBELIB_BUILD_TESTS=ON`, default) prints current FNV-1a reference values for synthesis/conversion regression workflows (`cmake --build build/dev-debug --target gen_golden && ./build/dev-debug/gen_golden`).
 
 ## Documentation
 
@@ -313,7 +326,8 @@ The generated site focuses on the public API (`include/`) and bundled examples.
 - Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`
 - Internal headers: `src/internal/`
 - External libraries: `src/external/pffft/` (bundled PFFFT + FFTPACK sources, BSD-like license)
-- Tests: `tests/` • Examples: `examples/`
+- Tests: `tests/` • Examples: `examples/` • Benchmarks: `bench/`
+- Developer tooling and CI parity scripts: `tools/`
 
 ## Contributing
 
