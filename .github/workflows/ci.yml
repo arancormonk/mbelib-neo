@@ -162,6 +162,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cppcheck
 
+      - name: Configure (dev-debug preset)
+        run: cmake --preset dev-debug
+
       - name: Run cppcheck (strict)
         run: |
           tools/cppcheck.sh --strict
