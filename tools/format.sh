@@ -3,9 +3,27 @@ set -euo pipefail
 
 shopt -s globstar nullglob
 
-# Include all C sources/headers across src, include, tests, and examples,
-# plus any C/C headers at the repo root. Exclude build/ via git in CI.
-files=(src/**/*.c src/**/*.h include/**/*.h tests/**/*.c tests/**/*.h examples/**/*.c examples/**/*.h *.c *.h)
+# Include all C/C++ sources/headers across src, include, tests, examples, bench,
+# plus any C/C++ headers at the repo root. CI excludes build/ via git; our
+# globs already avoid it by scoping to project dirs.
+# Third-party code (src/external/) is excluded to preserve upstream formatting.
+files=(
+  src/**/*.{c,cc,cxx,cpp,h,hpp}
+  include/**/*.{h,hpp}
+  tests/**/*.{c,cc,cxx,cpp,h,hpp}
+  examples/**/*.{c,cc,cxx,cpp,h,hpp}
+  bench/**/*.{c,cc,cxx,cpp,h,hpp}
+  *.{c,cc,cxx,cpp,h,hpp}
+)
+# Filter out third-party code
+files=("${files[@]/*external*/}")
+# Remove empty elements left by filtering
+filtered=()
+for f in "${files[@]}"; do
+  [[ -n "$f" ]] && filtered+=("$f")
+done
+files=("${filtered[@]}")
+
 if command -v clang-format >/dev/null 2>&1; then
   if [ ${#files[@]} -eq 0 ]; then
     echo "No C/C headers found to format."

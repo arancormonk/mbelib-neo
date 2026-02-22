@@ -21,7 +21,7 @@ on:
 
 jobs:
   build-test:
-    needs: [format-check, clang-tidy, cppcheck]
+    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
     name: ${{ matrix.os }} • preset=${{ matrix.preset }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -39,7 +39,7 @@ jobs:
         run: ctest --preset ${{ matrix.preset }} -V
 
   sanitize-linux:
-    needs: [format-check, clang-tidy, cppcheck]
+    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
     name: linux • Debug • sanitizers
     runs-on: ubuntu-latest
     steps:
@@ -63,8 +63,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-format
       - name: Check formatting
         run: |
-          files=$(git ls-files '*.c' '*.h' ':!:build/**')
-          if [ -z "$files" ]; then echo "No C/C headers to check"; exit 0; fi
+          files=$(git ls-files '*.c' '*.cc' '*.cxx' '*.cpp' '*.h' '*.hpp' ':!:build/**' ':!:src/external/**')
+          if [ -z "$files" ]; then echo "No C/C++ files to check"; exit 0; fi
           clang-format --version
           # Prefer dry-run Werror if supported; fallback to diff
           if clang-format -n --Werror $files 2>/dev/null; then
@@ -79,25 +79,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
-      - name: Install clang-tidy (latest)
-        run: sudo apt-get update && sudo apt-get install -y clang-tidy ripgrep
+      - name: Install static analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy ripgrep iwyu
       - name: Configure (dev-debug preset)
         run: cmake --preset dev-debug
-      - name: Run clang-tidy
-        run: |
-          # Analyze both sources and headers; headers are also checked via header-filter from TUs
-          # Exclude src/external/ (third-party code like kiss_fft)
-          files=$(git ls-files '*.c' '*.h' ':!:build/**' ':!:src/external/**')
-          if [ -z "$files" ]; then echo "No C files to analyze"; exit 0; fi
-          echo "Analyzing: $files"
-          # Run clang-tidy using project config
-          clang-tidy -p build/dev-debug $files 2>&1 | tee clang-tidy.log || true
-          # Fail the job if any analyzer/bugprone diagnostics appear
-          if rg -n "\[(clang-analyzer|bugprone).*\]$" clang-tidy.log; then
-            echo "clang-tidy found analyzer/bugprone issues (treated as errors)." >&2
-            exit 1
-          fi
-          echo "clang-tidy clean for analyzer/bugprone checks."
+      - name: Run clang-tidy (curated)
+        run: tools/clang_tidy.sh
+      - name: Upload clang-tidy output
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: clang-tidy-report
+          path: .clang-tidy.local.out
+          include-hidden-files: true
+          retention-days: 7
+      - name: Run IWYU
+        run: tools/iwyu.sh --strict
+      - name: Upload IWYU output
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: iwyu-report
+          path: .iwyu.local.out
+          include-hidden-files: true
+          retention-days: 7
+      - name: Run GCC fanalyzer
+        run: tools/gcc_fanalyzer.sh
+      - name: Upload GCC fanalyzer output
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: gcc-fanalyzer-report
+          path: .gcc-fanalyzer.local.out
+          include-hidden-files: true
+          retention-days: 7
 
   cppcheck:
     name: cppcheck
@@ -114,10 +131,65 @@ jobs:
       - name: Run cppcheck
         run: |
           tools/cppcheck.sh
+      - name: Upload cppcheck output
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cppcheck-report
+          path: .cppcheck.local.out
+          include-hidden-files: true
+          retention-days: 7
+
+  scan-build:
+    name: scan-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Install scan-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tools cmake ninja-build build-essential
+      - name: Run scan-build
+        run: |
+          tools/scan_build.sh --strict
+      - name: Upload scan-build output
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: scan-build-report
+          path: |
+            .scan-build.local.out
+            .scan-build.local
+          include-hidden-files: true
+          retention-days: 7
+
+  semgrep:
+    name: semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Set up Python
+        uses: actions/setup-python@v6.0.0
+        with:
+          python-version: "3.x"
+      - name: Install Semgrep
+        run: python -m pip install --upgrade semgrep
+      - name: Run Semgrep
+        run: tools/semgrep.sh --strict
+      - name: Upload Semgrep output
+        if: always()
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: semgrep-report
+          path: .semgrep.local.out
+          include-hidden-files: true
+          retention-days: 7
 
   update-aur:
     name: Update AUR package
-    needs: [format-check, clang-tidy, cppcheck, build-test, sanitize-linux]
+    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep, build-test, sanitize-linux]
     runs-on: ubuntu-latest
     # Only run on upstream pushes; steps guard on AUR key presence
     if: github.repository == 'arancormonk/mbelib-neo' && github.event_name != 'pull_request'
@@ -212,7 +284,7 @@ jobs:
           GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push origin master
 
   install-and-consume:
-    needs: [format-check, clang-tidy, cppcheck]
+    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
     name: install + consume (pkg-config/CMake)
     runs-on: ${{ matrix.os }}
     strategy:
@@ -274,7 +346,7 @@ jobs:
           ./build/consumer
 
   install-and-consume-win:
-    needs: [format-check, clang-tidy, cppcheck]
+    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
     name: install + consume (CMake, Windows)
     runs-on: windows-latest
     steps:

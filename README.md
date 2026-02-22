@@ -270,6 +270,15 @@ cmake --build build --target docs
 ## Contributing
 
 - Follow `.clang-format` (LLVM style, 4‑space indent, 120 cols). You can run `tools/format.sh`.
+- Static analysis scripts (CI-aligned):
+  - `tools/clang_tidy.sh` (supports `--strict` and targeted TUs).
+  - `tools/cppcheck.sh` (supports `--strict` and targeted TUs).
+  - `tools/iwyu.sh` (include hygiene via include-what-you-use; excludes `src/external`).
+  - `tools/gcc_fanalyzer.sh` (GCC `-fanalyzer` diagnostics; excludes `src/external`).
+  - `tools/scan_build.sh` (Clang Static Analyzer via `scan-build`; excludes `src/external`).
+  - `tools/semgrep.sh` (additional SAST rules; use `--strict` to fail on findings).
+- Git hooks: `tools/install-git-hooks.sh` enables auto-format on commit and CI-style pre-push checks.
+- Manual preflight runner: `tools/preflight_ci.sh` runs the same pre-push checks without pushing.
 - Prefer keeping internal symbols `static` and declarations in headers where shared.
 - Before sending changes: build locally, run `ctest -V`, and ensure examples still link.
 
