@@ -79,10 +79,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
-      - name: Install static analysis tools
+      - name: Install toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tidy ripgrep iwyu
+          sudo apt-get install -y clang-tidy ripgrep iwyu build-essential cmake ninja-build pkg-config git ccache
+      - name: Prepare ccache environment
+        run: |
+          set -euxo pipefail
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> "$GITHUB_ENV"
+          echo "CC=ccache gcc" >> "$GITHUB_ENV"
+          echo "CXX=ccache g++" >> "$GITHUB_ENV"
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
+          echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
+          echo "CCACHE_SLOPPINESS=time_macros" >> "$GITHUB_ENV"
+          mkdir -p "${GITHUB_WORKSPACE}/.ccache"
+      - name: Compute tool versions (for ccache key)
+        id: toolver-tidy
+        run: |
+          set -euxo pipefail
+          echo "gcc_ver=$(gcc -dumpfullversion -dumpversion || gcc --version | head -n1)" >> "$GITHUB_OUTPUT"
+          echo "cmake_ver=$(cmake --version | head -n1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+      - name: Restore ccache
+        uses: actions/cache@v5.0.3
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.job }}-${{ steps.toolver-tidy.outputs.gcc_ver }}-${{ steps.toolver-tidy.outputs.cmake_ver }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.job }}-${{ steps.toolver-tidy.outputs.gcc_ver }}-${{ steps.toolver-tidy.outputs.cmake_ver }}-
+            ccache-${{ runner.os }}-${{ github.job }}-
+            ccache-${{ runner.os }}-
+      - name: Initialize ccache
+        run: |
+          ccache --version
+          ccache --zero-stats
+          ccache --set-config=max_size=500M
+          ccache --set-config=compression=true
       - name: Configure (dev-debug preset)
         run: cmake --preset dev-debug
       - name: Run clang-tidy (curated)
@@ -115,6 +146,9 @@ jobs:
           path: .gcc-fanalyzer.local.out
           include-hidden-files: true
           retention-days: 7
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s
 
   cppcheck:
     name: cppcheck
@@ -149,7 +183,7 @@ jobs:
       - name: Install scan-build toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-tools cmake ninja-build build-essential
+          sudo apt-get install -y clang-tools cmake ninja-build pkg-config git build-essential
       - name: Run scan-build
         run: |
           tools/scan_build.sh --strict
