@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 1.2.2 LANGUAGES C)
+project(mbelib-neo VERSION 1.2.3 LANGUAGES C)
 
 # Language and build defaults
 set(CMAKE_C_STANDARD 99)
