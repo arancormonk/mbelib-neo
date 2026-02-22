@@ -49,6 +49,7 @@
 #include "mbe_math.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
+#include "mbelib-neo/version.h"
 #include "mbelib_const.h"
 
 #define MBE_TWO_PI (2.0f * (float)M_PI)

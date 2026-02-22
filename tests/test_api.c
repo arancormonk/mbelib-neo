@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <string.h>
 #include "mbelib-neo/mbelib.h"
+#include "mbelib-neo/version.h"
 
 /**
  * @brief Test entry: verifies mbe_printVersion matches MBELIB_VERSION.

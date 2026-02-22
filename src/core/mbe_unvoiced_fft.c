@@ -8,11 +8,11 @@
 
 #include <math.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "mbe_compiler.h"
 #include "mbe_unvoiced_fft.h"
+#include "mbelib-neo/mbelib.h"
 #include "pffft.h"
 
 /* LCG integer constants matching the float #defines in the header */

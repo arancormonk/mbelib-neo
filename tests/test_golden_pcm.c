@@ -8,7 +8,6 @@
  * @brief Golden hash tests for deterministic synthesis and conversion.
  */
 
-#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

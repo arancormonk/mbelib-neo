@@ -70,6 +70,21 @@ if ! command -v cmake >/dev/null 2>&1; then
   exit 1
 fi
 
+print_scan_build_version() {
+  if scan-build --version >/dev/null 2>&1; then
+    scan-build --version
+    return 0
+  fi
+
+  if scan-build -version >/dev/null 2>&1; then
+    scan-build -version
+    return 0
+  fi
+
+  echo "scan-build path: $(command -v scan-build)"
+  return 0
+}
+
 if [[ -z "$JOBS" ]]; then
   JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 fi
@@ -96,7 +111,7 @@ rm -rf "$BUILD_DIR" "$OUTPUT_DIR"
 set +e
 {
   echo "scan-build version:"
-  scan-build --version
+  print_scan_build_version
   echo "Excluding analyzer path: $ROOT_DIR/src/external"
   echo ""
   echo "Configuring analysis build in $BUILD_DIR ..."

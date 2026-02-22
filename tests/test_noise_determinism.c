@@ -15,9 +15,7 @@
  * generator state persists in mbe_parms and advances naturally per frame.
  * There is no external seeding mechanism for unvoiced noise in JMBE.
  */
-#include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 #include "mbelib-neo/mbelib.h"
 
 /**

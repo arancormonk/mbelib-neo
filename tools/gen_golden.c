@@ -8,10 +8,8 @@
  * @brief Utility: generate golden FNV-1a hashes for deterministic synthesis.
  */
 
-#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "mbelib-neo/mbelib.h"
 

@@ -8,7 +8,6 @@
  * @brief Unit tests for ECC helpers (Golay and Hamming variants).
  */
 #include <assert.h>
-#include <stdint.h>
 #include <string.h>
 // Embedded copies of generator tables used for test expectations
 static const int hammingGenerator[4] = {0x7f08, 0x78e4, 0x66d2, 0x55b1};

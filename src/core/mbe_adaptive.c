@@ -13,7 +13,6 @@
 
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
-#include "mbe_math.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Thread-local storage for comfort noise RNG to avoid cross-thread interference.
