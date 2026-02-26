@@ -23,7 +23,8 @@ This notice is advisory and does not modify the license. See `LICENSE` for terms
 
 - mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license.
 - Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `COPYRIGHT` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
-- Source files carry SPDX identifiers reflecting their license.
+- Project-maintained source files carry SPDX identifiers reflecting their license; vendored sources under
+  `src/external/pffft/` retain upstream license headers.
 
 ## Overview
 
