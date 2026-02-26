@@ -439,10 +439,17 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         float32x4_t vWeightedCurr = vmulq_f32(vWcurr, vCurrSamp);
         float32x4_t vSum = vaddq_f32(vWeightedPrev, vWeightedCurr);
 
-        /* Divide by denominator (NEON doesn't have direct divide, use reciprocal estimate) */
+        /* Divide by denominator.
+         * - AArch64 has native vector divide (best numerical parity with scalar/SSE).
+         * - 32-bit ARM NEON uses reciprocal estimate; apply two NR refinements. */
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC)
+        float32x4_t vResult = vdivq_f32(vSum, vDenom);
+#else
         float32x4_t vRecip = vrecpeq_f32(vDenom);
-        vRecip = vmulq_f32(vRecip, vrecpsq_f32(vDenom, vRecip)); /* Newton-Raphson refinement */
+        vRecip = vmulq_f32(vRecip, vrecpsq_f32(vDenom, vRecip));
+        vRecip = vmulq_f32(vRecip, vrecpsq_f32(vDenom, vRecip));
         float32x4_t vResult = vmulq_f32(vSum, vRecip);
+#endif
 
         /* Mask out results where denom <= threshold */
         uint32x4_t vMask = vcgtq_f32(vDenom, threshold);

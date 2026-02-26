@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 1.2.3 LANGUAGES C)
+project(mbelib-neo VERSION 1.2.4 LANGUAGES C)
 
 # Language and build defaults
 set(CMAKE_C_STANDARD 99)
@@ -362,6 +362,17 @@ if(MBELIB_BUILD_TESTS)
     target_link_options(test_params BEFORE PRIVATE ${_SAN_LDFLAGS})
   endif()
   add_test(NAME test_params COMMAND test_params)
+
+  add_executable(test_floattoshort_parity tests/test_floattoshort_parity.c)
+  target_link_libraries(test_floattoshort_parity PRIVATE ${MBELIB_EXEC_LINK_TGT})
+  target_include_directories(test_floattoshort_parity PRIVATE "${PROJECT_SOURCE_DIR}/include")
+  if(_SAN_CFLAGS)
+    target_compile_options(test_floattoshort_parity PRIVATE ${_SAN_CFLAGS})
+  endif()
+  if(_SAN_LDFLAGS)
+    target_link_options(test_floattoshort_parity BEFORE PRIVATE ${_SAN_LDFLAGS})
+  endif()
+  add_test(NAME test_floattoshort_parity COMMAND test_floattoshort_parity)
 
   add_executable(test_golden_pcm tests/test_golden_pcm.c)
   target_link_libraries(test_golden_pcm PRIVATE ${MBELIB_EXEC_LINK_TGT})

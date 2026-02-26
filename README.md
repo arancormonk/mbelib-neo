@@ -304,7 +304,7 @@ tools/bench_compare.sh
 ## Tests and Examples
 
 - Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
-- Included tests: `test_api` (version/headers), `test_ecc` (Golay and Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior), `test_golden_pcm` (golden hash regression checks).
+- Included tests: `test_api` (version/headers), `test_ecc` (Golay and Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_golden_pcm` (golden hash regression checks).
 - Example: `examples/print_version.c` shows linking and header usage.
 - Golden hash helper: `gen_golden` (available when `MBELIB_BUILD_TESTS=ON`, default) prints current FNV-1a reference values for synthesis/conversion regression workflows (`cmake --build build/dev-debug --target gen_golden && ./build/dev-debug/gen_golden`).
 
