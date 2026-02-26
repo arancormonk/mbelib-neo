@@ -1162,7 +1162,11 @@ mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf)
 #endif
 
 typedef void (*mbe_floattoshort_fn)(const float*, short*);
-static mbe_floattoshort_fn mbe_floattoshort_impl = NULL; /**< Runtime-selected impl pointer. */
+/*
+ * Keep dispatch state thread-local so first-use initialization has no cross-thread
+ * data races and still amortizes probe cost to one-time per thread.
+ */
+static MBE_THREAD_LOCAL mbe_floattoshort_fn mbe_floattoshort_impl = NULL; /**< Runtime-selected impl pointer. */
 
 /**
  * @brief Initialize runtime dispatch by probing CPU features.
@@ -1172,13 +1176,13 @@ mbe_init_runtime_dispatch(void) {
     if (mbe_floattoshort_impl) {
         return;
     }
-    /* Default to scalar */
-    mbe_floattoshort_impl = mbe_floattoshort_scalar;
+    /* Choose implementation first, then publish once. */
+    mbe_floattoshort_fn impl = mbe_floattoshort_scalar;
 
 #if defined(__x86_64__) || defined(_M_X64)
     /* SSE2 is guaranteed on x86_64 */
 #if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64)
-    mbe_floattoshort_impl = mbe_floattoshort_sse2;
+    impl = mbe_floattoshort_sse2;
 #endif
 #elif defined(__i386__) || defined(_M_IX86)
     /* Probe SSE2 on 32-bit x86 */
@@ -1189,7 +1193,7 @@ mbe_init_runtime_dispatch(void) {
     if (edx & (1 << 26)) {
 /* SSE2 supported */
 #if defined(__SSE2__)
-        mbe_floattoshort_impl = mbe_floattoshort_sse2;
+        impl = mbe_floattoshort_sse2;
 #endif
     }
 #else
@@ -1197,7 +1201,7 @@ mbe_init_runtime_dispatch(void) {
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
         if (edx & (1u << 26)) {
 #if defined(__SSE2__)
-            mbe_floattoshort_impl = mbe_floattoshort_sse2;
+            impl = mbe_floattoshort_sse2;
 #endif
         }
     }
@@ -1205,12 +1209,13 @@ mbe_init_runtime_dispatch(void) {
 #elif defined(__aarch64__) || defined(_M_ARM64)
     /* NEON is mandatory on AArch64 */
 #if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
-    mbe_floattoshort_impl = mbe_floattoshort_neon;
+    impl = mbe_floattoshort_neon;
 #endif
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
     /* Assume NEON if building with NEON intrinsics */
-    mbe_floattoshort_impl = mbe_floattoshort_neon;
+    impl = mbe_floattoshort_neon;
 #endif
+    mbe_floattoshort_impl = impl;
 }
 
 void

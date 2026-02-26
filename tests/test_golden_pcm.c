@@ -57,12 +57,15 @@ fill_params(mbe_parms* cur, mbe_parms* prev) {
 int
 main(void) {
     /*
-     * On x86/x64 (SSE2), SIMD math order is stable; we check exact hashes.
-     * On other arches (e.g., AArch64/NEON), rounding order can differ; we fall
-     * back to deterministic and sanity checks so CI remains green.
+     * On x86/x64, keep exact golden hashes in strict mode. Float-domain
+     * synthesis is deterministic per build mode, but SIMD and scalar can differ
+     * due to floating-point accumulation order.
+     * On other arches (e.g., AArch64/NEON), rounding order can differ; we use
+     * determinism and sanity checks so CI remains green.
      */
     /* Updated for PFFFT FFT implementation */
-    const uint32_t X86_F32_FNV1A = 0x59741032u;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0x59741032u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0xFDA0A110u;
     const uint32_t X86_S16_FNV1A = 0x4EDB8636u;
 
     float out_f[160];
@@ -105,8 +108,12 @@ main(void) {
      * sanity bounds for float but always enforce exact int16 hash.
      */
 #if defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
-    if (hf1 != X86_F32_FNV1A) {
-        fprintf(stderr, "x86 float hash mismatch: got=0x%08X exp=0x%08X\n", (unsigned)hf1, (unsigned)X86_F32_FNV1A);
+    uint32_t x86_expected_f32 = X86_F32_FNV1A_SCALAR;
+#ifdef MBELIB_TEST_BUILD_SIMD
+    x86_expected_f32 = X86_F32_FNV1A_SIMD;
+#endif
+    if (hf1 != x86_expected_f32) {
+        fprintf(stderr, "x86 float hash mismatch: got=0x%08X exp=0x%08X\n", (unsigned)hf1, (unsigned)x86_expected_f32);
         return 1;
     }
 #else
