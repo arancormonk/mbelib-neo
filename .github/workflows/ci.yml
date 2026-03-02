@@ -123,7 +123,7 @@ jobs:
         run: tools/clang_tidy.sh --strict
       - name: Upload clang-tidy output
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: clang-tidy-report
           path: .clang-tidy.local.out
@@ -133,7 +133,7 @@ jobs:
         run: tools/iwyu.sh --strict
       - name: Upload IWYU output
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: iwyu-report
           path: .iwyu.local.out
@@ -143,7 +143,7 @@ jobs:
         run: tools/gcc_fanalyzer.sh --strict
       - name: Upload GCC fanalyzer output
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: gcc-fanalyzer-report
           path: .gcc-fanalyzer.local.out
@@ -173,7 +173,7 @@ jobs:
           tools/cppcheck.sh --strict
       - name: Upload cppcheck output
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: cppcheck-report
           path: .cppcheck.local.out
@@ -195,7 +195,7 @@ jobs:
           tools/scan_build.sh --strict
       - name: Upload scan-build output
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: scan-build-report
           path: |
@@ -220,7 +220,7 @@ jobs:
         run: tools/semgrep.sh --strict
       - name: Upload Semgrep output
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: semgrep-report
           path: .semgrep.local.out
