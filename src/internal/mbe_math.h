@@ -13,6 +13,10 @@
 
 #include <math.h>
 
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
 /**
  * @brief Compute both sine and cosine of an angle.
  *
@@ -25,11 +29,9 @@
  */
 static inline void
 mbe_sincosf(float x, float* s, float* c) {
-#if defined(__has_builtin)
 #if __has_builtin(__builtin_sincosf)
     __builtin_sincosf(x, s, c);
     return;
-#endif
 #elif defined(__GNUC__) && !defined(__clang__)
     /* GCC provides __builtin_sincosf */
     __builtin_sincosf(x, s, c);

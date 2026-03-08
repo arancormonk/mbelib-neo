@@ -28,14 +28,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "mbe_compiler.h"
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
 #include <emmintrin.h>
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#if defined(MBE_SIMD_TARGET_NEON)
 #include <arm_neon.h>
 #endif
-#if defined(__i386__) || defined(_M_IX86)
+#if defined(MBE_ARCH_X86_32)
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
@@ -45,7 +46,6 @@
 #endif
 
 #include "mbe_adaptive.h"
-#include "mbe_compiler.h"
 #include "mbe_math.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
@@ -139,7 +139,7 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
     *c = cc;
     *s = ss;
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
     __m128 vC = _mm_loadu_ps(cblk);
     __m128 vW = _mm_loadu_ps(W);
     __m128 vA = _mm_set1_ps(2.0f * amp); /* JMBE multiplies voiced output by 2.0 */
@@ -147,7 +147,7 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
     vS = _mm_add_ps(vS, _mm_mul_ps(_mm_mul_ps(vC, vW), vA));
     _mm_storeu_ps(Ss, vS);
     return;
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
     float32x4_t vC = vld1q_f32(cblk);
     float32x4_t vW = vld1q_f32(W);
     float32x4_t vA = vdupq_n_f32(2.0f * amp); /* JMBE multiplies voiced output by 2.0 */
@@ -298,7 +298,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
     Rm0 = 0.0f;
     Rm1 = 0.0f;
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
     if (L >= 4) {
         __m128 vRm0 = _mm_setzero_ps();
         __m128 vRm1 = _mm_setzero_ps();
@@ -330,7 +330,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
             Rm1 += Ml2 * cos_tab[l];
         }
     } else
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
     if (L >= 4) {
         float32x4_t vRm0 = vdupq_n_f32(0.0f);
         float32x4_t vRm1 = vdupq_n_f32(0.0f);
@@ -397,7 +397,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
      * Uses SIMD when available */
     sum = 0.0f;
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
     if (L >= 4) {
         __m128 vsum = _mm_setzero_ps();
         __m128 sign_mask = _mm_set1_ps(-0.0f);
@@ -423,7 +423,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
             sum += (M * M);
         }
     } else
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
     if (L >= 4) {
         float32x4_t vsum = vdupq_n_f32(0.0f);
         int l4;
@@ -467,7 +467,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
     /* Apply scaling factor to all bands
      * Uses SIMD when available */
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
     if (L >= 4) {
         __m128 vgamma = _mm_set1_ps(gamma);
         int l4;
@@ -481,7 +481,7 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
             cur_mp->Ml[l] = gamma * cur_mp->Ml[l];
         }
     } else
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
     if (L >= 4) {
         float32x4_t vgamma = vdupq_n_f32(gamma);
         int l4;
@@ -1116,7 +1116,7 @@ mbe_floattoshort_scalar(const float* restrict float_buf, short* restrict aout_bu
 /**
  * @brief SSE2 specialization for float→int16 conversion.
  */
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
 static void
 mbe_floattoshort_sse2(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
@@ -1139,7 +1139,7 @@ mbe_floattoshort_sse2(const float* restrict float_buf, short* restrict aout_buf)
 /**
  * @brief NEON specialization for float→int16 conversion.
  */
-#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#if defined(MBE_SIMD_TARGET_NEON)
 static void
 mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
@@ -1179,12 +1179,17 @@ mbe_init_runtime_dispatch(void) {
     /* Choose implementation first, then publish once. */
     mbe_floattoshort_fn impl = mbe_floattoshort_scalar;
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(MBE_ARCH_AARCH64)
+    /* NEON is mandatory on AArch64, including ARM64EC. */
+#if defined(MBE_SIMD_TARGET_NEON)
+    impl = mbe_floattoshort_neon;
+#endif
+#elif defined(MBE_ARCH_X86_64)
     /* SSE2 is guaranteed on x86_64 */
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64)
+#if defined(MBE_SIMD_TARGET_SSE2)
     impl = mbe_floattoshort_sse2;
 #endif
-#elif defined(__i386__) || defined(_M_IX86)
+#elif defined(MBE_ARCH_X86_32)
     /* Probe SSE2 on 32-bit x86 */
 #if defined(_MSC_VER)
     int regs[4] = {0};
@@ -1192,7 +1197,7 @@ mbe_init_runtime_dispatch(void) {
     int edx = regs[3];
     if (edx & (1 << 26)) {
 /* SSE2 supported */
-#if defined(__SSE2__)
+#if defined(MBE_SIMD_TARGET_SSE2)
         impl = mbe_floattoshort_sse2;
 #endif
     }
@@ -1200,18 +1205,13 @@ mbe_init_runtime_dispatch(void) {
     unsigned int eax, ebx, ecx, edx;
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
         if (edx & (1u << 26)) {
-#if defined(__SSE2__)
+#if defined(MBE_SIMD_TARGET_SSE2)
             impl = mbe_floattoshort_sse2;
 #endif
         }
     }
 #endif
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    /* NEON is mandatory on AArch64 */
-#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
-    impl = mbe_floattoshort_neon;
-#endif
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(MBE_SIMD_TARGET_NEON)
     /* Assume NEON if building with NEON intrinsics */
     impl = mbe_floattoshort_neon;
 #endif

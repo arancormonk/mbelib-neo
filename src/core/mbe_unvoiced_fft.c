@@ -30,10 +30,10 @@ static MBE_THREAD_LOCAL int mbe_unvoiced_seed_override = 0;
 
 /* SIMD headers for vectorized paths */
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
 #include <emmintrin.h>
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#if defined(MBE_SIMD_TARGET_NEON)
 #include <arm_neon.h>
 #endif
 #endif
@@ -351,7 +351,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
      */
 
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
     /* SSE2 path: process 4 samples at a time where both indices are valid */
 
     /* Process samples n=0..31 with scalar (curr_idx < 0) */
@@ -405,7 +405,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
     }
     return;
 
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
     /* NEON path: process 4 samples at a time where both indices are valid */
 
     /* Process samples n=0..31 with scalar (curr_idx < 0) */
@@ -442,7 +442,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         /* Divide by denominator.
          * - AArch64 has native vector divide (best numerical parity with scalar/SSE).
          * - 32-bit ARM NEON uses reciprocal estimate; apply two NR refinements. */
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC)
+#if defined(MBE_ARCH_AARCH64)
         float32x4_t vResult = vdivq_f32(vSum, vDenom);
 #else
         float32x4_t vRecip = vrecpeq_f32(vDenom);
@@ -596,7 +596,7 @@ mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
         const float* ptr = &fft[2u * (size_t)start];
 
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
         /* SSE2 path: process 4 bins (8 floats) at a time */
         if (interior_count >= 4) {
             __m128 vsum = _mm_setzero_ps();
@@ -623,7 +623,7 @@ mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
 
             interior_count -= i;
         }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
         /* NEON path: process 4 bins at a time */
         if (interior_count >= 4) {
             float32x4_t vsum = vdupq_n_f32(0.0f);
@@ -753,14 +753,14 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
         const float scale = 1.0f / (float)MBE_FFT_SIZE;
         int i = 0;
 #if defined(MBELIB_ENABLE_SIMD)
-#if defined(__SSE2__) || defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
+#if defined(MBE_SIMD_TARGET_SSE2)
         __m128 vscale = _mm_set1_ps(scale);
         for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
             __m128 v = _mm_loadu_ps(&Uw_out[i]);
             v = _mm_mul_ps(v, vscale);
             _mm_storeu_ps(&Uw_out[i], v);
         }
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(MBE_SIMD_TARGET_NEON)
         float32x4_t vscale = vdupq_n_f32(scale);
         for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
             float32x4_t v = vld1q_f32(&Uw_out[i]);

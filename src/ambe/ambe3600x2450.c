@@ -628,7 +628,6 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_s
                                   mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
                                   int c0_errors, int c0_errors_valid) {
     int i, bad;
-    int repeat_required;
 
     /* JMBE AMBE starts from W124 defaults; normalize if caller used generic init. */
     mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
@@ -664,6 +663,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_s
         cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
     } else {
+        int repeat_required;
+
         if (c0_errors_valid) {
             /* JMBE AMBE repeat criteria when C0 errors are known:
              * errors[0] >= 4 || (errors[0] >= 2 && total >= 6). */

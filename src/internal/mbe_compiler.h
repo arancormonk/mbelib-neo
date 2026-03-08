@@ -68,4 +68,70 @@
  */
 #define MBE_CACHE_LINE_SIZE 64
 
+/**
+ * @brief Normalized architecture and SIMD-target detection helpers.
+ *
+ * Keep these checks centralized so all translation units make the same
+ * SSE2-vs-NEON decision. ARM64EC must be treated as an ARM64 target even
+ * though MSVC also defines `_M_X64` for that environment.
+ *
+ * The test suite can force synthetic detection scenarios through the
+ * `MBE_TEST_OVERRIDE_*` hooks below without redefining compiler-provided
+ * target macros. When an architecture override is active, SIMD inference
+ * must come from the normalized architecture macros so the host compiler's
+ * native target macros do not leak into the synthetic scenario.
+ */
+#if defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)
+#error "MBE test arch overrides are mutually exclusive"
+#endif
+
+#if defined(MBE_TEST_OVERRIDE_SIMD_SSE2) && defined(MBE_TEST_OVERRIDE_SIMD_NEON)
+#error "MBE test SIMD overrides are mutually exclusive"
+#endif
+
+#if defined(MBE_TEST_OVERRIDE_ARCH_X86_64)
+#define MBE_ARCH_X86_64 1
+#elif defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)
+#define MBE_ARCH_ARM64EC 1
+#define MBE_ARCH_AARCH64 1
+#else
+#if defined(_M_ARM64EC)
+#define MBE_ARCH_ARM64EC 1
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(MBE_ARCH_ARM64EC)
+#define MBE_ARCH_AARCH64 1
+#endif
+
+#if (defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)) && !defined(MBE_ARCH_ARM64EC)
+#define MBE_ARCH_X86_64 1
+#endif
+
+#if defined(__i386__) || defined(_M_IX86)
+#define MBE_ARCH_X86_32 1
+#endif
+#endif
+
+#if defined(MBE_TEST_OVERRIDE_SIMD_NEON)
+#define MBE_SIMD_TARGET_NEON 1
+#elif defined(MBE_TEST_OVERRIDE_SIMD_SSE2)
+#define MBE_SIMD_TARGET_SSE2 1
+#elif defined(MBE_TEST_OVERRIDE_ARCH_X86_64) || defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)
+#if defined(MBE_ARCH_AARCH64)
+#define MBE_SIMD_TARGET_NEON 1
+#endif
+
+#if defined(MBE_ARCH_X86_64) && !defined(MBE_ARCH_ARM64EC)
+#define MBE_SIMD_TARGET_SSE2 1
+#endif
+#else
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(MBE_ARCH_AARCH64)
+#define MBE_SIMD_TARGET_NEON 1
+#endif
+
+#if (defined(__SSE2__) || defined(MBE_ARCH_X86_64)) && !defined(MBE_ARCH_ARM64EC)
+#define MBE_SIMD_TARGET_SSE2 1
+#endif
+#endif
+
 #endif /* MBELIB_NEO_INTERNAL_MBE_COMPILER_H */

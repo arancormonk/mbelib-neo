@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -101,7 +102,7 @@ main(void) {
     }
 
     /* Arch-specific exactness or sanity checks */
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)
     /*
      * On x86, exact float hash can differ under aggressive FP opts. In Debug
      * or when explicitly requested, enforce exact float hash. Otherwise, use
