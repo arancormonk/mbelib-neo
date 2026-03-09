@@ -36,13 +36,6 @@
 #if defined(MBE_SIMD_TARGET_NEON)
 #include <arm_neon.h>
 #endif
-#if defined(MBE_ARCH_X86_32)
-#if defined(_MSC_VER)
-#include <intrin.h>
-#else
-#include <cpuid.h>
-#endif
-#endif
 #endif
 
 #include "mbe_adaptive.h"
@@ -1169,7 +1162,7 @@ typedef void (*mbe_floattoshort_fn)(const float*, short*);
 static MBE_THREAD_LOCAL mbe_floattoshort_fn mbe_floattoshort_impl = NULL; /**< Runtime-selected impl pointer. */
 
 /**
- * @brief Initialize runtime dispatch by probing CPU features.
+ * @brief Initialize conversion dispatch for the compiled target ISA.
  */
 static void
 mbe_init_runtime_dispatch(void) {
@@ -1190,26 +1183,12 @@ mbe_init_runtime_dispatch(void) {
     impl = mbe_floattoshort_sse2;
 #endif
 #elif defined(MBE_ARCH_X86_32)
-    /* Probe SSE2 on 32-bit x86 */
-#if defined(_MSC_VER)
-    int regs[4] = {0};
-    __cpuid(regs, 1);
-    int edx = regs[3];
-    if (edx & (1 << 26)) {
-/* SSE2 supported */
+    /*
+     * 32-bit x86 only compiles the SSE2 specialization when the build targets
+     * SSE2 explicitly (for example /arch:SSE2 or -msse2).
+     */
 #if defined(MBE_SIMD_TARGET_SSE2)
-        impl = mbe_floattoshort_sse2;
-#endif
-    }
-#else
-    unsigned int eax, ebx, ecx, edx;
-    if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
-        if (edx & (1u << 26)) {
-#if defined(MBE_SIMD_TARGET_SSE2)
-            impl = mbe_floattoshort_sse2;
-#endif
-        }
-    }
+    impl = mbe_floattoshort_sse2;
 #endif
 #elif defined(MBE_SIMD_TARGET_NEON)
     /* Assume NEON if building with NEON intrinsics */

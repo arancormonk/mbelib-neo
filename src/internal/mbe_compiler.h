@@ -75,13 +75,19 @@
  * SSE2-vs-NEON decision. ARM64EC must be treated as an ARM64 target even
  * though MSVC also defines `_M_X64` for that environment.
  *
+ * `MBE_SIMD_TARGET_*` describes the ISA the current translation unit is
+ * compiled to use. It is a compile-time capability signal, not a runtime
+ * CPU-feature probe.
+ *
  * The test suite can force synthetic detection scenarios through the
  * `MBE_TEST_OVERRIDE_*` hooks below without redefining compiler-provided
  * target macros. When an architecture override is active, SIMD inference
  * must come from the normalized architecture macros so the host compiler's
  * native target macros do not leak into the synthetic scenario.
  */
-#if defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)
+#if (defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC))                                \
+    || (defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_X86_32))                              \
+    || (defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC) && defined(MBE_TEST_OVERRIDE_ARCH_X86_32))
 #error "MBE test arch overrides are mutually exclusive"
 #endif
 
@@ -94,6 +100,8 @@
 #elif defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)
 #define MBE_ARCH_ARM64EC 1
 #define MBE_ARCH_AARCH64 1
+#elif defined(MBE_TEST_OVERRIDE_ARCH_X86_32)
+#define MBE_ARCH_X86_32 1
 #else
 #if defined(_M_ARM64EC)
 #define MBE_ARCH_ARM64EC 1
@@ -116,12 +124,15 @@
 #define MBE_SIMD_TARGET_NEON 1
 #elif defined(MBE_TEST_OVERRIDE_SIMD_SSE2)
 #define MBE_SIMD_TARGET_SSE2 1
-#elif defined(MBE_TEST_OVERRIDE_ARCH_X86_64) || defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)
+#elif defined(MBE_TEST_OVERRIDE_ARCH_X86_64) || defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC)                                \
+    || defined(MBE_TEST_OVERRIDE_ARCH_X86_32)
 #if defined(MBE_ARCH_AARCH64)
 #define MBE_SIMD_TARGET_NEON 1
 #endif
 
 #if defined(MBE_ARCH_X86_64) && !defined(MBE_ARCH_ARM64EC)
+#define MBE_SIMD_TARGET_SSE2 1
+#elif defined(MBE_ARCH_X86_32) && defined(_M_IX86_FP) && (_M_IX86_FP >= 2)
 #define MBE_SIMD_TARGET_SSE2 1
 #endif
 #else
@@ -129,7 +140,9 @@
 #define MBE_SIMD_TARGET_NEON 1
 #endif
 
-#if (defined(__SSE2__) || defined(MBE_ARCH_X86_64)) && !defined(MBE_ARCH_ARM64EC)
+#if !defined(MBE_ARCH_ARM64EC)                                                                                         \
+    && (defined(MBE_ARCH_X86_64)                                                                                       \
+        || (defined(MBE_ARCH_X86_32) && (defined(__SSE2__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 2)))))
 #define MBE_SIMD_TARGET_SSE2 1
 #endif
 #endif

@@ -1,11 +1,32 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 1.2.5 LANGUAGES C)
+project(mbelib-neo VERSION 1.2.6 LANGUAGES C)
 
 # Language and build defaults
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+include(CheckCSourceCompiles)
+
+function(_mbelib_check_c_source_compiles_static source out_var)
+  set(_mbelib_had_try_compile_target_type OFF)
+  if(DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
+    set(_mbelib_had_try_compile_target_type ON)
+    set(_mbelib_saved_try_compile_target_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+  endif()
+
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+  check_c_source_compiles("${source}" ${out_var})
+
+  if(_mbelib_had_try_compile_target_type)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_mbelib_saved_try_compile_target_type}")
+  else()
+    unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+  endif()
+
+  set(${out_var} "${${out_var}}" PARENT_SCOPE)
+endfunction()
 
 # Options
 option(NOTONES "Disable AMBE+2 Tones" OFF)
@@ -144,10 +165,94 @@ if(NOT WIN32)
   target_link_libraries(mbe-shared m)
 endif()
 
+# Detect 32-bit x86 targets so the SIMD option can ensure SSE2 codegen when
+# needed instead of relying on the host processor string.
+set(MBELIB_TARGET_X86_32 OFF)
+set(_mbelib_x86_32_probe_source
+  [=[
+    #if !defined(__i386__) && !defined(_M_IX86)
+    #error Not a 32-bit x86 target
+    #endif
+    int mbelib_target_x86_32;
+  ]=])
+set(_mbelib_x86_32_sse2_probe_source
+  [=[
+    #if !defined(__i386__) && !defined(_M_IX86)
+    #error Not a 32-bit x86 target
+    #endif
+    #if !defined(__SSE2__) && !(defined(_M_IX86_FP) && (_M_IX86_FP >= 2))
+    #error 32-bit x86 target is not compiling for SSE2
+    #endif
+    int mbelib_target_x86_32_sse2;
+  ]=])
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+  # Query the active compiler target instead of the host processor string so
+  # multilib builds (for example -m32 on an x86_64 host) are classified
+  # correctly during configure.
+  _mbelib_check_c_source_compiles_static("${_mbelib_x86_32_probe_source}" _mbelib_compiler_targets_x86_32)
+  if(_mbelib_compiler_targets_x86_32)
+    set(MBELIB_TARGET_X86_32 ON)
+  endif()
+  unset(_mbelib_compiler_targets_x86_32 CACHE)
+  unset(_mbelib_compiler_targets_x86_32)
+endif()
+
 # Optional SIMD toggles
 if(MBELIB_ENABLE_SIMD)
   target_compile_definitions(mbe-shared PRIVATE MBELIB_ENABLE_SIMD=1)
   target_compile_definitions(mbe-static PRIVATE MBELIB_ENABLE_SIMD=1)
+  if(MBELIB_TARGET_X86_32)
+    set(_mbelib_x86_sse2_flag "")
+    _mbelib_check_c_source_compiles_static("${_mbelib_x86_32_sse2_probe_source}" _mbelib_x86_targets_sse2_by_default)
+    if(_mbelib_x86_targets_sse2_by_default)
+      message(STATUS "MBELIB_ENABLE_SIMD on 32-bit x86: active compiler target already includes SSE2")
+    else()
+      set(_mbelib_x86_sse2_candidate_flags -msse2 /arch:SSE2)
+      if(MSVC)
+        set(_mbelib_x86_sse2_candidate_flags /arch:SSE2 -msse2)
+      endif()
+
+      foreach(_mbelib_candidate_flag IN LISTS _mbelib_x86_sse2_candidate_flags)
+        set(_mbelib_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+        if(CMAKE_REQUIRED_FLAGS)
+          set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} ${_mbelib_candidate_flag}")
+        else()
+          set(CMAKE_REQUIRED_FLAGS "${_mbelib_candidate_flag}")
+        endif()
+
+        _mbelib_check_c_source_compiles_static(
+          "${_mbelib_x86_32_sse2_probe_source}"
+          _mbelib_x86_sse2_candidate_supported)
+
+        set(CMAKE_REQUIRED_FLAGS "${_mbelib_saved_required_flags}")
+        set(_mbelib_candidate_flag_supported "${_mbelib_x86_sse2_candidate_supported}")
+        unset(_mbelib_x86_sse2_candidate_supported CACHE)
+        unset(_mbelib_x86_sse2_candidate_supported)
+
+        if(_mbelib_candidate_flag_supported)
+          set(_mbelib_x86_sse2_flag "${_mbelib_candidate_flag}")
+          break()
+        endif()
+      endforeach()
+
+      if(NOT _mbelib_x86_sse2_flag)
+        message(FATAL_ERROR
+          "MBELIB_ENABLE_SIMD on 32-bit x86 requires the active compiler target to enable SSE2 "
+          "(for example via -msse2 or /arch:SSE2)")
+      endif()
+
+      message(STATUS "MBELIB_ENABLE_SIMD on 32-bit x86: compiling library targets for SSE2 via ${_mbelib_x86_sse2_flag}")
+      target_compile_options(mbe-shared PRIVATE ${_mbelib_x86_sse2_flag})
+      target_compile_options(mbe-static PRIVATE ${_mbelib_x86_sse2_flag})
+    endif()
+    unset(_mbelib_x86_sse2_candidate_flags)
+    unset(_mbelib_x86_targets_sse2_by_default CACHE)
+    unset(_mbelib_x86_targets_sse2_by_default)
+    unset(_mbelib_x86_sse2_flag)
+    unset(_mbelib_candidate_flag)
+    unset(_mbelib_candidate_flag_supported)
+    unset(_mbelib_saved_required_flags)
+  endif()
 else()
   # Keep bundled PFFFT scalar when SIMD is disabled for the project.
   target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)
@@ -411,6 +516,20 @@ if(MBELIB_BUILD_TESTS)
     target_link_options(test_simd_arch_detection_arm64ec BEFORE PRIVATE ${_SAN_LDFLAGS})
   endif()
   add_test(NAME test_simd_arch_detection_arm64ec COMMAND test_simd_arch_detection_arm64ec)
+
+  add_executable(test_simd_arch_detection_x86_32_msvc_sse2 tests/test_simd_arch_detection.c)
+  target_include_directories(test_simd_arch_detection_x86_32_msvc_sse2 PRIVATE "${PROJECT_SOURCE_DIR}/src/internal")
+  target_compile_definitions(test_simd_arch_detection_x86_32_msvc_sse2
+    PRIVATE
+      MBE_TEST_SCENARIO_X86_32_MSVC_SSE2=1
+      _M_IX86_FP=2)
+  if(_SAN_CFLAGS)
+    target_compile_options(test_simd_arch_detection_x86_32_msvc_sse2 PRIVATE ${_SAN_CFLAGS})
+  endif()
+  if(_SAN_LDFLAGS)
+    target_link_options(test_simd_arch_detection_x86_32_msvc_sse2 BEFORE PRIVATE ${_SAN_LDFLAGS})
+  endif()
+  add_test(NAME test_simd_arch_detection_x86_32_msvc_sse2 COMMAND test_simd_arch_detection_x86_32_msvc_sse2)
 endif()
 
 # Benchmarks (opt-in)

@@ -17,6 +17,12 @@
 #define MBE_TEST_OVERRIDE_ARCH_X86_64 1
 #elif defined(MBE_TEST_SCENARIO_ARM64EC)
 #define MBE_TEST_OVERRIDE_ARCH_ARM64EC 1
+#elif defined(MBE_TEST_SCENARIO_X86_32_MSVC_SSE2)
+/*
+ * Exercise 32-bit x86 SIMD inference via the MSVC `_M_IX86_FP` contract while
+ * forcing the normalized architecture classification away from the host.
+ */
+#define MBE_TEST_OVERRIDE_ARCH_X86_32 1
 #endif
 
 #include "mbe_compiler.h"
@@ -54,6 +60,25 @@ main(void) {
 #endif
 #if defined(MBE_SIMD_TARGET_SSE2)
 #error "ARM64EC scenario must not select SSE2 over NEON"
+#endif
+#elif defined(MBE_TEST_SCENARIO_X86_32_MSVC_SSE2)
+#if !defined(MBE_ARCH_X86_32)
+#error "x86_32 MSVC SSE2 scenario must classify as x86_32"
+#endif
+#if defined(MBE_ARCH_X86_64)
+#error "x86_32 MSVC SSE2 scenario must not classify as x86_64"
+#endif
+#if defined(MBE_ARCH_AARCH64)
+#error "x86_32 MSVC SSE2 scenario must not classify as AArch64"
+#endif
+#if defined(MBE_ARCH_ARM64EC)
+#error "x86_32 MSVC SSE2 scenario must not classify as ARM64EC"
+#endif
+#if !defined(MBE_SIMD_TARGET_SSE2)
+#error "x86_32 MSVC SSE2 scenario must enable SSE2 intrinsics"
+#endif
+#if defined(MBE_SIMD_TARGET_NEON)
+#error "x86_32 MSVC SSE2 scenario must not enable NEON intrinsics"
 #endif
 #else
 #error "test_simd_arch_detection requires an explicit scenario"
