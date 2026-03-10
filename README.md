@@ -284,19 +284,19 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 Build micro-benchmarks:
 
 ```
-cmake --preset dev-release-simd -DMBELIB_BUILD_BENCHMARKS=ON
-cmake --build --preset dev-release-simd -j --target bench_synth bench_unvoiced bench_convert
+cmake --preset dev-release -DMBELIB_BUILD_BENCHMARKS=ON
+cmake --build --preset dev-release -j --target bench_synth bench_unvoiced bench_convert
 ```
 
 Run benchmark executables:
 
 ```
-./build/dev-release-simd/bench_synth
-./build/dev-release-simd/bench_unvoiced
-./build/dev-release-simd/bench_convert
+./build/dev-release/bench_synth
+./build/dev-release/bench_unvoiced
+./build/dev-release/bench_convert
 ```
 
-Quick scalar-vs-SIMD comparison helper:
+Quick scalar-vs-SIMD comparison helper (builds ad hoc comparison trees under `build/bench-compare-scalar/` and `build/bench-compare-simd/`):
 
 ```
 tools/bench_compare.sh
