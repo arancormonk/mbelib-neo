@@ -108,11 +108,12 @@ struct mbe_fft_plan {
 
     /* Precomputed WOLA weights for n=0..159 (avoids per-sample window lookups)
      * Cache line aligned for efficient SIMD loads in hot WOLA combine loop */
-    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev[MBE_FRAME_LEN];    /**< w(n) for previous frame */
-    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr[MBE_FRAME_LEN];    /**< w(n-160) for current frame */
-    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev_sq[MBE_FRAME_LEN]; /**< w_prev^2 */
-    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr_sq[MBE_FRAME_LEN]; /**< w_curr^2 */
-    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_denom[MBE_FRAME_LEN];     /**< w_prev^2 + w_curr^2 */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev[MBE_FRAME_LEN];     /**< w(n) for previous frame */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr[MBE_FRAME_LEN];     /**< w(n-160) for current frame */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_prev_sq[MBE_FRAME_LEN];  /**< w_prev^2 */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_w_curr_sq[MBE_FRAME_LEN];  /**< w_curr^2 */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float wola_denom[MBE_FRAME_LEN];      /**< w_prev^2 + w_curr^2 */
+    MBE_ALIGNAS(MBE_CACHE_LINE_SIZE) float synthesis_window[MBE_FFT_SIZE]; /**< 256-sample synthesis window */
 
     float* Uw_out; /**< IFFT output buffer (256 floats, aligned) */
     float* work;   /**< PFFFT work buffer (256 floats, aligned) */
@@ -167,6 +168,11 @@ mbe_fft_plan_alloc(void) {
         plan->wola_denom[n] = plan->wola_w_prev_sq[n] + plan->wola_w_curr_sq[n];
     }
 
+    for (int i = 0; i < MBE_FFT_SIZE; i++) {
+        int win_idx = i - 128;
+        plan->synthesis_window[i] = (win_idx >= -105 && win_idx <= 105) ? mbe_synthesisWindow_fast(win_idx) : 0.0f;
+    }
+
     return plan;
 }
 
@@ -198,6 +204,73 @@ mbe_synthesisWindow(int n) {
         return 0.0f;
     }
     return Ws_synthesis[n + 105];
+}
+
+static void
+mbe_apply_synthesis_window(float* restrict dst, const float* restrict src, const mbe_fft_plan* restrict plan) {
+    const float* window = plan->synthesis_window;
+    int i = 0;
+
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(MBE_SIMD_TARGET_SSE2)
+    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+        __m128 vsrc = _mm_loadu_ps(src + i);
+        __m128 vwin = _mm_loadu_ps(window + i);
+        _mm_storeu_ps(dst + i, _mm_mul_ps(vsrc, vwin));
+    }
+#elif defined(MBE_SIMD_TARGET_NEON)
+    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+        float32x4_t vsrc = vld1q_f32(src + i);
+        float32x4_t vwin = vld1q_f32(window + i);
+        vst1q_f32(dst + i, vmulq_f32(vsrc, vwin));
+    }
+#endif
+#endif
+
+    for (; i < MBE_FFT_SIZE; i++) {
+        dst[i] = src[i] * window[i];
+    }
+}
+
+static void
+mbe_scale_ordered_real_fft_bins(float* restrict fft, const float* restrict scale) {
+    fft[0] *= scale[0];
+
+    int bin = 1;
+
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(MBE_SIMD_TARGET_SSE2)
+    for (; bin + 3 < (MBE_FFT_SIZE / 2); bin += 4) {
+        size_t offset = 2u * (size_t)bin;
+        __m128 vscale = _mm_loadu_ps(scale + bin);
+        __m128 vscale01 = _mm_unpacklo_ps(vscale, vscale);
+        __m128 vscale23 = _mm_unpackhi_ps(vscale, vscale);
+        __m128 vfft01 = _mm_loadu_ps(fft + offset);
+        __m128 vfft23 = _mm_loadu_ps(fft + offset + 4u);
+        _mm_storeu_ps(fft + offset, _mm_mul_ps(vfft01, vscale01));
+        _mm_storeu_ps(fft + offset + 4u, _mm_mul_ps(vfft23, vscale23));
+    }
+#elif defined(MBE_SIMD_TARGET_NEON)
+    for (; bin + 3 < (MBE_FFT_SIZE / 2); bin += 4) {
+        size_t offset = 2u * (size_t)bin;
+        float32x4_t vscale = vld1q_f32(scale + bin);
+        float32x4x2_t vdup = vzipq_f32(vscale, vscale);
+        float32x4_t vfft01 = vld1q_f32(fft + offset);
+        float32x4_t vfft23 = vld1q_f32(fft + offset + 4u);
+        vst1q_f32(fft + offset, vmulq_f32(vfft01, vdup.val[0]));
+        vst1q_f32(fft + offset + 4u, vmulq_f32(vfft23, vdup.val[1]));
+    }
+#endif
+#endif
+
+    for (; bin < (MBE_FFT_SIZE / 2); bin++) {
+        size_t offset = 2u * (size_t)bin;
+        float scalor = scale[bin];
+        fft[offset] *= scalor;
+        fft[offset + 1u] *= scalor;
+    }
+
+    fft[1] *= scale[MBE_FFT_SIZE / 2];
 }
 
 void
@@ -481,64 +554,6 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
 }
 
 /**
- * @brief PFFFT bin accessor helpers.
- *
- * PFFFT ordered real transform output format for N=256:
- *   fft[0] = DC component (bin 0 real)
- *   fft[1] = Nyquist component (bin 128 real)
- *   fft[2k], fft[2k+1] = bin k (re, im) for k = 1..127
- */
-
-/* Get real part of bin (0 <= bin <= 128) */
-static inline float
-pffft_bin_re(const float* fft, int bin) {
-    if (bin == 0) {
-        return fft[0];
-    }
-    if (bin == MBE_FFT_SIZE / 2) {
-        return fft[1];
-    }
-    return fft[2u * (size_t)bin];
-}
-
-/* Get imaginary part of bin (0 <= bin <= 128) */
-static inline float
-pffft_bin_im(const float* fft, int bin) {
-    if (bin == 0 || bin == MBE_FFT_SIZE / 2) {
-        return 0.0f;
-    }
-    return fft[2u * (size_t)bin + 1u];
-}
-
-/* Set bin value (0 <= bin <= 128) */
-static inline void
-pffft_bin_set(float* fft, int bin, float re, float im) {
-    if (bin == 0) {
-        fft[0] = re;
-    } else if (bin == MBE_FFT_SIZE / 2) {
-        fft[1] = re;
-    } else {
-        size_t offset = 2u * (size_t)bin;
-        fft[offset] = re;
-        fft[offset + 1u] = im;
-    }
-}
-
-/* Scale bin by factor (0 <= bin <= 128) */
-static inline void
-pffft_bin_scale(float* fft, int bin, float scale) {
-    if (bin == 0) {
-        fft[0] *= scale;
-    } else if (bin == MBE_FFT_SIZE / 2) {
-        fft[1] *= scale;
-    } else {
-        size_t offset = 2u * (size_t)bin;
-        fft[offset] *= scale;
-        fft[offset + 1u] *= scale;
-    }
-}
-
-/**
  * @brief Compute sum of magnitude squared for a range of FFT bins.
  *
  * Calculates sum(re[i]^2 + im[i]^2) for bins from start to end (exclusive).
@@ -671,16 +686,8 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     /* Initialize scalors to zero (voiced bands stay zeroed) */
     memset(dftBinScalor, 0, (MBE_FFT_SIZE / 2 + 1) * sizeof(float));
 
-    /* Copy pre-generated noise buffer and apply synthesis window (Algorithm #118 prep)
-     * Window is centered at sample 128, indices go from -128 to +127
-     * Use fast inline lookup - all indices are in valid range [-105, 105] after offset
-     */
-    for (int i = 0; i < MBE_FFT_SIZE; i++) {
-        int win_idx = i - 128;
-        /* Indices outside [-105, +105] get zero from the window table edges */
-        float w = (win_idx >= -105 && win_idx <= 105) ? mbe_synthesisWindow_fast(win_idx) : 0.0f;
-        Uw[i] = noise_buffer[i] * w;
-    }
+    /* Copy pre-generated noise buffer and apply the precomputed synthesis window. */
+    mbe_apply_synthesis_window(Uw, noise_buffer, plan);
 
     /* Algorithm #118: 256-point real FFT using PFFFT */
     pffft_transform_ordered(plan->setup, Uw, Uw_fft, plan->work, PFFFT_FORWARD);
@@ -720,13 +727,8 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
         /* Voiced bands: scalor remains 0, effectively zeroing those bins */
     }
 
-    /* Algorithms #119, #120, #124: Apply scaling to FFT bins
-     * Scale each bin using PFFFT's interleaved format.
-     * Voiced bins get scaled by 0 (zeroed), unvoiced bins get proper scaling.
-     */
-    for (int bin = 0; bin <= MBE_FFT_SIZE / 2; bin++) {
-        pffft_bin_scale(Uw_fft, bin, dftBinScalor[bin]);
-    }
+    /* Algorithms #119, #120, #124: Apply per-bin scaling in ordered real FFT layout. */
+    mbe_scale_ordered_real_fft_bins(Uw_fft, dftBinScalor);
 
     /* Algorithm #125: Inverse FFT using PFFFT */
     pffft_transform_ordered(plan->setup, Uw_fft, Uw_out, plan->work, PFFFT_BACKWARD);
