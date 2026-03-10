@@ -118,10 +118,6 @@ struct mbe_fft_plan {
     float* work;   /**< PFFFT work buffer (256 floats, aligned) */
 
     int b_max[57]; /**< Band upper bin edges */
-
-    /* Index arrays for WOLA (int arrays benefit less from alignment) */
-    int wola_prev_idx[MBE_FRAME_LEN]; /**< n + 128 */
-    int wola_curr_idx[MBE_FRAME_LEN]; /**< n + 128 - 160 = n - 32 */
 };
 
 mbe_fft_plan*
@@ -169,10 +165,6 @@ mbe_fft_plan_alloc(void) {
         plan->wola_w_prev_sq[n] = w_prev * w_prev;
         plan->wola_w_curr_sq[n] = w_curr * w_curr;
         plan->wola_denom[n] = plan->wola_w_prev_sq[n] + plan->wola_w_curr_sq[n];
-
-        /* Precompute buffer indices */
-        plan->wola_prev_idx[n] = n + 128;
-        plan->wola_curr_idx[n] = n + 128 - MBE_FRAME_LEN; /* n - 32 for N=160 */
     }
 
     return plan;
@@ -338,8 +330,6 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
     const float* w_prev = plan->wola_w_prev;
     const float* w_curr = plan->wola_w_curr;
     const float* denom = plan->wola_denom;
-    const int* prev_idx = plan->wola_prev_idx;
-    const int* curr_idx = plan->wola_curr_idx;
 
     /* Buffer index bounds:
      * - prev_idx[n] = n + 128, valid when < MBE_FFT_SIZE (256), so n < 128
@@ -356,7 +346,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
 
     /* Process samples n=0..31 with scalar (curr_idx < 0) */
     for (int n = 0; n < 32; n++) {
-        float prev_sample = prevUw[prev_idx[n]];
+        float prev_sample = prevUw[n + 128];
         float curr_sample = 0.0f; /* curr_idx[n] < 0 for n < 32 */
         float d = denom[n];
         if (MBE_LIKELY(d > 1e-10f)) {
@@ -372,11 +362,9 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         __m128 vWcurr = _mm_loadu_ps(&w_curr[n]);
         __m128 vDenom = _mm_loadu_ps(&denom[n]);
 
-        /* Gather samples (all indices valid in this range) */
-        __m128 vPrevSamp =
-            _mm_set_ps(prevUw[prev_idx[n + 3]], prevUw[prev_idx[n + 2]], prevUw[prev_idx[n + 1]], prevUw[prev_idx[n]]);
-        __m128 vCurrSamp =
-            _mm_set_ps(currUw[curr_idx[n + 3]], currUw[curr_idx[n + 2]], currUw[curr_idx[n + 1]], currUw[curr_idx[n]]);
+        /* These source regions are contiguous for n=32..127. */
+        __m128 vPrevSamp = _mm_loadu_ps(prevUw + n + 128);
+        __m128 vCurrSamp = _mm_loadu_ps(currUw + n - 32);
 
         /* Compute weighted samples */
         __m128 vWeightedPrev = _mm_mul_ps(vWprev, vPrevSamp);
@@ -397,7 +385,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
     /* Process samples n=128..159 with scalar (prev_idx >= MBE_FFT_SIZE) */
     for (int n = 128; n < MBE_FRAME_LEN; n++) {
         float prev_sample = 0.0f; /* prev_idx[n] >= 256 for n >= 128 */
-        float curr_sample = currUw[curr_idx[n]];
+        float curr_sample = currUw[n - 32];
         float d = denom[n];
         if (MBE_LIKELY(d > 1e-10f)) {
             output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
@@ -410,7 +398,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
 
     /* Process samples n=0..31 with scalar (curr_idx < 0) */
     for (int n = 0; n < 32; n++) {
-        float prev_sample = prevUw[prev_idx[n]];
+        float prev_sample = prevUw[n + 128];
         float curr_sample = 0.0f; /* curr_idx[n] < 0 for n < 32 */
         float d = denom[n];
         if (MBE_LIKELY(d > 1e-10f)) {
@@ -426,13 +414,9 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         float32x4_t vWcurr = vld1q_f32(&w_curr[n]);
         float32x4_t vDenom = vld1q_f32(&denom[n]);
 
-        /* Gather samples (all indices valid in this range) */
-        float prev_samples[4] = {prevUw[prev_idx[n]], prevUw[prev_idx[n + 1]], prevUw[prev_idx[n + 2]],
-                                 prevUw[prev_idx[n + 3]]};
-        float curr_samples[4] = {currUw[curr_idx[n]], currUw[curr_idx[n + 1]], currUw[curr_idx[n + 2]],
-                                 currUw[curr_idx[n + 3]]};
-        float32x4_t vPrevSamp = vld1q_f32(prev_samples);
-        float32x4_t vCurrSamp = vld1q_f32(curr_samples);
+        /* These source regions are contiguous for n=32..127. */
+        float32x4_t vPrevSamp = vld1q_f32(prevUw + n + 128);
+        float32x4_t vCurrSamp = vld1q_f32(currUw + n - 32);
 
         /* Compute weighted samples */
         float32x4_t vWeightedPrev = vmulq_f32(vWprev, vPrevSamp);
@@ -464,7 +448,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
     /* Process samples n=128..159 with scalar (prev_idx >= MBE_FFT_SIZE) */
     for (int n = 128; n < MBE_FRAME_LEN; n++) {
         float prev_sample = 0.0f; /* prev_idx[n] >= 256 for n >= 128 */
-        float curr_sample = currUw[curr_idx[n]];
+        float curr_sample = currUw[n - 32];
         float d = denom[n];
         if (MBE_LIKELY(d > 1e-10f)) {
             output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
@@ -479,12 +463,12 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         float prev_sample = 0.0f;
         float curr_sample = 0.0f;
 
-        int pidx = prev_idx[n];
-        if (MBE_LIKELY(pidx >= 0 && pidx < MBE_FFT_SIZE)) {
+        int pidx = n + 128;
+        if (MBE_LIKELY(pidx < MBE_FFT_SIZE)) {
             prev_sample = prevUw[pidx];
         }
 
-        int cidx = curr_idx[n];
+        int cidx = n - 32;
         if (MBE_LIKELY(cidx >= 0 && cidx < MBE_FFT_SIZE)) {
             curr_sample = currUw[cidx];
         }

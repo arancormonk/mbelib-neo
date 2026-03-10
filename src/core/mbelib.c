@@ -96,32 +96,16 @@ mbe_xorshift32(void) {
 }
 
 /*
- * Vectorized helper: add voiced oscillator contribution for 4 consecutive
- * samples to the output buffer, and advance oscillator state by 4 steps.
- * This optimizes the per-sample multiply-add with window weights.
+ * Voiced-path helpers keep the oscillator recurrence scalar so the synthesis
+ * order matches the historical implementation, then apply SIMD only to the
+ * output accumulation. The paired helper lets the common prev+cur voiced case
+ * touch the output buffer once per 4-sample block instead of twice.
  */
-/**
- * @brief Add four voiced samples to the output using oscillator recurrence.
- *
- * Generates four consecutive cosine samples from the current oscillator state,
- * multiplies by window `W[0..3]` and amplitude `amp`, and accumulates into
- * `Ss[0..3]`. Advances the oscillator state by four steps.
- *
- * @param Ss Output sample pointer (adds to Ss[0..3]).
- * @param W  Window values for these four samples.
- * @param amp Amplitude multiplier for this band/component.
- * @param c  In/out cosine register.
- * @param s  In/out sine register.
- * @param sd sin(Δθ) per step.
- * @param cd cos(Δθ) per step.
- */
-/** @internal @ingroup mbe_internal */
 static inline void
-mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, float* restrict c, float* restrict s,
-                      float sd, float cd) {
-    /* produce c[0..3] from current state */
-    float cblk[4];
-    float cc = *c, ss = *s;
+mbe_fill_voiced_cos_block4(float* restrict cblk, float* restrict c, float* restrict s, float sd, float cd) {
+    float cc = *c;
+    float ss = *s;
+
     for (int k = 0; k < 4; ++k) {
         cblk[k] = cc;
         float cpn = (cc * cd) - (ss * sd);
@@ -129,13 +113,38 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
         cc = cpn;
         ss = spn;
     }
+
     *c = cc;
     *s = ss;
+}
+
+/**
+ * @brief Add four voiced samples to the output using oscillator recurrence.
+ *
+ * Generates four consecutive cosine samples from the current oscillator state,
+ * multiplies by window `W[0..3]` and gain `gain`, and accumulates into
+ * `Ss[0..3]`. `gain` already includes the JMBE `2.0f` voiced multiplier.
+ *
+ * @param Ss Output sample pointer (adds to Ss[0..3]).
+ * @param W  Window values for these four samples.
+ * @param gain Voiced gain for this band/component, including the `2.0f` factor.
+ * @param c  In/out cosine register.
+ * @param s  In/out sine register.
+ * @param sd sin(Δθ) per step.
+ * @param cd cos(Δθ) per step.
+ */
+/** @internal @ingroup mbe_internal */
+static inline void
+mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float gain, float* restrict c, float* restrict s,
+                      float sd, float cd) {
+    float cblk[4];
+    mbe_fill_voiced_cos_block4(cblk, c, s, sd, cd);
+
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(MBE_SIMD_TARGET_SSE2)
     __m128 vC = _mm_loadu_ps(cblk);
     __m128 vW = _mm_loadu_ps(W);
-    __m128 vA = _mm_set1_ps(2.0f * amp); /* JMBE multiplies voiced output by 2.0 */
+    __m128 vA = _mm_set1_ps(gain);
     __m128 vS = _mm_loadu_ps(Ss);
     vS = _mm_add_ps(vS, _mm_mul_ps(_mm_mul_ps(vC, vW), vA));
     _mm_storeu_ps(Ss, vS);
@@ -143,18 +152,64 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float amp, fl
 #elif defined(MBE_SIMD_TARGET_NEON)
     float32x4_t vC = vld1q_f32(cblk);
     float32x4_t vW = vld1q_f32(W);
-    float32x4_t vA = vdupq_n_f32(2.0f * amp); /* JMBE multiplies voiced output by 2.0 */
+    float32x4_t vA = vdupq_n_f32(gain);
     float32x4_t vS = vld1q_f32(Ss);
     vS = vaddq_f32(vS, vmulq_f32(vmulq_f32(vC, vW), vA));
     vst1q_f32(Ss, vS);
     return;
 #endif
 #endif
-    /* scalar fallback (JMBE multiplies voiced output by 2.0) */
-    Ss[0] += 2.0f * W[0] * amp * cblk[0];
-    Ss[1] += 2.0f * W[1] * amp * cblk[1];
-    Ss[2] += 2.0f * W[2] * amp * cblk[2];
-    Ss[3] += 2.0f * W[3] * amp * cblk[3];
+    Ss[0] += gain * W[0] * cblk[0];
+    Ss[1] += gain * W[1] * cblk[1];
+    Ss[2] += gain * W[2] * cblk[2];
+    Ss[3] += gain * W[3] * cblk[3];
+}
+
+/**
+ * @brief Add previous/current voiced contributions in one 4-sample block.
+ *
+ * This preserves the historical add order (`prev`, then `cur`) while avoiding
+ * a second load/store of the output buffer when both voiced components are
+ * active for the same harmonic.
+ */
+/** @internal @ingroup mbe_internal */
+static inline void
+mbe_add_voiced_dual_block4(float* restrict Ss, const float* restrict W_prev, float gain_prev, float* restrict c_prev,
+                           float* restrict s_prev, float sd_prev, float cd_prev, const float* restrict W_cur,
+                           float gain_cur, float* restrict c_cur, float* restrict s_cur, float sd_cur, float cd_cur) {
+    float prev_cblk[4];
+    float cur_cblk[4];
+
+    mbe_fill_voiced_cos_block4(prev_cblk, c_prev, s_prev, sd_prev, cd_prev);
+    mbe_fill_voiced_cos_block4(cur_cblk, c_cur, s_cur, sd_cur, cd_cur);
+
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(MBE_SIMD_TARGET_SSE2)
+    __m128 vS = _mm_loadu_ps(Ss);
+    __m128 vPrev = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(prev_cblk), _mm_loadu_ps(W_prev)), _mm_set1_ps(gain_prev));
+    __m128 vCur = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(cur_cblk), _mm_loadu_ps(W_cur)), _mm_set1_ps(gain_cur));
+    vS = _mm_add_ps(vS, vPrev);
+    vS = _mm_add_ps(vS, vCur);
+    _mm_storeu_ps(Ss, vS);
+    return;
+#elif defined(MBE_SIMD_TARGET_NEON)
+    float32x4_t vS = vld1q_f32(Ss);
+    float32x4_t vPrev = vmulq_f32(vmulq_f32(vld1q_f32(prev_cblk), vld1q_f32(W_prev)), vdupq_n_f32(gain_prev));
+    float32x4_t vCur = vmulq_f32(vmulq_f32(vld1q_f32(cur_cblk), vld1q_f32(W_cur)), vdupq_n_f32(gain_cur));
+    vS = vaddq_f32(vS, vPrev);
+    vS = vaddq_f32(vS, vCur);
+    vst1q_f32(Ss, vS);
+    return;
+#endif
+#endif
+    Ss[0] += gain_prev * W_prev[0] * prev_cblk[0];
+    Ss[1] += gain_prev * W_prev[1] * prev_cblk[1];
+    Ss[2] += gain_prev * W_prev[2] * prev_cblk[2];
+    Ss[3] += gain_prev * W_prev[3] * prev_cblk[3];
+    Ss[0] += gain_cur * W_cur[0] * cur_cblk[0];
+    Ss[1] += gain_cur * W_cur[1] * cur_cblk[1];
+    Ss[2] += gain_cur * W_cur[2] * cur_cblk[2];
+    Ss[3] += gain_cur * W_cur[3] * cur_cblk[3];
 }
 
 /**
@@ -1009,33 +1064,50 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
                 }
             } else {
                 /* Windowed oscillator approach for higher harmonics or pitch changes */
-                Ss = aout_buf;
+                if (prev_voiced && cur_voiced) {
+                    Ss = aout_buf;
 
-                /* Synthesize previous voiced component (fading out) */
-                if (prev_voiced) {
-                    const float amp_prev = prev_mp->Ml[l];
+                    const float gain_prev = 2.0f * prev_mp->Ml[l];
                     float sd_prev, cd_prev;
                     mbe_sincosf(pw0l, &sd_prev, &cd_prev);
                     float s_prev, c_prev;
                     mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
 
-                    for (n = 0; n < N; n += 4) {
-                        mbe_add_voiced_block4(Ss, Ws + n + N, amp_prev, &c_prev, &s_prev, sd_prev, cd_prev);
-                        Ss += 4;
-                    }
-                }
-
-                /* Synthesize current voiced component (fading in) */
-                if (cur_voiced) {
-                    Ss = aout_buf;
-                    const float amp_cur = cur_mp->Ml[l];
+                    const float gain_cur = 2.0f * cur_mp->Ml[l];
                     float sd_cur, cd_cur;
                     mbe_sincosf(cw0l, &sd_cur, &cd_cur);
                     float s_cur, c_cur;
                     mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
 
                     for (n = 0; n < N; n += 4) {
-                        mbe_add_voiced_block4(Ss, Ws + n, amp_cur, &c_cur, &s_cur, sd_cur, cd_cur);
+                        mbe_add_voiced_dual_block4(Ss, Ws + n + N, gain_prev, &c_prev, &s_prev, sd_prev, cd_prev,
+                                                   Ws + n, gain_cur, &c_cur, &s_cur, sd_cur, cd_cur);
+                        Ss += 4;
+                    }
+                } else if (prev_voiced) {
+                    Ss = aout_buf;
+
+                    const float gain_prev = 2.0f * prev_mp->Ml[l];
+                    float sd_prev, cd_prev;
+                    mbe_sincosf(pw0l, &sd_prev, &cd_prev);
+                    float s_prev, c_prev;
+                    mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
+
+                    for (n = 0; n < N; n += 4) {
+                        mbe_add_voiced_block4(Ss, Ws + n + N, gain_prev, &c_prev, &s_prev, sd_prev, cd_prev);
+                        Ss += 4;
+                    }
+                } else if (cur_voiced) {
+                    Ss = aout_buf;
+
+                    const float gain_cur = 2.0f * cur_mp->Ml[l];
+                    float sd_cur, cd_cur;
+                    mbe_sincosf(cw0l, &sd_cur, &cd_cur);
+                    float s_cur, c_cur;
+                    mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
+
+                    for (n = 0; n < N; n += 4) {
+                        mbe_add_voiced_block4(Ss, Ws + n, gain_cur, &c_cur, &s_cur, sd_cur, cd_cur);
                         Ss += 4;
                     }
                 }
