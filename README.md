@@ -99,6 +99,22 @@ cmake --install build/dev-release --config Release
 cmake --build build/dev-release --target uninstall
 ```
 
+## Tagged Releases
+
+GitHub Actions publishes release assets when you push a tag matching `vX.Y.Z`.
+The tag must match the project version declared in `CMakeLists.txt`, or the release workflow fails before publishing.
+
+On a matching tag, CI rebuilds `dev-release`, reruns the release preset tests, packages the installed library tree for Linux, macOS, and Windows, and attaches those archives plus `SHA256SUMS.txt` to the corresponding GitHub Release.
+
+Typical release flow:
+
+```
+# Update project(mbelib-neo VERSION X.Y.Z ...) first, commit, and push.
+
+git tag -a vX.Y.Z -m "mbelib-neo X.Y.Z"
+git push origin vX.Y.Z
+```
+
 ## Configuration Options
 
 - `-DNOTONES=ON` — Disable AMBE/AMBE+2 tone synthesis (adds `-DDISABLE_AMBE_TONES`).

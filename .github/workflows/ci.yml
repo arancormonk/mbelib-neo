@@ -4,6 +4,8 @@ on:
   workflow_dispatch: {}
   push:
     branches: [main, master]
+    tags:
+      - "v*.*.*"
     paths-ignore:
       - ".github/*.yml"
       - ".github/*.yaml"
@@ -66,15 +68,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-format
       - name: Check formatting
         run: |
-          files=$(git ls-files '*.c' '*.cc' '*.cxx' '*.cpp' '*.h' '*.hpp' ':!:build/**' ':!:src/external/**')
-          if [ -z "$files" ]; then echo "No C/C++ files to check"; exit 0; fi
+          mapfile -t files < <(git ls-files '*.c' '*.cc' '*.cxx' '*.cpp' '*.h' '*.hpp' ':!:build/**' ':!:src/external/**')
+          if [ "${#files[@]}" -eq 0 ]; then echo "No C/C++ files to check"; exit 0; fi
           clang-format --version
           # Prefer dry-run Werror if supported; fallback to diff
-          if clang-format -n --Werror $files 2>/dev/null; then
+          if clang-format -n --Werror "${files[@]}" 2>/dev/null; then
             echo "Formatting OK (clang-format -n --Werror)"
           else
             echo "clang-format -n --Werror unsupported or failed; using diff"
-            diff -u <(cat $files) <(clang-format $files) || (echo "Run tools/format.sh" && exit 1)
+            diff -u <(cat "${files[@]}") <(clang-format "${files[@]}") || (echo "Run tools/format.sh" && exit 1)
           fi
 
   clang-tidy:
@@ -89,12 +91,14 @@ jobs:
       - name: Prepare ccache environment
         run: |
           set -euxo pipefail
-          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache" >> "$GITHUB_ENV"
-          echo "CC=ccache gcc" >> "$GITHUB_ENV"
-          echo "CXX=ccache g++" >> "$GITHUB_ENV"
-          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
-          echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
-          echo "CCACHE_SLOPPINESS=time_macros" >> "$GITHUB_ENV"
+          {
+            echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache"
+            echo "CC=ccache gcc"
+            echo "CXX=ccache g++"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_NOHASHDIR=true"
+            echo "CCACHE_SLOPPINESS=time_macros"
+          } >> "$GITHUB_ENV"
           mkdir -p "${GITHUB_WORKSPACE}/.ccache"
       - name: Compute tool versions (for ccache key)
         id: toolver-tidy
@@ -227,12 +231,55 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+  validate-release-tag:
+    name: Validate release tag
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.verify.outputs.version }}
+      archive_prefix: ${{ steps.verify.outputs.archive_prefix }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Configure release metadata
+        run: cmake --preset dev-release -DMBELIB_BUILD_TESTS=OFF -DMBELIB_BUILD_EXAMPLES=OFF
+      - name: Verify tag matches project version
+        id: verify
+        shell: bash
+        env:
+          RELEASE_TAG_CREATED: ${{ github.event.created }}
+        run: |
+          set -euxo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          if [ "${version}" = "${tag}" ]; then
+            echo "Release tags must start with 'v'." >&2
+            exit 1
+          fi
+          if [ "${GITHUB_EVENT_NAME}" != "push" ] || [ "${RELEASE_TAG_CREATED}" != "true" ]; then
+            echo "Release publishing requires a newly created version tag push; refusing to publish ${tag}." >&2
+            exit 1
+          fi
+
+          project_version=$(sed -nE 's/^#define MBELIB_VERSION "([^"]+)"$/\1/p' \
+            build/dev-release/include/mbelib-neo/version.h)
+          if [ -z "${project_version}" ]; then
+            echo "Failed to read MBELIB_VERSION from generated header." >&2
+            exit 1
+          fi
+          if [ "${version}" != "${project_version}" ]; then
+            echo "Tag ${tag} does not match project version ${project_version}." >&2
+            exit 1
+          fi
+
+          echo "version=${project_version}" >> "$GITHUB_OUTPUT"
+          echo "archive_prefix=mbelib-neo-${project_version}" >> "$GITHUB_OUTPUT"
+
   update-aur:
     name: Update AUR package
     needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep, build-test, sanitize-linux]
     runs-on: ubuntu-latest
     # Only run on upstream pushes; steps guard on AUR key presence
-    if: github.repository == 'arancormonk/mbelib-neo' && github.event_name != 'pull_request'
+    if: github.repository == 'arancormonk/mbelib-neo' && github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Check AUR SSH key availability
         id: aur_key
@@ -359,7 +406,8 @@ jobs:
             return ver[0] ? 0 : 1;
           }
           EOF
-          cc consumer.c $(pkg-config --cflags --libs libmbe-neo) -Wl,-rpath,${RUNNER_TEMP}/mbe-install/lib -o consumer
+          read -r -a pkg_config_flags <<< "$(pkg-config --cflags --libs libmbe-neo)"
+          cc consumer.c "${pkg_config_flags[@]}" "-Wl,-rpath,${RUNNER_TEMP}/mbe-install/lib" -o consumer
           ./consumer
       - name: Test CMake package consumer
         run: |
@@ -422,3 +470,137 @@ jobs:
           cmake -S . -B build -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/mbe-install"
           cmake --build build --config Release --parallel
           ./build/Release/consumer.exe
+
+  package-release:
+    name: package release (${{ matrix.os }})
+    needs: [validate-release-tag, build-test, sanitize-linux, install-and-consume, install-and-consume-win]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+          - os: windows-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Configure (dev-release preset)
+        run: cmake --preset dev-release
+      - name: Build (dev-release preset)
+        run: cmake --build --preset dev-release --parallel
+      - name: Test (dev-release preset)
+        run: ctest --preset dev-release -V
+      - name: Compute bundle name
+        id: bundle
+        shell: bash
+        env:
+          ARCHIVE_PREFIX: ${{ needs.validate-release-tag.outputs.archive_prefix }}
+        run: |
+          set -euxo pipefail
+          case "${RUNNER_OS}" in
+            Linux) platform="linux" ;;
+            macOS) platform="macos" ;;
+            Windows) platform="windows" ;;
+            *)
+              echo "Unsupported runner OS: ${RUNNER_OS}" >&2
+              exit 1
+              ;;
+          esac
+
+          arch=$(echo "${RUNNER_ARCH}" | tr '[:upper:]' '[:lower:]')
+          echo "bundle_name=${ARCHIVE_PREFIX}-${platform}-${arch}" >> "$GITHUB_OUTPUT"
+      - name: Package install tree (Unix)
+        if: runner.os != 'Windows'
+        id: package_unix
+        shell: bash
+        env:
+          BUNDLE_NAME: ${{ steps.bundle.outputs.bundle_name }}
+        run: |
+          set -euxo pipefail
+          staging_root="${RUNNER_TEMP}/release"
+          staging_dir="${staging_root}/${BUNDLE_NAME}"
+          archive_path="${RUNNER_TEMP}/${BUNDLE_NAME}.tar.gz"
+
+          rm -rf "${staging_dir}" "${archive_path}"
+          mkdir -p "${staging_dir}"
+
+          cmake --install build/dev-release --prefix "${staging_dir}"
+          tar -C "${staging_root}" -czf "${archive_path}" "${BUNDLE_NAME}"
+
+          echo "archive_path=${archive_path}" >> "$GITHUB_OUTPUT"
+      - name: Package install tree (Windows)
+        if: runner.os == 'Windows'
+        id: package_windows
+        shell: pwsh
+        env:
+          BUNDLE_NAME: ${{ steps.bundle.outputs.bundle_name }}
+        run: |
+          $stagingRoot = Join-Path $env:RUNNER_TEMP 'release'
+          $stagingDir = Join-Path $stagingRoot $env:BUNDLE_NAME
+          $archivePath = Join-Path $env:RUNNER_TEMP "$($env:BUNDLE_NAME).zip"
+
+          if (Test-Path $stagingDir) {
+            Remove-Item $stagingDir -Recurse -Force
+          }
+          if (Test-Path $archivePath) {
+            Remove-Item $archivePath -Force
+          }
+
+          New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+          cmake --install build/dev-release --config Release --prefix $stagingDir
+          Compress-Archive -Path $stagingDir -DestinationPath $archivePath -CompressionLevel Optimal
+
+          "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
+      - name: Upload release package (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: release-package-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ steps.package_unix.outputs.archive_path }}
+          retention-days: 7
+      - name: Upload release package (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: release-package-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ steps.package_windows.outputs.archive_path }}
+          retention-days: 7
+
+  publish-release:
+    name: Publish release
+    needs: [validate-release-tag, package-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+          pattern: release-package-*
+          merge-multiple: true
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd dist
+          sha256sum mbelib-neo-* > SHA256SUMS.txt
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.validate-release-tag.outputs.version }}
+        run: |
+          set -euxo pipefail
+          tag="${GITHUB_REF_NAME}"
+          title="mbelib-neo ${RELEASE_VERSION}"
+
+          if gh release view "${tag}" --repo "${GH_REPO}" >/dev/null 2>&1; then
+            echo "GitHub release ${tag} already exists; refusing to overwrite published assets." >&2
+            exit 1
+          fi
+
+          gh release create "${tag}" dist/* --title "${title}" --generate-notes --verify-tag --repo "${GH_REPO}"
