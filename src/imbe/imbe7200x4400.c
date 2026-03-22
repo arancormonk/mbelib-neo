@@ -663,9 +663,8 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str
 void
 mbe_processImbe4400Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char imbe_d[88],
                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
-    (void)errs;
-    mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
-                                    0);
+    mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, *errs,
+                                    1);
 }
 
 /**

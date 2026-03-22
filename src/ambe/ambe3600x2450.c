@@ -742,9 +742,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_s
 void
 mbe_processAmbe2450Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
-    (void)errs;
-    mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
-                                      0);
+    mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, *errs,
+                                      1);
 }
 
 /**
