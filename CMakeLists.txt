@@ -366,7 +366,7 @@ install(FILES
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/LICENSES/GPL-2.0-or-later.txt"
         "${PROJECT_SOURCE_DIR}/LICENSES/ISC.txt"
-        "${PROJECT_SOURCE_DIR}/COPYRIGHT"
+        "${PROJECT_SOURCE_DIR}/docs/upstream-mbelib-attribution.md"
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 # Exported targets and CMake package config
