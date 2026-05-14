@@ -336,15 +336,16 @@ jobs:
       - name: Setup SSH for AUR
         if: steps.aur_key.outputs.has_key == 'true'
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          mkdir -p "$HOME/.ssh"
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          ssh-keyscan -t ed25519 aur.archlinux.org >> "$HOME/.ssh/known_hosts"
 
       - name: Clone AUR package
         if: steps.aur_key.outputs.has_key == 'true'
         run: |
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git clone ssh://aur@aur.archlinux.org/mbelib-neo-git.git aur-package
+          aur_ssh_command="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          GIT_SSH_COMMAND="$aur_ssh_command" git clone ssh://aur@aur.archlinux.org/mbelib-neo-git.git aur-package
           git config --global --add safe.directory "$GITHUB_WORKSPACE/aur-package"
 
       - name: Compute new pkgver
@@ -397,7 +398,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO
           git commit -m "Update to ${{ steps.pkgver.outputs.pkgver }}"
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push origin master
+          aur_ssh_command="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          GIT_SSH_COMMAND="$aur_ssh_command" git push origin master
 
   update-aur-release:
     name: Update AUR package (release)
@@ -448,15 +450,16 @@ jobs:
       - name: Setup SSH for AUR
         if: steps.aur_key.outputs.has_key == 'true'
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          mkdir -p "$HOME/.ssh"
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          ssh-keyscan -t ed25519 aur.archlinux.org >> "$HOME/.ssh/known_hosts"
 
       - name: Clone AUR package
         if: steps.aur_key.outputs.has_key == 'true'
         run: |
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git clone ssh://aur@aur.archlinux.org/mbelib-neo.git aur-package
+          aur_ssh_command="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          GIT_SSH_COMMAND="$aur_ssh_command" git clone ssh://aur@aur.archlinux.org/mbelib-neo.git aur-package
           git config --global --add safe.directory "$GITHUB_WORKSPACE/aur-package"
 
       - name: Compute release metadata
@@ -512,7 +515,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO
           git commit -m "Update to ${{ steps.release_meta.outputs.pkgver }}"
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push origin master
+          aur_ssh_command="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          GIT_SSH_COMMAND="$aur_ssh_command" git push origin master
 
   install-and-consume:
     needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
