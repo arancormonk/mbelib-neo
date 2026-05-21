@@ -6,7 +6,6 @@
  * Implements JMBE Algorithms #111-116 for error-based audio quality improvement.
  */
 
-#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -21,6 +20,12 @@
 #define MBE_JAVA_RNG_ADD       0xBULL
 #define MBE_JAVA_RNG_MASK      ((1ULL << 48) - 1ULL)
 #define MBE_JAVA_RNG_INIT_SEED 0x12345678ULL
+#if defined(__FLT_MAX__)
+#define MBE_FLOAT_MAX __FLT_MAX__
+#else
+#include <float.h>
+#define MBE_FLOAT_MAX FLT_MAX
+#endif
 static MBE_THREAD_LOCAL uint64_t mbe_comfort_noise_seed48 = 0;
 static MBE_THREAD_LOCAL int mbe_comfort_noise_seeded = 0;
 /* Thread-local pre-enhancement RM0 handoff from mbe_spectralAmpEnhance(). */
@@ -160,6 +165,61 @@ mbe_synthesizeComfortNoise(short* aout_buf) {
     mbe_floattoshort(float_buf, aout_buf);
 }
 
+static float
+mbe_current_frame_rm0(const mbe_parms* cur_mp) {
+    if (mbe_pre_enh_rm0_valid && mbe_pre_enh_owner == cur_mp) {
+        const float rm0 = mbe_pre_enh_rm0;
+        mbe_pre_enh_rm0_valid = 0;
+        mbe_pre_enh_owner = NULL;
+        return rm0;
+    }
+
+    float rm0 = 0.0f;
+    for (int l = 1; l <= cur_mp->L; l++) {
+        rm0 += cur_mp->Ml[l] * cur_mp->Ml[l];
+    }
+    return rm0;
+}
+
+static float
+mbe_smoothed_local_energy(float prev_energy, float rm0) {
+    if (prev_energy < MBE_MIN_LOCAL_ENERGY) {
+        prev_energy = MBE_DEFAULT_LOCAL_ENERGY;
+    }
+
+    float local_energy = MBE_ENERGY_SMOOTH_ALPHA * prev_energy + MBE_ENERGY_SMOOTH_BETA * rm0;
+    if (local_energy < MBE_MIN_LOCAL_ENERGY) {
+        local_energy = MBE_MIN_LOCAL_ENERGY;
+    }
+    return local_energy;
+}
+
+static float
+mbe_adaptive_vm(float local_energy, float error_rate, int error_total, int error_count4) {
+    if (error_rate <= MBE_ERROR_THRESHOLD_LOW && error_total <= 4) {
+        return MBE_FLOAT_MAX;
+    }
+
+    /* x^(3/8) = (x^(1/8))^3, where x^(1/8) = sqrtf(sqrtf(sqrtf(x))). */
+    float x8 = sqrtf(sqrtf(sqrtf(local_energy)));
+    float energy = x8 * x8 * x8;
+    if (error_rate <= MBE_ERROR_THRESHOLD_ENTRY && error_count4 == 0) {
+        return (MBE_ADAPTIVE_GAIN * energy) / expf(MBE_ADAPTIVE_EXPONENT * error_rate);
+    }
+    return MBE_ADAPTIVE_ALT * energy;
+}
+
+static int
+mbe_adaptive_amplitude_threshold(float error_rate, int error_total, int prev_threshold) {
+    if (prev_threshold <= 0) {
+        prev_threshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+    }
+    if (error_rate <= MBE_ERROR_THRESHOLD_LOW && error_total <= 6) {
+        return MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+    }
+    return MBE_AMPLITUDE_BASE - (MBE_AMPLITUDE_PENALTY_PER_ERROR * error_total) + prev_threshold;
+}
+
 /**
  * @brief Apply adaptive smoothing to parameters based on error rates.
  *
@@ -188,46 +248,11 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     int errorCount4 = cur_mp->errorCount4;
 
     /* Algorithm #111: Calculate local energy with IIR smoothing */
-    float RM0 = 0.0f;
-    if (mbe_pre_enh_rm0_valid && mbe_pre_enh_owner == cur_mp) {
-        /* Use pre-enhancement RM0 provided by mbe_spectralAmpEnhance(). */
-        RM0 = mbe_pre_enh_rm0;
-        mbe_pre_enh_rm0_valid = 0;
-        mbe_pre_enh_owner = NULL;
-    } else {
-        /* Fallback for direct callers that bypass spectral enhancement. */
-        for (int l = 1; l <= L; l++) {
-            RM0 += M[l] * M[l];
-        }
-    }
-
-    float prevEnergy = prev_mp->localEnergy;
-    if (prevEnergy < MBE_MIN_LOCAL_ENERGY) {
-        prevEnergy = MBE_DEFAULT_LOCAL_ENERGY;
-    }
-
-    cur_mp->localEnergy = MBE_ENERGY_SMOOTH_ALPHA * prevEnergy + MBE_ENERGY_SMOOTH_BETA * RM0;
-    if (cur_mp->localEnergy < MBE_MIN_LOCAL_ENERGY) {
-        cur_mp->localEnergy = MBE_MIN_LOCAL_ENERGY;
-    }
+    float RM0 = mbe_current_frame_rm0(cur_mp);
+    cur_mp->localEnergy = mbe_smoothed_local_energy(prev_mp->localEnergy, RM0);
 
     /* Algorithm #112: Calculate adaptive threshold VM */
-    float VM;
-    if (errorRate <= MBE_ERROR_THRESHOLD_LOW && errorTotal <= 4) {
-        VM = FLT_MAX; /* No smoothing at very low error rates */
-    } else {
-        /* x^(3/8) = (x^(1/8))^3, where x^(1/8) = sqrtf(sqrtf(sqrtf(x)))
-         * Faster than powf() and maintains adequate precision for adaptive smoothing */
-        float x8 = sqrtf(sqrtf(sqrtf(cur_mp->localEnergy)));
-        float energy = x8 * x8 * x8;
-        if (errorRate <= MBE_ERROR_THRESHOLD_ENTRY && errorCount4 == 0) {
-            /* Formula 1: exponential decay based on error rate */
-            VM = (MBE_ADAPTIVE_GAIN * energy) / expf(MBE_ADAPTIVE_EXPONENT * errorRate);
-        } else {
-            /* Formula 2: simple scaling for higher error conditions */
-            VM = MBE_ADAPTIVE_ALT * energy;
-        }
-    }
+    float VM = mbe_adaptive_vm(cur_mp->localEnergy, errorRate, errorTotal, errorCount4);
 
     /* Algorithm #113: Apply threshold to voicing decisions */
     for (int l = 1; l <= L; l++) {
@@ -243,17 +268,7 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     }
 
     /* Algorithm #115: Calculate amplitude threshold */
-    int Tm;
-    int prevThreshold = prev_mp->amplitudeThreshold;
-    if (prevThreshold <= 0) {
-        prevThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-    }
-
-    if (errorRate <= MBE_ERROR_THRESHOLD_LOW && errorTotal <= 6) {
-        Tm = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-    } else {
-        Tm = MBE_AMPLITUDE_BASE - (MBE_AMPLITUDE_PENALTY_PER_ERROR * errorTotal) + prevThreshold;
-    }
+    int Tm = mbe_adaptive_amplitude_threshold(errorRate, errorTotal, prev_mp->amplitudeThreshold);
     cur_mp->amplitudeThreshold = Tm;
 
     /* Algorithm #116: Scale enhanced spectral amplitudes if exceeded */

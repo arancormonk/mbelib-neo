@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-test:
-    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: ${{ matrix.os }} • preset=${{ matrix.preset }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -36,7 +36,7 @@ jobs:
         run: ctest --preset ${{ matrix.preset }} -V
 
   sanitize-linux:
-    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: linux • Debug • sanitizers
     runs-on: ubuntu-latest
     steps:
@@ -223,6 +223,29 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+  lizard:
+    name: lizard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.x"
+      - name: Install Lizard
+        run: python -m pip install --upgrade lizard
+      - name: Run Lizard
+        run: tools/lizard.sh --strict
+      - name: Upload Lizard output
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: lizard-report
+          path: .lizard.local.out
+          include-hidden-files: true
+          retention-days: 7
+
   validate-release-tag:
     name: Validate release tag
     if: startsWith(github.ref, 'refs/tags/v')
@@ -268,7 +291,7 @@ jobs:
 
   update-aur-git:
     name: Update AUR package (git)
-    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
@@ -286,6 +309,7 @@ jobs:
         needs.format-check.result == 'success' &&
         needs.clang-tidy.result == 'success' &&
         needs.cppcheck.result == 'success' &&
+        needs.lizard.result == 'success' &&
         needs.scan-build.result == 'success' &&
         needs.semgrep.result == 'success' &&
         needs.build-test.result == 'success' &&
@@ -403,7 +427,7 @@ jobs:
 
   update-aur-release:
     name: Update AUR package (release)
-    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
@@ -519,7 +543,7 @@ jobs:
           GIT_SSH_COMMAND="$aur_ssh_command" git push origin master
 
   install-and-consume:
-    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: install + consume (pkg-config/CMake)
     runs-on: ${{ matrix.os }}
     strategy:
@@ -582,7 +606,7 @@ jobs:
           ./build/consumer
 
   install-and-consume-win:
-    needs: [format-check, clang-tidy, cppcheck, scan-build, semgrep]
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: install + consume (CMake, Windows)
     runs-on: windows-latest
     steps:

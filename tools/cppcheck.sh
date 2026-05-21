@@ -124,6 +124,7 @@ CPPCHECK_ARGS+=(
   --suppress=normalCheckLevelMaxBranches
   --suppress=unmatchedSuppression
   --suppress=unusedFunction
+  --suppress=constParameter
   --suppress=toomanyconfigs
   --suppress=checkersReport
   -i src/external

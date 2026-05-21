@@ -50,6 +50,21 @@ count_bit_differences_soft(const mbe_soft_bit* soft, const char* candidate, int 
     return diffs;
 }
 
+static int
+soft_decode_candidate_is_better(int have_best, int score, int best_score, int matches_hard, int best_matches_hard,
+                                int diffs, int best_diffs) {
+    if (!have_best || score < best_score) {
+        return 1;
+    }
+    if (score != best_score) {
+        return 0;
+    }
+    if (matches_hard != best_matches_hard) {
+        return matches_hard;
+    }
+    return diffs < best_diffs;
+}
+
 static void
 golay_encode_data_word(uint32_t data, char candidate[23]) {
     uint32_t ecc = 0u;
@@ -176,10 +191,8 @@ hamming1511_soft_common(const mbe_soft_bit* in, char* out, const int generator[4
         int matches_hard = (memcmp(candidate, hard_out, 15) == 0);
         int best_matches_hard = have_best ? (memcmp(best, hard_out, 15) == 0) : 0;
 
-        if (!have_best || score < best_score
-            || (score == best_score
-                && ((matches_hard && !best_matches_hard)
-                    || (matches_hard == best_matches_hard && diffs < best_diffs)))) {
+        if (soft_decode_candidate_is_better(have_best, score, best_score, matches_hard, best_matches_hard, diffs,
+                                            best_diffs)) {
             memcpy(best, candidate, 15);
             best_score = score;
             best_diffs = diffs;
@@ -295,10 +308,8 @@ mbe_golay2312Soft(const mbe_soft_bit* in, char* out) {
         int matches_hard = golay_data_matches(candidate, hard_out);
         int best_matches_hard = have_best ? golay_data_matches(best, hard_out) : 0;
 
-        if (!have_best || score < best_score
-            || (score == best_score
-                && ((matches_hard && !best_matches_hard)
-                    || (matches_hard == best_matches_hard && data_diffs < best_data_diffs)))) {
+        if (soft_decode_candidate_is_better(have_best, score, best_score, matches_hard, best_matches_hard, data_diffs,
+                                            best_data_diffs)) {
             memcpy(best, candidate, 23);
             best_score = score;
             best_data_diffs = data_diffs;

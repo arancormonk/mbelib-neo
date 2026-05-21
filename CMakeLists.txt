@@ -459,7 +459,7 @@ if(MBELIB_BUILD_TESTS)
 
   add_executable(test_params tests/test_params.c)
   target_link_libraries(test_params PRIVATE ${MBELIB_EXEC_LINK_TGT})
-  target_include_directories(test_params PRIVATE "${PROJECT_SOURCE_DIR}/include")
+  target_include_directories(test_params PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/src/internal")
   if(_SAN_CFLAGS)
     target_compile_options(test_params PRIVATE ${_SAN_CFLAGS})
   endif()

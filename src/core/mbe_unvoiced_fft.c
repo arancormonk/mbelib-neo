@@ -381,54 +381,44 @@ mbe_wola_combine(float* restrict output, const float* restrict prevUw, const flo
     }
 }
 
-/**
- * @brief Optimized WOLA combine using precomputed weights.
- *
- * Uses the plan's precomputed window weights and denominator values to avoid
- * per-sample window lookups and redundant squaring operations. Includes SIMD
- * paths for SSE2 and NEON when MBELIB_ENABLE_SIMD is defined.
- *
- * @param output Output buffer of 160 samples.
- * @param prevUw Previous frame's inverse FFT output (256 samples).
- * @param currUw Current frame's inverse FFT output (256 samples).
- * @param plan FFT plan containing precomputed WOLA weights.
- */
 static void
-mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
-                      const mbe_fft_plan* restrict plan) {
-    if (MBE_UNLIKELY(!output || !prevUw || !currUw || !plan)) {
-        return;
-    }
-
+mbe_wola_combine_scalar_range(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
+                              const mbe_fft_plan* restrict plan, int start, int end) {
     const float* w_prev = plan->wola_w_prev;
     const float* w_curr = plan->wola_w_curr;
     const float* denom = plan->wola_denom;
 
-    /* Buffer index bounds:
-     * - prev_idx[n] = n + 128, valid when < MBE_FFT_SIZE (256), so n < 128
-     * - curr_idx[n] = n - 32, valid when >= 0, so n >= 32
-     * Therefore:
-     *   - n=0..31: curr_idx invalid (< 0), prev_idx valid
-     *   - n=32..127: both indices valid (SIMD safe)
-     *   - n=128..159: prev_idx invalid (>= 256), curr_idx valid
-     */
+    for (int n = start; n < end; n++) {
+        float prev_sample = 0.0f;
+        float curr_sample = 0.0f;
 
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
-    /* SSE2 path: process 4 samples at a time where both indices are valid */
+        int pidx = n + 128;
+        if (MBE_LIKELY(pidx < MBE_FFT_SIZE)) {
+            prev_sample = prevUw[pidx];
+        }
 
-    /* Process samples n=0..31 with scalar (curr_idx < 0) */
-    for (int n = 0; n < 32; n++) {
-        float prev_sample = prevUw[n + 128];
-        float curr_sample = 0.0f; /* curr_idx[n] < 0 for n < 32 */
+        int cidx = n - 32;
+        if (MBE_LIKELY(cidx >= 0 && cidx < MBE_FFT_SIZE)) {
+            curr_sample = currUw[cidx];
+        }
+
         float d = denom[n];
         if (MBE_LIKELY(d > 1e-10f)) {
             output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
         }
     }
+}
 
-    /* Process samples n=32..127 with SIMD (both indices valid) */
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(MBE_SIMD_TARGET_SSE2)
+static void
+mbe_wola_combine_sse2_center(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
+                             const mbe_fft_plan* restrict plan) {
+    const float* w_prev = plan->wola_w_prev;
+    const float* w_curr = plan->wola_w_curr;
+    const float* denom = plan->wola_denom;
     const __m128 threshold = _mm_set1_ps(1e-10f);
+
     for (int n = 32; n < 128; n += 4) {
         /* Load precomputed weights */
         __m128 vWprev = _mm_loadu_ps(&w_prev[n]);
@@ -454,33 +444,17 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         vOut = _mm_add_ps(vOut, vResult);
         _mm_storeu_ps(&output[n], vOut);
     }
-
-    /* Process samples n=128..159 with scalar (prev_idx >= MBE_FFT_SIZE) */
-    for (int n = 128; n < MBE_FRAME_LEN; n++) {
-        float prev_sample = 0.0f; /* prev_idx[n] >= 256 for n >= 128 */
-        float curr_sample = currUw[n - 32];
-        float d = denom[n];
-        if (MBE_LIKELY(d > 1e-10f)) {
-            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
-        }
-    }
-    return;
+}
 
 #elif defined(MBE_SIMD_TARGET_NEON)
-    /* NEON path: process 4 samples at a time where both indices are valid */
-
-    /* Process samples n=0..31 with scalar (curr_idx < 0) */
-    for (int n = 0; n < 32; n++) {
-        float prev_sample = prevUw[n + 128];
-        float curr_sample = 0.0f; /* curr_idx[n] < 0 for n < 32 */
-        float d = denom[n];
-        if (MBE_LIKELY(d > 1e-10f)) {
-            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
-        }
-    }
-
-    /* Process samples n=32..127 with SIMD (both indices valid) */
+static void
+mbe_wola_combine_neon_center(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
+                             const mbe_fft_plan* restrict plan) {
+    const float* w_prev = plan->wola_w_prev;
+    const float* w_curr = plan->wola_w_curr;
+    const float* denom = plan->wola_denom;
     const float32x4_t threshold = vdupq_n_f32(1e-10f);
+
     for (int n = 32; n < 128; n += 4) {
         /* Load precomputed weights */
         float32x4_t vWprev = vld1q_f32(&w_prev[n]);
@@ -517,40 +491,41 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
         vOut = vaddq_f32(vOut, vResult);
         vst1q_f32(&output[n], vOut);
     }
-
-    /* Process samples n=128..159 with scalar (prev_idx >= MBE_FFT_SIZE) */
-    for (int n = 128; n < MBE_FRAME_LEN; n++) {
-        float prev_sample = 0.0f; /* prev_idx[n] >= 256 for n >= 128 */
-        float curr_sample = currUw[n - 32];
-        float d = denom[n];
-        if (MBE_LIKELY(d > 1e-10f)) {
-            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
-        }
-    }
-    return;
+}
 #endif
 #endif
 
-    /* Scalar fallback with precomputed weights */
-    for (int n = 0; n < MBE_FRAME_LEN; n++) {
-        float prev_sample = 0.0f;
-        float curr_sample = 0.0f;
-
-        int pidx = n + 128;
-        if (MBE_LIKELY(pidx < MBE_FFT_SIZE)) {
-            prev_sample = prevUw[pidx];
-        }
-
-        int cidx = n - 32;
-        if (MBE_LIKELY(cidx >= 0 && cidx < MBE_FFT_SIZE)) {
-            curr_sample = currUw[cidx];
-        }
-
-        float d = denom[n];
-        if (MBE_LIKELY(d > 1e-10f)) {
-            output[n] += ((w_prev[n] * prev_sample) + (w_curr[n] * curr_sample)) / d;
-        }
+/**
+ * @brief Optimized WOLA combine using precomputed weights.
+ *
+ * Uses the plan's precomputed window weights and denominator values to avoid
+ * per-sample window lookups and redundant squaring operations. Includes SIMD
+ * paths for SSE2 and NEON when MBELIB_ENABLE_SIMD is defined.
+ *
+ * @param output Output buffer of 160 samples.
+ * @param prevUw Previous frame's inverse FFT output (256 samples).
+ * @param currUw Current frame's inverse FFT output (256 samples).
+ * @param plan FFT plan containing precomputed WOLA weights.
+ */
+static void
+mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
+                      const mbe_fft_plan* restrict plan) {
+    if (MBE_UNLIKELY(!output || !prevUw || !currUw || !plan)) {
+        return;
     }
+
+    /* SIMD center range is n=32..127; outside that, one source index is out of range. */
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
+    mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 0, 32);
+    mbe_wola_combine_sse2_center(output, prevUw, currUw, plan);
+    mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 128, MBE_FRAME_LEN);
+#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
+    mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 0, 32);
+    mbe_wola_combine_neon_center(output, prevUw, currUw, plan);
+    mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 128, MBE_FRAME_LEN);
+#else
+    mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 0, MBE_FRAME_LEN);
+#endif
 }
 
 /**
@@ -664,6 +639,69 @@ mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
     return sum;
 }
 
+static void
+mbe_calculate_unvoiced_band_edges(int* a_min, int* b_max, int L, float w0) {
+    const float multiplier = MBE_256_OVER_2PI * w0;
+
+    for (int l = 1; l <= L; l++) {
+        a_min[l] = (int)ceilf((l - 0.5f) * multiplier);
+        b_max[l] = (int)ceilf((l + 0.5f) * multiplier);
+        if (a_min[l] < 0) {
+            a_min[l] = 0;
+        }
+        if (b_max[l] > MBE_FFT_SIZE / 2) {
+            b_max[l] = MBE_FFT_SIZE / 2;
+        }
+    }
+}
+
+static void
+mbe_apply_unvoiced_band_scaling(float* restrict dftBinScalor, const float* restrict Uw_fft,
+                                const mbe_parms* restrict cur_mp, const int* restrict a_min,
+                                const int* restrict b_max) {
+    for (int l = 1; l <= cur_mp->L; l++) {
+        if (cur_mp->Vl[l] == 0) {
+            int bin_count = b_max[l] - a_min[l];
+            float numerator = mbe_magnitude_squared_sum(Uw_fft, a_min[l], b_max[l]);
+
+            if (bin_count > 0 && numerator > 1e-10f) {
+                float denominator = (float)bin_count;
+                float scalor = MBE_UNVOICED_SCALE_COEFF * cur_mp->Ml[l] / sqrtf(numerator / denominator);
+
+                for (int bin = a_min[l]; bin < b_max[l]; bin++) {
+                    dftBinScalor[bin] = scalor;
+                }
+            }
+        }
+    }
+}
+
+static void
+mbe_normalize_ifft_output(float* restrict Uw_out) {
+    const float scale = 1.0f / (float)MBE_FFT_SIZE;
+    int i = 0;
+#if defined(MBELIB_ENABLE_SIMD)
+#if defined(MBE_SIMD_TARGET_SSE2)
+    __m128 vscale = _mm_set1_ps(scale);
+    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+        __m128 v = _mm_loadu_ps(&Uw_out[i]);
+        v = _mm_mul_ps(v, vscale);
+        _mm_storeu_ps(&Uw_out[i], v);
+    }
+#elif defined(MBE_SIMD_TARGET_NEON)
+    float32x4_t vscale = vdupq_n_f32(scale);
+    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+        float32x4_t v = vld1q_f32(&Uw_out[i]);
+        v = vmulq_f32(v, vscale);
+        vst1q_f32(&Uw_out[i], v);
+    }
+#endif
+#endif
+    for (; i < MBE_FFT_SIZE; i++) {
+        Uw_out[i] *= scale;
+    }
+}
+
 void
 mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict cur_mp,
                                    const mbe_parms* restrict prev_mp, mbe_fft_plan* restrict plan,
@@ -680,9 +718,6 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     int* a_min = plan->a_min;
     int* b_max = plan->b_max;
 
-    int L = cur_mp->L;
-    float w0 = cur_mp->w0;
-
     /* Initialize scalors to zero (voiced bands stay zeroed) */
     memset(dftBinScalor, 0, (MBE_FFT_SIZE / 2 + 1) * sizeof(float));
 
@@ -692,40 +727,12 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     /* Algorithm #118: 256-point real FFT using PFFFT */
     pffft_transform_ordered(plan->setup, Uw, Uw_fft, plan->work, PFFFT_FORWARD);
 
-    /* Algorithms #122-123: Calculate frequency band edges for each harmonic */
-    float multiplier = MBE_256_OVER_2PI * w0;
-
-    for (int l = 1; l <= L; l++) {
-        a_min[l] = (int)ceilf((l - 0.5f) * multiplier);
-        b_max[l] = (int)ceilf((l + 0.5f) * multiplier);
-        /* Clamp to valid bin range */
-        if (a_min[l] < 0) {
-            a_min[l] = 0;
-        }
-        if (b_max[l] > MBE_FFT_SIZE / 2) {
-            b_max[l] = MBE_FFT_SIZE / 2;
-        }
-    }
+    /* Algorithms #122-123: Calculate frequency band edges for each harmonic. */
+    mbe_calculate_unvoiced_band_edges(a_min, b_max, cur_mp->L, cur_mp->w0);
 
     /* Algorithm #120: Calculate band-level scaling for unvoiced bands
      * Uses SIMD-optimized magnitude accumulation when available */
-    for (int l = 1; l <= L; l++) {
-        if (cur_mp->Vl[l] == 0) { /* Unvoiced band */
-            int bin_count = b_max[l] - a_min[l];
-            float numerator = mbe_magnitude_squared_sum(Uw_fft, a_min[l], b_max[l]);
-
-            if (bin_count > 0 && numerator > 1e-10f) {
-                float denominator = (float)bin_count;
-                float scalor = MBE_UNVOICED_SCALE_COEFF * cur_mp->Ml[l] / sqrtf(numerator / denominator);
-
-                /* Apply scaling factor to all bins in this band */
-                for (int bin = a_min[l]; bin < b_max[l]; bin++) {
-                    dftBinScalor[bin] = scalor;
-                }
-            }
-        }
-        /* Voiced bands: scalor remains 0, effectively zeroing those bins */
-    }
+    mbe_apply_unvoiced_band_scaling(dftBinScalor, Uw_fft, cur_mp, a_min, b_max);
 
     /* Algorithms #119, #120, #124: Apply per-bin scaling in ordered real FFT layout. */
     mbe_scale_ordered_real_fft_bins(Uw_fft, dftBinScalor);
@@ -733,33 +740,8 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
     /* Algorithm #125: Inverse FFT using PFFFT */
     pffft_transform_ordered(plan->setup, Uw_fft, Uw_out, plan->work, PFFFT_BACKWARD);
 
-    /* Normalize IFFT output (PFFFT doesn't normalize: BACKWARD(FORWARD(x)) = N*x)
-     * Uses SIMD when available for faster scaling */
-    {
-        const float scale = 1.0f / (float)MBE_FFT_SIZE;
-        int i = 0;
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
-        __m128 vscale = _mm_set1_ps(scale);
-        for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
-            __m128 v = _mm_loadu_ps(&Uw_out[i]);
-            v = _mm_mul_ps(v, vscale);
-            _mm_storeu_ps(&Uw_out[i], v);
-        }
-#elif defined(MBE_SIMD_TARGET_NEON)
-        float32x4_t vscale = vdupq_n_f32(scale);
-        for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
-            float32x4_t v = vld1q_f32(&Uw_out[i]);
-            v = vmulq_f32(v, vscale);
-            vst1q_f32(&Uw_out[i], v);
-        }
-#endif
-#endif
-        /* Scalar fallback for remaining samples */
-        for (; i < MBE_FFT_SIZE; i++) {
-            Uw_out[i] *= scale;
-        }
-    }
+    /* Normalize IFFT output: PFFFT BACKWARD(FORWARD(x)) = N*x. */
+    mbe_normalize_ifft_output(Uw_out);
 
     /* Algorithm #126: WOLA combine with previous frame (using precomputed weights) */
     mbe_wola_combine_fast(output, prev_mp->previousUw, Uw_out, plan);

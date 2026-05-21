@@ -15,6 +15,7 @@
 #endif
 #include <string.h>
 
+#include "mbe_tone.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -224,6 +225,30 @@ main(void) {
             assert(approx_equal(prev.PSIl[l], 0.0f, 1e-7f));
             assert(approx_equal(cur.PSIl[l], 0.0f, 1e-7f));
             assert(approx_equal(prev_enh.PSIl[l], 0.0f, 1e-7f));
+        }
+    }
+
+    // AMBE tone lookup: shared table/formula behavior for synthesis and tone validation
+    {
+        struct {
+            int id;
+            int valid;
+            float freq1;
+            float freq2;
+        } cases[] = {
+            {4, 0, 0.0f, 0.0f},         {5, 1, 156.25f, 156.25f}, {6, 1, 187.5f, 187.5f},    {7, 1, 218.75f, 218.75f},
+            {122, 1, 3812.5f, 3812.5f}, {123, 0, 0.0f, 0.0f},     {128, 1, 1336.0f, 941.0f}, {141, 1, 1633.0f, 941.0f},
+            {163, 1, 490.0f, 350.0f},   {255, 0, 0.0f, 0.0f},
+        };
+
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            float freq1 = -1.0f;
+            float freq2 = -1.0f;
+            int valid = mbe_tone_lookup_freqs(cases[i].id, &freq1, &freq2);
+            assert(valid == cases[i].valid);
+            assert(mbe_tone_id_is_valid(cases[i].id) == cases[i].valid);
+            assert(approx_equal(freq1, cases[i].freq1, 1e-6f));
+            assert(approx_equal(freq2, cases[i].freq2, 1e-6f));
         }
     }
 

@@ -22,6 +22,7 @@
 #include "ambe_common.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
+#include "mbe_tone.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -83,13 +84,7 @@ ambe2450_is_valid_tone_id(const char ambe_d[49]) {
         id1 = (id1 << 1) | (int)ambe_d[i];
     }
 
-    if (id1 == 5 || id1 == 6) {
-        return 1;
-    }
-    if ((id1 >= 7 && id1 <= 122) || (id1 >= 128 && id1 <= 163)) {
-        return 1;
-    }
-    return 0;
+    return mbe_tone_id_is_valid(id1);
 }
 
 /**
@@ -166,162 +161,39 @@ mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
     return mbe_eccAmbe3600Data_common(ambe_fr, ambe_d);
 }
 
-/**
- * @brief Internal AMBE 2450 parameter decode with optional tone BER gate.
- *
- * @param ambe_d  Demodulated AMBE parameter bits (49).
- * @param cur_mp  Output: current frame parameters.
- * @param prev_mp Input: previous frame parameters (for prediction).
- * @param total_errors Total frame error count for JMBE tone gating, or <0 to disable.
- * @return Tone index or 0 for voice; implementation-specific non-zero for special frames.
- */
-static int
-mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp, int total_errors) {
+static void
+ambe2450_read_u_fields(const char* ambe_d, int* u0, int* u1, int* u2, int* u3) {
+    *u0 = 0;
+    *u1 = 0;
+    *u2 = 0;
+    *u3 = 0;
 
-    int ji, i, j, k, l, L = 0, L9, m, am, ak;
-    int intkl[57];
-    int b0, b1, b2, b3, b4, b5, b6, b7, b8;
-    float f0, Cik[5][18], flokl[57], deltal[57];
-    float Sum42, Sum43, Tl[57] = {0}, Gm[9], Ri[9], sum, c1, c2;
-    int silence;
-    int Ji[5], jl;
-    float deltaGamma, BigGamma;
-    float unvc, rconst;
-
-    silence = 0;
-
-#ifdef AMBE_DEBUG
-    fprintf(stderr, "\n");
-#endif
-
-    int u0, u1, u2, u3;
-    u0 = u1 = u2 = u3 = 0;
-
-    for (i = 0; i < 12; i++) {
-        u0 = u0 << 1;
-        u0 = u0 | (int)ambe_d[i];
+    for (int i = 0; i < 12; i++) {
+        *u0 = (*u0 << 1) | (int)ambe_d[i];
     }
-
-    for (i = 12; i < 24; i++) {
-        u1 = u1 << 1;
-        u1 = u1 | (int)ambe_d[i];
+    for (int i = 12; i < 24; i++) {
+        *u1 = (*u1 << 1) | (int)ambe_d[i];
     }
-
-    for (i = 24; i < 35; i++) {
-        u2 = u2 << 1;
-        u2 = u2 | (int)ambe_d[i];
+    for (int i = 24; i < 35; i++) {
+        *u2 = (*u2 << 1) | (int)ambe_d[i];
     }
-
-    for (i = 35; i < 49; i++) {
-        u3 = u3 << 1;
-        u3 = u3 | (int)ambe_d[i];
+    for (int i = 35; i < 49; i++) {
+        *u3 = (*u3 << 1) | (int)ambe_d[i];
     }
+}
 
-    int u0_tone_check = (u0 >> 6) & 0x3f;
-    int u3_tone_check = (u3 & 0xf);
-    int u1_high_tone_verify = (u1 >> 8) & 0xf;
-    int u1_low_tone_verify = u1 & 0xf;
-    int tone_verified = (u0_tone_check == 63) && ((u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify));
-
-#ifdef AMBE_DEBUG
-    fprintf(stderr, "TONECHK u0=%d u3=%d u1h=%d u1l=%d ", u0_tone_check, u3_tone_check, u1_high_tone_verify,
-            u1_low_tone_verify);
-#endif
-
-    // copy repeat from prev_mp
-    cur_mp->repeat = prev_mp->repeat;
-
-    // decode fundamental frequency w0 from b0
-    b0 = 0;
-    b0 |= ambe_d[0] << 6;
-    b0 |= ambe_d[1] << 5;
-    b0 |= ambe_d[2] << 4;
-    b0 |= ambe_d[3] << 3;
-    b0 |= ambe_d[37] << 2;
-    b0 |= ambe_d[38] << 1;
-    b0 |= ambe_d[39];
-
-    /* JMBE-compatible tone classification:
-     * - Tone if U0 tone check passes and either U3 check is zero or U1 high/low nibbles match.
-     * - If total BER is known and >= 6, do not classify as tone (JMBE AMBEFrame). */
-    if (tone_verified && total_errors < 6) {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Tone Frame\n");
-#endif
-        return (7);
-    }
-
-    if ((b0 >= 120) && (b0 <= 123)) // if w0 bits are 1111000, 1111001, 1111010 or 1111011, frame is erasure
-    {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Erasure Frame b0 = %d\n", b0);
-#endif
-        return (2);
-    }
-    if ((b0 == 124) || (b0 == 125)) // if w0 bits are 1111100 or 1111101, frame is silence
-    {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Silence Frame\n");
-#endif
-        silence = 1;
-        /* JMBE AMBEFundamentalFrequency.W124/W125: constructor uses (frequency * 2*PI), where frequency is PI/32. */
-        f0 = (float)M_PI / 32.0f;
-        cur_mp->w0 = f0 * (float)(2.0 * M_PI);
-        L = (b0 == 124) ? 15 : 14; /* JMBE maps W124->L15, W125->L14 */
-        cur_mp->L = L;
-        for (l = 1; l <= L; l++) {
-            cur_mp->Vl[l] = 0;
-        }
-    }
-    /* If the fundamental decodes as a tone but tone verification failed above,
-     * treat this as erasure to match JMBE's fallback behavior. */
-    if ((b0 == 126) || (b0 == 127)) {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Unverified tone fundamental -> erasure\n");
-#endif
-        return (2);
-    }
-
-    if (silence == 0) {
-        // w0 from specification document
-        f0 = AmbeW0table[b0];
-        cur_mp->w0 = f0 * (float)2 * M_PI;
-        // w0 from patent filings
-        //f0 = powf (2, ((float) b0 + (float) 195.626) / -(float) 45.368);
-        //cur_mp->w0 = f0 * (float) 2 *M_PI;
-    }
-
-    unvc = (float)0.2046 / sqrtf(cur_mp->w0);
-    //unvc = (float) 1;
-    //unvc = (float) 0.2046 / sqrtf (f0);
-
-    // decode L
-    if (silence == 0) {
-        // L from specification document
-        // lookup L in tabl3
-        L = AmbeLtable[b0];
-        // L formula from patent filings
-        //L=(int)((float)0.4627 / f0);
-        cur_mp->L = L;
-    }
-    L9 = L - 9;
-    (void)L9;
-
-    // decode V/UV parameters
-    // load b1 from ambe_d
-    b1 = 0;
+static void
+ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
+    (void)b0;
+    int b1 = 0;
     b1 |= ambe_d[4] << 4;
     b1 |= ambe_d[5] << 3;
     b1 |= ambe_d[6] << 2;
     b1 |= ambe_d[7] << 1;
     b1 |= ambe_d[35];
 
-    for (l = 1; l <= L; l++) {
-        // jl from specification document
-        jl = (int)((float)l * (float)16.0 * f0);
-        // jl from patent filings?
-        //jl = (int)(((float)l * (float)16.0 * f0) + 0.25);
-
+    for (int l = 1; l <= L; l++) {
+        int jl = (int)((float)l * (float)16.0 * f0);
         if (silence == 0) {
             cur_mp->Vl[l] = AmbeVuv[b1][jl];
         }
@@ -332,27 +204,14 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\nb0:%i w0:%f L:%i b1:%i\n", b0, cur_mp->w0, L, b1);
 #endif
+}
 
-    // decode gain vector
-    // load b2 from ambe_d
-    b2 = 0;
-    b2 |= ambe_d[8] << 4;
-    b2 |= ambe_d[9] << 3;
-    b2 |= ambe_d[10] << 2;
-    b2 |= ambe_d[11] << 1;
-    b2 |= ambe_d[36];
-
-    deltaGamma = AmbeDg[b2];
-    cur_mp->gamma = deltaGamma + ((float)0.5 * prev_mp->gamma);
-#ifdef AMBE_DEBUG
-    fprintf(stderr, "b2: %i, deltaGamma: %f gamma: %f gamma-1: %f\n", b2, deltaGamma, cur_mp->gamma, prev_mp->gamma);
-#endif
-
-    // decode PRBA vectors
+static void
+ambe2450_decode_ri(const char* ambe_d, float Ri[9]) {
+    float Gm[9];
     Gm[1] = 0;
 
-    // load b3 from ambe_d
-    b3 = 0;
+    int b3 = 0;
     b3 |= ambe_d[12] << 8;
     b3 |= ambe_d[13] << 7;
     b3 |= ambe_d[14] << 6;
@@ -366,8 +225,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     Gm[3] = AmbePRBA24[b3][1];
     Gm[4] = AmbePRBA24[b3][2];
 
-    // load b4 from ambe_d
-    b4 = 0;
+    int b4 = 0;
     b4 |= ambe_d[20] << 6;
     b4 |= ambe_d[21] << 5;
     b4 |= ambe_d[22] << 4;
@@ -385,16 +243,11 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
             Gm[3], Gm[4], b4, Gm[5], Gm[6], Gm[7], Gm[8]);
 #endif
 
-    // compute Ri (using cached cosine coefficients)
     struct ambe2450_dct_cache* cache = ambe2450_get_dct_cache();
-    for (i = 1; i <= 8; i++) {
-        sum = 0;
-        for (m = 1; m <= 8; m++) {
-            if (m == 1) {
-                am = 1;
-            } else {
-                am = 2;
-            }
+    for (int i = 1; i <= 8; i++) {
+        float sum = 0;
+        for (int m = 1; m <= 8; m++) {
+            int am = (m == 1) ? 1 : 2;
             sum = sum + ((float)am * Gm[m] * cache->ri_cos[m][i]);
         }
         Ri[i] = sum;
@@ -405,9 +258,11 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\n");
 #endif
+}
 
-    // generate first to elements of each Ci,k block from PRBA vector
-    rconst = ((float)1 / ((float)2 * M_SQRT2));
+static void
+ambe2450_decode_cik(const char* ambe_d, int L, const float Ri[9], float Cik[5][18], int Ji[5]) {
+    const float rconst = ((float)1 / ((float)2 * M_SQRT2));
     Cik[1][1] = (float)0.5 * (Ri[1] + Ri[2]);
     Cik[1][2] = rconst * (Ri[1] - Ri[2]);
     Cik[2][1] = (float)0.5 * (Ri[3] + Ri[4]);
@@ -417,37 +272,30 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     Cik[4][1] = (float)0.5 * (Ri[7] + Ri[8]);
     Cik[4][2] = rconst * (Ri[7] - Ri[8]);
 
-    // decode HOC
-
-    // load b5 from ambe_d
-    b5 = 0;
+    int b5 = 0;
     b5 |= ambe_d[24] << 4;
     b5 |= ambe_d[25] << 3;
     b5 |= ambe_d[26] << 2;
     b5 |= ambe_d[27] << 1;
     b5 |= ambe_d[44];
 
-    // load b6 from ambe_d
-    b6 = 0;
+    int b6 = 0;
     b6 |= ambe_d[28] << 3;
     b6 |= ambe_d[29] << 2;
     b6 |= ambe_d[30] << 1;
     b6 |= ambe_d[45];
 
-    // load b7 from ambe_d
-    b7 = 0;
+    int b7 = 0;
     b7 |= ambe_d[31] << 3;
     b7 |= ambe_d[32] << 2;
     b7 |= ambe_d[33] << 1;
     b7 |= ambe_d[46];
 
-    // load b8 from ambe_d
-    b8 = 0;
+    int b8 = 0;
     b8 |= ambe_d[34] << 2;
     b8 |= ambe_d[47] << 1;
     b8 |= ambe_d[48];
 
-    // lookup Ji
     Ji[1] = AmbeLmprbl[L][0];
     Ji[2] = AmbeLmprbl[L][1];
     Ji[3] = AmbeLmprbl[L][2];
@@ -457,10 +305,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     fprintf(stderr, "b5: %i b6: %i b7: %i b8: %i\n", b5, b6, b7, b8);
 #endif
 
-    // Load Ci,k with the values from the HOC tables
-    // there appear to be a couple typos in eq. 37 so we will just do what makes sense
-    // (3 <= k <= Ji and k<=6)
-    for (k = 3; k <= Ji[1]; k++) {
+    for (int k = 3; k <= Ji[1]; k++) {
         if (k > 6) {
             Cik[1][k] = 0;
         } else {
@@ -470,7 +315,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 #endif
         }
     }
-    for (k = 3; k <= Ji[2]; k++) {
+    for (int k = 3; k <= Ji[2]; k++) {
         if (k > 6) {
             Cik[2][k] = 0;
         } else {
@@ -480,7 +325,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 #endif
         }
     }
-    for (k = 3; k <= Ji[3]; k++) {
+    for (int k = 3; k <= Ji[3]; k++) {
         if (k > 6) {
             Cik[3][k] = 0;
         } else {
@@ -490,7 +335,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 #endif
         }
     }
-    for (k = 3; k <= Ji[4]; k++) {
+    for (int k = 3; k <= Ji[4]; k++) {
         if (k > 6) {
             Cik[4][k] = 0;
         } else {
@@ -503,19 +348,18 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\n");
 #endif
+}
 
-    // inverse DCT each Ci,k to give ci,j (Tl) - using cached cosines
-    l = 1;
-    for (i = 1; i <= 4; i++) {
-        ji = Ji[i];
-        for (j = 1; j <= ji; j++) {
-            sum = 0;
-            for (k = 1; k <= ji; k++) {
-                if (k == 1) {
-                    ak = 1;
-                } else {
-                    ak = 2;
-                }
+static void
+ambe2450_inverse_dct_tl(float Cik[5][18], int Ji[5], float Tl[57]) {
+    struct ambe2450_dct_cache* cache = ambe2450_get_dct_cache();
+    int l = 1;
+    for (int i = 1; i <= 4; i++) {
+        int ji = Ji[i];
+        for (int j = 1; j <= ji; j++) {
+            float sum = 0;
+            for (int k = 1; k <= ji; k++) {
+                int ak = (k == 1) ? 1 : 2;
 #ifdef AMBE_DEBUG
                 fprintf(stderr, "j: %i Cik[%i][%i]: %f ", j, i, k, Cik[i][k]);
 #endif
@@ -528,35 +372,44 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
             l++;
         }
     }
+}
 
-    // determine log2Ml by applying ci,j to previous log2Ml
+static void
+ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc) {
+    int intkl[57];
+    float flokl[57], deltal[57];
+    int prev_L = prev_mp->L;
+    if (cur_mp->L < 1) {
+        cur_mp->L = 1;
+    } else if (cur_mp->L > 56) {
+        cur_mp->L = 56;
+    }
+    if (prev_L < 1) {
+        prev_L = 1;
+    } else if (prev_L > 56) {
+        prev_L = 56;
+    }
 
-    // fix for when L > L(-1)
-    if (cur_mp->L > prev_mp->L) {
-        for (l = (prev_mp->L) + 1; l <= cur_mp->L; l++) {
-            prev_mp->Ml[l] = prev_mp->Ml[prev_mp->L];
-            prev_mp->log2Ml[l] = prev_mp->log2Ml[prev_mp->L];
+    if (cur_mp->L > prev_L) {
+        for (int l = prev_L + 1; l <= cur_mp->L; l++) {
+            prev_mp->Ml[l] = prev_mp->Ml[prev_L];
+            prev_mp->log2Ml[l] = prev_mp->log2Ml[prev_L];
         }
     }
     prev_mp->log2Ml[0] = prev_mp->log2Ml[1];
     prev_mp->Ml[0] = prev_mp->Ml[1];
 
-    // Part 1
-    Sum43 = 0;
-    for (l = 1; l <= cur_mp->L; l++) {
-
-        // eq. 40
-        flokl[l] = ((float)prev_mp->L / (float)cur_mp->L) * (float)l;
+    float Sum43 = 0;
+    for (int l = 1; l <= cur_mp->L; l++) {
+        flokl[l] = ((float)prev_L / (float)cur_mp->L) * (float)l;
         intkl[l] = (int)(flokl[l]);
 #ifdef AMBE_DEBUG
         fprintf(stderr, "flok%i: %f, intk%i: %i ", l, flokl[l], l, intkl[l]);
 #endif
-        // eq. 41
         deltal[l] = flokl[l] - (float)intkl[l];
 #ifdef AMBE_DEBUG
         fprintf(stderr, "delta%i: %f ", l, deltal[l]);
 #endif
-        // eq 43
         Sum43 = Sum43
                 + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[intkl[l] + 1]));
     }
@@ -566,21 +419,17 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     fprintf(stderr, "Sum43: %f\n", Sum43);
 #endif
 
-    // Part 2
-    Sum42 = 0;
-    for (l = 1; l <= cur_mp->L; l++) {
+    float Sum42 = 0;
+    for (int l = 1; l <= cur_mp->L; l++) {
         Sum42 += Tl[l];
     }
     Sum42 = Sum42 / (float)cur_mp->L;
-    BigGamma = cur_mp->gamma - (0.5f * log2f((float)cur_mp->L)) - Sum42;
-    //BigGamma=cur_mp->gamma - ((float)0.5 * log((float)cur_mp->L)) - Sum42;
+    float BigGamma = cur_mp->gamma - (0.5f * log2f((float)cur_mp->L)) - Sum42;
 
-    // Part 3
-    for (l = 1; l <= cur_mp->L; l++) {
-        c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-        c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[intkl[l] + 1]);
+    for (int l = 1; l <= cur_mp->L; l++) {
+        float c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
+        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[intkl[l] + 1]);
         cur_mp->log2Ml[l] = Tl[l] + c1 + c2 - Sum43 + BigGamma;
-        // inverse log to generate spectral amplitudes
         if (cur_mp->Vl[l] == 1) {
             cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);
         } else {
@@ -594,6 +443,162 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
                 Sum43, l, Tl[l], l, cur_mp->log2Ml[l], l, cur_mp->Ml[l]);
 #endif
     }
+}
+
+static int
+ambe2450_decode_b0(const char* ambe_d) {
+    int b0 = 0;
+    b0 |= ambe_d[0] << 6;
+    b0 |= ambe_d[1] << 5;
+    b0 |= ambe_d[2] << 4;
+    b0 |= ambe_d[3] << 3;
+    b0 |= ambe_d[37] << 2;
+    b0 |= ambe_d[38] << 1;
+    b0 |= ambe_d[39];
+    return b0;
+}
+
+static int
+ambe2450_tone_verified(const char* ambe_d) {
+    int u0, u1, u2, u3;
+    ambe2450_read_u_fields(ambe_d, &u0, &u1, &u2, &u3);
+    (void)u2;
+
+    int u0_tone_check = (u0 >> 6) & 0x3f;
+    int u3_tone_check = (u3 & 0xf);
+    int u1_high_tone_verify = (u1 >> 8) & 0xf;
+    int u1_low_tone_verify = u1 & 0xf;
+
+#ifdef AMBE_DEBUG
+    fprintf(stderr, "TONECHK u0=%d u3=%d u1h=%d u1l=%d ", u0_tone_check, u3_tone_check, u1_high_tone_verify,
+            u1_low_tone_verify);
+#endif
+
+    return (u0_tone_check == 63) && ((u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify));
+}
+
+static void
+ambe2450_set_silence_model(mbe_parms* cur_mp, int b0, int* L, float* f0, int* silence) {
+    *silence = 1;
+    /* JMBE AMBEFundamentalFrequency.W124/W125: constructor uses (frequency * 2*PI), where frequency is PI/32. */
+    *f0 = (float)M_PI / 32.0f;
+    cur_mp->w0 = *f0 * (float)(2.0 * M_PI);
+    *L = (b0 == 124) ? 15 : 14; /* JMBE maps W124->L15, W125->L14 */
+    cur_mp->L = *L;
+    for (int l = 1; l <= *L; l++) {
+        cur_mp->Vl[l] = 0;
+    }
+}
+
+static int
+ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int total_errors, int* b0, int* L, float* f0,
+                           int* silence) {
+    *silence = 0;
+
+    /* JMBE-compatible tone classification:
+     * - Tone if U0 tone check passes and either U3 check is zero or U1 high/low nibbles match.
+     * - If total BER is known and >= 6, do not classify as tone (JMBE AMBEFrame). */
+    if (ambe2450_tone_verified(ambe_d) && total_errors < 6) {
+#ifdef AMBE_DEBUG
+        fprintf(stderr, "Tone Frame\n");
+#endif
+        return 7;
+    }
+
+    *b0 = ambe2450_decode_b0(ambe_d);
+
+    if ((*b0 >= 120) && (*b0 <= 123)) {
+#ifdef AMBE_DEBUG
+        fprintf(stderr, "Erasure Frame b0 = %d\n", *b0);
+#endif
+        return 2;
+    }
+    if ((*b0 == 124) || (*b0 == 125)) {
+#ifdef AMBE_DEBUG
+        fprintf(stderr, "Silence Frame\n");
+#endif
+        ambe2450_set_silence_model(cur_mp, *b0, L, f0, silence);
+        return 0;
+    }
+    /* If the fundamental decodes as a tone but tone verification failed above,
+     * treat this as erasure to match JMBE's fallback behavior. */
+    if ((*b0 == 126) || (*b0 == 127)) {
+#ifdef AMBE_DEBUG
+        fprintf(stderr, "Unverified tone fundamental -> erasure\n");
+#endif
+        return 2;
+    }
+    if ((*b0 < 0) || (*b0 >= 120)) {
+        return 2;
+    }
+
+    *f0 = AmbeW0table[*b0];
+    cur_mp->w0 = *f0 * (float)2 * M_PI;
+    *L = AmbeLtable[*b0];
+    cur_mp->L = *L;
+    return 0;
+}
+
+/**
+ * @brief Internal AMBE 2450 parameter decode with optional tone BER gate.
+ *
+ * @param ambe_d  Demodulated AMBE parameter bits (49).
+ * @param cur_mp  Output: current frame parameters.
+ * @param prev_mp Input: previous frame parameters (for prediction).
+ * @param total_errors Total frame error count for JMBE tone gating, or <0 to disable.
+ * @return Tone index or 0 for voice; implementation-specific non-zero for special frames.
+ */
+static int
+mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp, int total_errors) {
+
+    int b0, b2, L = 0;
+    float f0, Cik[5][18], Tl[57] = {0}, Ri[9];
+    int silence = 0;
+    int Ji[5];
+    float deltaGamma;
+    float unvc;
+
+#ifdef AMBE_DEBUG
+    fprintf(stderr, "\n");
+#endif
+
+    // copy repeat from prev_mp
+    cur_mp->repeat = prev_mp->repeat;
+
+    int special_frame = ambe2450_setup_frame_model(ambe_d, cur_mp, total_errors, &b0, &L, &f0, &silence);
+    if (special_frame != 0) {
+        return special_frame;
+    }
+
+    unvc = (float)0.2046 / sqrtf(cur_mp->w0);
+    //unvc = (float) 1;
+    //unvc = (float) 0.2046 / sqrtf (f0);
+
+    // decode V/UV parameters
+    ambe2450_decode_vuv(ambe_d, cur_mp, L, f0, silence, b0);
+
+    // decode gain vector
+    // load b2 from ambe_d
+    b2 = 0;
+    b2 |= ambe_d[8] << 4;
+    b2 |= ambe_d[9] << 3;
+    b2 |= ambe_d[10] << 2;
+    b2 |= ambe_d[11] << 1;
+    b2 |= ambe_d[36];
+
+    deltaGamma = AmbeDg[b2];
+    cur_mp->gamma = deltaGamma + ((float)0.5 * prev_mp->gamma);
+#ifdef AMBE_DEBUG
+    fprintf(stderr, "b2: %i, deltaGamma: %f gamma: %f gamma-1: %f\n", b2, deltaGamma, cur_mp->gamma, prev_mp->gamma);
+#endif
+
+    // decode PRBA/HOC vectors and inverse DCT
+    ambe2450_decode_ri(ambe_d, Ri);
+    ambe2450_decode_cik(ambe_d, L, Ri, Cik, Ji);
+    ambe2450_inverse_dct_tl(Cik, Ji, Tl);
+
+    // determine log2Ml by applying ci,j to previous log2Ml
+    ambe2450_update_spectral_amplitudes(cur_mp, prev_mp, Tl, unvc);
 
     return (0);
 }
