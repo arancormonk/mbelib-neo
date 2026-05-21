@@ -346,6 +346,27 @@ main(void) {
         assert(ambe_fr[0][0] == 0);
     }
 
+    // Soft AMBE C0 must preserve Golay parity-bit errors for hard-equivalent inputs
+    {
+        char ambe_fr[4][24] = {{0}};
+        char hard_d[49];
+        char soft_d[49];
+        mbe_soft_bit soft_fr[4][24];
+        mbe_process_result hard_result;
+        mbe_process_result soft_result;
+
+        ambe_fr[0][1] = 1; /* protected Golay parity bit */
+        int hard_ret = mbe_decodeAmbe3600x2450Frame(ambe_fr, hard_d, &hard_result);
+        mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u);
+        int soft_ret = mbe_decodeAmbe3600x2450SoftFrame(soft_fr, soft_d, &soft_result);
+
+        assert(hard_ret == soft_ret);
+        assert(hard_result.c0_errors == 1);
+        assert(soft_result.c0_errors == hard_result.c0_errors);
+        assert(soft_result.total_errors == hard_result.total_errors);
+        assert(memcmp(hard_d, soft_d, sizeof(hard_d)) == 0);
+    }
+
     // AMBE tone BER gate + ERASURE model fallback semantics
     {
         char ambe_d[49];
@@ -580,6 +601,80 @@ main(void) {
 
         mbe_processImbe4400Dataf(out, &errs, &errs2, err_str, imbe_d, &cur, &prev, &prev_enh, 8);
         assert(cur.errorCount4 == 0);
+    }
+
+    // IMBE V2 parameter synthesis must handle partial C0/C4 result metadata independently
+    {
+        char imbe_d[88];
+        float out[160];
+        mbe_process_result result;
+        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
+
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        set_bits_zero(imbe_d, 88);
+        set_imbe7200_b0(imbe_d, 0);
+        mbe_initProcessResult(&result);
+
+        cur.errorCount4 = 7;
+        result.flags = MBE_PROCESS_FLAG_C4_VALID;
+        result.c4_errors = 3;
+        result.protected_errors = 3;
+        result.total_errors = 3;
+
+        mbe_processImbe4400DatafV2(out, &result, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(cur.errorCount4 == 3);
+    }
+
+    {
+        char imbe_d[88];
+        float out[160];
+        mbe_process_result result;
+        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
+
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        set_bits_zero(imbe_d, 88);
+        set_imbe7200_b0(imbe_d, 0);
+        mbe_initProcessResult(&result);
+
+        cur.errorCount4 = 7;
+        result.flags = MBE_PROCESS_FLAG_C0_VALID;
+        result.c0_errors = 1;
+        result.total_errors = 1;
+
+        mbe_processImbe4400DatafV2(out, &result, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(cur.errorCount4 == 0);
+    }
+
+    // V2 wrappers own fixed status storage and must clamp stale public error counts
+    {
+        enum { v2_status_safe_errors = 381 };
+
+        char ambe_d[49];
+        char imbe_d[88];
+        float out[160];
+        mbe_process_result result;
+        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
+
+        set_bits_zero(ambe_d, 49);
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        mbe_initProcessResult(&result);
+        result.total_errors = 1000;
+        assert(mbe_processAmbe2400DatafV2(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) == v2_status_safe_errors);
+        assert(result.total_errors == v2_status_safe_errors);
+
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        mbe_initProcessResult(&result);
+        result.total_errors = 1000;
+        assert(mbe_processAmbe2450DatafV2(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) == v2_status_safe_errors);
+        assert(result.total_errors == v2_status_safe_errors);
+
+        set_bits_zero(imbe_d, 88);
+        set_imbe7200_b0(imbe_d, 0);
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        mbe_initProcessResult(&result);
+        result.total_errors = 1000;
+        assert(mbe_processImbe4400DatafV2(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) == v2_status_safe_errors);
+        assert(result.total_errors == v2_status_safe_errors);
     }
 
     // IMBE repeat headroom parity: prolonged repeats reset to defaults rather than muting indefinitely

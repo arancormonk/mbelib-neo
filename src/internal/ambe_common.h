@@ -29,6 +29,7 @@
  * @return Number of corrected bit errors in C0.
  */
 int mbe_eccAmbe3600C0_common(char fr[4][24]);
+int mbe_eccAmbe3600C0Soft_common(mbe_soft_bit fr[4][24]);
 
 /**
  * @brief Demodulate AMBE 3600x{2400,2450} C1 in-place.
@@ -39,6 +40,7 @@ int mbe_eccAmbe3600C0_common(char fr[4][24]);
  * @param fr AMBE frame as 4x24 bitplanes (modified).
  */
 void mbe_demodulateAmbe3600Data_common(char fr[4][24]);
+void mbe_demodulateAmbe3600DataSoft_common(mbe_soft_bit fr[4][24]);
 
 /**
  * @brief Extract 49 parameter bits from C0..C3 with ECC.
@@ -51,6 +53,7 @@ void mbe_demodulateAmbe3600Data_common(char fr[4][24]);
  * @return Number of corrected bit errors in protected fields.
  */
 int mbe_eccAmbe3600Data_common(char fr[4][24], char* out49);
+int mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49);
 
 /**
  * @brief Initialize AMBE parameter state to JMBE-compatible defaults.

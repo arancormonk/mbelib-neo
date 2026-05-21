@@ -14,6 +14,7 @@
 
 #include "ambe_common.h"
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
 #include "mbe_adaptive.h"
 #include "mbelib-neo/mbelib.h"
@@ -38,6 +39,33 @@ mbe_eccAmbe3600C0_common(char fr[4][24]) {
         }
         if ((ones & 1) != 0) {
             fr[0][0] ^= 1;
+            errs = 1;
+        }
+    }
+    return errs;
+}
+
+int
+mbe_eccAmbe3600C0Soft_common(mbe_soft_bit fr[4][24]) {
+    int j, errs;
+    mbe_soft_bit in[23];
+    char out[23];
+
+    for (j = 0; j < 23; j++) {
+        in[j] = fr[0][j + 1];
+    }
+    errs = mbe_golay2312Soft(in, out);
+    for (j = 0; j < 23; j++) {
+        fr[0][j + 1].bit = (uint8_t)(out[j] & 1);
+    }
+
+    if (errs == 0) {
+        int ones = 0;
+        for (j = 0; j < 24; j++) {
+            ones += (int)(fr[0][j].bit & 1u);
+        }
+        if ((ones & 1) != 0) {
+            fr[0][0].bit ^= 1u;
             errs = 1;
         }
     }
@@ -71,6 +99,31 @@ mbe_demodulateAmbe3600Data_common(char fr[4][24]) {
     }
 }
 
+void
+mbe_demodulateAmbe3600DataSoft_common(mbe_soft_bit fr[4][24]) {
+    int i, j, k;
+    unsigned short pr[115];
+    unsigned short foo = 0;
+
+    for (i = 23; i >= 12; i--) {
+        foo <<= 1;
+        foo |= (unsigned short)(fr[0][i].bit & 1u);
+    }
+    pr[0] = (unsigned short)(16 * foo);
+    for (i = 1; i < 24; i++) {
+        pr[i] = (unsigned short)((173 * pr[i - 1]) + 13849 - (65536 * (((173 * pr[i - 1]) + 13849) / 65536)));
+    }
+    for (i = 1; i < 24; i++) {
+        pr[i] = (unsigned short)(pr[i] / 32768);
+    }
+
+    k = 1;
+    for (j = 22; j >= 0; j--) {
+        fr[1][j].bit = (uint8_t)((fr[1][j].bit & 1u) ^ (uint8_t)pr[k]);
+        k++;
+    }
+}
+
 int
 mbe_eccAmbe3600Data_common(char fr[4][24], char* out49) {
     int j, errs;
@@ -98,6 +151,38 @@ mbe_eccAmbe3600Data_common(char fr[4][24], char* out49) {
     /* just copy C3 */
     for (j = 13; j >= 0; j--) {
         *ambe = fr[3][j];
+        ambe++;
+    }
+    return errs;
+}
+
+int
+mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49) {
+    int j, errs;
+    char *ambe, gout[23];
+    mbe_soft_bit gin[23];
+
+    ambe = out49;
+    for (j = 23; j > 11; j--) {
+        *ambe = (char)(fr[0][j].bit & 1u);
+        ambe++;
+    }
+
+    for (j = 0; j < 23; j++) {
+        gin[j] = fr[1][j];
+    }
+    errs = mbe_golay2312Soft(gin, gout);
+    for (j = 22; j > 10; j--) {
+        *ambe = gout[j];
+        ambe++;
+    }
+
+    for (j = 10; j >= 0; j--) {
+        *ambe = (char)(fr[2][j].bit & 1u);
+        ambe++;
+    }
+    for (j = 13; j >= 0; j--) {
+        *ambe = (char)(fr[3][j].bit & 1u);
         ambe++;
     }
     return errs;

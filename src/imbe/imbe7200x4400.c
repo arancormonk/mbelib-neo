@@ -14,17 +14,20 @@
  */
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "imbe7200x4400_const.h"
 #include "mbe_compiler.h"
+#include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Internal helper also used by imbe7100x4400.c frame path. */
 void mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
-                                     int c0_errors, int c0_errors_valid);
+                                     int c0_errors, int c0_errors_valid, int c4_errors_valid);
 
 /**
  * @brief Thread-local cache for IMBE DCT cosine coefficients.
@@ -199,6 +202,23 @@ mbe_eccImbe7200x4400C0(char imbe_fr[8][23]) {
     return (errs);
 }
 
+static int
+mbe_eccImbe7200x4400C0Soft(mbe_soft_bit imbe_fr[8][23]) {
+    int j, errs;
+    mbe_soft_bit in[23];
+    char out[23];
+
+    for (j = 0; j < 23; j++) {
+        in[j] = imbe_fr[0][j];
+    }
+    errs = mbe_golay2312Soft(in, out);
+    for (j = 0; j < 23; j++) {
+        imbe_fr[0][j].bit = (uint8_t)(out[j] & 1);
+    }
+
+    return errs;
+}
+
 /**
  * @brief Internal: Apply ECC to IMBE 7200x4400 data with separate C4 error tracking.
  * @param imbe_fr Frame as 8x23 bitplanes.
@@ -252,6 +272,53 @@ mbe_eccImbe7200x4400DataInternal(char imbe_fr[8][23], char* imbe_d, int* errs_c4
     }
 
     return (errs);
+}
+
+static int
+mbe_eccImbe7200x4400DataSoftInternal(mbe_soft_bit imbe_fr[8][23], char* imbe_d, int* errs_c4) {
+    int i, j, errs;
+    char *imbe, gout[23], hout[15];
+    mbe_soft_bit gin[23], hin[15];
+
+    errs = 0;
+    imbe = imbe_d;
+    for (i = 0; i < 4; i++) {
+        if (i > 0) {
+            for (j = 0; j < 23; j++) {
+                gin[j] = imbe_fr[i][j];
+            }
+            errs += mbe_golay2312Soft(gin, gout);
+            for (j = 22; j > 10; j--) {
+                *imbe = gout[j];
+                imbe++;
+            }
+        } else {
+            for (j = 22; j > 10; j--) {
+                *imbe = (char)(imbe_fr[i][j].bit & 1u);
+                imbe++;
+            }
+        }
+    }
+    for (i = 4; i < 7; i++) {
+        for (j = 0; j < 15; j++) {
+            hin[j] = imbe_fr[i][j];
+        }
+        int hamming_errs = mbe_hamming1511Soft(hin, hout);
+        errs += hamming_errs;
+        if (i == 4 && errs_c4 != NULL) {
+            *errs_c4 = hamming_errs;
+        }
+        for (j = 14; j >= 4; j--) {
+            *imbe = hout[j];
+            imbe++;
+        }
+    }
+    for (j = 6; j >= 0; j--) {
+        *imbe = (char)(imbe_fr[7][j].bit & 1u);
+        imbe++;
+    }
+
+    return errs;
 }
 
 /**
@@ -572,6 +639,86 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
     }
 }
 
+static void
+mbe_demodulateImbe7200x4400DataSoft(mbe_soft_bit imbe[8][23]) {
+    int i, j, k;
+    unsigned short pr[115];
+    unsigned short foo;
+
+    foo = 0;
+    for (i = 22; i >= 11; i--) {
+        foo <<= 1;
+        foo |= (unsigned short)(imbe[0][i].bit & 1u);
+    }
+    pr[0] = (unsigned short)(16 * foo);
+    for (i = 1; i < 115; i++) {
+        pr[i] = (unsigned short)((173 * pr[i - 1]) + 13849 - (65536 * (((173 * pr[i - 1]) + 13849) / 65536)));
+    }
+    for (i = 1; i < 115; i++) {
+        pr[i] >>= 15;
+    }
+
+    k = 1;
+    for (i = 1; i < 4; i++) {
+        for (j = 22; j >= 0; j--) {
+            imbe[i][j].bit = (uint8_t)((imbe[i][j].bit & 1u) ^ (uint8_t)pr[k]);
+            k++;
+        }
+    }
+    for (i = 4; i < 7; i++) {
+        for (j = 14; j >= 0; j--) {
+            imbe[i][j].bit = (uint8_t)((imbe[i][j].bit & 1u) ^ (uint8_t)pr[k]);
+            k++;
+        }
+    }
+}
+
+int
+mbe_decodeImbe7200x4400Frame(const char imbe_fr[8][23], char imbe_d[88], mbe_process_result* result) {
+    char fr[8][23];
+    int c0_errors;
+    int protected_errors;
+    int c4_errors = 0;
+
+    memcpy(fr, imbe_fr, sizeof(fr));
+    c0_errors = mbe_eccImbe7200x4400C0(fr);
+    mbe_demodulateImbe7200x4400Data(fr);
+    protected_errors = mbe_eccImbe7200x4400DataInternal(fr, imbe_d, &c4_errors);
+
+    if (result) {
+        mbe_initProcessResult(result);
+        result->c0_errors = c0_errors;
+        result->protected_errors = protected_errors;
+        result->c4_errors = c4_errors;
+        result->total_errors = c0_errors + protected_errors;
+        result->flags = MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID;
+    }
+    return c0_errors + protected_errors;
+}
+
+int
+mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_process_result* result) {
+    mbe_soft_bit fr[8][23];
+    int c0_errors;
+    int protected_errors;
+    int c4_errors = 0;
+
+    memcpy(fr, imbe_fr, sizeof(fr));
+    c0_errors = mbe_eccImbe7200x4400C0Soft(fr);
+    mbe_demodulateImbe7200x4400DataSoft(fr);
+    protected_errors = mbe_eccImbe7200x4400DataSoftInternal(fr, imbe_d, &c4_errors);
+
+    if (result) {
+        mbe_initProcessResult(result);
+        result->c0_errors = c0_errors;
+        result->protected_errors = protected_errors;
+        result->c4_errors = c4_errors;
+        result->total_errors = c0_errors + protected_errors;
+        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID;
+    }
+    return c0_errors + protected_errors;
+}
+
 /**
  * @brief Internal IMBE 4400 synthesis path with optional C0 error context.
  *
@@ -581,7 +728,7 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
 void
 mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
                                 mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
-                                int c0_errors, int c0_errors_valid) {
+                                int c0_errors, int c0_errors_valid, int c4_errors_valid) {
     int i, bad;
     int repeat_required;
     float repeat_threshold;
@@ -594,7 +741,7 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str
      * This matches JMBE IMBEModelParameters.setErrors() */
     cur_mp->errorCountTotal = *errs2;
     cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.000365f * (float)(*errs2));
-    if (!c0_errors_valid) {
+    if (!c4_errors_valid) {
         /* Dataf callers do not provide C4 context; avoid stale cross-frame state. */
         cur_mp->errorCount4 = 0;
     }
@@ -665,7 +812,7 @@ mbe_processImbe4400Dataf(float* aout_buf, const int* errs, const int* errs2, cha
                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     (void)errs;
     mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
-                                    0);
+                                    0, 0);
 }
 
 /**
@@ -679,6 +826,46 @@ mbe_processImbe4400Data(short* aout_buf, const int* errs, const int* errs2, char
 
     mbe_processImbe4400Dataf(float_buf, errs, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
     mbe_floattoshort(float_buf, aout_buf);
+}
+
+int
+mbe_processImbe4400DatafV2(float* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
+                           mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    mbe_process_result local_result;
+    char status[MBE_RESULT_STATUS_SIZE];
+
+    if (!result) {
+        mbe_initProcessResult(&local_result);
+        result = &local_result;
+    }
+
+    int errs2 = result->total_errors;
+    if (errs2 == 0 && (result->c0_errors != 0 || result->protected_errors != 0)) {
+        errs2 = result->c0_errors + result->protected_errors;
+    }
+    errs2 = mbe_result_clamp_status_errors(errs2, sizeof(status));
+    int c0_errors_valid = (result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u;
+    int c4_errors_valid = (result->flags & MBE_PROCESS_FLAG_C4_VALID) != 0u;
+    if (c4_errors_valid) {
+        cur_mp->errorCount4 = result->c4_errors;
+    }
+
+    status[0] = '\0';
+    mbe_processImbe4400Dataf_withC0(aout_buf, &errs2, status, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
+                                    result->c0_errors, c0_errors_valid, c4_errors_valid);
+    result->total_errors = errs2;
+    result->protected_errors = errs2 - result->c0_errors;
+    mbe_result_apply_status(result, status);
+    return result->total_errors;
+}
+
+int
+mbe_processImbe4400DataV2(short* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
+                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    float float_buf[160];
+    int ret = mbe_processImbe4400DatafV2(float_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    mbe_floattoshort(float_buf, aout_buf);
+    return ret;
 }
 
 /**
@@ -710,7 +897,30 @@ mbe_processImbe7200x4400Framef(float* aout_buf, int* errs, int* errs2, char* err
     cur_mp->errorCount4 = errs_c4;
 
     mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
-                                    *errs, 1);
+                                    *errs, 1, 1);
+}
+
+int
+mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_result* result, const mbe_soft_bit imbe_fr[8][23],
+                                   char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                   int uvquality) {
+    mbe_process_result local_result;
+    if (!result) {
+        result = &local_result;
+    }
+    (void)mbe_decodeImbe7200x4400SoftFrame(imbe_fr, imbe_d, result);
+    return mbe_processImbe4400DatafV2(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+}
+
+int
+mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result, const mbe_soft_bit imbe_fr[8][23],
+                                  char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                  int uvquality) {
+    float float_buf[160];
+    int ret = mbe_processImbe7200x4400SoftFramef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                                 uvquality);
+    mbe_floattoshort(float_buf, aout_buf);
+    return ret;
 }
 
 /**

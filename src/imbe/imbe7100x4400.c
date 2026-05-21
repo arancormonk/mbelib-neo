@@ -14,15 +14,17 @@
  */
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "mbelib-neo/mbelib.h"
 
 /* Internal helper implemented in imbe7200x4400.c to preserve frame-path C0 repeat criteria. */
 void mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
-                                     int c0_errors, int c0_errors_valid);
+                                     int c0_errors, int c0_errors_valid, int c4_errors_valid);
 
 /**
  * @brief Print IMBE 7100x4400 parameter bits to stderr (debug aid).
@@ -118,6 +120,27 @@ mbe_eccImbe7100x4400C0(char imbe_fr[7][24]) {
     return (errs);
 }
 
+static int
+mbe_eccImbe7100x4400C0Soft(mbe_soft_bit imbe_fr[7][24]) {
+    int j, errs;
+    mbe_soft_bit in[23];
+    char out[23];
+
+    for (j = 0; j < 18; j++) {
+        in[j] = imbe_fr[0][j + 1];
+    }
+    for (j = 18; j < 23; j++) {
+        in[j] = mbe_softBitFromHard(0, 255u);
+    }
+
+    errs = mbe_golay2312Soft(in, out);
+    for (j = 0; j < 18; j++) {
+        imbe_fr[0][j + 1].bit = (uint8_t)(out[j] & 1);
+    }
+
+    return errs;
+}
+
 /**
  * @brief Internal: Apply ECC to IMBE 7100x4400 data with separate C4 error tracking.
  * @param imbe_fr Frame as 7x24 bitplanes.
@@ -187,6 +210,61 @@ mbe_eccImbe7100x4400DataInternal(char imbe_fr[7][24], char* imbe_d, int* errs_c4
     return (errs);
 }
 
+static int
+mbe_eccImbe7100x4400DataSoftInternal(mbe_soft_bit imbe_fr[7][24], char* imbe_d, int* errs_c4) {
+    int i, j, errs;
+    char *imbe, gout[23], hout[15];
+    mbe_soft_bit gin[23], hin[15];
+
+    imbe = imbe_d;
+
+    for (j = 18; j > 11; j--) {
+        *imbe = (char)(imbe_fr[0][j].bit & 1u);
+        imbe++;
+    }
+
+    for (j = 0; j < 23; j++) {
+        gin[j] = imbe_fr[1][j + 1];
+    }
+    errs = mbe_golay2312Soft(gin, gout);
+    for (j = 22; j > 10; j--) {
+        *imbe = gout[j];
+        imbe++;
+    }
+
+    for (i = 2; i < 4; i++) {
+        for (j = 0; j < 23; j++) {
+            gin[j] = imbe_fr[i][j];
+        }
+        errs += mbe_golay2312Soft(gin, gout);
+        for (j = 22; j > 10; j--) {
+            *imbe = gout[j];
+            imbe++;
+        }
+    }
+    for (i = 4; i < 6; i++) {
+        for (j = 0; j < 15; j++) {
+            hin[j] = imbe_fr[i][j];
+        }
+        int hamming_errs = mbe_7100x4400hamming1511Soft(hin, hout);
+        errs += hamming_errs;
+        if (i == 4 && errs_c4 != NULL) {
+            *errs_c4 = hamming_errs;
+        }
+        for (j = 14; j >= 4; j--) {
+            *imbe = hout[j];
+            imbe++;
+        }
+    }
+
+    for (j = 22; j >= 0; j--) {
+        *imbe = (char)(imbe_fr[6][j].bit & 1u);
+        imbe++;
+    }
+
+    return errs;
+}
+
 /**
  * @brief Apply ECC to IMBE 7100x4400 data and pack parameter bits.
  * @param imbe_fr Frame as 7x24 bitplanes.
@@ -244,6 +322,46 @@ mbe_demodulateImbe7100x4400Data(char imbe[7][24]) {
     for (i = 4; i < 6; i++) {
         for (j = 14; j >= 0; j--) {
             imbe[i][j] = ((imbe[i][j]) ^ pr[k]);
+            k++;
+        }
+    }
+}
+
+static void
+mbe_demodulateImbe7100x4400DataSoft(mbe_soft_bit imbe[7][24]) {
+    int i, j, k;
+    unsigned short pr[115];
+    unsigned short seed;
+
+    seed = 0;
+    for (i = 18; i > 11; i--) {
+        seed <<= 1;
+        seed |= (unsigned short)(imbe[0][i].bit & 1u);
+    }
+    pr[0] = (unsigned short)(16 * seed);
+    for (i = 1; i < 101; i++) {
+        pr[i] = (unsigned short)((173 * pr[i - 1]) + 13849 - (65536 * (((173 * pr[i - 1]) + 13849) / 65536)));
+    }
+    for (i = 1; i < 101; i++) {
+        pr[i] >>= 15;
+    }
+
+    k = 1;
+    for (j = 23; j >= 0; j--) {
+        imbe[1][j].bit = (uint8_t)((imbe[1][j].bit & 1u) ^ (uint8_t)pr[k]);
+        k++;
+    }
+
+    for (i = 2; i < 4; i++) {
+        for (j = 22; j >= 0; j--) {
+            imbe[i][j].bit = (uint8_t)((imbe[i][j].bit & 1u) ^ (uint8_t)pr[k]);
+            k++;
+        }
+    }
+
+    for (i = 4; i < 6; i++) {
+        for (j = 14; j >= 0; j--) {
+            imbe[i][j].bit = (uint8_t)((imbe[i][j].bit & 1u) ^ (uint8_t)pr[k]);
             k++;
         }
     }
@@ -316,6 +434,54 @@ mbe_convertImbe7100to7200(char* imbe_d) {
     }
 }
 
+int
+mbe_decodeImbe7100x4400Frame(const char imbe_fr[7][24], char imbe_d[88], mbe_process_result* result) {
+    char fr[7][24];
+    int c0_errors;
+    int protected_errors;
+    int c4_errors = 0;
+
+    memcpy(fr, imbe_fr, sizeof(fr));
+    c0_errors = mbe_eccImbe7100x4400C0(fr);
+    mbe_demodulateImbe7100x4400Data(fr);
+    protected_errors = mbe_eccImbe7100x4400DataInternal(fr, imbe_d, &c4_errors);
+    mbe_convertImbe7100to7200(imbe_d);
+
+    if (result) {
+        mbe_initProcessResult(result);
+        result->c0_errors = c0_errors;
+        result->protected_errors = protected_errors;
+        result->c4_errors = c4_errors;
+        result->total_errors = c0_errors + protected_errors;
+        result->flags = MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID;
+    }
+    return c0_errors + protected_errors;
+}
+
+int
+mbe_decodeImbe7100x4400SoftFrame(const mbe_soft_bit imbe_fr[7][24], char imbe_d[88], mbe_process_result* result) {
+    mbe_soft_bit fr[7][24];
+    int c0_errors;
+    int protected_errors;
+    int c4_errors = 0;
+
+    memcpy(fr, imbe_fr, sizeof(fr));
+    c0_errors = mbe_eccImbe7100x4400C0Soft(fr);
+    mbe_demodulateImbe7100x4400DataSoft(fr);
+    protected_errors = mbe_eccImbe7100x4400DataSoftInternal(fr, imbe_d, &c4_errors);
+    mbe_convertImbe7100to7200(imbe_d);
+
+    if (result) {
+        mbe_initProcessResult(result);
+        result->c0_errors = c0_errors;
+        result->protected_errors = protected_errors;
+        result->c4_errors = c4_errors;
+        result->total_errors = c0_errors + protected_errors;
+        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID;
+    }
+    return c0_errors + protected_errors;
+}
+
 /**
  * @brief Process a complete IMBE 7100x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -346,7 +512,30 @@ mbe_processImbe7100x4400Framef(float* aout_buf, int* errs, int* errs2, char* err
     cur_mp->errorCount4 = errs_c4;
 
     mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
-                                    *errs, 1);
+                                    *errs, 1, 1);
+}
+
+int
+mbe_processImbe7100x4400SoftFramef(float* aout_buf, mbe_process_result* result, const mbe_soft_bit imbe_fr[7][24],
+                                   char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                   int uvquality) {
+    mbe_process_result local_result;
+    if (!result) {
+        result = &local_result;
+    }
+    (void)mbe_decodeImbe7100x4400SoftFrame(imbe_fr, imbe_d, result);
+    return mbe_processImbe4400DatafV2(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+}
+
+int
+mbe_processImbe7100x4400SoftFrame(short* aout_buf, mbe_process_result* result, const mbe_soft_bit imbe_fr[7][24],
+                                  char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                  int uvquality) {
+    float float_buf[160];
+    int ret = mbe_processImbe7100x4400SoftFramef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                                 uvquality);
+    mbe_floattoshort(float_buf, aout_buf);
+    return ret;
 }
 
 /**

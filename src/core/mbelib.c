@@ -40,6 +40,7 @@
 
 #include "mbe_adaptive.h"
 #include "mbe_math.h"
+#include "mbe_result.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 #include "mbelib-neo/version.h"
@@ -52,6 +53,117 @@ static MBE_THREAD_LOCAL uint32_t mbe_rng_state = 0x12345678u;
 
 /* Thread-local FFT plan for unvoiced synthesis */
 static MBE_THREAD_LOCAL mbe_fft_plan* mbe_fft_plan_instance = NULL;
+
+void
+mbe_initProcessResult(mbe_process_result* result) {
+    if (!result) {
+        return;
+    }
+    memset(result, 0, sizeof(*result));
+}
+
+void
+mbe_result_apply_status(mbe_process_result* result, const char* status) {
+    if (!result || !status) {
+        return;
+    }
+
+    result->flags &=
+        ~(MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE);
+    for (const char* p = status; *p != '\0'; ++p) {
+        if (*p == 'T') {
+            result->flags |= MBE_PROCESS_FLAG_TONE;
+        } else if (*p == 'E') {
+            result->flags |= MBE_PROCESS_FLAG_ERASURE;
+        } else if (*p == 'R') {
+            result->flags |= MBE_PROCESS_FLAG_REPEAT;
+        } else if (*p == 'M') {
+            result->flags |= MBE_PROCESS_FLAG_MUTE;
+        }
+    }
+}
+
+void
+mbe_formatProcessResult(char* str, size_t size, const mbe_process_result* result) {
+    if (!str || size == 0u) {
+        return;
+    }
+
+    size_t pos = 0u;
+    int total_errors = result ? result->total_errors : 0;
+    if (total_errors < 0) {
+        total_errors = 0;
+    }
+
+    for (int i = 0; i < total_errors && pos + 1u < size; ++i) {
+        str[pos++] = '=';
+    }
+
+    if (result) {
+        const unsigned flags = result->flags;
+        if ((flags & MBE_PROCESS_FLAG_ERASURE) != 0u && pos + 1u < size) {
+            str[pos++] = 'E';
+        }
+        if ((flags & MBE_PROCESS_FLAG_TONE) != 0u && pos + 1u < size) {
+            str[pos++] = 'T';
+        }
+        if ((flags & MBE_PROCESS_FLAG_REPEAT) != 0u && pos + 1u < size) {
+            str[pos++] = 'R';
+        }
+        if ((flags & MBE_PROCESS_FLAG_MUTE) != 0u && pos + 1u < size) {
+            str[pos++] = 'M';
+        }
+    }
+    str[pos] = '\0';
+}
+
+static uint8_t
+mbe_clamp_u8_int(int value) {
+    if (value < 0) {
+        return 0u;
+    }
+    if (value > 255) {
+        return 255u;
+    }
+    return (uint8_t)value;
+}
+
+mbe_soft_bit
+mbe_softBitFromHard(int bit, uint8_t reliability) {
+    mbe_soft_bit soft;
+    soft.bit = (uint8_t)(bit ? 1u : 0u);
+    soft.reliability = reliability;
+    return soft;
+}
+
+mbe_soft_bit
+mbe_softBitFromLlr(int16_t llr) {
+    int mag = (llr < 0) ? -(int)llr : (int)llr;
+    mbe_soft_bit soft;
+    soft.bit = (uint8_t)((llr > 0) ? 1u : 0u);
+    soft.reliability = mbe_clamp_u8_int(mag);
+    return soft;
+}
+
+void
+mbe_softBitsFromHard(const char* bits, mbe_soft_bit* soft, size_t count, uint8_t reliability) {
+    if (!bits || !soft) {
+        return;
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        soft[i] = mbe_softBitFromHard(bits[i], reliability);
+    }
+}
+
+void
+mbe_softBitsFromLlr(const int16_t* llr, mbe_soft_bit* soft, size_t count) {
+    if (!llr || !soft) {
+        return;
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        soft[i] = mbe_softBitFromLlr(llr[i]);
+    }
+}
 
 /**
  * @brief Get or create the thread-local FFT plan.

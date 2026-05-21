@@ -7,9 +7,11 @@
  * @file
  * @brief Public API for mbelib-neo vocoder primitives and helpers.
  *
- * This header exposes the stable `mbe_` API used to decode IMBE/AMBE frames
- * and synthesize 8 kHz PCM audio. It is installed for consumers and meant to
- * remain ABI stable across minor releases.
+ * This header exposes the installed `mbe_` API used to decode IMBE/AMBE frames
+ * and synthesize 8 kHz PCM audio. The 2.x API adds soft-decision frame decode
+ * and `mbe_process_result` status reporting; it is ABI-breaking relative to
+ * 1.x, while minor releases within a major version are intended to remain ABI
+ * compatible.
  *
  * @note The `*f` (float) PCM APIs return samples in mbelib's historical float
  *       scale (roughly int16/7), not normalized `[-1, +1]`. Use
@@ -17,10 +19,12 @@
  *       `(7.0f / 32768.0f)` for normalized floats (approximately `[-0.95, +0.95]`
  *       after soft clipping).
  *
- * @note `err_str` outputs from process APIs are compact status traces:
+ * @note Legacy `err_str` outputs from process APIs are compact status traces:
  *       `'='` repeated `*errs2` times, optional suffix markers (`E`, `T`,
  *       `R`, `M` depending on codec/path), then trailing NUL. Provide at
  *       least `(*errs2 + 3)` writable bytes.
+ *       `mbe_formatProcessResult()` formats `mbe_process_result` values
+ *       directly and may append any set `E`, `T`, `R`, and `M` flags.
  *
  * @note Threading: processing APIs are reentrant when each stream has its own
  *       `mbe_parms` state. `mbe_setThreadRngSeed()` affects only the calling
@@ -30,6 +34,7 @@
 #ifndef MBELIB_NEO_PUBLIC_MBEBELIB_H
 #define MBELIB_NEO_PUBLIC_MBEBELIB_H
 
+#include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
@@ -137,6 +142,86 @@ struct mbe_parameters {
 typedef struct mbe_parameters mbe_parms;
 
 /**
+ * @brief Soft-decision input bit.
+ *
+ * `bit` carries the caller's hard decision (0 or 1). `reliability` is the
+ * confidence in that hard decision, where 0 means unknown/erasure-like and
+ * 255 means highly reliable.
+ */
+typedef struct mbe_soft_bit {
+    uint8_t bit;
+    uint8_t reliability;
+} mbe_soft_bit;
+
+/** Processing/result flag: frame input used soft decisions. */
+#define MBE_PROCESS_FLAG_SOFT_INPUT 0x0001u
+/** Processing/result flag: C0 error count is available to the synthesis path. */
+#define MBE_PROCESS_FLAG_C0_VALID   0x0002u
+/** Processing/result flag: IMBE C4 error count is available. */
+#define MBE_PROCESS_FLAG_C4_VALID   0x0004u
+/** Processing/result flag: frame was classified as tone. */
+#define MBE_PROCESS_FLAG_TONE       0x0010u
+/** Processing/result flag: frame was classified as erasure. */
+#define MBE_PROCESS_FLAG_ERASURE    0x0020u
+/** Processing/result flag: previous parameters were repeated. */
+#define MBE_PROCESS_FLAG_REPEAT     0x0040u
+/** Processing/result flag: output was muted/comfort-noise substituted. */
+#define MBE_PROCESS_FLAG_MUTE       0x0080u
+
+/**
+ * @brief Frame decode and synthesis status for v2 APIs.
+ *
+ * Decode helpers initialize and populate this structure when a non-NULL
+ * pointer is supplied. V2 synthesis wrappers consume the available context,
+ * update synthesis status flags, and return `total_errors`.
+ */
+typedef struct mbe_process_result {
+    /** Corrected errors in the C0/protected header field, when `MBE_PROCESS_FLAG_C0_VALID` is set. */
+    int c0_errors;
+    /** Corrected errors in protected parameter fields, excluding `c0_errors`. */
+    int protected_errors;
+    /** Corrected IMBE C4/Hamming errors, when `MBE_PROCESS_FLAG_C4_VALID` is set. */
+    int c4_errors;
+    /** Total error count used for repeat/muting decisions and status formatting. */
+    int total_errors;
+    /** Bitwise OR of `MBE_PROCESS_FLAG_*` values. */
+    unsigned flags;
+} mbe_process_result;
+
+/** @brief Reset a process result to all-zero/default values. */
+MBE_API void mbe_initProcessResult(mbe_process_result* result);
+/**
+ * @brief Format a v2 result as a compact status trace.
+ *
+ * Writes `'='` repeated `result->total_errors` times, then any set `E`, `T`,
+ * `R`, and `M` status flags in that order, followed by NUL. Output is
+ * truncated to `size`.
+ */
+MBE_API void mbe_formatProcessResult(char* str, size_t size, const mbe_process_result* result);
+/**
+ * @brief Build one soft bit from a hard bit and reliability.
+ * @param bit Hard decision; any non-zero value maps to 1.
+ * @param reliability Confidence in the hard decision (`0` unknown/erasure-like, `255` highly reliable).
+ */
+MBE_API mbe_soft_bit mbe_softBitFromHard(int bit, uint8_t reliability);
+/**
+ * @brief Build one soft bit from a signed LLR.
+ * @param llr Signed log-likelihood-like value; positive maps to bit 1, non-positive maps to bit 0.
+ * @return Soft bit with reliability equal to `abs(llr)` clamped to `0..255`.
+ */
+MBE_API mbe_soft_bit mbe_softBitFromLlr(int16_t llr);
+/**
+ * @brief Convert hard 0/1 bits to soft bits with a fixed reliability.
+ * @note If either pointer is NULL, this function leaves output unchanged.
+ */
+MBE_API void mbe_softBitsFromHard(const char* bits, mbe_soft_bit* soft, size_t count, uint8_t reliability);
+/**
+ * @brief Convert signed LLRs to soft bits.
+ * @note If either pointer is NULL, this function leaves output unchanged.
+ */
+MBE_API void mbe_softBitsFromLlr(const int16_t* llr, mbe_soft_bit* soft, size_t count);
+
+/**
  * @brief Correct a (23,12) Golay encoded block in-place and extract data.
  * @param block Pointer to packed 23-bit block (upper bits ignored). On return, contains 12-bit data.
  */
@@ -149,6 +234,14 @@ MBE_API void mbe_checkGolayBlock(long int* block);
  */
 MBE_API int mbe_golay2312(const char* in, char* out);
 /**
+ * @brief Soft-decision Golay(23,12) decode.
+ * @param in  Input soft bits, LSB at index 0, length 23.
+ * @param out Output hard bits, length 23.
+ * @return Number of hard-decision data-bit differences between `in` and the selected codeword.
+ * @note Matches mbe_golay2312 output semantics: data bits are corrected, parity bits preserve the hard input.
+ */
+MBE_API int mbe_golay2312Soft(const mbe_soft_bit* in, char* out);
+/**
  * @brief Decode a (15,11) Hamming codeword (IMBE/AMBE common use).
  * @param in  Input bits, LSB at index 0, length 15.
  * @param out Output bits, corrected, LSB at index 0, length 15.
@@ -156,12 +249,26 @@ MBE_API int mbe_golay2312(const char* in, char* out);
  */
 MBE_API int mbe_hamming1511(const char* in, char* out);
 /**
+ * @brief Soft-decision Hamming(15,11) decode.
+ * @param in  Input soft bits, LSB at index 0, length 15.
+ * @param out Output corrected hard bits, LSB at index 0, length 15.
+ * @return Number of hard-decision bit differences between `in` and the selected codeword.
+ */
+MBE_API int mbe_hamming1511Soft(const mbe_soft_bit* in, char* out);
+/**
  * @brief Decode a (15,11) Hamming codeword with IMBE 7100x4400 mapping.
  * @param in  Input bits, LSB at index 0, length 15.
  * @param out Output bits, corrected, LSB at index 0, length 15.
  * @return Number of corrected bit errors (0 or 1).
  */
 MBE_API int mbe_7100x4400hamming1511(const char* in, char* out);
+/**
+ * @brief Soft-decision Hamming(15,11) decode with IMBE 7100x4400 mapping.
+ * @param in  Input soft bits, LSB at index 0, length 15.
+ * @param out Output corrected hard bits, LSB at index 0, length 15.
+ * @return Number of hard-decision bit differences between `in` and the selected codeword.
+ */
+MBE_API int mbe_7100x4400hamming1511Soft(const mbe_soft_bit* in, char* out);
 
 /* Prototypes from ambe3600x2400.c */
 /**
@@ -191,6 +298,23 @@ MBE_API int mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_p
  */
 MBE_API void mbe_demodulateAmbe3600x2400Data(char ambe_fr[4][24]);
 /**
+ * @brief Decode a hard AMBE 3600x2400 frame to parameter bits without synthesis.
+ * @param ambe_fr Input frame as 4x24 bitplanes; not modified.
+ * @param ambe_d  Output parameter bits (49).
+ * @param result  Optional output status; receives C0/protected/total errors and `MBE_PROCESS_FLAG_C0_VALID`.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_process_result* result);
+/**
+ * @brief Decode a soft AMBE 3600x2400 frame to parameter bits without synthesis.
+ * @param ambe_fr Input soft frame as 4x24 bitplanes; not modified.
+ * @param ambe_d  Output hard parameter bits (49).
+ * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[49],
+                                             mbe_process_result* result);
+/**
  * @brief Process AMBE 2400 parameters into 8 kHz float PCM.
  * @param aout_buf Output buffer of 160 float samples.
  * @param errs     Input corrected C0 error count (used for AMBE 2400 tone gating).
@@ -214,6 +338,21 @@ MBE_API void mbe_processAmbe2400Data(short* aout_buf, const int* errs, const int
                                      const char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                      mbe_parms* prev_mp_enhanced, int uvquality);
 /**
+ * @brief v2 AMBE 2400 parameter synthesis using mbe_process_result context.
+ * @param result In/out status context. If NULL, zero-initialized local context is used.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processAmbe2400DatafV2(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
+                                       mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                       int uvquality);
+/**
+ * @brief v2 AMBE 2400 parameter synthesis to int16 PCM.
+ * @see mbe_processAmbe2400DatafV2 for result semantics.
+ */
+MBE_API int mbe_processAmbe2400DataV2(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
+                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                      int uvquality);
+/**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz float PCM.
  * @param aout_buf Output buffer of 160 float samples.
  * @param errs     Output corrected C0 error count.
@@ -234,6 +373,18 @@ MBE_API void mbe_processAmbe3600x2400Framef(float* aout_buf, int* errs, int* err
 MBE_API void mbe_processAmbe3600x2400Frame(short* aout_buf, int* errs, int* errs2, char* err_str, char ambe_fr[4][24],
                                            char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                            mbe_parms* prev_mp_enhanced, int uvquality);
+/**
+ * @brief Process a soft AMBE 3600x2400 frame into float PCM.
+ * @param result Optional output status populated by decode and synthesis.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processAmbe3600x2400SoftFramef(float* aout_buf, mbe_process_result* result,
+                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+/** @brief Process a soft AMBE 3600x2400 frame into int16 PCM; see float variant for result semantics. */
+MBE_API int mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_result* result,
+                                              const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
 
 /* Prototypes from ambe3600x2450.c */
 /** @brief ECC correction for AMBE 3600x2450 C0. */
@@ -244,6 +395,23 @@ MBE_API int mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d);
 MBE_API int mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate AMBE 3600x2450 interleaved data. */
 MBE_API void mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]);
+/**
+ * @brief Decode a hard AMBE 3600x2450 frame to parameter bits without synthesis.
+ * @param ambe_fr Input frame as 4x24 bitplanes; not modified.
+ * @param ambe_d  Output parameter bits (49).
+ * @param result  Optional output status; receives C0/protected/total errors and `MBE_PROCESS_FLAG_C0_VALID`.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeAmbe3600x2450Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_process_result* result);
+/**
+ * @brief Decode a soft AMBE 3600x2450 frame to parameter bits without synthesis.
+ * @param ambe_fr Input soft frame as 4x24 bitplanes; not modified.
+ * @param ambe_d  Output hard parameter bits (49).
+ * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[49],
+                                             mbe_process_result* result);
 /**
  * @brief Process AMBE 2450 parameters into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -265,6 +433,22 @@ MBE_API void mbe_processAmbe2450Data(short* aout_buf, const int* errs, const int
                                      const char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                      mbe_parms* prev_mp_enhanced, int uvquality);
 /**
+ * @brief v2 AMBE 2450 parameter synthesis using mbe_process_result context.
+ * @param result In/out status context. If `MBE_PROCESS_FLAG_C0_VALID` is set, `c0_errors` is used for repeat gating.
+ *               If NULL, zero-initialized local context is used.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processAmbe2450DatafV2(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
+                                       mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                       int uvquality);
+/**
+ * @brief v2 AMBE 2450 parameter synthesis to int16 PCM.
+ * @see mbe_processAmbe2450DatafV2 for result semantics.
+ */
+MBE_API int mbe_processAmbe2450DataV2(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
+                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                      int uvquality);
+/**
  * @brief Process AMBE 3600x2450 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
  * @param errs     Output corrected C0 error count.
@@ -282,6 +466,18 @@ MBE_API void mbe_processAmbe3600x2450Framef(float* aout_buf, int* errs, int* err
 MBE_API void mbe_processAmbe3600x2450Frame(short* aout_buf, int* errs, int* errs2, char* err_str, char ambe_fr[4][24],
                                            char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                            mbe_parms* prev_mp_enhanced, int uvquality);
+/**
+ * @brief Process a soft AMBE 3600x2450 frame into float PCM.
+ * @param result Optional output status populated by decode and synthesis.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processAmbe3600x2450SoftFramef(float* aout_buf, mbe_process_result* result,
+                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+/** @brief Process a soft AMBE 3600x2450 frame into int16 PCM; see float variant for result semantics. */
+MBE_API int mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_result* result,
+                                              const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
 
 /* Prototypes from imbe7200x4400.c */
 /** @brief Print IMBE 4400 parameter bits to stderr (debug). */
@@ -298,6 +494,23 @@ MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
 MBE_API int mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate IMBE 7200x4400 interleaved data. */
 MBE_API void mbe_demodulateImbe7200x4400Data(char imbe[8][23]);
+/**
+ * @brief Decode a hard IMBE 7200x4400 frame to parameter bits without synthesis.
+ * @param imbe_fr Input frame as 8x23 bitplanes; not modified.
+ * @param imbe_d  Output parameter bits (88).
+ * @param result  Optional output status; receives C0/protected/C4/total errors and valid-context flags.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeImbe7200x4400Frame(const char imbe_fr[8][23], char imbe_d[88], mbe_process_result* result);
+/**
+ * @brief Decode a soft IMBE 7200x4400 frame to parameter bits without synthesis.
+ * @param imbe_fr Input soft frame as 8x23 bitplanes; not modified.
+ * @param imbe_d  Output hard parameter bits (88).
+ * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], char imbe_d[88],
+                                             mbe_process_result* result);
 /**
  * @brief Process IMBE 4400 parameters into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -319,6 +532,23 @@ MBE_API void mbe_processImbe4400Data(short* aout_buf, const int* errs, const int
                                      const char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                      mbe_parms* prev_mp_enhanced, int uvquality);
 /**
+ * @brief v2 IMBE 4400 parameter synthesis using mbe_process_result context.
+ * @param result In/out status context. `MBE_PROCESS_FLAG_C0_VALID` enables C0-aware repeat gating, and
+ *               `MBE_PROCESS_FLAG_C4_VALID` applies `c4_errors` to adaptive smoothing. If NULL,
+ *               zero-initialized local context is used.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processImbe4400DatafV2(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
+                                       mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                       int uvquality);
+/**
+ * @brief v2 IMBE 4400 parameter synthesis to int16 PCM.
+ * @see mbe_processImbe4400DatafV2 for result semantics.
+ */
+MBE_API int mbe_processImbe4400DataV2(short* aout_buf, mbe_process_result* result, const char imbe_d[88],
+                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                      int uvquality);
+/**
  * @brief Process IMBE 7200x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
  * @param errs     Output corrected C0 error count.
@@ -336,6 +566,18 @@ MBE_API void mbe_processImbe7200x4400Framef(float* aout_buf, int* errs, int* err
 MBE_API void mbe_processImbe7200x4400Frame(short* aout_buf, int* errs, int* errs2, char* err_str, char imbe_fr[8][23],
                                            char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                            mbe_parms* prev_mp_enhanced, int uvquality);
+/**
+ * @brief Process a soft IMBE 7200x4400 frame into float PCM.
+ * @param result Optional output status populated by decode and synthesis.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_result* result,
+                                               const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+/** @brief Process a soft IMBE 7200x4400 frame into int16 PCM; see float variant for result semantics. */
+MBE_API int mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result,
+                                              const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
 
 /* Prototypes from imbe7100x4400.c */
 /** @brief Print IMBE 7100x4400 parameter bits to stderr (debug). */
@@ -350,6 +592,23 @@ MBE_API int mbe_eccImbe7100x4400Data(char imbe_fr[7][24], char* imbe_d);
 MBE_API void mbe_demodulateImbe7100x4400Data(char imbe[7][24]);
 /** @brief Convert IMBE 7100x4400 parameter set into 7200x4400 layout. */
 MBE_API void mbe_convertImbe7100to7200(char* imbe_d);
+/**
+ * @brief Decode a hard IMBE 7100x4400 frame to converted IMBE 4400 parameter bits without synthesis.
+ * @param imbe_fr Input frame as 7x24 bitplanes; not modified.
+ * @param imbe_d  Output parameter bits (88), converted to the 7200x4400/IMBE 4400 layout.
+ * @param result  Optional output status; receives C0/protected/C4/total errors and valid-context flags.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeImbe7100x4400Frame(const char imbe_fr[7][24], char imbe_d[88], mbe_process_result* result);
+/**
+ * @brief Decode a soft IMBE 7100x4400 frame to converted IMBE 4400 parameter bits without synthesis.
+ * @param imbe_fr Input soft frame as 7x24 bitplanes; not modified.
+ * @param imbe_d  Output hard parameter bits (88), converted to the 7200x4400/IMBE 4400 layout.
+ * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`.
+ * @return Corrected error total (`c0_errors + protected_errors`).
+ */
+MBE_API int mbe_decodeImbe7100x4400SoftFrame(const mbe_soft_bit imbe_fr[7][24], char imbe_d[88],
+                                             mbe_process_result* result);
 /**
  * @brief Process IMBE 7100x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -368,6 +627,18 @@ MBE_API void mbe_processImbe7100x4400Framef(float* aout_buf, int* errs, int* err
 MBE_API void mbe_processImbe7100x4400Frame(short* aout_buf, int* errs, int* errs2, char* err_str, char imbe_fr[7][24],
                                            char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                            mbe_parms* prev_mp_enhanced, int uvquality);
+/**
+ * @brief Process a soft IMBE 7100x4400 frame into float PCM.
+ * @param result Optional output status populated by decode and synthesis.
+ * @return Final total error count used by the wrapper.
+ */
+MBE_API int mbe_processImbe7100x4400SoftFramef(float* aout_buf, mbe_process_result* result,
+                                               const mbe_soft_bit imbe_fr[7][24], char imbe_d[88], mbe_parms* cur_mp,
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+/** @brief Process a soft IMBE 7100x4400 frame into int16 PCM; see float variant for result semantics. */
+MBE_API int mbe_processImbe7100x4400SoftFrame(short* aout_buf, mbe_process_result* result,
+                                              const mbe_soft_bit imbe_fr[7][24], char imbe_d[88], mbe_parms* cur_mp,
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
 
 /* Prototypes from mbelib.c */
 /**

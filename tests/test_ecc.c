@@ -29,6 +29,25 @@ flip_bit(char* bits, int idx) {
     bits[idx] = bits[idx] ? 0 : 1;
 }
 
+static void
+make_soft_bits(const char* bits, mbe_soft_bit* soft, int count, int weak0, int weak1, int weak2, int weak3) {
+    for (int i = 0; i < count; ++i) {
+        soft[i] = mbe_softBitFromHard(bits[i], 200);
+    }
+    if (weak0 >= 0) {
+        soft[weak0].reliability = 1;
+    }
+    if (weak1 >= 0) {
+        soft[weak1].reliability = 1;
+    }
+    if (weak2 >= 0) {
+        soft[weak2].reliability = 1;
+    }
+    if (weak3 >= 0) {
+        soft[weak3].reliability = 1;
+    }
+}
+
 /**
  * @brief Compute 4-bit syndrome for a 15-bit codeword using a generator.
  * @param code      Codeword bits as 0/1 chars, LSB at index 0.
@@ -238,11 +257,24 @@ main(void) {
         if (failures) {
             return 4;
         }
+
+        {
+            char err[15];
+            memcpy(err, code, sizeof(err));
+            flip_bit(err, 2);
+            flip_bit(err, 4);
+            mbe_soft_bit soft[15];
+            make_soft_bits(err, soft, 15, 2, 4, -1, -1);
+            char fixed[15];
+            int soft_errs = mbe_hamming1511Soft(soft, fixed);
+            assert(soft_errs == 2);
+            assert(memcmp(code, fixed, sizeof(code)) == 0);
+        }
     }
 
     // IMBE 7100x4400 Hamming variant: same properties
     {
-        int data_pos[11] = {2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14};
+        int data_pos[11] = {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
 
         char data11[11];
         for (int i = 0; i < 11; ++i) {
@@ -284,6 +316,40 @@ main(void) {
             }
             assert(memcmp(data_ref, data_now, sizeof(data_ref)) == 0);
         }
+
+        {
+            char err[15];
+            memcpy(err, code, sizeof(err));
+            flip_bit(err, 2);
+            flip_bit(err, 4);
+            mbe_soft_bit soft[15];
+            make_soft_bits(err, soft, 15, 2, 4, -1, -1);
+            char fixed[15];
+            int soft_errs = mbe_7100x4400hamming1511Soft(soft, fixed);
+            assert(soft_errs == 2);
+            assert(memcmp(code, fixed, sizeof(code)) == 0);
+        }
+
+        for (unsigned int data = 0; data < 2048u; ++data) {
+            char all_data[11];
+            char clean[15];
+            char fixed[15];
+            mbe_soft_bit soft[15];
+
+            for (int i = 0; i < 11; ++i) {
+                all_data[i] = (char)((data >> i) & 1u);
+            }
+            int ok_all = encode_hamming15_with_generator(imbe7100x4400hammingGenerator, data_pos, all_data, clean);
+            assert(ok_all == 1);
+            (void)ok_all;
+
+            make_soft_bits(clean, soft, 15, -1, -1, -1, -1);
+            int soft_errs = mbe_7100x4400hamming1511Soft(soft, fixed);
+            if (soft_errs != 0 || memcmp(clean, fixed, sizeof(clean)) != 0) {
+                fprintf(stderr, "clean 7100 soft hamming mismatch for data 0x%03x\n", data);
+                return 6;
+            }
+        }
     }
 
     // Golay (23,12): corrects any single-bit error in the 23-bit codeword
@@ -307,6 +373,37 @@ main(void) {
         mbe_checkGolayBlock(&b);
         // mbe_checkGolayBlock returns only the 12-bit data in b
         assert((unsigned int)b == data);
+
+        char code[23];
+        for (int j = 0; j < 23; ++j) {
+            code[j] = (char)((block >> j) & 1u);
+        }
+        char err[23];
+        memcpy(err, code, sizeof(err));
+        flip_bit(err, 22);
+        flip_bit(err, 17);
+        flip_bit(err, 8);
+        flip_bit(err, 2);
+        mbe_soft_bit soft[23];
+        make_soft_bits(err, soft, 23, 22, 17, 8, 2);
+        char fixed[23];
+        int soft_errs = mbe_golay2312Soft(soft, fixed);
+        assert(soft_errs == 2);
+        for (int j = 22; j >= 11; --j) {
+            assert(fixed[j] == code[j]);
+        }
+
+        memcpy(err, code, sizeof(err));
+        flip_bit(err, 5);
+        make_soft_bits(err, soft, 23, 5, -1, -1, -1);
+        soft_errs = mbe_golay2312Soft(soft, fixed);
+        assert(soft_errs == 0);
+        for (int j = 22; j >= 11; --j) {
+            assert(fixed[j] == code[j]);
+        }
+        for (int j = 10; j >= 0; --j) {
+            assert(fixed[j] == err[j]);
+        }
     }
 
     return 0;

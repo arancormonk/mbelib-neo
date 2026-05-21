@@ -16,10 +16,12 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "ambe3600x2450_const.h"
 #include "ambe_common.h"
 #include "mbe_compiler.h"
+#include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -617,6 +619,48 @@ mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]) {
     mbe_demodulateAmbe3600Data_common(ambe_fr);
 }
 
+int
+mbe_decodeAmbe3600x2450Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_process_result* result) {
+    char fr[4][24];
+    int c0_errors;
+    int protected_errors;
+
+    memcpy(fr, ambe_fr, sizeof(fr));
+    c0_errors = mbe_eccAmbe3600x2450C0(fr);
+    mbe_demodulateAmbe3600x2450Data(fr);
+    protected_errors = mbe_eccAmbe3600x2450Data(fr, ambe_d);
+
+    if (result) {
+        mbe_initProcessResult(result);
+        result->c0_errors = c0_errors;
+        result->protected_errors = protected_errors;
+        result->total_errors = c0_errors + protected_errors;
+        result->flags = MBE_PROCESS_FLAG_C0_VALID;
+    }
+    return c0_errors + protected_errors;
+}
+
+int
+mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_process_result* result) {
+    mbe_soft_bit fr[4][24];
+    int c0_errors;
+    int protected_errors;
+
+    memcpy(fr, ambe_fr, sizeof(fr));
+    c0_errors = mbe_eccAmbe3600C0Soft_common(fr);
+    mbe_demodulateAmbe3600DataSoft_common(fr);
+    protected_errors = mbe_eccAmbe3600DataSoft_common(fr, ambe_d);
+
+    if (result) {
+        mbe_initProcessResult(result);
+        result->c0_errors = c0_errors;
+        result->protected_errors = protected_errors;
+        result->total_errors = c0_errors + protected_errors;
+        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID;
+    }
+    return c0_errors + protected_errors;
+}
+
 /**
  * @brief Internal AMBE 2450 synthesis path with optional C0 error context.
  *
@@ -760,6 +804,41 @@ mbe_processAmbe2450Data(short* aout_buf, const int* errs, const int* errs2, char
     mbe_floattoshort(float_buf, aout_buf);
 }
 
+int
+mbe_processAmbe2450DatafV2(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
+                           mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    mbe_process_result local_result;
+    char status[MBE_RESULT_STATUS_SIZE];
+
+    if (!result) {
+        mbe_initProcessResult(&local_result);
+        result = &local_result;
+    }
+
+    int errs2 = result->total_errors;
+    if (errs2 == 0 && (result->c0_errors != 0 || result->protected_errors != 0)) {
+        errs2 = result->c0_errors + result->protected_errors;
+    }
+    errs2 = mbe_result_clamp_status_errors(errs2, sizeof(status));
+
+    status[0] = '\0';
+    mbe_processAmbe2450Dataf_internal(aout_buf, &errs2, status, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
+                                      result->c0_errors, (result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u);
+    result->total_errors = errs2;
+    result->protected_errors = errs2 - result->c0_errors;
+    mbe_result_apply_status(result, status);
+    return result->total_errors;
+}
+
+int
+mbe_processAmbe2450DataV2(short* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
+                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    float float_buf[160];
+    int ret = mbe_processAmbe2450DatafV2(float_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    mbe_floattoshort(float_buf, aout_buf);
+    return ret;
+}
+
 /**
  * @brief Process a complete AMBE 3600x2450 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -785,6 +864,29 @@ mbe_processAmbe3600x2450Framef(float* aout_buf, int* errs, int* errs2, char* err
 
     mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
                                       *errs, 1);
+}
+
+int
+mbe_processAmbe3600x2450SoftFramef(float* aout_buf, mbe_process_result* result, const mbe_soft_bit ambe_fr[4][24],
+                                   char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                   int uvquality) {
+    mbe_process_result local_result;
+    if (!result) {
+        result = &local_result;
+    }
+    (void)mbe_decodeAmbe3600x2450SoftFrame(ambe_fr, ambe_d, result);
+    return mbe_processAmbe2450DatafV2(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+}
+
+int
+mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_result* result, const mbe_soft_bit ambe_fr[4][24],
+                                  char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
+                                  int uvquality) {
+    float float_buf[160];
+    int ret = mbe_processAmbe3600x2450SoftFramef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                                 uvquality);
+    mbe_floattoshort(float_buf, aout_buf);
+    return ret;
 }
 
 /**
