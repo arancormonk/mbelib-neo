@@ -19,12 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "imbe4400_internal.h"
 #include "mbelib-neo/mbelib.h"
-
-/* Internal helper implemented in imbe7200x4400.c to preserve frame-path C0 repeat criteria. */
-void mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
-                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
-                                     int c0_errors, int c0_errors_valid, int c4_errors_valid);
 
 /**
  * @brief Print IMBE 7100x4400 parameter bits to stderr (debug aid).

@@ -271,6 +271,10 @@ MBE_API int mbe_7100x4400hamming1511(const char* in, char* out);
 MBE_API int mbe_7100x4400hamming1511Soft(const mbe_soft_bit* in, char* out);
 
 /* Prototypes from ambe3600x2400.c */
+/** @brief Print AMBE 2400 parameter bits to stderr (debug). */
+MBE_API void mbe_dumpAmbe2400Data(const char* ambe_d);
+/** @brief Print a raw AMBE 3600x2400 frame to stderr (debug). */
+MBE_API void mbe_dumpAmbe3600x2400Frame(const char ambe_fr[4][24]);
 /**
  * @brief Apply ECC to AMBE 3600x2400 C0 and update in-place.
  * @param ambe_fr AMBE frame as 4x24 bitplanes.
@@ -387,6 +391,10 @@ MBE_API int mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_resul
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
 
 /* Prototypes from ambe3600x2450.c */
+/** @brief Print AMBE 2450 parameter bits to stderr (debug). */
+MBE_API void mbe_dumpAmbe2450Data(const char* ambe_d);
+/** @brief Print a raw AMBE 3600x2450 frame to stderr (debug). */
+MBE_API void mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]);
 /** @brief ECC correction for AMBE 3600x2450 C0. */
 MBE_API int mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]);
 /** @brief ECC and parameter packing for AMBE 3600x2450. */

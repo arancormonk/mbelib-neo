@@ -13,7 +13,7 @@ usage() {
 Usage: tools/scan_build.sh [--strict] [--jobs N] [--build-dir DIR] [--output-dir DIR]
 
 Options:
-  --strict          Fail if scan-build reports bugs (--status-bugs).
+  --strict          Fail on analyzer bugs and enable extra security/portability checkers.
   --jobs N          Parallel build jobs (default: detected CPU count).
   --build-dir DIR   Build directory (default: build/scan-build-debug).
   --output-dir DIR  scan-build report output dir (default: .scan-build.local).
@@ -96,7 +96,21 @@ SCAN_ARGS=(
   --exclude "$ROOT_DIR/src/external"
 )
 if [[ $STRICT -eq 1 ]]; then
-  SCAN_ARGS+=(--status-bugs)
+  SCAN_ARGS+=(
+    --status-bugs
+    -analyze-headers
+    --force-analyze-debug-code
+    -maxloop 8
+    -enable-checker security.ArrayBound
+    -enable-checker security.FloatLoopCounter
+    -enable-checker security.PointerSub
+    -enable-checker security.VAList
+    -enable-checker security.cert.env.InvalidPtr
+    -enable-checker security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+    -enable-checker security.insecureAPI.rand
+    -enable-checker security.insecureAPI.strcpy
+    -enable-checker optin.portability.UnixAPI
+  )
 fi
 
 for d in "$BUILD_DIR" "$OUTPUT_DIR"; do

@@ -362,14 +362,14 @@ The generated site focuses on the public API (`include/`) and bundled examples.
 ## Contributing
 
 - Follow `.clang-format` (LLVM style, 4‑space indent, 120 cols). You can run `tools/format.sh`.
-- Static analysis scripts (CI-aligned):
-  - `tools/clang_tidy.sh` (supports `--strict` and targeted TUs).
-  - `tools/cppcheck.sh` (supports `--strict` and targeted TUs).
-  - `tools/iwyu.sh` (include hygiene via include-what-you-use; excludes `src/external`).
-  - `tools/gcc_fanalyzer.sh` (GCC `-fanalyzer` diagnostics; excludes `src/external`).
-  - `tools/scan_build.sh` (Clang Static Analyzer via `scan-build`; excludes `src/external`).
-  - `tools/semgrep.sh` (additional SAST rules; use `--strict` to fail on findings).
-  - `tools/lizard.sh` (complexity thresholds; excludes `src/external`).
+- Static analysis scripts (CI-aligned; CI and pre-push/preflight use strict mode where applicable):
+  - `tools/clang_tidy.sh` (strict promotes broad bugprone/performance/portability findings; targeted TUs supported).
+  - `tools/cppcheck.sh` (strict uses exhaustive value-flow, inconclusive findings, and targeted TUs).
+  - `tools/iwyu.sh` (strict include hygiene via include-what-you-use, including project headers; excludes `src/external`).
+  - `tools/gcc_fanalyzer.sh` (strict GCC `-fanalyzer` plus additional high-signal GCC warnings; excludes `src/external`).
+  - `tools/scan_build.sh` (strict Clang Static Analyzer with extra security/portability checkers; excludes `src/external`).
+  - `tools/semgrep.sh` (strict SAST with default, C, and security-audit rule packs).
+  - `tools/lizard.sh` (strict complexity/length/argument budgets; excludes `src/external`).
 - Git hooks: `tools/install-git-hooks.sh` enables auto-format on commit and CI-style pre-push checks.
 - Manual preflight runner: `tools/preflight_ci.sh` runs the local CI quality gates without pushing.
 - Prefer keeping internal symbols `static` and declarations in headers where shared.

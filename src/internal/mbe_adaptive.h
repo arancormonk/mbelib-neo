@@ -9,6 +9,8 @@
 #ifndef MBEINT_MBE_ADAPTIVE_H
 #define MBEINT_MBE_ADAPTIVE_H
 
+#include <stdint.h>
+
 #include "mbelib-neo/mbelib.h"
 
 /* Algorithm constants from JMBE specification */

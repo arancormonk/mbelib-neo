@@ -14,7 +14,7 @@ usage() {
 Usage: tools/gcc_fanalyzer.sh [--strict] [--all-commands] [--jobs N] [--] [files...]
 
 Options:
-  --strict        Treat all compiler warnings as failures (not just analyzer diagnostics).
+  --strict        Add stricter GCC diagnostics and treat all compiler warnings as failures.
   --all-commands  Analyze every compile command entry (including duplicates).
   --jobs N        Number of parallel workers (default: detected CPU count).
 
@@ -277,7 +277,25 @@ def transform_command(rel, entry):
 
     filtered.extend(["-fsyntax-only", "-fanalyzer", "-fdiagnostics-color=never"])
     if strict:
-        filtered.append("-Werror")
+        filtered.extend(
+            [
+                "-Wall",
+                "-Wextra",
+                "-Wpedantic",
+                "-Wformat=2",
+                "-Wstrict-prototypes",
+                "-Wmissing-prototypes",
+                "-Wold-style-definition",
+                "-Wvla",
+                "-Wduplicated-cond",
+                "-Wduplicated-branches",
+                "-Wlogical-op",
+                "-Wnull-dereference",
+                "-Warray-bounds=2",
+                "-Wstringop-overflow=4",
+                "-Werror",
+            ]
+        )
 
     return filtered, ""
 

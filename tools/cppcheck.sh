@@ -20,7 +20,8 @@ usage() {
 Usage: tools/cppcheck.sh [--strict] [--verbose|-v] [--] [files...]
 
 Options:
-  --strict    Enable all checks and treat warnings as errors.
+  --strict    Enable all checks, inconclusive findings, and exhaustive value-flow;
+              treat findings as errors.
   --verbose   Show detailed output during analysis.
 
 Arguments:
@@ -92,11 +93,14 @@ CPPCHECK_ARGS=(
   --error-exitcode=1
 )
 
-# Strict mode: enable all checks and be more aggressive
+# Strict mode: enable all checks and deeper value-flow analysis.
 if [[ $STRICT -eq 1 ]]; then
-  echo "Strict mode: enabling all checks and treating warnings as errors"
+  echo "Strict mode: enabling all checks, inconclusive findings, and exhaustive value-flow"
   CPPCHECK_ARGS=(
     --enable=all
+    --inconclusive
+    --check-level=exhaustive
+    --max-ctu-depth=4
     --force
     --std=c11
     --std=c++14

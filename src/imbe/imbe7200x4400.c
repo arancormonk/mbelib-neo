@@ -19,15 +19,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "imbe4400_internal.h"
 #include "imbe7200x4400_const.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
-
-/* Internal helper also used by imbe7100x4400.c frame path. */
-void mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str, const char imbe_d[88],
-                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
-                                     int c0_errors, int c0_errors_valid, int c4_errors_valid);
 
 /**
  * @brief Thread-local cache for IMBE DCT cosine coefficients.

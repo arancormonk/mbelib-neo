@@ -381,9 +381,11 @@ main(void) {
         mbe_process_result soft_result;
 
         ambe_fr[0][1] = 1; /* protected Golay parity bit */
-        int hard_ret = mbe_decodeAmbe3600x2450Frame(ambe_fr, hard_d, &hard_result);
+        const char (*hard_fr)[24] = (const char (*)[24])ambe_fr;
+        int hard_ret = mbe_decodeAmbe3600x2450Frame(hard_fr, hard_d, &hard_result);
         mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u);
-        int soft_ret = mbe_decodeAmbe3600x2450SoftFrame(soft_fr, soft_d, &soft_result);
+        const mbe_soft_bit(*soft_fr_const)[24] = (const mbe_soft_bit(*)[24])soft_fr;
+        int soft_ret = mbe_decodeAmbe3600x2450SoftFrame(soft_fr_const, soft_d, &soft_result);
 
         assert(hard_ret == soft_ret);
         assert(hard_result.c0_errors == 1);

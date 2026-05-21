@@ -9,6 +9,8 @@
 #ifndef MBEINT_MBE_UNVOICED_FFT_H
 #define MBEINT_MBE_UNVOICED_FFT_H
 
+#include <stdint.h>
+
 #include "mbelib-neo/mbelib.h"
 
 /* FFT size for unvoiced synthesis */

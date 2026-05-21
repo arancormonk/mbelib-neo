@@ -256,29 +256,26 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float gain, f
     float cblk[4];
     mbe_fill_voiced_cos_block4(cblk, c, s, sd, cd);
 
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
     __m128 vC = _mm_loadu_ps(cblk);
     __m128 vW = _mm_loadu_ps(W);
     __m128 vA = _mm_set1_ps(gain);
     __m128 vS = _mm_loadu_ps(Ss);
     vS = _mm_add_ps(vS, _mm_mul_ps(_mm_mul_ps(vC, vW), vA));
     _mm_storeu_ps(Ss, vS);
-    return;
-#elif defined(MBE_SIMD_TARGET_NEON)
+#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
     float32x4_t vC = vld1q_f32(cblk);
     float32x4_t vW = vld1q_f32(W);
     float32x4_t vA = vdupq_n_f32(gain);
     float32x4_t vS = vld1q_f32(Ss);
     vS = vaddq_f32(vS, vmulq_f32(vmulq_f32(vC, vW), vA));
     vst1q_f32(Ss, vS);
-    return;
-#endif
-#endif
+#else
     Ss[0] += gain * W[0] * cblk[0];
     Ss[1] += gain * W[1] * cblk[1];
     Ss[2] += gain * W[2] * cblk[2];
     Ss[3] += gain * W[3] * cblk[3];
+#endif
 }
 
 /**
@@ -299,25 +296,21 @@ mbe_add_voiced_dual_block4(float* restrict Ss, const float* restrict W_prev, flo
     mbe_fill_voiced_cos_block4(prev_cblk, c_prev, s_prev, sd_prev, cd_prev);
     mbe_fill_voiced_cos_block4(cur_cblk, c_cur, s_cur, sd_cur, cd_cur);
 
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
     __m128 vS = _mm_loadu_ps(Ss);
     __m128 vPrev = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(prev_cblk), _mm_loadu_ps(W_prev)), _mm_set1_ps(gain_prev));
     __m128 vCur = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(cur_cblk), _mm_loadu_ps(W_cur)), _mm_set1_ps(gain_cur));
     vS = _mm_add_ps(vS, vPrev);
     vS = _mm_add_ps(vS, vCur);
     _mm_storeu_ps(Ss, vS);
-    return;
-#elif defined(MBE_SIMD_TARGET_NEON)
+#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
     float32x4_t vS = vld1q_f32(Ss);
     float32x4_t vPrev = vmulq_f32(vmulq_f32(vld1q_f32(prev_cblk), vld1q_f32(W_prev)), vdupq_n_f32(gain_prev));
     float32x4_t vCur = vmulq_f32(vmulq_f32(vld1q_f32(cur_cblk), vld1q_f32(W_cur)), vdupq_n_f32(gain_cur));
     vS = vaddq_f32(vS, vPrev);
     vS = vaddq_f32(vS, vCur);
     vst1q_f32(Ss, vS);
-    return;
-#endif
-#endif
+#else
     Ss[0] += gain_prev * W_prev[0] * prev_cblk[0];
     Ss[1] += gain_prev * W_prev[1] * prev_cblk[1];
     Ss[2] += gain_prev * W_prev[2] * prev_cblk[2];
@@ -326,6 +319,7 @@ mbe_add_voiced_dual_block4(float* restrict Ss, const float* restrict W_prev, flo
     Ss[1] += gain_cur * W_cur[1] * cur_cblk[1];
     Ss[2] += gain_cur * W_cur[2] * cur_cblk[2];
     Ss[3] += gain_cur * W_cur[3] * cur_cblk[3];
+#endif
 }
 
 /**
@@ -353,8 +347,8 @@ mbe_versionString(void) {
 
 /**
  * @brief Copy MBE parameter set from input to output.
- * @param in  Source parameter set.
- * @param out Destination parameter set.
+ * @param cur_mp  Source parameter set.
+ * @param prev_mp Destination parameter set.
  *
  * Uses struct assignment for efficiency - the compiler generates optimal
  * code (typically a single memcpy-like operation) rather than many individual
@@ -362,20 +356,20 @@ mbe_versionString(void) {
  * is correct and safe.
  */
 void
-mbe_moveMbeParms(const mbe_parms* in, mbe_parms* out) {
-    *out = *in;
+mbe_moveMbeParms(const mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    *prev_mp = *cur_mp;
 }
 
 /**
  * @brief Replace current parameters with the last known parameters.
- * @param out Destination parameter set to fill.
- * @param in  Source parameter set from previous frame.
+ * @param cur_mp  Destination parameter set to fill.
+ * @param prev_mp Source parameter set from previous frame.
  *
  * Uses struct assignment for efficiency. See mbe_moveMbeParms() for details.
  */
 void
-mbe_useLastMbeParms(mbe_parms* out, const mbe_parms* in) {
-    *out = *in;
+mbe_useLastMbeParms(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    *cur_mp = *prev_mp;
 }
 
 /**
@@ -757,8 +751,7 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
     (void)cur_mp;
     mbe_synthesizeSilencef(aout_buf);
     return;
-#endif
-
+#else
     int i;
 
     int u0, u1, u2, u3;
@@ -804,6 +797,7 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
     }
 
     mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
+#endif
 }
 
 /**
@@ -821,8 +815,7 @@ mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp,
     (void)ID1;
     mbe_synthesizeSilencef(aout_buf);
     return;
-#endif
-
+#else
     int AD = 103; /* JMBE nominal D-STAR tone amplitude */
     float freq1 = 0, freq2 = 0;
     (void)ambe_d;
@@ -851,6 +844,7 @@ mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp,
     }
 
     mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
+#endif
 }
 
 /**

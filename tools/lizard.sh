@@ -14,8 +14,8 @@ Usage: tools/lizard.sh [--strict] [--ccn N] [--length N] [--arguments N] [--] [p
 Options:
   --strict       Fail when threshold warnings are emitted.
   --ccn N        Cyclomatic complexity warning threshold (default: 15).
-  --length N     Function length warning threshold (default: 1000).
-  --arguments N  Parameter count warning threshold (default: 100).
+  --length N     Function length warning threshold (default: 1000; strict: 120).
+  --arguments N  Parameter count warning threshold (default: 100; strict: 13).
 
 Arguments:
   paths...       Optional paths to scan. Default: src include
@@ -26,6 +26,9 @@ STRICT=0
 CCN=15
 LENGTH=1000
 ARGUMENTS=100
+CCN_SET=0
+LENGTH_SET=0
+ARGUMENTS_SET=0
 TARGETS=()
 
 while [[ $# -gt 0 ]]; do
@@ -40,6 +43,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       CCN="$2"
+      CCN_SET=1
       shift 2
       ;;
     --length)
@@ -48,6 +52,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       LENGTH="$2"
+      LENGTH_SET=1
       shift 2
       ;;
     --arguments)
@@ -56,6 +61,7 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       ARGUMENTS="$2"
+      ARGUMENTS_SET=1
       shift 2
       ;;
     -h|--help)
@@ -78,6 +84,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ $STRICT -eq 1 ]]; then
+  # Keep the current maximum CCN as the strict ceiling, but make length and
+  # parameter-count budgets useful enough to catch future growth.
+  [[ $CCN_SET -eq 0 ]] && CCN=15
+  [[ $LENGTH_SET -eq 0 ]] && LENGTH=120
+  [[ $ARGUMENTS_SET -eq 0 ]] && ARGUMENTS=13
+fi
 
 if ! command -v lizard >/dev/null 2>&1; then
   echo "lizard not found. Install with: python -m pip install lizard." >&2
