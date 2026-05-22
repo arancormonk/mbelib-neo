@@ -401,7 +401,7 @@ jobs:
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           cp -a . "$tmp/aur-package"
-          chown -R "$AUR_MAKEPKG_USER:$AUR_MAKEPKG_USER" "$tmp/aur-package"
+          chown -R "$AUR_MAKEPKG_USER:$AUR_MAKEPKG_USER" "$tmp"
           runuser -u "$AUR_MAKEPKG_USER" -- bash -lc "set -o pipefail; cd '$tmp/aur-package' && makepkg --nobuild --nodeps --skipinteg --noconfirm 2>&1 | tee makepkg.out"
           actual="$(awk '/==> Updated version:/ { ver=$NF } END { sub(/-[^-]*$/, "", ver); print ver }' "$tmp/aur-package/makepkg.out")"
           if [ -z "$actual" ]; then
