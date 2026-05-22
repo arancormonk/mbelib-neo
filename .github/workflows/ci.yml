@@ -388,6 +388,32 @@ jobs:
           echo "pkgver=$new_pkgver" >> "$GITHUB_OUTPUT"
           echo "Computed pkgver from $ref ($(git rev-parse --short=7 "$ref")): $new_pkgver"
 
+      - name: Validate AUR VCS metadata
+        if: steps.aur_key.outputs.has_key == 'true'
+        run: |
+          set -euo pipefail
+          cd aur-package
+          expected="${{ steps.pkgver.outputs.pkgver }}"
+          if ! grep -Fq 'git+https://github.com/arancormonk/mbelib-neo.git#branch=main' PKGBUILD; then
+            echo "AUR PKGBUILD must explicitly track the upstream main branch." >&2
+            exit 1
+          fi
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          cp -a . "$tmp/aur-package"
+          chown -R "$AUR_MAKEPKG_USER:$AUR_MAKEPKG_USER" "$tmp/aur-package"
+          runuser -u "$AUR_MAKEPKG_USER" -- bash -lc "set -o pipefail; cd '$tmp/aur-package' && makepkg --nobuild --nodeps --skipinteg --noconfirm 2>&1 | tee makepkg.out"
+          actual="$(awk '/==> Updated version:/ { ver=$NF } END { sub(/-[^-]*$/, "", ver); print ver }' "$tmp/aur-package/makepkg.out")"
+          if [ -z "$actual" ]; then
+            actual="$(sed -n 's/^pkgver=//p' "$tmp/aur-package/PKGBUILD" | head -n1)"
+          fi
+          echo "Expected pkgver: $expected"
+          echo "Actual makepkg pkgver: $actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "AUR PKGBUILD pkgver() is incompatible with CI-computed pkgver." >&2
+            exit 1
+          fi
+
       - name: Check if update needed
         id: check
         if: steps.aur_key.outputs.has_key == 'true'
@@ -530,6 +556,13 @@ jobs:
           sed -i "s/^sha256sums=.*/sha256sums=('${{ steps.release_meta.outputs.sha256 }}')/" PKGBUILD
           chown -R "$AUR_MAKEPKG_USER:$AUR_MAKEPKG_USER" .
           runuser -u "$AUR_MAKEPKG_USER" -- bash -lc "cd '$PWD' && makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Validate AUR release source
+        if: steps.aur_key.outputs.has_key == 'true' && steps.check.outputs.needs_update == 'true'
+        run: |
+          set -euo pipefail
+          cd aur-package
+          runuser -u "$AUR_MAKEPKG_USER" -- bash -lc "cd '$PWD' && makepkg --verifysource --nodeps --noconfirm"
 
       - name: Commit and push to AUR
         if: steps.aur_key.outputs.has_key == 'true' && steps.check.outputs.needs_update == 'true'
