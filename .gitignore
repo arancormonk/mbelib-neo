@@ -3,6 +3,8 @@
 
 # Tool caches
 /.cache/
+/.ccache/
+/.deps/
 
 # Editor/IntelliSense database generated via CMake Tools
 /compile_commands.json

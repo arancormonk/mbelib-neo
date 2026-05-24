@@ -56,67 +56,63 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
-      - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
       - name: Check formatting
         run: |
-          mapfile -t files < <(git ls-files '*.c' '*.cc' '*.cxx' '*.cpp' '*.h' '*.hpp' ':!:build/**' ':!:src/external/**')
-          if [ "${#files[@]}" -eq 0 ]; then echo "No C/C++ files to check"; exit 0; fi
-          clang-format --version
-          # Prefer dry-run Werror if supported; fallback to diff
-          if clang-format -n --Werror "${files[@]}" 2>/dev/null; then
-            echo "Formatting OK (clang-format -n --Werror)"
-          else
-            echo "clang-format -n --Werror unsupported or failed; using diff"
-            diff -u <(cat "${files[@]}") <(clang-format "${files[@]}") || (echo "Run tools/format.sh" && exit 1)
-          fi
+          bash tools/ci_arch_toolchain.sh bash -lc '
+            set -euo pipefail
+            mapfile -t files < <(git ls-files "*.c" "*.cc" "*.cxx" "*.cpp" "*.h" "*.hpp" ":!:build/**" ":!:src/external/**")
+            if [ "${#files[@]}" -eq 0 ]; then echo "No C/C++ files to check"; exit 0; fi
+            clang-format --version
+            if clang-format -n --Werror "${files[@]}" 2>/dev/null; then
+              echo "Formatting OK (clang-format -n --Werror)"
+            else
+              echo "clang-format -n --Werror unsupported or failed; using diff"
+              diff -u <(cat "${files[@]}") <(clang-format "${files[@]}") || (echo "Run tools/format.sh" && exit 1)
+            fi
+          '
 
   clang-tidy:
     name: clang-tidy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
-      - name: Install toolchains
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-tidy ripgrep iwyu build-essential cmake ninja-build pkg-config git ccache
-      - name: Prepare ccache environment
+      - name: Compute IWYU toolchain SHA
+        id: iwyu-sha
         run: |
           set -euxo pipefail
-          {
-            echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache"
-            echo "CC=ccache gcc"
-            echo "CXX=ccache g++"
-            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
-            echo "CCACHE_NOHASHDIR=true"
-            echo "CCACHE_SLOPPINESS=time_macros"
-          } >> "$GITHUB_ENV"
-          mkdir -p "${GITHUB_WORKSPACE}/.ccache"
-      - name: Compute tool versions (for ccache key)
-        id: toolver-tidy
-        run: |
-          set -euxo pipefail
-          echo "gcc_ver=$(gcc -dumpfullversion -dumpversion || gcc --version | head -n1)" >> "$GITHUB_OUTPUT"
-          echo "cmake_ver=$(cmake --version | head -n1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git ls-remote https://github.com/include-what-you-use/include-what-you-use refs/heads/clang_22 | cut -f1)" >> "$GITHUB_OUTPUT"
+      - name: Restore Arch toolchain cache
+        uses: actions/cache@v5.0.5
+        with:
+          path: .deps
+          key: arch-toolchain-${{ runner.os }}-iwyu-${{ steps.iwyu-sha.outputs.sha }}
+          restore-keys: |
+            arch-toolchain-${{ runner.os }}-iwyu-
       - name: Restore ccache
         uses: actions/cache@v5.0.5
         with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.job }}-${{ steps.toolver-tidy.outputs.gcc_ver }}-${{ steps.toolver-tidy.outputs.cmake_ver }}-${{ github.sha }}
+          path: .ccache
+          key: ccache-${{ runner.os }}-arch-${{ github.job }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.job }}-${{ steps.toolver-tidy.outputs.gcc_ver }}-${{ steps.toolver-tidy.outputs.cmake_ver }}-
-            ccache-${{ runner.os }}-${{ github.job }}-
-            ccache-${{ runner.os }}-
-      - name: Initialize ccache
+            ccache-${{ runner.os }}-arch-${{ github.job }}-
+            ccache-${{ runner.os }}-arch-
+      - name: Run C/C++ static analysis under Arch toolchain
         run: |
-          ccache --version
-          ccache --zero-stats
-          ccache --set-config=max_size=500M
-          ccache --set-config=compression=true
-      - name: Configure (dev-debug preset)
-        run: cmake --preset dev-debug
-      - name: Run clang-tidy (strict)
-        run: tools/clang_tidy.sh --strict
+          bash tools/ci_arch_toolchain.sh bash -lc '
+            set -euxo pipefail
+            ccache --version
+            ccache --zero-stats
+            ccache --set-config=max_size=500M
+            ccache --set-config=compression=true
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            rm -rf build/dev-debug
+            cmake --preset dev-debug
+            tools/clang_tidy.sh --strict
+            tools/iwyu.sh --strict
+            tools/gcc_fanalyzer.sh --strict
+            ccache -s
+          '
       - name: Upload clang-tidy output
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -125,8 +121,6 @@ jobs:
           path: .clang-tidy.local.out
           include-hidden-files: true
           retention-days: 7
-      - name: Run IWYU
-        run: tools/iwyu.sh --strict
       - name: Upload IWYU output
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -135,8 +129,6 @@ jobs:
           path: .iwyu.local.out
           include-hidden-files: true
           retention-days: 7
-      - name: Run GCC fanalyzer (strict)
-        run: tools/gcc_fanalyzer.sh --strict
       - name: Upload GCC fanalyzer output
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -145,10 +137,6 @@ jobs:
           path: .gcc-fanalyzer.local.out
           include-hidden-files: true
           retention-days: 7
-      - name: Show ccache stats
-        if: always()
-        run: ccache -s
-
   cppcheck:
     name: cppcheck
     runs-on: ubuntu-latest
@@ -156,17 +144,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
-      - name: Install cppcheck
+      - name: Run cppcheck under Arch toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cppcheck
-
-      - name: Configure (dev-debug preset)
-        run: cmake --preset dev-debug
-
-      - name: Run cppcheck (strict)
-        run: |
-          tools/cppcheck.sh --strict
+          bash tools/ci_arch_toolchain.sh bash -lc '
+            set -euxo pipefail
+            rm -rf build/dev-debug
+            cmake --preset dev-debug
+            tools/cppcheck.sh --strict
+          '
       - name: Upload cppcheck output
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -182,13 +167,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6.0.2
-      - name: Install scan-build toolchain
+      - name: Run scan-build under Arch toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-tools cmake ninja-build pkg-config git build-essential
-      - name: Run scan-build
-        run: |
-          tools/scan_build.sh --strict
+          bash tools/ci_arch_toolchain.sh tools/scan_build.sh --strict
       - name: Upload scan-build output
         if: always()
         uses: actions/upload-artifact@v7.0.1
