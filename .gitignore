@@ -5,6 +5,7 @@
 /.cache/
 /.ccache/
 /.deps/
+/.deps-arch-toolchain/
 
 # Editor/IntelliSense database generated via CMake Tools
 /compile_commands.json
