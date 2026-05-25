@@ -610,6 +610,20 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_params COMMAND test_params)
 
+    add_executable(test_frame_paths tests/test_frame_paths.c)
+    target_link_libraries(test_frame_paths PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    target_include_directories(
+        test_frame_paths
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_frame_paths PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_frame_paths BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_frame_paths COMMAND test_frame_paths)
+
     add_executable(test_floattoshort_parity tests/test_floattoshort_parity.c)
     target_link_libraries(
         test_floattoshort_parity
