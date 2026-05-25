@@ -1,0 +1,270 @@
+name: guardrails
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "19 6 * * 2"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  script-lint:
+    name: shell/workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run shell and workflow lint
+        env:
+          CI_ARCH_EXTRA_PACKAGES: shellcheck shfmt actionlint
+        run: |
+          tools/ci_arch_toolchain.sh bash -lc '
+            set -euo pipefail
+            tools/shell_lint.sh
+            tools/workflow_lint.sh
+          '
+
+      - name: Upload lint output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: script-lint-report
+          path: |
+            .shell-lint.local.out
+            .actionlint.local.out
+          include-hidden-files: true
+          retention-days: 7
+
+  cmake-format:
+    name: cmake format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute PR changed files
+        if: github.event_name == 'pull_request'
+        id: changed
+        run: |
+          tools/ci_changed_files.sh \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head HEAD \
+            --no-header-expansion
+
+      - name: Skip CMake format
+        if: github.event_name == 'pull_request' && steps.changed.outputs.cmake_format_files == '0'
+        run: echo "No CMake files to check."
+
+      - name: Set up Python
+        if: github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.x"
+
+      - name: Install gersemi
+        if: github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0'
+        run: python -m pip install --upgrade gersemi
+
+      - name: Check CMake formatting
+        if: github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0'
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            mapfile -t files < .ci/changed-files/cmake_format_files.txt
+            tools/cmake_format_check.sh -- "${files[@]}"
+          else
+            tools/cmake_format_check.sh
+          fi
+
+      - name: Upload CMake format output
+        if: always() && (github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cmake-format-report
+          path: .cmake-format.local.out
+          include-hidden-files: true
+          retention-days: 7
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        run: tools/gitleaks.sh
+
+      - name: Upload Gitleaks SARIF
+        if: always() && hashFiles('.gitleaks.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        with:
+          sarif_file: .gitleaks.sarif
+
+      - name: Upload Gitleaks output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-report
+          path: |
+            .gitleaks.local.out
+            .gitleaks.sarif
+          include-hidden-files: true
+          retention-days: 7
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute PR changed files
+        if: github.event_name == 'pull_request'
+        id: changed
+        run: |
+          tools/ci_changed_files.sh \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head HEAD \
+            --no-header-expansion
+
+      - name: Skip zizmor
+        if: github.event_name == 'pull_request' && steps.changed.outputs.workflow_security_targets == '0'
+        run: echo "No workflow security files to check."
+
+      - name: Set up Python
+        if: github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.x"
+
+      - name: Install zizmor
+        if: github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0'
+        run: python -m pip install --upgrade zizmor
+
+      - name: Run zizmor
+        if: github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0'
+        env:
+          MBE_ZIZMOR_SARIF_OUT: .zizmor.sarif
+        run: tools/zizmor.sh
+
+      - name: Run pedantic zizmor advisory
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          MBE_ZIZMOR_SARIF_OUT: .zizmor-pedantic.sarif
+        run: tools/zizmor.sh --pedantic --min-confidence high --no-config
+
+      - name: Upload zizmor SARIF
+        if: always() && hashFiles('.zizmor.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        with:
+          sarif_file: .zizmor.sarif
+
+      - name: Upload zizmor output
+        if: always() && (github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zizmor-report
+          path: |
+            .zizmor.local.out
+            .zizmor.sarif
+            .zizmor-pedantic.sarif
+          include-hidden-files: true
+          retention-days: 7
+
+  osv-scan:
+    name: osv scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute PR changed files
+        if: github.event_name == 'pull_request'
+        id: changed
+        run: |
+          tools/ci_changed_files.sh \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head HEAD \
+            --no-header-expansion
+
+      - name: Skip OSV scan
+        if: github.event_name == 'pull_request' && steps.changed.outputs.dependency_scan_targets == '0'
+        run: echo "No dependency inputs to scan."
+
+      - name: Run OSV scan
+        if: github.event_name != 'pull_request' || steps.changed.outputs.dependency_scan_targets != '0'
+        env:
+          MBE_OSV_SARIF_OUT: .osv-scanner.sarif
+        run: tools/osv_scan.sh
+
+      - name: Upload OSV SARIF
+        if: always() && hashFiles('.osv-scanner.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        with:
+          sarif_file: .osv-scanner.sarif
+
+      - name: Upload OSV output
+        if: always() && (github.event_name != 'pull_request' || steps.changed.outputs.dependency_scan_targets != '0')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: osv-scan-report
+          path: |
+            .osv-scanner.local.out
+            .osv-scanner.sarif
+          include-hidden-files: true
+          retention-days: 7
+
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: always
+
+  warnings-as-errors:
+    name: warnings as errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure with warnings as errors
+        run: cmake --preset dev-debug -DMBELIB_WARNINGS_AS_ERRORS=ON
+
+      - name: Build with warnings as errors
+        run: cmake --build --preset dev-debug -j
+
+      - name: Test warnings-as-errors build
+        run: ctest --preset dev-debug --output-on-failure

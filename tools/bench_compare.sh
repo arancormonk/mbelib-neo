@@ -13,19 +13,19 @@ echo "== Configure scalar benchmark build =="
 cmake --preset dev-release \
   -B "$scalar_build" \
   -DMBELIB_ENABLE_SIMD=OFF \
-  -DMBELIB_BUILD_BENCHMARKS=ON >/dev/null
+  -DMBELIB_BUILD_BENCHMARKS=ON > /dev/null
 
 echo "== Build scalar benchmark =="
-cmake --build "$scalar_build" -j --target bench_synth >/dev/null || cmake --build "$scalar_build" -j >/dev/null
+cmake --build "$scalar_build" -j --target bench_synth > /dev/null || cmake --build "$scalar_build" -j > /dev/null
 
 echo "== Configure SIMD benchmark build =="
 cmake --preset dev-release \
   -B "$simd_build" \
   -DMBELIB_ENABLE_SIMD=ON \
-  -DMBELIB_BUILD_BENCHMARKS=ON >/dev/null
+  -DMBELIB_BUILD_BENCHMARKS=ON > /dev/null
 
 echo "== Build SIMD benchmark =="
-cmake --build "$simd_build" -j --target bench_synth >/dev/null || cmake --build "$simd_build" -j >/dev/null
+cmake --build "$simd_build" -j --target bench_synth > /dev/null || cmake --build "$simd_build" -j > /dev/null
 
 echo
 echo "== Running scalar benchmark =="

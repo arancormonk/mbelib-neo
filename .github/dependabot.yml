@@ -4,8 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-      # Optional: day/time can be set to reduce noise
-      # day: "monday"
-      # time: "09:00"
-      # timezone: "UTC"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Chicago"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github_actions"

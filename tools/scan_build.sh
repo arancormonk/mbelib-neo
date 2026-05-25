@@ -5,11 +5,11 @@ set -euo pipefail
 # Intended for CI or explicit local runs (heavier than per-file analyzers).
 # Excludes third-party code under src/external.
 
-ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+ROOT_DIR=$(git rev-parse --show-toplevel 2> /dev/null || pwd)
 cd "$ROOT_DIR"
 
 usage() {
-  cat <<'USAGE'
+  cat << 'USAGE'
 Usage: tools/scan_build.sh [--strict] [--jobs N] [--build-dir DIR] [--output-dir DIR]
 
 Options:
@@ -27,7 +27,10 @@ OUTPUT_DIR=".scan-build.local"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --strict) STRICT=1; shift ;;
+    --strict)
+      STRICT=1
+      shift
+      ;;
     --jobs)
       if [[ $# -lt 2 ]]; then
         echo "Missing value for --jobs" >&2
@@ -52,7 +55,10 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_DIR="$2"
       shift 2
       ;;
-    -h|--help) usage; exit 0 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
     *)
       echo "Unknown option: $1" >&2
       usage >&2
@@ -61,22 +67,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! command -v scan-build >/dev/null 2>&1; then
+if ! command -v scan-build > /dev/null 2>&1; then
   echo "scan-build not found. Please install clang-tools." >&2
   exit 1
 fi
-if ! command -v cmake >/dev/null 2>&1; then
+if ! command -v cmake > /dev/null 2>&1; then
   echo "cmake not found. Please install cmake." >&2
   exit 1
 fi
 
 print_scan_build_version() {
-  if scan-build --version >/dev/null 2>&1; then
+  if scan-build --version > /dev/null 2>&1; then
     scan-build --version
     return 0
   fi
 
-  if scan-build -version >/dev/null 2>&1; then
+  if scan-build -version > /dev/null 2>&1; then
     scan-build -version
     return 0
   fi
@@ -86,7 +92,7 @@ print_scan_build_version() {
 }
 
 if [[ -z "$JOBS" ]]; then
-  JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+  JOBS=$(nproc 2> /dev/null || sysctl -n hw.ncpu 2> /dev/null || echo 4)
 fi
 
 LOG_FILE=".scan-build.local.out"

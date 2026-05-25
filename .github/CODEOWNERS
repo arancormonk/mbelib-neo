@@ -1,0 +1,11 @@
+* @arancormonk
+
+/CMakeLists.txt @arancormonk
+/CMakePresets.json @arancormonk
+/.github/ @arancormonk
+/cmake/ @arancormonk
+/tools/ @arancormonk
+
+/include/mbelib-neo/ @arancormonk
+/src/ @arancormonk
+/tests/ @arancormonk
