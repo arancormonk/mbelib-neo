@@ -1,4 +1,4 @@
-# Security Requirements and Assurance
+# Security Requirements
 
 mbelib-neo is a native C library. Its main security goal is to process
 potentially malformed codec frames without memory corruption, credential
@@ -78,60 +78,6 @@ The project applies the following controls:
 - OSV-Scanner and dependency review for dependency vulnerabilities
 - pinned GitHub Actions and zizmor workflow security checks
 - branch protection requiring status checks before merge
-
-## Assurance Case
-
-Claim: mbelib-neo's documented security requirements are met for the intended
-library use case when users build a supported release and call the public API as
-documented.
-
-Argument:
-
-- The main attacker-controlled boundary is caller-provided frame/data input.
-  Public API documentation and tests focus on bounded frame layouts, caller-owned
-  state, and bounded output behavior.
-- Common C implementation weaknesses are countered with compiler warnings,
-  sanitizer testing, static analysis, fuzzing, focused regression tests, and code
-  review.
-- CI/CD and release trust boundaries are controlled with branch protection,
-  pinned actions, least-privilege workflow permissions, secret scanning, OSV
-  scanning, dependency review, and workflow security linting.
-- The project does not implement network services, TLS, password storage, or
-  credential management, reducing the applicable attack surface for runtime
-  cryptography and authentication failures.
-
-Residual risk:
-
-- As a C library, memory-safety bugs remain possible and should be reported
-  privately.
-- Applications processing hostile captures should still use normal process
-  isolation and privilege reduction.
-- Vendored third-party code can contain defects and must be monitored and
-  updated when applicable vulnerabilities are found.
-
-## Hardening
-
-The project supports and exercises hardening through:
-
-- warning-enabled builds by default
-- warnings-as-errors by default
-- AddressSanitizer and UndefinedBehaviorSanitizer presets
-- CI sanitizer jobs
-- CI static-analysis jobs
-- release builds with controlled CMake options
-- no runtime shell execution from project-owned C code without explicit review
-
-## Input Validation Requirements
-
-Public entry points must validate API assumptions before use. In particular:
-
-- pointer parameters that are required for output or mutable state must be valid
-- fixed-size frame and data layouts must be respected
-- status strings must be bounded by caller-provided buffer size where the API
-  accepts a size-aware interface
-- new APIs should prefer const input and explicit output sizes
-- untrusted CI metadata must be passed through environment variables or action
-  inputs, not directly interpolated into shell scripts
 
 ## Cryptography and Credentials
 

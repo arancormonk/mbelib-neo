@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-Security fixes are handled on the default branch and the latest tagged release line.
-See `SUPPORT.md` for the support and upgrade policy.
+Security fixes are handled on the default branch and the latest tagged release
+line.
 
 ## Reporting A Vulnerability
 

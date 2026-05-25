@@ -356,16 +356,12 @@ The generated site focuses on the public API (`include/`) and bundled examples.
 Project documentation and policies:
 
 - Contribution process, DCO, coding standards, review requirements, and test policy: `CONTRIBUTING.md`
-- Code of conduct: `CODE_OF_CONDUCT.md`
-- Governance, roles, responsibilities, sensitive-resource access, and continuity: `GOVERNANCE.md`
-- Roadmap and scope: `ROADMAP.md`
-- Support and upgrade policy: `SUPPORT.md`
 - Defect reporting: `docs/issue-reporting.md`
 - Architecture and trust boundaries: `docs/architecture.md`
 - Build and installation policy: `docs/build-installation.md`
-- Security requirements and assurance: `docs/security-requirements.md`
+- Security requirements and design: `docs/security-requirements.md`
 - Dependency management and monitoring: `docs/dependencies.md`
-- Project site, accessibility, and localization: `docs/project-site-and-localization.md`
+- OpenSSF OSPS Baseline evidence: `docs/openssf-baseline.md`
 - Testing, CI, coverage target, and dynamic analysis: `docs/testing.md`
 - Release verification and signing: `docs/release-verification.md`
 - Supply-chain guardrails: `docs/supply-chain-guardrails.md`
