@@ -15,8 +15,19 @@
  * generator state persists in mbe_parms and advances naturally per frame.
  * There is no external seeding mechanism for unvoiced noise in JMBE.
  */
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include "mbelib-neo/mbelib.h"
+
+static int
+float_bits_equal(float a, float b) {
+    uint32_t a_bits;
+    uint32_t b_bits;
+    memcpy(&a_bits, &a, sizeof(a_bits));
+    memcpy(&b_bits, &b, sizeof(b_bits));
+    return a_bits == b_bits;
+}
 
 /**
  * @brief Initialize deterministic unvoiced parameter sets for testing.
@@ -56,7 +67,7 @@ main(void) {
     mbe_synthesizeSpeechf(out2, &cur2, &prev2, 8);
 
     for (int i = 0; i < 160; ++i) {
-        if (out1[i] != out2[i]) {
+        if (!float_bits_equal(out1[i], out2[i])) {
             fprintf(stderr, "FAIL: determinism - same state produced different output at sample %d\n", i);
             return 1;
         }
@@ -69,7 +80,7 @@ main(void) {
 
     int diff = 0;
     for (int i = 0; i < 160; ++i) {
-        if (out1[i] != out3[i]) {
+        if (!float_bits_equal(out1[i], out3[i])) {
             diff = 1;
             break;
         }
@@ -86,7 +97,7 @@ main(void) {
     mbe_synthesizeSpeechf(out1, &cur_check, &prev_check, 8);
     float seed_after = cur_check.noiseSeed;
 
-    if (seed_before == seed_after) {
+    if (float_bits_equal(seed_before, seed_after)) {
         fprintf(stderr, "FAIL: noiseSeed did not advance after synthesis\n");
         return 1;
     }

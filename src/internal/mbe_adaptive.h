@@ -52,16 +52,35 @@
 #define MBE_AMPLITUDE_BASE              6000
 
 /**
- * @brief Register pre-enhancement RM0 energy for the current frame.
+ * @brief Apply adaptive smoothing with caller-supplied pre-enhancement RM0.
  *
  * JMBE Algorithm #111 uses local energy derived from pre-enhanced spectral
- * amplitudes. This helper allows the spectral-enhancement stage to provide
- * RM0 to adaptive smoothing without changing the public ABI.
+ * amplitudes. Internal decode/synthesize paths pass that value explicitly so
+ * the handoff cannot retain caller stack addresses.
  *
- * @param owner Frame-parameter owner for this RM0 handoff.
+ * @param cur_mp Current frame parameters (modified in-place).
+ * @param prev_mp Previous frame parameters (for local energy).
  * @param rm0 Sum of squared pre-enhancement amplitudes.
  */
-void mbe_setPreEnhRm0(const mbe_parms* owner, float rm0);
+void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0);
+
+/**
+ * @brief Apply spectral amplitude enhancement and return pre-enhancement RM0.
+ * @param cur_mp In/out parameter set to enhance.
+ * @return Sum of squared amplitudes before enhancement.
+ */
+float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
+
+/**
+ * @brief Synthesize speech using a captured pre-enhancement RM0 value.
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param cur_mp Current frame parameters.
+ * @param prev_mp Previous enhanced frame parameters.
+ * @param uvquality Unvoiced synthesis quality setting.
+ * @param rm0 Sum of squared pre-enhancement amplitudes.
+ */
+void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality,
+                                        float rm0);
 
 /**
  * @brief Seed the comfort-noise RNG used by mbe_synthesizeComfortNoisef().

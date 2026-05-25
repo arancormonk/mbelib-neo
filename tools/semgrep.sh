@@ -20,7 +20,7 @@ Options:
                     May be supplied multiple times.
 
 Arguments:
-  paths...          Optional paths to scan. Default: src include examples bench tests tools .github/workflows
+  paths...          Optional paths to scan. Default: src include examples bench tests fuzz tools .github/workflows
 
 Environment:
   MBE_SEMGREP_SARIF_OUT  Optional SARIF output path for GitHub code scanning.
@@ -77,7 +77,7 @@ if ! command -v semgrep > /dev/null 2>&1; then
 fi
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  TARGETS=(src include examples bench tests tools .github/workflows)
+  TARGETS=(src include examples bench tests fuzz tools .github/workflows)
 fi
 
 LOG_FILE=".semgrep.local.out"
