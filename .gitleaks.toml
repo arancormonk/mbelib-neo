@@ -1,0 +1,10 @@
+title = "mbelib-neo Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Repository public keys and non-secret test fixtures"
+paths = [
+  '''^mbelib_Author\.pgp$''',
+]

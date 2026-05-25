@@ -1,0 +1,62 @@
+rules:
+  - id: mbelib-neo.no-shell-exec
+    languages: [c]
+    severity: ERROR
+    message: Do not invoke shells or spawn processes from project-owned C code without explicit design review.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /tests/**
+        - /examples/**
+        - /bench/**
+      exclude:
+        - /src/external/**
+    pattern-either:
+      - pattern: system(...)
+      - pattern: popen(...)
+      - pattern: execl(...)
+      - pattern: execle(...)
+      - pattern: execlp(...)
+      - pattern: execv(...)
+      - pattern: execve(...)
+      - pattern: execvp(...)
+      - pattern: posix_spawn(...)
+      - pattern: posix_spawnp(...)
+
+  - id: mbelib-neo.no-direct-third-party-include
+    languages: [c]
+    severity: ERROR
+    message: Use a project-owned integration point instead of directly including bundled third-party headers.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /tests/**
+        - /examples/**
+        - /bench/**
+      exclude:
+        - /src/external/**
+        - /src/core/mbe_unvoiced_fft.c
+    pattern-either:
+      - pattern: '#include "src/external/..."'
+      - pattern: '#include <src/external/...>'
+      - pattern: '#include "pffft.h"'
+      - pattern: '#include <pffft.h>'
+      - pattern: '#include "fftpack.h"'
+      - pattern: '#include <fftpack.h>'
+
+  - id: mbelib-neo.github-actions.no-untrusted-context-in-run
+    languages: [yaml]
+    severity: ERROR
+    message: Pass untrusted GitHub context through env or action inputs instead of interpolating it directly into a run block.
+    paths:
+      include:
+        - /.github/workflows/*.yml
+        - /.github/workflows/*.yaml
+    patterns:
+      - pattern: |
+          run: $SCRIPT
+      - metavariable-regex:
+          metavariable: $SCRIPT
+          regex: '(?s).*\$\{\{\s*github\.(?:head_ref|ref_name|event\.(?:issue\.(?:title|body)|comment\.body|pull_request\.(?:title|body)|pull_request\.head\.(?:ref|label)|pull_request\.head\.repo\.full_name)).*'

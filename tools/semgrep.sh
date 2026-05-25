@@ -3,22 +3,27 @@ set -euo pipefail
 
 # Run Semgrep for additional SAST checks. Default mode is advisory (non-erroring).
 # Use --strict to fail on findings.
-# Excludes third-party code under src/external.
+# Excludes third-party code under src/external. Strict mode also loads
+# project-specific guardrail rules from semgrep/mbelib-neo.yml.
 
-ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+ROOT_DIR=$(git rev-parse --show-toplevel 2> /dev/null || pwd)
 cd "$ROOT_DIR"
 
 usage() {
-  cat <<'USAGE'
+  cat << 'USAGE'
 Usage: tools/semgrep.sh [--strict] [--config <config>] [--] [paths...]
 
 Options:
   --strict          Fail on findings (--error).
   --config CONFIG   Semgrep config/rule pack (default: p/default; strict also
-                    adds p/c and p/security-audit). May be supplied multiple times.
+                    adds p/c, p/security-audit, and semgrep/mbelib-neo.yml).
+                    May be supplied multiple times.
 
 Arguments:
-  paths...          Optional paths to scan. Default: src include examples bench tests tools
+  paths...          Optional paths to scan. Default: src include examples bench tests tools .github/workflows
+
+Environment:
+  MBE_SEMGREP_SARIF_OUT  Optional SARIF output path for GitHub code scanning.
 USAGE
 }
 
@@ -29,7 +34,10 @@ TARGETS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --strict) STRICT=1; shift ;;
+    --strict)
+      STRICT=1
+      shift
+      ;;
     --config)
       if [[ $# -lt 2 ]]; then
         echo "Missing value for --config" >&2
@@ -42,24 +50,34 @@ while [[ $# -gt 0 ]]; do
       CONFIGS+=("$2")
       shift 2
       ;;
-    -h|--help) usage; exit 0 ;;
-    --) shift; TARGETS+=("$@"); break ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      TARGETS+=("$@")
+      break
+      ;;
     -*)
       echo "Unknown option: $1" >&2
       usage >&2
       exit 2
       ;;
-    *) TARGETS+=("$1"); shift ;;
+    *)
+      TARGETS+=("$1")
+      shift
+      ;;
   esac
 done
 
-if ! command -v semgrep >/dev/null 2>&1; then
+if ! command -v semgrep > /dev/null 2>&1; then
   echo "semgrep not found. Install with: pipx install semgrep (or pip install semgrep)." >&2
   exit 1
 fi
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  TARGETS=(src include examples bench tests tools)
+  TARGETS=(src include examples bench tests tools .github/workflows)
 fi
 
 LOG_FILE=".semgrep.local.out"
@@ -67,19 +85,26 @@ LOG_FILE=".semgrep.local.out"
 ARGS=(
   --metrics=off
   --disable-version-check
+  --no-git-ignore
+  --exclude .deps-arch-toolchain
+  --exclude .deps-arch-toolchain/**
   --exclude src/external
   --exclude src/external/**
   --exclude build
+  --exclude build/**
 )
 if [[ $STRICT -eq 1 ]]; then
   ARGS+=(--error)
   if [[ $CUSTOM_CONFIGS -eq 0 ]]; then
-    CONFIGS+=(p/c p/security-audit)
+    CONFIGS+=(p/c p/security-audit semgrep/mbelib-neo.yml)
   fi
 fi
 for config in "${CONFIGS[@]}"; do
   ARGS+=(--config "$config")
 done
+if [[ -n "${MBE_SEMGREP_SARIF_OUT:-}" ]]; then
+  ARGS+=(--sarif --output "$MBE_SEMGREP_SARIF_OUT")
+fi
 
 set +e
 semgrep "${ARGS[@]}" "${TARGETS[@]}" 2>&1 | tee "$LOG_FILE"

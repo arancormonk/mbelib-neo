@@ -27,7 +27,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         preset: [dev-debug, dev-release, notones-debug]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Configure (${{ matrix.preset }})
         run: cmake --preset ${{ matrix.preset }}
       - name: Build (${{ matrix.preset }})
@@ -40,7 +40,7 @@ jobs:
     name: linux • Debug • sanitizers
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Configure (asan-ubsan-debug)
         run: cmake --preset asan-ubsan-debug
       - name: Build (asan-ubsan-debug)
@@ -55,7 +55,7 @@ jobs:
     name: clang-format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Check formatting
         run: |
           bash tools/ci_arch_toolchain.sh bash -lc '
@@ -75,21 +75,21 @@ jobs:
     name: clang-tidy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Compute IWYU toolchain SHA
         id: iwyu-sha
         run: |
           set -euxo pipefail
           echo "sha=$(git ls-remote https://github.com/include-what-you-use/include-what-you-use refs/heads/clang_22 | cut -f1)" >> "$GITHUB_OUTPUT"
       - name: Restore Arch toolchain cache
-        uses: actions/cache@v5.0.5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .deps-arch-toolchain
           key: arch-toolchain-${{ runner.os }}-iwyu-${{ steps.iwyu-sha.outputs.sha }}
           restore-keys: |
             arch-toolchain-${{ runner.os }}-iwyu-
       - name: Restore ccache
-        uses: actions/cache@v5.0.5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ccache
           key: ccache-${{ runner.os }}-arch-${{ github.job }}-${{ github.sha }}
@@ -117,7 +117,7 @@ jobs:
           '
       - name: Upload clang-tidy output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clang-tidy-report
           path: .clang-tidy.local.out
@@ -125,7 +125,7 @@ jobs:
           retention-days: 7
       - name: Upload IWYU output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iwyu-report
           path: .iwyu.local.out
@@ -133,7 +133,7 @@ jobs:
           retention-days: 7
       - name: Upload GCC fanalyzer output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gcc-fanalyzer-report
           path: .gcc-fanalyzer.local.out
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Run cppcheck under Arch toolchain
         run: |
@@ -156,7 +156,7 @@ jobs:
           '
       - name: Upload cppcheck output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cppcheck-report
           path: .cppcheck.local.out
@@ -168,13 +168,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Run scan-build under Arch toolchain
         run: |
           bash tools/ci_arch_toolchain.sh tools/scan_build.sh --strict
       - name: Upload scan-build output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: scan-build-report
           path: |
@@ -187,22 +187,35 @@ jobs:
     name: semgrep
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
-        uses: actions/setup-python@v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.x"
       - name: Install Semgrep
         run: python -m pip install --upgrade semgrep
       - name: Run Semgrep
+        env:
+          MBE_SEMGREP_SARIF_OUT: .semgrep.sarif
         run: tools/semgrep.sh --strict
+      - name: Upload Semgrep SARIF
+        if: always() && hashFiles('.semgrep.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
+        with:
+          sarif_file: .semgrep.sarif
       - name: Upload Semgrep output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep-report
-          path: .semgrep.local.out
+          path: |
+            .semgrep.local.out
+            .semgrep.sarif
           include-hidden-files: true
           retention-days: 7
 
@@ -211,9 +224,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
-        uses: actions/setup-python@v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.x"
       - name: Install Lizard
@@ -222,7 +235,7 @@ jobs:
         run: tools/lizard.sh --strict
       - name: Upload Lizard output
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lizard-report
           path: .lizard.local.out
@@ -237,7 +250,7 @@ jobs:
       version: ${{ steps.verify.outputs.version }}
       archive_prefix: ${{ steps.verify.outputs.archive_prefix }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Configure release metadata
         run: cmake --preset dev-release -DMBELIB_BUILD_TESTS=OFF -DMBELIB_BUILD_EXAMPLES=OFF
       - name: Verify tag matches project version
@@ -328,7 +341,7 @@ jobs:
 
       - name: Checkout repository
         if: steps.aur_key.outputs.has_key == 'true'
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -472,7 +485,7 @@ jobs:
 
       - name: Checkout repository
         if: steps.aur_key.outputs.has_key == 'true'
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -567,7 +580,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Ensure pkg-config is available (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config
@@ -626,7 +639,7 @@ jobs:
     name: install + consume (CMake, Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Configure (dev-release preset)
         run: cmake --preset dev-release
       - name: Build (dev-release preset)
@@ -672,7 +685,7 @@ jobs:
           - os: macos-latest
           - os: windows-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Configure (dev-release preset)
         run: cmake --preset dev-release
       - name: Build (dev-release preset)
@@ -742,14 +755,14 @@ jobs:
           "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
       - name: Upload release package (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-package-${{ runner.os }}-${{ runner.arch }}
           path: ${{ steps.package_unix.outputs.archive_path }}
           retention-days: 7
       - name: Upload release package (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-package-${{ runner.os }}-${{ runner.arch }}
           path: ${{ steps.package_windows.outputs.archive_path }}
@@ -764,7 +777,7 @@ jobs:
       contents: write
     steps:
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           pattern: release-package-*

@@ -4,6 +4,7 @@
 # Tool caches
 /.cache/
 /.ccache/
+/.ci/
 /.deps/
 /.deps-arch-toolchain/
 
@@ -17,10 +18,18 @@ Thumbs.db
 # Ignore all markdown files in root directory with exceptions
 /*.md
 !/README.md
+!/SECURITY.md
 
 # Log files
 /logs/
 *.log
 *.out
+/.cmake-format.local.out
+/.gitleaks.sarif
+/.osv-scanner.local.out
+/.osv-scanner.sarif
+/.zizmor.local.out
+/.zizmor.sarif
+/.zizmor-pedantic.sarif
 /.scan-build.local/
 /.cppcheck-build/
