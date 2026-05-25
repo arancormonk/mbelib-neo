@@ -8,7 +8,11 @@ Security fixes are handled on the default branch and the latest tagged release l
 
 Please do not report suspected vulnerabilities through public GitHub issues.
 
-Use GitHub private vulnerability reporting or a draft GitHub Security Advisory for this repository. Include:
+Use GitHub private vulnerability reporting for this repository:
+
+https://github.com/arancormonk/mbelib-neo/security/advisories/new
+
+If you need to coordinate before filing, use a draft GitHub Security Advisory. Include:
 
 - affected commit, tag, or release
 - platform and build configuration

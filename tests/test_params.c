@@ -10,6 +10,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <stdint.h>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -157,13 +158,34 @@ approx_equal(float a, float b, float eps) {
  * @return 1 if all elements match exactly, else 0.
  */
 static int
+float_bits_equal(float a, float b) {
+    uint32_t a_bits;
+    uint32_t b_bits;
+    memcpy(&a_bits, &a, sizeof(a_bits));
+    memcpy(&b_bits, &b, sizeof(b_bits));
+    return a_bits == b_bits;
+}
+
+/**
+ * @brief Check whether two float arrays are exactly element-wise equal.
+ * @param a First array.
+ * @param b Second array.
+ * @param n Number of elements.
+ * @return 1 if all elements match exactly, else 0.
+ */
+static int
 float_array_equal_exact(const float* a, const float* b, size_t n) {
     for (size_t i = 0; i < n; ++i) {
-        if (a[i] != b[i]) {
+        if (!float_bits_equal(a[i], b[i])) {
             return 0;
         }
     }
     return 1;
+}
+
+static int
+float_bits_differ(float a, float b) {
+    return !float_bits_equal(a, b);
 }
 
 /**
@@ -176,7 +198,7 @@ float_array_equal_exact(const float* a, const float* b, size_t n) {
 static int
 float_array_differs(const float* a, const float* b, size_t n) {
     for (size_t i = 0; i < n; ++i) {
-        if (a[i] != b[i]) {
+        if (float_bits_differ(a[i], b[i])) {
             return 1;
         }
     }
@@ -494,7 +516,7 @@ main(void) {
         cur.repeatCount = 0;
         float ambe_seed_before = cur.noiseSeed;
         mbe_synthesizeSpeechf(out, &cur, &prev, 8);
-        assert(cur.noiseSeed != ambe_seed_before);
+        assert(float_bits_differ(cur.noiseSeed, ambe_seed_before));
 
         seed_speech_params(&cur, &prev);
         cur.mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
@@ -502,7 +524,7 @@ main(void) {
         cur.repeatCount = 0;
         float imbe_seed_before = cur.noiseSeed;
         mbe_synthesizeSpeechf(out, &cur, &prev, 8);
-        assert(cur.noiseSeed == imbe_seed_before);
+        assert(float_bits_equal(cur.noiseSeed, imbe_seed_before));
     }
 
     // Muted IMBE frames should still advance adaptive smoothing state (JMBE parity)
@@ -517,7 +539,7 @@ main(void) {
 
         float local_before = cur.localEnergy;
         mbe_synthesizeSpeechf(out, &cur, &prev, 8);
-        assert(cur.localEnergy != local_before);
+        assert(float_bits_differ(cur.localEnergy, local_before));
     }
 
     // JMBE parity: previous voiced phase is wrapped to [0, 2PI) before advancement
@@ -754,7 +776,7 @@ main(void) {
 
         float noise_seed_before = prev_enh.noiseSeed;
         mbe_processImbe4400Dataf(out, &errs, &errs2, err_str, imbe_d, &cur, &prev, &prev_enh, 8);
-        assert(prev_enh.noiseSeed == noise_seed_before);
+        assert(float_bits_equal(prev_enh.noiseSeed, noise_seed_before));
     }
 
     return 0;

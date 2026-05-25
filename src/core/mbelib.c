@@ -650,8 +650,8 @@ mbe_scale_spectral_magnitudes(mbe_parms* cur_mp, float gamma) {
  *
  * Uses SIMD optimizations for accumulation and scaling loops when available.
  */
-void
-mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
+float
+mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp) {
 
     float Rm0, Rm1;
     float cos_tab[57];
@@ -659,14 +659,18 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
     mbe_precompute_harmonic_cosines(cos_tab, cur_mp->L, cur_mp->w0);
     mbe_accumulate_spectral_energy(cur_mp, cos_tab, &Rm0, &Rm1);
 
-    /* JMBE Algorithm #111 uses pre-enhancement RM0 for local-energy tracking. */
-    mbe_setPreEnhRm0(cur_mp, Rm0);
-
     mbe_apply_spectral_weights(cur_mp, cos_tab, Rm0, Rm1);
 
     float sum = mbe_sum_spectral_magnitudes_squared(cur_mp);
     float gamma = (sum == 0.0f) ? 1.0f : sqrtf(Rm0 / sum);
     mbe_scale_spectral_magnitudes(cur_mp, gamma);
+
+    return Rm0;
+}
+
+void
+mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
+    (void)mbe_spectralAmpEnhanceWithRm0(cur_mp);
 }
 
 /* JMBE float-domain soft clip translated to this library's float scale. */
@@ -1030,8 +1034,9 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
     }
 }
 
-void
-mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
+static void
+mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality, int has_pre_enh_rm0,
+                         float pre_enh_rm0) {
 
     const int N = 160;
 
@@ -1041,7 +1046,11 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     /* Apply adaptive smoothing (Algorithms #111-116) before muting checks.
      * JMBE computes/update smoothing state during parameter preparation even
      * for frames that are subsequently muted. */
-    mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
+    if (has_pre_enh_rm0) {
+        mbe_applyAdaptiveSmoothingWithRm0(cur_mp, prev_mp, pre_enh_rm0);
+    } else {
+        mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
+    }
 
     /* Frame muting:
      * - JMBE IMBE path mutes on max repeats OR error-rate threshold.
@@ -1082,6 +1091,16 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
 
     /* Match JMBE float-path soft clipping semantics for synthesized speech. */
     mbe_clipFloatBuffer(aout_buf, N);
+}
+
+void
+mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality, float rm0) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, uvquality, 1, rm0);
+}
+
+void
+mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, uvquality, 0, 0.0f);
 }
 
 /**

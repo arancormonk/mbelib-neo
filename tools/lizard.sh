@@ -18,7 +18,7 @@ Options:
   --arguments N  Parameter count warning threshold (default: 100; strict: 13).
 
 Arguments:
-  paths...       Optional paths to scan. Default: src include
+  paths...       Optional paths to scan. Default: src include fuzz
 USAGE
 }
 
@@ -99,7 +99,7 @@ if ! command -v lizard > /dev/null 2>&1; then
 fi
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  TARGETS=(src include)
+  TARGETS=(src include fuzz)
 fi
 
 LOG_FILE=".lizard.local.out"

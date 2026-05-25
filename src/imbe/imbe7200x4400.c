@@ -21,6 +21,7 @@
 
 #include "imbe4400_internal.h"
 #include "imbe7200x4400_const.h"
+#include "mbe_adaptive.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
@@ -801,8 +802,8 @@ mbe_processImbe4400Dataf_withC0(float* aout_buf, const int* errs2, char* err_str
     int frame_muted = mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp);
 
     mbe_moveMbeParms(cur_mp, prev_mp);
-    mbe_spectralAmpEnhance(cur_mp);
-    mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+    float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
 
     if (frame_muted) {
         *err_str = 'M';

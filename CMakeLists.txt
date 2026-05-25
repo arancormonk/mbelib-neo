@@ -80,8 +80,8 @@ configure_file(
 # PFFFT sources (bundled, BSD-like FFTPACK license)
 set(PFFFT_SOURCES src/external/pffft/pffft.c src/external/pffft/fftpack.c)
 
-# Explicit source list (avoids FILE(GLOB ...))
-set(MBELIB_SOURCES
+# Explicit source lists (avoids FILE(GLOB ...))
+set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2400.c
     src/ambe/ambe3600x2450.c
     src/ambe/ambe_common.c
@@ -92,11 +92,17 @@ set(MBELIB_SOURCES
     src/core/mbelib.c
     src/core/mbe_adaptive.c
     src/core/mbe_unvoiced_fft.c
-    ${PFFFT_SOURCES}
 )
+set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
 
 add_library(mbe-shared SHARED ${MBELIB_SOURCES})
 add_library(mbe-static STATIC ${MBELIB_SOURCES})
+add_library(
+    mbe-codeql-first-party
+    OBJECT
+    EXCLUDE_FROM_ALL
+    ${MBELIB_FIRST_PARTY_SOURCES}
+)
 
 add_library(mbe_neo::mbe_shared ALIAS mbe-shared)
 add_library(mbe_neo::mbe_static ALIAS mbe-static)
@@ -125,6 +131,15 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/src/internal
         ${PROJECT_SOURCE_DIR}/src/external/pffft
 )
+target_include_directories(
+    mbe-codeql-first-party
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/include
+        ${MBELIB_GENERATED_INCLUDE_DIR}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/src/internal
+        ${PROJECT_SOURCE_DIR}/src/external/pffft
+)
 
 # Mark static consumption for Windows to avoid dllimport decorations in headers
 target_compile_definitions(mbe-static PUBLIC MBE_STATIC=1)
@@ -145,10 +160,18 @@ endif()
 if(NOTONES)
     target_compile_definitions(mbe-shared PRIVATE DISABLE_AMBE_TONES)
     target_compile_definitions(mbe-static PRIVATE DISABLE_AMBE_TONES)
+    target_compile_definitions(
+        mbe-codeql-first-party
+        PRIVATE DISABLE_AMBE_TONES
+    )
 endif()
 if(MBELIB_STRICT_ORDER)
     target_compile_definitions(mbe-shared PRIVATE MBELIB_STRICT_ORDER=1)
     target_compile_definitions(mbe-static PRIVATE MBELIB_STRICT_ORDER=1)
+    target_compile_definitions(
+        mbe-codeql-first-party
+        PRIVATE MBELIB_STRICT_ORDER=1
+    )
 endif()
 
 # Documentation (Doxygen)

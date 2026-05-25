@@ -195,9 +195,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.x"
+          python-version: "3.14"
       - name: Install Semgrep
-        run: python -m pip install --upgrade semgrep
+        run: python -m pip install --require-hashes -r .github/requirements/semgrep.txt
       - name: Run Semgrep
         env:
           MBE_SEMGREP_SARIF_OUT: .semgrep.sarif
@@ -228,9 +228,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.x"
+          python-version: "3.14"
       - name: Install Lizard
-        run: python -m pip install --upgrade lizard
+        run: python -m pip install --require-hashes -r .github/requirements/lizard.txt
       - name: Run Lizard
         run: tools/lizard.sh --strict
       - name: Upload Lizard output
@@ -767,41 +767,3 @@ jobs:
           name: release-package-${{ runner.os }}-${{ runner.arch }}
           path: ${{ steps.package_windows.outputs.archive_path }}
           retention-days: 7
-
-  publish-release:
-    name: Publish release
-    needs: [validate-release-tag, package-release]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download packaged artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          path: dist
-          pattern: release-package-*
-          merge-multiple: true
-      - name: Generate release checksums
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cd dist
-          sha256sum mbelib-neo-* > SHA256SUMS.txt
-      - name: Create GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_VERSION: ${{ needs.validate-release-tag.outputs.version }}
-        run: |
-          set -euxo pipefail
-          tag="${GITHUB_REF_NAME}"
-          title="mbelib-neo ${RELEASE_VERSION}"
-
-          if gh release view "${tag}" --repo "${GH_REPO}" >/dev/null 2>&1; then
-            echo "GitHub release ${tag} already exists; refusing to overwrite published assets." >&2
-            exit 1
-          fi
-
-          gh release create "${tag}" dist/* --title "${title}" --generate-notes --verify-tag --repo "${GH_REPO}"

@@ -4,7 +4,7 @@ set -euo pipefail
 shopt -s globstar nullglob
 
 # Include all C/C++ sources/headers across src, include, tests, examples, bench,
-# plus any C/C++ headers at the repo root. CI excludes build/ via git; our
+# fuzz, plus any C/C++ headers at the repo root. CI excludes build/ via git; our
 # globs already avoid it by scoping to project dirs.
 # Third-party code (src/external/) is excluded to preserve upstream formatting.
 files=(
@@ -13,6 +13,7 @@ files=(
   tests/**/*.{c,cc,cxx,cpp,h,hpp}
   examples/**/*.{c,cc,cxx,cpp,h,hpp}
   bench/**/*.{c,cc,cxx,cpp,h,hpp}
+  fuzz/**/*.{c,cc,cxx,cpp,h,hpp}
   *.{c,cc,cxx,cpp,h,hpp}
 )
 # Filter out third-party code

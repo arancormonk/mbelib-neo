@@ -20,6 +20,7 @@
 
 #include "ambe3600x2450_const.h"
 #include "ambe_common.h"
+#include "mbe_adaptive.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
@@ -571,8 +572,6 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     }
 
     unvc = (float)0.2046 / sqrtf(cur_mp->w0);
-    //unvc = (float) 1;
-    //unvc = (float) 0.2046 / sqrtf (f0);
 
     // decode V/UV parameters
     ambe2450_decode_vuv(ambe_d, cur_mp, L, f0, silence, b0);
@@ -738,8 +737,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_s
     if (bad == 0) {
         if (cur_mp->repeat <= 3) {
             mbe_moveMbeParms(cur_mp, prev_mp);
-            mbe_spectralAmpEnhance(cur_mp);
-            mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+            float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+            mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
             mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         } else {
             *err_str = 'M';

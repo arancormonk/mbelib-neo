@@ -32,6 +32,15 @@ fnv1a32(const void* data, size_t len) {
     return h;
 }
 
+static int
+float_bits_equal(float a, float b) {
+    uint32_t a_bits;
+    uint32_t b_bits;
+    memcpy(&a_bits, &a, sizeof(a_bits));
+    memcpy(&b_bits, &b, sizeof(b_bits));
+    return a_bits == b_bits;
+}
+
 /**
  * @brief Initialize deterministic synthesis parameters for testing.
  * @param cur  Output current parameter set.
@@ -94,7 +103,7 @@ main(void) {
     fill_params(&cur, &prev);
     mbe_synthesizeSpeechf(out_f2, &cur, &prev, 8);
     for (int i = 0; i < 160; ++i) {
-        if (out_f[i] != out_f2[i]) {
+        if (!float_bits_equal(out_f[i], out_f2[i])) {
             fprintf(stderr, "determinism failure: float sample %d differs across runs\n", i);
             return 1;
         }
