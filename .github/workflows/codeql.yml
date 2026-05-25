@@ -15,12 +15,14 @@ concurrency:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   analyze:
     name: analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -53,9 +55,9 @@ jobs:
         if: matrix.language == 'c-cpp'
         run: cmake --preset dev-debug
 
-      - name: Build C/C++ database
+      - name: Build first-party C/C++ database
         if: matrix.language == 'c-cpp'
-        run: cmake --build --preset dev-debug -j
+        run: cmake --build --preset dev-debug --target mbe-codeql-first-party -j
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4

@@ -102,10 +102,10 @@ cmake --build build/dev-release --target uninstall
 
 ## Tagged Releases
 
-GitHub Actions publishes release assets when you push a tag matching `vX.Y.Z`.
-The tag must match the project version declared in `CMakeLists.txt`, or the release workflow fails before publishing.
+GitHub Actions builds release package artifacts when you push a tag matching `vX.Y.Z`.
+The tag must match the project version declared in `CMakeLists.txt`, or the release workflow fails before packaging.
 
-On a matching tag, CI rebuilds `dev-release`, reruns the release preset tests, packages the installed library tree for Linux, macOS, and Windows, and attaches those archives plus `SHA256SUMS.txt` to the corresponding GitHub Release.
+On a matching tag, CI rebuilds `dev-release`, reruns the release preset tests, and packages the installed library tree for Linux, macOS, and Windows. Release publication is a maintainer action after the package artifacts and checks have been reviewed.
 
 Typical release flow:
 

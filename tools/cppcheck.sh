@@ -26,7 +26,7 @@ Options:
 
 Arguments:
   files...    Optional list of translation units to analyze (e.g., src/foo.c).
-              When omitted, analyzes the src/ and include/ trees.
+              When omitted, analyzes the src/, include/, and fuzz/ trees.
 
 Environment:
   CPPCHECK_BUILD_DIR   Build/cache directory used by cppcheck
@@ -86,6 +86,7 @@ CPPCHECK_ARGS=(
   --suppress=missingIncludeSystem
   --cppcheck-build-dir="$CPPCHECK_BUILD_DIR"
   --inline-suppr
+  "-D__has_include(x)=0"
   -I include
   -I src/internal
   -I src/external/pffft
@@ -107,6 +108,7 @@ if [[ $STRICT -eq 1 ]]; then
     --suppress=missingIncludeSystem
     --cppcheck-build-dir="$CPPCHECK_BUILD_DIR"
     --inline-suppr
+    "-D__has_include(x)=0"
     -I include
     -I src/internal
     -I src/external/pffft
@@ -161,12 +163,12 @@ if [[ ${#REQUESTED_FILES[@]} -gt 0 ]]; then
   mapfile -t FILES < <(printf '%s\n' "${FILES[@]}" | sort -u)
   echo "Analyzing ${#FILES[@]} file(s) with cppcheck..."
 else
-  echo "Analyzing src/ and include/ directories..."
+  echo "Analyzing src/, include/, and fuzz/ directories..."
 fi
 echo ""
 
 # Select analysis targets.
-CPPCHECK_TARGETS=(src/ include/)
+CPPCHECK_TARGETS=(src/ include/ fuzz/)
 if [[ ${#FILES[@]} -gt 0 ]]; then
   CPPCHECK_TARGETS=("${FILES[@]}")
 fi

@@ -20,6 +20,7 @@
 
 #include "ambe3600x2400_const.h"
 #include "ambe_common.h"
+#include "mbe_adaptive.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
@@ -649,8 +650,8 @@ mbe_processAmbe2400Dataf(float* aout_buf, const int* errs, const int* errs2, cha
     if (bad == 0) {
         if (cur_mp->repeat <= 3) {
             mbe_moveMbeParms(cur_mp, prev_mp);
-            mbe_spectralAmpEnhance(cur_mp);
-            mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+            float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+            mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
             mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         } else {
             *err_str = 'M';

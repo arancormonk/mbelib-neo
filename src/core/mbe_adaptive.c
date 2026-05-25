@@ -8,7 +8,6 @@
 
 #include <math.h>
 #include <stdint.h>
-#include <string.h>
 
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
@@ -28,10 +27,6 @@
 #endif
 static MBE_THREAD_LOCAL uint64_t mbe_comfort_noise_seed48 = 0;
 static MBE_THREAD_LOCAL int mbe_comfort_noise_seeded = 0;
-/* Thread-local pre-enhancement RM0 handoff from mbe_spectralAmpEnhance(). */
-static MBE_THREAD_LOCAL float mbe_pre_enh_rm0 = 0.0f;
-static MBE_THREAD_LOCAL int mbe_pre_enh_rm0_valid = 0;
-static MBE_THREAD_LOCAL const mbe_parms* mbe_pre_enh_owner = NULL;
 
 void
 mbe_seedComfortNoiseRng(uint32_t seed) {
@@ -40,19 +35,6 @@ mbe_seedComfortNoiseRng(uint32_t seed) {
     }
     mbe_comfort_noise_seed48 = (((uint64_t)seed) ^ MBE_JAVA_RNG_MULT) & MBE_JAVA_RNG_MASK;
     mbe_comfort_noise_seeded = 1;
-}
-
-void
-mbe_setPreEnhRm0(const mbe_parms* owner, float rm0) {
-    if (owner && rm0 >= 0.0f) {
-        mbe_pre_enh_rm0 = rm0;
-        mbe_pre_enh_rm0_valid = 1;
-        mbe_pre_enh_owner = owner;
-    } else {
-        mbe_pre_enh_rm0 = 0.0f;
-        mbe_pre_enh_rm0_valid = 0;
-        mbe_pre_enh_owner = NULL;
-    }
 }
 
 /**
@@ -167,13 +149,6 @@ mbe_synthesizeComfortNoise(short* aout_buf) {
 
 static float
 mbe_current_frame_rm0(const mbe_parms* cur_mp) {
-    if (mbe_pre_enh_rm0_valid && mbe_pre_enh_owner == cur_mp) {
-        const float rm0 = mbe_pre_enh_rm0;
-        mbe_pre_enh_rm0_valid = 0;
-        mbe_pre_enh_owner = NULL;
-        return rm0;
-    }
-
     float rm0 = 0.0f;
     for (int l = 1; l <= cur_mp->L; l++) {
         rm0 += cur_mp->Ml[l] * cur_mp->Ml[l];
@@ -233,13 +208,10 @@ mbe_adaptive_amplitude_threshold(float error_rate, int error_total, int prev_thr
  *
  * @param cur_mp Current frame parameters (modified in-place).
  * @param prev_mp Previous frame parameters (for local energy).
+ * @param RM0 Current-frame spectral energy for Algorithm #111.
  */
-void
-mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
-    if (MBE_UNLIKELY(!cur_mp || !prev_mp)) {
-        return;
-    }
-
+static void
+mbe_applyAdaptiveSmoothingCore(mbe_parms* cur_mp, const mbe_parms* prev_mp, float RM0) {
     float* M = cur_mp->Ml;
     int* V = cur_mp->Vl;
     int L = cur_mp->L;
@@ -248,7 +220,6 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     int errorCount4 = cur_mp->errorCount4;
 
     /* Algorithm #111: Calculate local energy with IIR smoothing */
-    float RM0 = mbe_current_frame_rm0(cur_mp);
     cur_mp->localEnergy = mbe_smoothed_local_energy(prev_mp->localEnergy, RM0);
 
     /* Algorithm #112: Calculate adaptive threshold VM */
@@ -278,4 +249,22 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
             M[l] *= scale;
         }
     }
+}
+
+void
+mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0) {
+    if (MBE_UNLIKELY(!cur_mp || !prev_mp)) {
+        return;
+    }
+
+    mbe_applyAdaptiveSmoothingCore(cur_mp, prev_mp, rm0);
+}
+
+void
+mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    if (MBE_UNLIKELY(!cur_mp || !prev_mp)) {
+        return;
+    }
+
+    mbe_applyAdaptiveSmoothingCore(cur_mp, prev_mp, mbe_current_frame_rm0(cur_mp));
 }
