@@ -114,7 +114,7 @@ Residual risk:
 The project supports and exercises hardening through:
 
 - warning-enabled builds by default
-- optional warnings-as-errors
+- warnings-as-errors by default
 - AddressSanitizer and UndefinedBehaviorSanitizer presets
 - CI sanitizer jobs
 - CI static-analysis jobs

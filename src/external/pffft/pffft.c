@@ -338,7 +338,7 @@ validate_pffft_simd(void) {
 }
 #else
 void
-validate_pffft_simd() {} // allow test_pffft.c to call this function even when simd is not available..
+validate_pffft_simd(void) {} // allow test_pffft.c to call this function even when simd is not available..
 #endif //!PFFFT_SIMD_DISABLE
 
 /* SSE and co like 16-bytes aligned pointers */

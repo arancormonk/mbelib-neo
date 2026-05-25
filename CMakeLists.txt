@@ -45,7 +45,7 @@ option(
 )
 option(MBE_ENABLE_DEBUG_LOGS "Enable debug logging in codec sources" OFF)
 option(MBELIB_ENABLE_WARNINGS "Enable common warning flags" ON)
-option(MBELIB_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+option(MBELIB_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 option(
     MBELIB_ENABLE_FAST_MATH
     "Enable fast-math optimizations (may relax IEEE semantics)"
@@ -67,6 +67,38 @@ option(
     "Reserved compatibility flag (currently no behavior change)"
     OFF
 )
+
+# Warnings
+if(MBELIB_ENABLE_WARNINGS)
+    if(MSVC)
+        foreach(
+            _mbelib_msvc_flag_var
+            IN
+            ITEMS
+                CMAKE_C_FLAGS
+                CMAKE_C_FLAGS_DEBUG
+                CMAKE_C_FLAGS_RELEASE
+                CMAKE_C_FLAGS_RELWITHDEBINFO
+                CMAKE_C_FLAGS_MINSIZEREL
+        )
+            string(
+                REGEX REPLACE "(^| )/W[0-4]( |$)"
+                " "
+                ${_mbelib_msvc_flag_var}
+                "${${_mbelib_msvc_flag_var}}"
+            )
+        endforeach()
+        add_compile_options(/W4)
+        if(MBELIB_WARNINGS_AS_ERRORS)
+            add_compile_options(/WX)
+        endif()
+    elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
+        add_compile_options(-Wall -Wextra -Wpedantic)
+        if(MBELIB_WARNINGS_AS_ERRORS)
+            add_compile_options(-Werror)
+        endif()
+    endif()
+endif()
 
 # Generated headers (version)
 include(CMakePackageConfigHelpers)
@@ -193,25 +225,6 @@ endif()
 if(MSVC)
     target_compile_definitions(mbe-shared PRIVATE _USE_MATH_DEFINES)
     target_compile_definitions(mbe-static PRIVATE _USE_MATH_DEFINES)
-endif()
-
-# Warnings
-if(MBELIB_ENABLE_WARNINGS)
-    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
-        target_compile_options(mbe-shared PRIVATE -Wall -Wextra -Wpedantic)
-        target_compile_options(mbe-static PRIVATE -Wall -Wextra -Wpedantic)
-        if(MBELIB_WARNINGS_AS_ERRORS)
-            target_compile_options(mbe-shared PRIVATE -Werror)
-            target_compile_options(mbe-static PRIVATE -Werror)
-        endif()
-    elseif(MSVC)
-        target_compile_options(mbe-shared PRIVATE /W4)
-        target_compile_options(mbe-static PRIVATE /W4)
-        if(MBELIB_WARNINGS_AS_ERRORS)
-            target_compile_options(mbe-shared PRIVATE /WX)
-            target_compile_options(mbe-static PRIVATE /WX)
-        endif()
-    endif()
 endif()
 
 if(NOT WIN32)
@@ -762,6 +775,28 @@ if(MBELIB_BUILD_TESTS)
         NAME test_simd_arch_detection_x86_32_msvc_sse2
         COMMAND test_simd_arch_detection_x86_32_msvc_sse2
     )
+
+    set(_MBELIB_TEST_TARGETS
+        test_api
+        test_ecc
+        test_noise_determinism
+        test_params
+        test_frame_paths
+        test_floattoshort_parity
+        test_golden_pcm
+        test_simd_arch_detection_x64
+        test_simd_arch_detection_arm64ec
+        test_simd_arch_detection_x86_32_msvc_sse2
+    )
+    foreach(_mbelib_test_target IN LISTS _MBELIB_TEST_TARGETS)
+        if(MSVC)
+            target_compile_options(${_mbelib_test_target} PRIVATE /UNDEBUG)
+        elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
+            target_compile_options(${_mbelib_test_target} PRIVATE -UNDEBUG)
+        endif()
+    endforeach()
+    unset(_MBELIB_TEST_TARGETS)
+    unset(_mbelib_test_target)
 endif()
 
 # Benchmarks (opt-in)

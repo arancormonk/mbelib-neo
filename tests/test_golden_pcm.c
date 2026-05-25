@@ -80,7 +80,9 @@ main(void) {
     const uint32_t X86_F32_FNV1A_SIMD = 0xFDA0A110u;
 #endif
 #endif
+#ifdef MBELIB_TEST_STRICT_INT16
     const uint32_t X86_S16_FNV1A = 0x4EDB8636u;
+#endif
 
     float out_f[160];
     short out_s[160];
@@ -159,11 +161,9 @@ main(void) {
     }
 #else
     int maxabs_s = 0;
-    int64_t sumsq_s = 0;
     for (int i = 0; i < 160; ++i) {
         int v = out_s[i];
         int a = v < 0 ? -v : v;
-        sumsq_s += (int64_t)v * (int64_t)v;
         if (a > maxabs_s) {
             maxabs_s = a;
         }
@@ -195,11 +195,9 @@ main(void) {
     }
     /* int16 bounds */
     int maxabs_s = 0;
-    int64_t sumsq_s = 0;
     for (int i = 0; i < 160; ++i) {
         int v = out_s[i];
         int a = v < 0 ? -v : v;
-        sumsq_s += (int64_t)v * (int64_t)v;
         if (a > maxabs_s) {
             maxabs_s = a;
         }

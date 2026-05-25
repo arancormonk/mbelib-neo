@@ -696,6 +696,7 @@ mbe_clipFloatBuffer(float* samples, int count) {
     }
 }
 
+#ifndef DISABLE_AMBE_TONES
 static inline uint32_t
 mbe_tonePhaseStep(double freq_hz) {
     double step = (freq_hz / 8000.0) * MBE_TONE_PHASE_SCALE;
@@ -741,6 +742,7 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
     cur_mp->swn = (int)phase1;
     cur_mp->un = (int)phase2;
 }
+#endif
 
 /**
  * @brief Synthesize a tone frame into 160 float samples at 8 kHz.

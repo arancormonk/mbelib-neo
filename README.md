@@ -125,7 +125,7 @@ git push origin vX.Y.Z
 - `-DMBELIB_BUILD_TESTS=ON` — Build CTest executables (default ON).
 - `-DMBELIB_BUILD_EXAMPLES=ON` — Build `examples/` (default ON).
 - `-DMBELIB_ENABLE_WARNINGS=ON` — Enable common warnings (default ON).
-- `-DMBELIB_WARNINGS_AS_ERRORS=ON` — Treat warnings as errors.
+- `-DMBELIB_WARNINGS_AS_ERRORS=ON` — Treat warnings as errors (default ON).
 - `-DMBELIB_ENABLE_ASAN=ON` — Enable AddressSanitizer in Debug builds.
 - `-DMBELIB_ENABLE_UBSAN=ON` — Enable UndefinedBehaviorSanitizer in Debug builds.
 - `-DMBE_ENABLE_DEBUG_LOGS=ON` — Verbose debug logging in codec sources.
