@@ -16,6 +16,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "MBELIB_BUILD_TESTS": "ON",
         "MBELIB_BUILD_EXAMPLES": "ON",
+        "MBELIB_WARNINGS_AS_ERRORS": "ON",
         "NOTONES": "OFF"
       }
     },
@@ -30,6 +31,7 @@
         "MBELIB_BUILD_TESTS": "ON",
         "MBELIB_BUILD_EXAMPLES": "ON",
         "MBELIB_ENABLE_SIMD": "ON",
+        "MBELIB_WARNINGS_AS_ERRORS": "ON",
         "NOTONES": "OFF",
         "MBELIB_ENABLE_FAST_MATH": "ON",
         "MBELIB_ENABLE_LTO": "ON"
@@ -47,6 +49,7 @@
         "MBELIB_BUILD_EXAMPLES": "ON",
         "MBELIB_ENABLE_ASAN": "ON",
         "MBELIB_ENABLE_UBSAN": "ON",
+        "MBELIB_WARNINGS_AS_ERRORS": "ON",
         "NOTONES": "OFF"
       }
     },
@@ -60,6 +63,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "MBELIB_BUILD_TESTS": "ON",
         "MBELIB_BUILD_EXAMPLES": "ON",
+        "MBELIB_WARNINGS_AS_ERRORS": "ON",
         "NOTONES": "ON"
       }
     }
