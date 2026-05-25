@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private vulnerability report
+    url: https://github.com/arancormonk/mbelib-neo/security/advisories/new
+    about: Report suspected security vulnerabilities privately.
+  - name: Discussions
+    url: https://github.com/arancormonk/mbelib-neo/discussions
+    about: Ask usage questions or discuss ideas before filing an issue.

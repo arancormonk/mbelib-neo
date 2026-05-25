@@ -5,6 +5,8 @@ Performance‑enhanced IMBE/AMBE vocoder primitives with a modern CMake build, i
 Project homepage: https://github.com/arancormonk/mbelib-neo
 
 [![CI](https://github.com/arancormonk/mbelib-neo/actions/workflows/ci.yml/badge.svg)](https://github.com/arancormonk/mbelib-neo/actions/workflows/ci.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12975/badge)](https://www.bestpractices.dev/projects/12975)
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/12975/baseline)](https://www.bestpractices.dev/projects/12975)
 
 ## Patent Notice
 
@@ -106,6 +108,7 @@ GitHub Actions builds release package artifacts when you push a tag matching `vX
 The tag must match the project version declared in `CMakeLists.txt`, or the release workflow fails before packaging.
 
 On a matching tag, CI rebuilds `dev-release`, reruns the release preset tests, and packages the installed library tree for Linux, macOS, and Windows. Release publication is a maintainer action after the package artifacts and checks have been reviewed.
+Release verification instructions are in `docs/release-verification.md`.
 
 Typical release flow:
 
@@ -350,6 +353,24 @@ cmake --build --preset dev-debug --target docs
 
 The generated site focuses on the public API (`include/`) and bundled examples.
 
+Project documentation and policies:
+
+- Contribution process, DCO, coding standards, review requirements, and test policy: `CONTRIBUTING.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Governance, roles, responsibilities, sensitive-resource access, and continuity: `GOVERNANCE.md`
+- Roadmap and scope: `ROADMAP.md`
+- Support and upgrade policy: `SUPPORT.md`
+- Defect reporting: `docs/issue-reporting.md`
+- Architecture and trust boundaries: `docs/architecture.md`
+- Build and installation policy: `docs/build-installation.md`
+- Security requirements and assurance: `docs/security-requirements.md`
+- Dependency management and monitoring: `docs/dependencies.md`
+- Project site, accessibility, and localization: `docs/project-site-and-localization.md`
+- Testing, CI, coverage target, and dynamic analysis: `docs/testing.md`
+- Release verification and signing: `docs/release-verification.md`
+- Supply-chain guardrails: `docs/supply-chain-guardrails.md`
+- Code-quality guardrails: `docs/code-quality-guardrails.md`
+
 ## Project Layout
 
 - Public headers: `include/mbelib-neo/`
@@ -361,6 +382,7 @@ The generated site focuses on the public API (`include/`) and bundled examples.
 
 ## Contributing
 
+- Read `CONTRIBUTING.md` before opening a pull request.
 - Follow `.clang-format` (LLVM style, 4‑space indent, 120 cols). You can run `tools/format.sh`.
 - Static analysis scripts (CI-aligned; CI and pre-push/preflight use strict mode where applicable):
   - `tools/clang_tidy.sh` (strict promotes broad bugprone/performance/portability findings; targeted TUs supported).
