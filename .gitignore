@@ -19,6 +19,11 @@ Thumbs.db
 /*.md
 !/README.md
 !/SECURITY.md
+!/CODE_OF_CONDUCT.md
+!/CONTRIBUTING.md
+!/GOVERNANCE.md
+!/ROADMAP.md
+!/SUPPORT.md
 
 # Log files
 /logs/
