@@ -74,13 +74,15 @@ main(void) {
      * determinism and sanity checks so CI remains green.
      */
     /* Updated for PFFFT FFT implementation */
-#if defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
     const uint32_t X86_F32_FNV1A_SCALAR = 0x59741032u;
 #ifdef MBELIB_TEST_BUILD_SIMD
     const uint32_t X86_F32_FNV1A_SIMD = 0xFDA0A110u;
 #endif
 #endif
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
     const uint32_t X86_S16_FNV1A = 0x4EDB8636u;
+#endif
 
     float out_f[160];
     short out_s[160];
@@ -159,11 +161,9 @@ main(void) {
     }
 #else
     int maxabs_s = 0;
-    int64_t sumsq_s = 0;
     for (int i = 0; i < 160; ++i) {
         int v = out_s[i];
         int a = v < 0 ? -v : v;
-        sumsq_s += (int64_t)v * (int64_t)v;
         if (a > maxabs_s) {
             maxabs_s = a;
         }
@@ -195,11 +195,9 @@ main(void) {
     }
     /* int16 bounds */
     int maxabs_s = 0;
-    int64_t sumsq_s = 0;
     for (int i = 0; i < 160; ++i) {
         int v = out_s[i];
         int a = v < 0 ? -v : v;
-        sumsq_s += (int64_t)v * (int64_t)v;
         if (a > maxabs_s) {
             maxabs_s = a;
         }

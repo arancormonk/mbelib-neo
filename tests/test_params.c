@@ -404,11 +404,11 @@ main(void) {
 
         ambe_fr[0][1] = 1; /* protected Golay parity bit */
         typedef const char hard_ambe_frame[24];
-        const hard_ambe_frame* hard_fr = (const hard_ambe_frame*)ambe_fr;
+        hard_ambe_frame* hard_fr = (hard_ambe_frame*)ambe_fr;
         int hard_ret = mbe_decodeAmbe3600x2450Frame(hard_fr, hard_d, &hard_result);
         mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u);
         typedef const mbe_soft_bit soft_ambe_frame[24];
-        const soft_ambe_frame* soft_fr_const = (const soft_ambe_frame*)soft_fr;
+        soft_ambe_frame* soft_fr_const = (soft_ambe_frame*)soft_fr;
         int soft_ret = mbe_decodeAmbe3600x2450SoftFrame(soft_fr_const, soft_d, &soft_result);
 
         assert(hard_ret == soft_ret);

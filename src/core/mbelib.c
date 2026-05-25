@@ -696,6 +696,7 @@ mbe_clipFloatBuffer(float* samples, int count) {
     }
 }
 
+#ifndef DISABLE_AMBE_TONES
 static inline uint32_t
 mbe_tonePhaseStep(double freq_hz) {
     double step = (freq_hz / 8000.0) * MBE_TONE_PHASE_SCALE;
@@ -741,6 +742,7 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
     cur_mp->swn = (int)phase1;
     cur_mp->un = (int)phase2;
 }
+#endif
 
 /**
  * @brief Synthesize a tone frame into 160 float samples at 8 kHz.
@@ -1203,7 +1205,7 @@ mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf)
 }
 #endif
 
-typedef void (*mbe_floattoshort_fn)(const float*, short*);
+typedef void (*mbe_floattoshort_fn)(const float* restrict, short* restrict);
 /*
  * Keep dispatch state thread-local so first-use initialization has no cross-thread
  * data races and still amortizes probe cost to one-time per thread.

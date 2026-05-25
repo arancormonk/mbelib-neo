@@ -23,6 +23,13 @@ COMMON_CFLAGS=(
   -I"$PROJECT_DIR/src/external/pffft"
 )
 
+PROJECT_WARNING_FLAGS=(
+  -Wall
+  -Wextra
+  -Wpedantic
+  -Werror
+)
+
 sources=(
   src/ambe/ambe3600x2400.c
   src/ambe/ambe3600x2450.c
@@ -41,11 +48,11 @@ sources=(
 objects=()
 for source in "${sources[@]}"; do
   object="$OBJ_DIR/${source//\//_}.o"
-  "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" -c "$PROJECT_DIR/$source" -o "$object"
+  "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" -c "$PROJECT_DIR/$source" -o "$object"
   objects+=("$object")
 done
 
-"$CXX" "${FUZZ_CXXFLAGS[@]}" -std=c++17 \
+"$CXX" "${FUZZ_CXXFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" -std=c++17 \
   -I"$PROJECT_DIR/include" \
   -I"$GEN_INCLUDE_DIR" \
   "$PROJECT_DIR/fuzz/fuzz_process_frame.cc" \
