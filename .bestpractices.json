@@ -133,7 +133,7 @@
   "version_unique_justification": "Releases use unique vX.Y.Z tags at https://github.com/arancormonk/mbelib-neo/releases.",
   "vulnerabilities_critical_fixed_justification": "SECURITY.md requires rapid handling of critical vulnerabilities; none are currently known open.",
   "vulnerabilities_fixed_60_days_justification": "No publicly known unpatched medium-or-higher vulnerabilities are currently known for this project.",
-  "vulnerability_report_private_justification": "Vulnerability reports are handled through GitHub private vulnerability reporting/security advisories.",
+  "vulnerability_report_private_justification": "SECURITY.md documents private vulnerability reporting via GitHub Security Advisories: https://raw.githubusercontent.com/arancormonk/mbelib-neo/main/SECURITY.md. Private reports are submitted at https://github.com/arancormonk/mbelib-neo/security/advisories/new.",
   "vulnerability_report_process_justification": "https://raw.githubusercontent.com/arancormonk/mbelib-neo/main/SECURITY.md documents private vulnerability reporting.",
   "vulnerability_report_response_justification": "No vulnerability reports are known in the last six months; SECURITY.md documents response expectations.",
   "warnings_fixed_justification": "Required CI and pre-push checks passed on PR #20 with warnings treated as errors where configured.",
