@@ -88,7 +88,9 @@ if(MBELIB_ENABLE_WARNINGS)
                 "${${_mbelib_msvc_flag_var}}"
             )
         endforeach()
-        add_compile_options(/W4)
+        # MSVC reports large legacy DSP tables and vendored PFFFT scalar math as
+        # noisy conversion diagnostics. Keep /WX for the rest of /W4.
+        add_compile_options(/W4 /wd4244 /wd4305)
         if(MBELIB_WARNINGS_AS_ERRORS)
             add_compile_options(/WX)
         endif()

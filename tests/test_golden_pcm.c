@@ -74,13 +74,13 @@ main(void) {
      * determinism and sanity checks so CI remains green.
      */
     /* Updated for PFFFT FFT implementation */
-#if defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
     const uint32_t X86_F32_FNV1A_SCALAR = 0x59741032u;
 #ifdef MBELIB_TEST_BUILD_SIMD
     const uint32_t X86_F32_FNV1A_SIMD = 0xFDA0A110u;
 #endif
 #endif
-#ifdef MBELIB_TEST_STRICT_INT16
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
     const uint32_t X86_S16_FNV1A = 0x4EDB8636u;
 #endif
 

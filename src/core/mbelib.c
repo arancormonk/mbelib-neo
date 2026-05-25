@@ -1205,7 +1205,7 @@ mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf)
 }
 #endif
 
-typedef void (*mbe_floattoshort_fn)(const float*, short*);
+typedef void (*mbe_floattoshort_fn)(const float* restrict, short* restrict);
 /*
  * Keep dispatch state thread-local so first-use initialization has no cross-thread
  * data races and still amortizes probe cost to one-time per thread.
