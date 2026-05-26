@@ -24,8 +24,8 @@ This document records mbelib-neo's evidence for OpenSSF OSPS Baseline Level 1.
   scripts.
 - Pull request workflows use least-privilege `GITHUB_TOKEN` permissions. The
   default GitHub Actions workflow permission for the repository is read-only.
-  Privileged publication credentials are only used in upstream non-PR release or
-  package update paths.
+  Release publication elevates `contents: write` only in trusted upstream
+  version-tag paths and publishes with the workflow `GITHUB_TOKEN`.
 - Official project channels and distribution channels are GitHub HTTPS URLs.
 - The project prevents accidental credential storage through contributor policy,
   GitHub secret scanning, Gitleaks CI, and review of workflow and release

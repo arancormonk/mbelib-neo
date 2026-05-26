@@ -50,8 +50,9 @@ unless release notes explicitly say otherwise.
 ## Asset Integrity
 
 Release assets are distributed over GitHub HTTPS. Each release includes
-`SHA256SUMS.txt` with hashes for packaged assets. New releases should also
-include `SHA256SUMS.txt.asc`, a detached signature over the checksum file.
+`SHA256SUMS.txt` with hashes for packaged assets. The tag release workflow
+creates or overwrites GitHub Release assets with the workflow `GITHUB_TOKEN`
+after packaging succeeds.
 
 Download the release assets and checksum file from the release page, then verify
 the checksum file signature when `SHA256SUMS.txt.asc` is present:
