@@ -767,3 +767,61 @@ jobs:
           name: release-package-${{ runner.os }}-${{ runner.arch }}
           path: ${{ steps.package_windows.outputs.archive_path }}
           retention-days: 7
+
+  publish-release:
+    name: publish release
+    needs: [validate-release-tag, package-release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'arancormonk/mbelib-neo'
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download release package artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-package-*
+          path: dist
+          merge-multiple: true
+      - name: Verify release packages and generate checksums
+        shell: bash
+        env:
+          ARCHIVE_PREFIX: ${{ needs.validate-release-tag.outputs.archive_prefix }}
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(
+            find dist -maxdepth 1 -type f \
+              \( -name "${ARCHIVE_PREFIX}-*.tar.gz" -o -name "${ARCHIVE_PREFIX}-*.zip" \) |
+              sort
+          )
+          if [ "${#packages[@]}" -ne 3 ]; then
+            echo "Expected 3 release packages, found ${#packages[@]}." >&2
+            find dist -maxdepth 1 -type f -print >&2
+            exit 1
+          fi
+          for platform in linux macos windows; do
+            if ! printf '%s\n' "${packages[@]}" | grep -Fq "/${ARCHIVE_PREFIX}-${platform}-"; then
+              echo "Missing ${platform} release package." >&2
+              exit 1
+            fi
+          done
+          : > dist/SHA256SUMS.txt
+          for package in "${packages[@]}"; do
+            (
+              cd dist
+              sha256sum "$(basename "$package")"
+            ) >> dist/SHA256SUMS.txt
+          done
+          cat dist/SHA256SUMS.txt
+      - name: Upload release assets
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          files: |
+            dist/${{ needs.validate-release-tag.outputs.archive_prefix }}-*.tar.gz
+            dist/${{ needs.validate-release-tag.outputs.archive_prefix }}-*.zip
+            dist/SHA256SUMS.txt
+          name: mbelib-neo ${{ needs.validate-release-tag.outputs.version }}
+          generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}
