@@ -362,6 +362,12 @@ run_check() {
   fi
 }
 
+if command -v rg > /dev/null 2>&1; then
+  run_check "workflow Git pin guardrail" tools/check_workflow_git_pins.sh
+else
+  mark_missing_tool "rg" "workflow Git pin guardrail"
+fi
+
 # shellcheck disable=SC2329 # Invoked indirectly via run_check callback dispatch.
 run_clang_format_check() {
   local rc=0

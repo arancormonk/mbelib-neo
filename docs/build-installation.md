@@ -16,9 +16,9 @@ including:
 - `CMAKE_EXE_LINKER_FLAGS`
 - `CMAKE_SHARED_LINKER_FLAGS`
 
-The project may add warning, sanitizer, SIMD, LTO, or platform flags based on
-explicit CMake options, but should not discard user-supplied compiler or linker
-settings.
+The project may add warning, sanitizer, SIMD, LTO, hardening, or platform flags
+based on explicit CMake options, but should not discard user-supplied compiler
+or linker settings.
 
 ## Debug Information
 

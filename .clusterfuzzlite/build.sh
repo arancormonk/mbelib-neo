@@ -52,11 +52,26 @@ for source in "${sources[@]}"; do
   objects+=("$object")
 done
 
-"$CXX" "${FUZZ_CXXFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" -std=c++17 \
-  -I"$PROJECT_DIR/include" \
-  -I"$GEN_INCLUDE_DIR" \
-  "$PROJECT_DIR/fuzz/fuzz_process_frame.cc" \
-  "${objects[@]}" \
-  "${FUZZING_ENGINE[@]}" \
-  -lm \
-  -o "$OUT/fuzz_process_frame"
+build_fuzzer() {
+  local source=$1
+  local name
+  name=$(basename "$source" .cc)
+
+  "$CXX" "${FUZZ_CXXFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" -std=c++17 \
+    -I"$PROJECT_DIR/include" \
+    -I"$GEN_INCLUDE_DIR" \
+    "$PROJECT_DIR/$source" \
+    "${objects[@]}" \
+    "${FUZZING_ENGINE[@]}" \
+    -lm \
+    -o "$OUT/$name"
+}
+
+fuzzers=(
+  fuzz/fuzz_process_frame.cc
+  fuzz/fuzz_frame_decode.cc
+)
+
+for fuzzer in "${fuzzers[@]}"; do
+  build_fuzzer "$fuzzer"
+done

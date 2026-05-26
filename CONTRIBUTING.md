@@ -52,7 +52,8 @@ pull request explains why an exception is appropriate.
 - Vendored third-party code is placed under `src/external/`, keeps upstream
   license notices, and is documented in dependency records.
 - Workflow, dependency, packaging, release, codec, DSP, public API, and security
-  changes receive extra review.
+  changes receive extra review when practical, or document solo-maintainer
+  residual risk in the pull request.
 - Static-analysis suppressions are narrow and explain why the local exception is
   acceptable.
 
