@@ -11,8 +11,8 @@ This document records mbelib-neo's evidence for OpenSSF OSPS Baseline Level 1.
   intentionally granted by the maintainer, and elevated access is not granted by
   default.
 - The primary branch is `main`. GitHub branch protection is required for `main`,
-  including required status checks before merge. Direct commits to `main` are
-  blocked by the protected branch workflow.
+  including required status checks and repository guardrails before merge. Direct
+  commits to `main` are blocked by the protected branch workflow.
 - Deleting the protected `main` branch is disabled in GitHub branch protection.
 
 ## Build, Release, and Secrets Controls

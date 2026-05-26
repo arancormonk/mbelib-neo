@@ -35,6 +35,12 @@ Run the smallest useful set before opening a PR, then broaden it when the change
 - Release hardening changes: `tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release`.
 - Dependency input changes: `tools/osv_scan.sh`.
 
+## Required PR Status Checks
+
+Branch protection must require the repository guardrail job for pull requests.
+Keep `repository guardrails` required whenever new repository-level security
+guardrails are added.
+
 ## Project-Specific Guardrails
 
 The repository intentionally blocks or flags patterns that are easy to reintroduce during large edits:

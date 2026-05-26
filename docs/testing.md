@@ -27,8 +27,8 @@ ctest --preset dev-debug --output-on-failure
 
 GitHub Actions runs tests and quality checks on pull requests and pushes to the
 primary branch. Required checks include cross-platform builds, sanitizer tests,
-static analysis, workflow linting, dependency review, secret scanning, OSV
-scanning, and install/consume checks.
+static analysis, repository security guardrails, workflow linting, dependency
+review, secret scanning, OSV scanning, and install/consume checks.
 
 ## Regression Test Requirement
 

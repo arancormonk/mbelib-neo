@@ -80,7 +80,8 @@ The project applies the following controls:
 - OSV-Scanner and dependency review for dependency vulnerabilities
 - pinned GitHub Actions, pinned CI source checkouts, and zizmor workflow
   security checks
-- branch protection requiring status checks before merge
+- branch protection requiring status checks before merge, including repository
+  guardrails
 
 ## Solo Maintainer Operating Mode
 
