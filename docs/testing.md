@@ -75,4 +75,5 @@ ctest --preset asan-ubsan-debug --output-on-failure
 ```
 
 Frame-processing paths are also covered by ClusterFuzzLite PR fuzzing with
-AddressSanitizer.
+AddressSanitizer, including fixed-size hard/soft frame decode paths and
+parameter synthesis paths.

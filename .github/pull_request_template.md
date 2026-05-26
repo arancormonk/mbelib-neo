@@ -6,7 +6,7 @@
 
 - [ ] Changes were reviewed against the surrounding module design.
 - [ ] Behavior, ownership boundaries, and failure modes were reviewed by a human.
-- [ ] Risky or broad changes have a second reviewer.
+- [ ] Risky or broad changes have a second reviewer when practical, or document solo-maintainer residual risk below.
 - [ ] Copied, generated, or bulk-written code has been read, understood, and adapted to mbelib-neo conventions.
 - [ ] Non-trivial commits include DCO `Signed-off-by` lines.
 
@@ -25,6 +25,8 @@
 - [ ] `tools/quality_preflight.sh` for broad or high-risk changes
 - [ ] `tools/cmake_format_check.sh` for CMake changes
 - [ ] `tools/zizmor.sh` for workflow changes
+- [ ] `tools/check_workflow_git_pins.sh` for workflow Git source fetch changes
+- [ ] `tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release` for release hardening changes
 - [ ] `tools/osv_scan.sh` for dependency input changes
 
 ## Risk

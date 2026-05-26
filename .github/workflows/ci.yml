@@ -34,6 +34,11 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       - name: Test (${{ matrix.preset }})
         run: ctest --preset ${{ matrix.preset }} -V
+      - name: Verify release hardening
+        if: matrix.os == 'ubuntu-latest' && matrix.preset == 'dev-release'
+        run: |
+          tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release
+          tools/check_release_hardening.sh build/dev-release/example_print_version build/dev-release
 
   sanitize-linux:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
@@ -76,16 +81,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Compute IWYU toolchain SHA
-        id: iwyu-sha
+      - name: Load CI dependency pins
+        id: dep-pins
         run: |
           set -euxo pipefail
-          echo "sha=$(git ls-remote https://github.com/include-what-you-use/include-what-you-use refs/heads/clang_22 | cut -f1)" >> "$GITHUB_OUTPUT"
+          source tools/ci-dependency-pins.env
+          echo "iwyu_sha=${IWYU_SHA}" >> "$GITHUB_OUTPUT"
       - name: Restore Arch toolchain cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .deps-arch-toolchain
-          key: arch-toolchain-${{ runner.os }}-iwyu-${{ steps.iwyu-sha.outputs.sha }}
+          key: arch-toolchain-${{ runner.os }}-iwyu-${{ steps.dep-pins.outputs.iwyu_sha }}
           restore-keys: |
             arch-toolchain-${{ runner.os }}-iwyu-
       - name: Restore ccache
@@ -98,7 +104,7 @@ jobs:
             ccache-${{ runner.os }}-arch-
       - name: Run C/C++ static analysis under Arch toolchain
         env:
-          CI_ARCH_IWYU_SHA: ${{ steps.iwyu-sha.outputs.sha }}
+          CI_ARCH_IWYU_SHA: ${{ steps.dep-pins.outputs.iwyu_sha }}
         run: |
           bash tools/ci_arch_toolchain.sh bash -lc '
             set -euxo pipefail
@@ -692,6 +698,11 @@ jobs:
         run: cmake --build --preset dev-release --parallel
       - name: Test (dev-release preset)
         run: ctest --preset dev-release -V
+      - name: Verify release hardening
+        if: runner.os == 'Linux'
+        run: |
+          tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release
+          tools/check_release_hardening.sh build/dev-release/example_print_version build/dev-release
       - name: Compute bundle name
         id: bundle
         shell: bash

@@ -72,12 +72,24 @@ The project applies the following controls:
   architecture detection
 - sanitizer CI for AddressSanitizer and UndefinedBehaviorSanitizer
 - ClusterFuzzLite PR fuzzing with AddressSanitizer for frame-processing paths
+- default-on Release-like compiler/linker hardening for supported Clang/GCC
+  targets, with Linux release verification in CI
 - static analysis through CodeQL, Semgrep, clang-tidy, cppcheck, scan-build,
   GCC `-fanalyzer`, and include-what-you-use
 - Gitleaks and GitHub secret scanning for credential leakage
 - OSV-Scanner and dependency review for dependency vulnerabilities
-- pinned GitHub Actions and zizmor workflow security checks
+- pinned GitHub Actions, pinned CI source checkouts, and zizmor workflow
+  security checks
 - branch protection requiring status checks before merge
+
+## Solo Maintainer Operating Mode
+
+mbelib-neo is allowed to operate as a solo-maintainer project, but the absence
+of a routine second reviewer is treated as residual risk, not as implicit
+approval. For security-sensitive, workflow, release, parser, dependency, public
+API, codec, DSP, or broad runtime changes, the maintainer should keep changes
+narrowly scoped, document risk in the pull request or release notes, run the
+relevant guardrails, and seek outside review when practical.
 
 ## Cryptography and Credentials
 

@@ -1,13 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(mbelib-neo VERSION 2.0.0 LANGUAGES C)
+if(POLICY CMP0083)
+    cmake_policy(SET CMP0083 NEW)
+endif()
 
 # Language and build defaults
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+include(CheckCCompilerFlag)
 include(CheckCSourceCompiles)
+include(CheckLinkerFlag)
 
 function(_mbelib_check_c_source_compiles_static source out_var)
     set(_mbelib_had_try_compile_target_type OFF)
@@ -57,6 +62,11 @@ option(
     OFF
 )
 option(
+    MBELIB_ENABLE_HARDENING
+    "Enable Release-like compiler and linker hardening when supported"
+    ON
+)
+option(
     MBELIB_ENABLE_SIMD
     "Enable SIMD optimized routines when available (SSE2/NEON)"
     OFF
@@ -101,6 +111,77 @@ if(MBELIB_ENABLE_WARNINGS)
         endif()
     endif()
 endif()
+
+set(_mbelib_release_like_config
+    "$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>"
+)
+
+if(MBELIB_ENABLE_HARDENING AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
+    check_c_compiler_flag(
+        "-fstack-protector-strong"
+        MBELIB_C_HAS_STACK_PROTECTOR_STRONG
+    )
+    if(NOT APPLE)
+        check_c_compiler_flag(
+            "-fstack-clash-protection"
+            MBELIB_C_HAS_STACK_CLASH_PROTECTION
+        )
+    endif()
+    if(UNIX AND NOT APPLE)
+        check_linker_flag(C "-Wl,-z,relro" MBELIB_LD_HAS_RELRO)
+        check_linker_flag(C "-Wl,-z,now" MBELIB_LD_HAS_NOW)
+        include(CheckPIESupported)
+        check_pie_supported(LANGUAGES C)
+    endif()
+endif()
+
+function(_mbelib_apply_hardening target)
+    if(
+        NOT MBELIB_ENABLE_HARDENING
+        OR NOT (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    )
+        return()
+    endif()
+
+    target_compile_definitions(
+        ${target}
+        PRIVATE "$<${_mbelib_release_like_config}:_FORTIFY_SOURCE=2>"
+    )
+
+    if(MBELIB_C_HAS_STACK_PROTECTOR_STRONG)
+        target_compile_options(
+            ${target}
+            PRIVATE "$<${_mbelib_release_like_config}:-fstack-protector-strong>"
+        )
+    endif()
+    if(NOT APPLE AND MBELIB_C_HAS_STACK_CLASH_PROTECTION)
+        target_compile_options(
+            ${target}
+            PRIVATE "$<${_mbelib_release_like_config}:-fstack-clash-protection>"
+        )
+    endif()
+
+    get_target_property(_mbelib_target_type ${target} TYPE)
+    if(
+        UNIX
+        AND NOT APPLE
+        AND NOT _mbelib_target_type STREQUAL "STATIC_LIBRARY"
+        AND NOT _mbelib_target_type STREQUAL "OBJECT_LIBRARY"
+    )
+        if(MBELIB_LD_HAS_RELRO)
+            target_link_options(
+                ${target}
+                PRIVATE "$<${_mbelib_release_like_config}:-Wl,-z,relro>"
+            )
+        endif()
+        if(MBELIB_LD_HAS_NOW)
+            target_link_options(
+                ${target}
+                PRIVATE "$<${_mbelib_release_like_config}:-Wl,-z,now>"
+            )
+        endif()
+    endif()
+endfunction()
 
 # Generated headers (version)
 include(CMakePackageConfigHelpers)
@@ -177,6 +258,8 @@ target_include_directories(
 
 # Mark static consumption for Windows to avoid dllimport decorations in headers
 target_compile_definitions(mbe-static PUBLIC MBE_STATIC=1)
+_mbelib_apply_hardening(mbe-shared)
+_mbelib_apply_hardening(mbe-static)
 
 # Optional verbose debug logging in library sources
 if(MBE_ENABLE_DEBUG_LOGS)
@@ -528,6 +611,7 @@ endif()
 if(MBELIB_BUILD_EXAMPLES)
     add_executable(example_print_version examples/print_version.c)
     target_link_libraries(example_print_version PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(example_print_version)
     target_include_directories(
         example_print_version
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
@@ -554,6 +638,7 @@ if(MBELIB_BUILD_TESTS)
     # Golden data generator tool (not a test): helpful for refreshing hashes
     add_executable(gen_golden tools/gen_golden.c)
     target_link_libraries(gen_golden PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(gen_golden)
     target_include_directories(
         gen_golden
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
@@ -791,6 +876,7 @@ if(MBELIB_BUILD_TESTS)
         test_simd_arch_detection_x86_32_msvc_sse2
     )
     foreach(_mbelib_test_target IN LISTS _MBELIB_TEST_TARGETS)
+        _mbelib_apply_hardening(${_mbelib_test_target})
         if(MSVC)
             target_compile_options(${_mbelib_test_target} PRIVATE /UNDEBUG)
         elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
@@ -805,6 +891,7 @@ endif()
 if(MBELIB_BUILD_BENCHMARKS)
     add_executable(bench_synth bench/bench_synth.c)
     target_link_libraries(bench_synth PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_synth)
     target_include_directories(
         bench_synth
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
@@ -820,6 +907,7 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     add_executable(bench_unvoiced bench/bench_unvoiced.c)
     target_link_libraries(bench_unvoiced PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_unvoiced)
     target_include_directories(
         bench_unvoiced
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
@@ -832,6 +920,7 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     add_executable(bench_convert bench/bench_convert.c)
     target_link_libraries(bench_convert PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_convert)
     target_include_directories(
         bench_convert
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
