@@ -116,6 +116,28 @@ set(_mbelib_release_like_config
     "$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>"
 )
 
+function(_mbelib_flags_define_fortify out_var)
+    set(_mbelib_fortify_defined OFF)
+    foreach(
+        _mbelib_flag_var
+        IN
+        ITEMS
+            CMAKE_C_FLAGS
+            CMAKE_C_FLAGS_RELEASE
+            CMAKE_C_FLAGS_RELWITHDEBINFO
+            CMAKE_C_FLAGS_MINSIZEREL
+    )
+        if(
+            DEFINED ${_mbelib_flag_var}
+            AND "${${_mbelib_flag_var}}" MATCHES "_FORTIFY_SOURCE"
+        )
+            set(_mbelib_fortify_defined ON)
+            break()
+        endif()
+    endforeach()
+    set(${out_var} "${_mbelib_fortify_defined}" PARENT_SCOPE)
+endfunction()
+
 if(MBELIB_ENABLE_HARDENING AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
     check_c_compiler_flag(
         "-fstack-protector-strong"
@@ -143,10 +165,13 @@ function(_mbelib_apply_hardening target)
         return()
     endif()
 
-    target_compile_definitions(
-        ${target}
-        PRIVATE "$<${_mbelib_release_like_config}:_FORTIFY_SOURCE=2>"
-    )
+    _mbelib_flags_define_fortify(_mbelib_c_flags_define_fortify)
+    if(NOT _mbelib_c_flags_define_fortify)
+        target_compile_definitions(
+            ${target}
+            PRIVATE "$<${_mbelib_release_like_config}:_FORTIFY_SOURCE=2>"
+        )
+    endif()
 
     if(MBELIB_C_HAS_STACK_PROTECTOR_STRONG)
         target_compile_options(
