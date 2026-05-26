@@ -364,8 +364,9 @@ run_check() {
 
 if command -v rg > /dev/null 2>&1; then
   run_check "workflow Git pin guardrail" tools/check_workflow_git_pins.sh
+  run_check "workflow download pin guardrail" tools/check_workflow_download_pins.sh
 else
-  mark_missing_tool "rg" "workflow Git pin guardrail"
+  mark_missing_tool "rg" "workflow pin guardrails"
 fi
 
 # shellcheck disable=SC2329 # Invoked indirectly via run_check callback dispatch.

@@ -12,7 +12,7 @@ Runs OSV-Scanner source dependency/vendored-code scanning.
 Default path: .
 
 Environment:
-  MBE_OSV_SCANNER_IMAGE       Docker image fallback (default: ghcr.io/google/osv-scanner:v2.3.1)
+  MBE_OSV_SCANNER_IMAGE       Docker image fallback (default: pinned OSV_SCANNER_IMAGE)
   MBE_OSV_SARIF_OUT           Optional SARIF output path.
   MBE_OSV_ALLOW_NO_PACKAGES   Treat missing package metadata/lockfiles as success (default: 1).
 USAGE
@@ -56,7 +56,11 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
   TARGETS=(.)
 fi
 
-OSV_IMAGE="${MBE_OSV_SCANNER_IMAGE:-ghcr.io/google/osv-scanner:v2.3.1}"
+# shellcheck source=tools/ci-dependency-pins.env
+# shellcheck disable=SC1091
+source "$ROOT_DIR/tools/ci-dependency-pins.env"
+PINNED_OSV_IMAGE="${OSV_SCANNER_IMAGE:?OSV_SCANNER_IMAGE is required}"
+OSV_IMAGE="${MBE_OSV_SCANNER_IMAGE:-$PINNED_OSV_IMAGE}"
 ALLOW_NO_PACKAGES="${MBE_OSV_ALLOW_NO_PACKAGES:-1}"
 LOG_FILE=".osv-scanner.local.out"
 

@@ -25,7 +25,7 @@
 - [ ] `tools/quality_preflight.sh` for broad or high-risk changes
 - [ ] `tools/cmake_format_check.sh` for CMake changes
 - [ ] `tools/zizmor.sh` for workflow changes
-- [ ] `tools/check_workflow_git_pins.sh` for workflow Git source fetch changes
+- [ ] `tools/check_workflow_git_pins.sh` and `tools/check_workflow_download_pins.sh` for workflow source/download pin changes
 - [ ] `tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release` for release hardening changes
 - [ ] `tools/osv_scan.sh` for dependency input changes
 

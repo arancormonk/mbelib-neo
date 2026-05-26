@@ -33,7 +33,7 @@ This notice is advisory and does not modify the license. See `LICENSE` for terms
 - A performance‑enhanced fork of [lwvmobile/mbelib](https://github.com/lwvmobile/mbelib), which is a fork of [szechyjs/mbelib](https://github.com/szechyjs/mbelib)
 - Supports IMBE 7200x4400 (P25 Phase 1), IMBE 7100x4400 (ProVoice), AMBE (D‑STAR), and AMBE+2 (DMR, NXDN, P25 Phase 2, dPMR, etc.).
 - Public API in `#include <mbelib-neo/mbelib.h>` with version macro `MBELIB_VERSION`.
-- v2.0.0 is an ABI-breaking release that adds soft-decision ECC/frame decode, staged frame-decode helpers, and result-structured synthesis wrappers; use older tags for the v1 API.
+- v2.0.0 is an ABI-breaking release that adds strict bit-array validation, soft-decision ECC/frame decode, staged frame-decode helpers, and result-structured synthesis APIs; use older tags for the v1 API.
 - Ships as shared and static libraries: `libmbe-neo.{so|dylib}` on Unix-like platforms, and `mbe-neo.dll` + import lib / `mbe-neo-static.lib` on Windows.
 - Installable CMake package (`mbe_neo::mbe_shared` / `mbe_neo::mbe_static`) and pkg-config file (`libmbe-neo`).
 
@@ -105,9 +105,9 @@ cmake --build build/dev-release --target uninstall
 ## Tagged Releases
 
 GitHub Actions builds release package artifacts when you push a tag matching `vX.Y.Z`.
-The tag must match the project version declared in `CMakeLists.txt`, or the release workflow fails before packaging.
+The tag must match the project version declared in `CMakeLists.txt` and verify as an annotated tag signed by the trusted release key, or the release workflow fails before packaging.
 
-On a matching tag, CI rebuilds `dev-release`, reruns the release preset tests, packages the installed library tree for Linux, macOS, and Windows, and creates or overwrites the matching GitHub Release assets.
+On a matching tag, CI rebuilds `dev-release`, reruns the release preset tests, packages the installed library tree for Linux, macOS, and Windows, generates SPDX SBOMs, creates GitHub artifact attestations, and creates or overwrites the matching GitHub Release assets.
 Release verification instructions are in `docs/release-verification.md`.
 
 Typical release flow:
@@ -181,11 +181,11 @@ cmake --build build/dev-debug --target example_print_version
 | IMBE 7200x4400 | `char imbe_fr[8][23]` | `mbe_soft_bit imbe_fr[8][23]` | `char imbe_d[88]` | `imbe_d[88]` |
 | IMBE 7100x4400 | `char imbe_fr[7][24]` | `mbe_soft_bit imbe_fr[7][24]` | `char imbe_d[88]` | `imbe_d[88]` (converted to 7200 layout) |
 
-Use legacy hard-frame `mbe_process*Frame*` APIs when you want one-call decode+synthesis from interleaved codec frames. These APIs accept mutable frame arrays, run demod/ECC, fill `errs`/`errs2`, and write the scratch/output parameter bits.
+Use hard-frame `mbe_process*Frame*` APIs when you want one-call decode+synthesis from interleaved codec frames. These APIs accept const frame arrays, run demod/ECC, populate `mbe_process_result`, and write the scratch/output parameter bits.
 
-Use `mbe_decode*Frame()` / `mbe_decode*SoftFrame()` when you need staged decode. These helpers accept const frame input, fill hard parameter bits, optionally populate `mbe_process_result`, and return the corrected error total without synthesizing audio. Use `mbe_process*Data*V2` for later synthesis when you want to carry that result context forward.
+Use `mbe_decode*Frame()` / `mbe_decode*SoftFrame()` when you need staged decode. These helpers accept const frame input, fill hard parameter bits, optionally populate `mbe_process_result`, and return the corrected error total without synthesizing audio. Use `mbe_process*Data*` for later synthesis when you want to carry that result context forward.
 
-Use `mbe_process*Data*` or `mbe_process*Data*V2` when you already have unpacked parameter bits.
+Use `mbe_process*Data*` when you already have unpacked parameter bits.
 
 IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs.
 
@@ -193,16 +193,13 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 
 - Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
 - Initialize once before decoding with `mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced)`.
-- Prefer legacy `mbe_process*Frame*` APIs when you have raw hard-decision vocoder frames and do not need staged parameter handling.
+- Prefer `mbe_process*Frame*` APIs when you have raw hard-decision vocoder frames and do not need staged parameter handling.
 - For soft-decision input, fill `mbe_soft_bit.bit` with the hard decision and `mbe_soft_bit.reliability` with confidence (`0` is erasure-like, `255` is highly reliable), then call `mbe_decode*SoftFrame()` or `mbe_process*SoftFrame*()`.
-- Helper constructors are available for common inputs: `mbe_softBitsFromHard()` assigns a fixed reliability, and `mbe_softBitsFromLlr()` maps positive signed LLRs to bit 1 with magnitude clamped to `0..255`.
-- v2 APIs report frame state through `mbe_process_result`: `c0_errors`, `protected_errors`, IMBE-specific `c4_errors`, `total_errors`, and flags such as `MBE_PROCESS_FLAG_SOFT_INPUT`, `MBE_PROCESS_FLAG_C0_VALID`, `MBE_PROCESS_FLAG_C4_VALID`, `MBE_PROCESS_FLAG_TONE`, `MBE_PROCESS_FLAG_ERASURE`, `MBE_PROCESS_FLAG_REPEAT`, and `MBE_PROCESS_FLAG_MUTE`.
+- Helper constructors are available for common inputs: `mbe_softBitsFromHard()` assigns a fixed reliability and validates hard bits, while `mbe_softBitsFromLlr()` maps positive signed LLRs to bit 1 with magnitude clamped to `0..255`.
+- Processing APIs report frame state through `mbe_process_result`: `c0_errors`, `protected_errors`, IMBE-specific `c4_errors`, `total_errors`, and flags such as `MBE_PROCESS_FLAG_SOFT_INPUT`, `MBE_PROCESS_FLAG_C0_VALID`, `MBE_PROCESS_FLAG_C4_VALID`, `MBE_PROCESS_FLAG_TONE`, `MBE_PROCESS_FLAG_ERASURE`, `MBE_PROCESS_FLAG_REPEAT`, and `MBE_PROCESS_FLAG_MUTE`.
 - Use `mbe_formatProcessResult()` when you need a compact status string from a result. It writes `'='` repeated `total_errors` times, then any `E`, `T`, `R`, and `M` flags in that order, truncated to the supplied buffer size.
-- Use legacy `mbe_process*Data*` APIs only when you already have unpacked parameter bits:
-  - `errs` and `errs2` are caller-provided inputs for these parameter-only paths.
-  - `mbe_processAmbe2450Data*` and `mbe_processImbe4400Data*` currently ignore `*errs`, but require a valid pointer for API compatibility.
-- Legacy `err_str` outputs are compact status traces: `'='` repeated `*errs2` times, optional suffix markers (`E`, `T`, `R`, `M` depending on codec/path), then a trailing NUL.
-- Size legacy `err_str` buffers for at least `(*errs2 + 3)` bytes so there is room for up to two suffix markers plus NUL. A conservative `char err_str[128]` works well for ordinary public entry points; use a larger buffer if you pass unusually high `errs2` values.
+- Hard input bits must be exactly `0` or `1`; soft `mbe_soft_bit.bit` values must also be exactly `0` or `1`. Invalid pointers/counters return `MBE_STATUS_INVALID_ARGUMENT`; invalid bit values return `MBE_STATUS_INVALID_BITS`.
+- For parameter-only processing, seed `mbe_process_result.total_errors` and any valid C0/C4 context before calling `mbe_process*Data*`.
 - `mbe_printVersion(char *str)` uses a legacy fixed write width of 32 bytes. Pass a buffer of at least 32 bytes, or prefer `mbe_versionString()` when possible.
 
 ### Audio Sample Scaling (Float vs int16)
@@ -296,7 +293,7 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 - Float and 16‑bit PCM variants are provided (e.g., `mbe_processAmbe3600x2400Framef` and `mbe_processAmbe3600x2400Frame`).
 - Version macro `MBELIB_VERSION` is defined in the generated header `mbelib-neo/version.h` and returned by `mbe_printVersion`.
 - `mbe_versionString()` returns a const pointer to the version string.
-- v2 result-based APIs return an `int` error total and use `mbe_process_result` instead of legacy `errs`/`errs2`/`err_str` arguments.
+- Processing APIs return an `int` error total and use `mbe_process_result` for decode/synthesis status.
 - Soft-decision ECC helpers are public for Golay(23,12), Hamming(15,11), and the IMBE 7100x4400 Hamming mapping.
 - Unvoiced synthesis uses a JMBE-style LCG state carried in `mbe_parms` (`noiseSeed`/`noiseOverlap`), with per-thread cold-start seeding via `mbe_setThreadRngSeed(uint32_t)`.
 - ABI: v2.0.0 breaks ABI from v1. The shared library `SOVERSION` follows the project major version; minor updates within a major version aim to remain ABI compatible.

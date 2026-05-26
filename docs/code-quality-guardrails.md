@@ -18,7 +18,7 @@ Use this checklist when a change touches decoder logic, external input, allocati
 - For new public APIs, verify headers live under `include/mbelib-neo/` and are included as `<mbelib-neo/...>`.
 - For new dependencies, document the dependency in CMake, README/install notes, and license notices as applicable.
 - For workflow changes, keep `GITHUB_TOKEN` permissions least-privilege and avoid interpolating untrusted GitHub context directly into shell scripts.
-- For release changes, verify artifact, checksum, and release-hardening checks still run on tag builds.
+- For release changes, verify signed-tag validation, SBOM, artifact, attestation, checksum, and release-hardening checks still run on tag builds.
 - For dependency or workflow changes, also check the supply-chain policy in `docs/supply-chain-guardrails.md`.
 
 ## Required Local Checks
@@ -31,7 +31,7 @@ Run the smallest useful set before opening a PR, then broaden it when the change
 - Sanitizer-sensitive code: `ctest --preset asan-ubsan-debug --output-on-failure` after configuring/building the matching preset.
 - CMake changes: `tools/cmake_format_check.sh`.
 - Workflow changes: `tools/workflow_lint.sh` and `tools/zizmor.sh`.
-- Workflow Git source changes: `tools/check_workflow_git_pins.sh`.
+- Workflow source/download pin changes: `tools/check_workflow_git_pins.sh` and `tools/check_workflow_download_pins.sh`.
 - Release hardening changes: `tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release`.
 - Dependency input changes: `tools/osv_scan.sh`.
 
@@ -48,5 +48,6 @@ The repository intentionally blocks or flags patterns that are easy to reintrodu
 - Do not execute shells or spawn processes from project-owned C without explicit design review.
 - Do not include bundled third-party headers directly outside approved integration points.
 - Keep public GitHub source fetches in CI pinned through `tools/ci-dependency-pins.env` and `tools/fetch-pinned-git.sh`.
+- Keep CI fallback container images pinned by digest and covered by `tools/check_workflow_download_pins.sh`.
 - Keep workflow scripts defensive: pass untrusted context through environment variables or action inputs, not direct expression interpolation in `run:` blocks.
 - Keep analyzer and linter output actionable. Prefer fixing root causes over widening suppressions.

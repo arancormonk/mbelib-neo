@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "imbe4400_internal.h"
+#include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -100,6 +101,10 @@ mbe_eccImbe7100x4400C0(char imbe_fr[7][24]) {
 
     int j, errs;
     char in[23], out[23];
+    int ret = mbe_validate_bits((const char*)imbe_fr, (size_t)7u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
 
     for (j = 0; j < 18; j++) {
         in[j] = imbe_fr[0][j + 1];
@@ -269,6 +274,13 @@ mbe_eccImbe7100x4400DataSoftInternal(mbe_soft_bit imbe_fr[7][24], char* imbe_d, 
  */
 int
 mbe_eccImbe7100x4400Data(char imbe_fr[7][24], char* imbe_d) {
+    if (!imbe_d) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    int ret = mbe_validate_bits((const char*)imbe_fr, (size_t)7u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
     return mbe_eccImbe7100x4400DataInternal(imbe_fr, imbe_d, NULL);
 }
 
@@ -276,13 +288,17 @@ mbe_eccImbe7100x4400Data(char imbe_fr[7][24], char* imbe_d) {
  * @brief Demodulate interleaved IMBE 7100x4400 data in-place.
  * @param imbe Frame as 7x24 bitplanes (modified).
  */
-void
+int
 mbe_demodulateImbe7100x4400Data(char imbe[7][24]) {
 
     int i, j, k;
     unsigned short pr[115];
     unsigned short seed;
     char tmpstr[24];
+    int ret = mbe_validate_bits((const char*)imbe, (size_t)7u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
 
     // create pseudo-random modulator
     j = 0;
@@ -321,6 +337,7 @@ mbe_demodulateImbe7100x4400Data(char imbe[7][24]) {
             k++;
         }
     }
+    return 0;
 }
 
 static void
@@ -367,13 +384,17 @@ mbe_demodulateImbe7100x4400DataSoft(mbe_soft_bit imbe[7][24]) {
  * @brief Convert IMBE 7100x4400 parameter layout to 7200x4400 layout.
  * @param imbe_d In/out parameter vector (88 bits), converted in-place.
  */
-void
+int
 mbe_convertImbe7100to7200(char* imbe_d) {
 
     int i, j, k, K, L, b0;
     char tmpstr[9];
     char tmp_imbe[88];
     float w0;
+    int ret = mbe_validate_bits(imbe_d, 88u);
+    if (ret < 0) {
+        return ret;
+    }
 
     // decode fundamental frequency w0 from b0
     tmpstr[8] = 0;
@@ -428,6 +449,7 @@ mbe_convertImbe7100to7200(char* imbe_d) {
     for (i = 0; i < 88; i++) {
         imbe_d[i] = tmp_imbe[i];
     }
+    return 0;
 }
 
 int
@@ -436,15 +458,32 @@ mbe_decodeImbe7100x4400Frame(const char imbe_fr[7][24], char imbe_d[88], mbe_pro
     int c0_errors;
     int protected_errors;
     int c4_errors = 0;
-
-    memcpy(fr, imbe_fr, sizeof(fr));
-    c0_errors = mbe_eccImbe7100x4400C0(fr);
-    mbe_demodulateImbe7100x4400Data(fr);
-    protected_errors = mbe_eccImbe7100x4400DataInternal(fr, imbe_d, &c4_errors);
-    mbe_convertImbe7100to7200(imbe_d);
+    int ret;
 
     if (result) {
         mbe_initProcessResult(result);
+    }
+    if (!imbe_d) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_bits((const char*)imbe_fr, (size_t)7u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
+
+    memcpy(fr, imbe_fr, sizeof(fr));
+    c0_errors = mbe_eccImbe7100x4400C0(fr);
+    ret = mbe_demodulateImbe7100x4400Data(fr);
+    if (ret < 0) {
+        return ret;
+    }
+    protected_errors = mbe_eccImbe7100x4400DataInternal(fr, imbe_d, &c4_errors);
+    ret = mbe_convertImbe7100to7200(imbe_d);
+    if (ret < 0) {
+        return ret;
+    }
+
+    if (result) {
         result->c0_errors = c0_errors;
         result->protected_errors = protected_errors;
         result->c4_errors = c4_errors;
@@ -460,15 +499,29 @@ mbe_decodeImbe7100x4400SoftFrame(const mbe_soft_bit imbe_fr[7][24], char imbe_d[
     int c0_errors;
     int protected_errors;
     int c4_errors = 0;
+    int ret;
+
+    if (result) {
+        mbe_initProcessResult(result);
+    }
+    if (!imbe_d) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_soft_bits((const mbe_soft_bit*)imbe_fr, (size_t)7u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
 
     memcpy(fr, imbe_fr, sizeof(fr));
     c0_errors = mbe_eccImbe7100x4400C0Soft(fr);
     mbe_demodulateImbe7100x4400DataSoft(fr);
     protected_errors = mbe_eccImbe7100x4400DataSoftInternal(fr, imbe_d, &c4_errors);
-    mbe_convertImbe7100to7200(imbe_d);
+    ret = mbe_convertImbe7100to7200(imbe_d);
+    if (ret < 0) {
+        return ret;
+    }
 
     if (result) {
-        mbe_initProcessResult(result);
         result->c0_errors = c0_errors;
         result->protected_errors = protected_errors;
         result->c4_errors = c4_errors;
@@ -481,34 +534,25 @@ mbe_decodeImbe7100x4400SoftFrame(const mbe_soft_bit imbe_fr[7][24], char imbe_d[
 /**
  * @brief Process a complete IMBE 7100x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs     Output corrected C0 error count.
- * @param errs2    Output total/protected-field error count.
- * @param err_str  Output status trace string.
+ * @param result   Optional output status populated by decode and synthesis.
  * @param imbe_fr  Input frame as 7x24 bitplanes.
  * @param imbe_d   Scratch/output parameter bits (88).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
  * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
-void
-mbe_processImbe7100x4400Framef(float* aout_buf, int* errs, int* errs2, char* err_str, char imbe_fr[7][24],
-                               char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                               int uvquality) {
-
-    int errs_c4 = 0;
-
-    *errs = 0;
-    *errs2 = 0;
-    *errs = mbe_eccImbe7100x4400C0(imbe_fr);
-    mbe_demodulateImbe7100x4400Data(imbe_fr);
-    *errs2 = *errs;
-    *errs2 += mbe_eccImbe7100x4400DataInternal(imbe_fr, imbe_d, &errs_c4);
-    mbe_convertImbe7100to7200(imbe_d);
-
-    /* Set C4 error count for adaptive smoothing (JMBE Algorithm #112 formula selection) */
-    cur_mp->errorCount4 = errs_c4;
-
-    mbe_processImbe4400Dataf_withC0(aout_buf, errs2, err_str, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
-                                    *errs, 1, 1);
+int
+mbe_processImbe7100x4400Framef(float* aout_buf, mbe_process_result* result, const char imbe_fr[7][24], char imbe_d[88],
+                               mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    mbe_process_result local_result;
+    int ret;
+    if (!result) {
+        result = &local_result;
+    }
+    ret = mbe_decodeImbe7100x4400Frame(imbe_fr, imbe_d, result);
+    if (ret < 0) {
+        return ret;
+    }
+    return mbe_processImbe4400Dataf_internal(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
 }
 
 int
@@ -516,11 +560,15 @@ mbe_processImbe7100x4400SoftFramef(float* aout_buf, mbe_process_result* result, 
                                    char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
                                    int uvquality) {
     mbe_process_result local_result;
+    int ret;
     if (!result) {
         result = &local_result;
     }
-    (void)mbe_decodeImbe7100x4400SoftFrame(imbe_fr, imbe_d, result);
-    return mbe_processImbe4400DatafV2(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    ret = mbe_decodeImbe7100x4400SoftFrame(imbe_fr, imbe_d, result);
+    if (ret < 0) {
+        return ret;
+    }
+    return mbe_processImbe4400Dataf_internal(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
 }
 
 int
@@ -528,8 +576,15 @@ mbe_processImbe7100x4400SoftFrame(short* aout_buf, mbe_process_result* result, c
                                   char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
                                   int uvquality) {
     float float_buf[160];
-    int ret = mbe_processImbe7100x4400SoftFramef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                                 uvquality);
+    int ret;
+    if (!aout_buf) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_processImbe7100x4400SoftFramef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                             uvquality);
+    if (ret < 0) {
+        return ret;
+    }
     mbe_floattoshort(float_buf, aout_buf);
     return ret;
 }
@@ -538,13 +593,20 @@ mbe_processImbe7100x4400SoftFrame(short* aout_buf, mbe_process_result* result, c
  * @brief Process a complete IMBE 7100x4400 frame into 16-bit PCM.
  * @see mbe_processImbe7100x4400Framef for details.
  */
-void
-mbe_processImbe7100x4400Frame(short* aout_buf, int* errs, int* errs2, char* err_str, char imbe_fr[7][24],
-                              char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                              int uvquality) {
+int
+mbe_processImbe7100x4400Frame(short* aout_buf, mbe_process_result* result, const char imbe_fr[7][24], char imbe_d[88],
+                              mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
 
     float float_buf[160];
-    mbe_processImbe7100x4400Framef(float_buf, errs, errs2, err_str, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                   uvquality);
+    int ret;
+    if (!aout_buf) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_processImbe7100x4400Framef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                         uvquality);
+    if (ret < 0) {
+        return ret;
+    }
     mbe_floattoshort(float_buf, aout_buf);
+    return ret;
 }

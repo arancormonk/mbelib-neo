@@ -185,9 +185,9 @@ main(void) {
 
         // Decoding a codeword should be a fixed point
         char code2[15];
-        int errs2 = mbe_hamming1511(code, code2);
-        assert(errs2 == 0);
-        (void)errs2; /* Suppress unused-but-set warning when asserts disabled */
+        int fixed_point_errs = mbe_hamming1511(code, code2);
+        assert(fixed_point_errs == 0);
+        (void)fixed_point_errs; /* Suppress unused-but-set warning when asserts disabled */
         assert(memcmp(code, code2, sizeof(code)) == 0);
 
         // Sanity: bit-level correction in integer domain should restore original block
@@ -291,9 +291,9 @@ main(void) {
         }
 
         char code2[15];
-        int errs2 = mbe_7100x4400hamming1511(code, code2);
-        assert(errs2 == 0);
-        (void)errs2; /* Suppress unused-but-set warning when asserts disabled */
+        int fixed_point_errs = mbe_7100x4400hamming1511(code, code2);
+        assert(fixed_point_errs == 0);
+        (void)fixed_point_errs; /* Suppress unused-but-set warning when asserts disabled */
         assert(memcmp(code, code2, sizeof(code)) == 0);
 
         for (int k = 0; k < 15; ++k) {
@@ -370,7 +370,7 @@ main(void) {
         // Introduce a single-bit error in the 23-bit block
         unsigned int block_err = block ^ (1u << 5);
         long int b = (long int)block_err;
-        mbe_checkGolayBlock(&b);
+        assert(mbe_checkGolayBlock(&b) == 0);
         // mbe_checkGolayBlock returns only the 12-bit data in b
         assert((unsigned int)b == data);
 

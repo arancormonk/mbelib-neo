@@ -28,7 +28,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
       - name: Check security guardrails
-        run: tools/check_workflow_git_pins.sh
+        run: |
+          tools/check_workflow_git_pins.sh
+          tools/check_workflow_download_pins.sh
 
   script-lint:
     name: shell/workflow lint

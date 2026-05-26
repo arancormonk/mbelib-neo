@@ -7,15 +7,16 @@ https://github.com/arancormonk/mbelib-neo/releases
 ## Release Identifiers
 
 Release tags use the form `vX.Y.Z`. The tag must match the project version
-declared by CMake, or the release workflow fails before packaging.
+declared by CMake and must be an annotated tag signed by the trusted mbelib-neo
+release key, or the release workflow fails before packaging.
 
 ## Release Signing
 
-Release tags are signed with the maintainer release key. Obtain the maintainer's
-public keys from GitHub:
+Release tags are signed with the trusted mbelib-neo release key checked into the
+repository:
 
 ```sh
-curl -fsSL https://github.com/arancormonk.gpg | gpg --import
+gpg --import release-keys/arancormonk-2026.pgp
 ```
 
 Verify a release tag:
@@ -47,21 +48,20 @@ That attribution key is:
 Do not confuse the upstream attribution key with the current release-signing key
 unless release notes explicitly say otherwise.
 
+GitHub repository rulesets should also protect `v*.*.*` tags, restrict release
+tag creation to the maintainer/admin role, block tag deletion and force updates,
+and require signed tags where the GitHub ruleset UI supports it. Workflow
+verification remains mandatory even when repository rulesets are enabled.
+
 ## Asset Integrity
 
 Release assets are distributed over GitHub HTTPS. Each release includes
 `SHA256SUMS.txt` with hashes for packaged assets. The tag release workflow
-creates or overwrites GitHub Release assets with the workflow `GITHUB_TOKEN`
-after packaging succeeds.
+generates SPDX SBOMs and GitHub artifact attestations for the packaged assets,
+attests the checksum manifest, then creates or overwrites GitHub Release assets
+with the workflow `GITHUB_TOKEN` after packaging succeeds.
 
-Download the release assets and checksum file from the release page, then verify
-the checksum file signature when `SHA256SUMS.txt.asc` is present:
-
-```sh
-gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
-```
-
-Then run:
+Download the release assets and checksum file from the release page, then run:
 
 ```sh
 sha256sum -c SHA256SUMS.txt
@@ -73,6 +73,21 @@ On macOS, use:
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
+Then verify the GitHub artifact attestations. For example:
+
+```sh
+gh attestation verify mbelib-neo-<version>-linux-<arch>.tar.gz \
+  --repo arancormonk/mbelib-neo
+gh attestation verify SHA256SUMS.txt \
+  --repo arancormonk/mbelib-neo
+```
+
+Review the matching SPDX SBOM file when present:
+
+```sh
+less mbelib-neo-<version>-linux-<arch>.tar.gz.spdx.json
+```
+
 ## Expected Release Author
 
 The expected release author is the project maintainer, `arancormonk`, using the
@@ -81,5 +96,5 @@ public release-signing key documented above.
 ## Release Review
 
 Before publication, release packaging must pass the required CI checks for the
-tag, including build, test, static-analysis, sanitizer, install/consume, and
-release validation jobs.
+tag, including signed-tag validation, build, test, static-analysis, sanitizer,
+install/consume, SBOM, attestation, and release validation jobs.

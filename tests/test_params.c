@@ -29,6 +29,19 @@ set_bits_zero(char* bits, int n) {
     memset(bits, 0, (size_t)n);
 }
 
+static void
+init_result_total(mbe_process_result* result, int total_errors) {
+    mbe_initProcessResult(result);
+    result->total_errors = total_errors;
+}
+
+static int
+result_has_marker(const mbe_process_result* result, char marker) {
+    char status[96];
+    mbe_formatProcessResult(status, sizeof(status), result);
+    return strchr(status, marker) != NULL;
+}
+
 /**
  * @brief Compose IMBE 7200x4400 b0 into the imbe_d vector.
  *
@@ -327,13 +340,12 @@ main(void) {
         assert(approx_equal(cur.w0, w0_silence, 1e-6f));
     }
 
-    // AMBE 2450 Dataf: errs is output-only; repeat decision must not depend on preinitialized errs input
+    // AMBE 2450 Dataf: absent C0-valid context, repeat decision must depend only on total errors
     {
         char ambe_d[49];
         float out[160];
-        int errs, errs2;
-        char err_str_a[64];
-        char err_str_b[64];
+        mbe_process_result result_a;
+        mbe_process_result result_b;
         mbe_parms cur_a = {0}, prev_a = {0}, prev_enh_a = {0};
         mbe_parms cur_b = {0}, prev_b = {0}, prev_enh_b = {0};
 
@@ -341,26 +353,25 @@ main(void) {
         set_ambe2450_b0(ambe_d, 0);
 
         mbe_initMbeParms(&cur_a, &prev_a, &prev_enh_a);
-        errs = 0;
-        errs2 = 5;
-        mbe_processAmbe2450Dataf(out, &errs, &errs2, err_str_a, ambe_d, &cur_a, &prev_a, &prev_enh_a, 8);
+        init_result_total(&result_a, 5);
+        result_a.c0_errors = 0;
+        assert(mbe_processAmbe2450Dataf(out, &result_a, ambe_d, &cur_a, &prev_a, &prev_enh_a, 8) >= 0);
 
         mbe_initMbeParms(&cur_b, &prev_b, &prev_enh_b);
-        errs = 4;
-        errs2 = 5;
-        mbe_processAmbe2450Dataf(out, &errs, &errs2, err_str_b, ambe_d, &cur_b, &prev_b, &prev_enh_b, 8);
+        init_result_total(&result_b, 5);
+        result_b.c0_errors = 4;
+        assert(mbe_processAmbe2450Dataf(out, &result_b, ambe_d, &cur_b, &prev_b, &prev_enh_b, 8) >= 0);
 
         assert(cur_a.repeatCount == cur_b.repeatCount);
-        assert((strchr(err_str_a, 'R') != NULL) == (strchr(err_str_b, 'R') != NULL));
+        assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
     }
 
-    // IMBE 4400 Dataf: errs is output-only; repeat decision must not depend on preinitialized errs input
+    // IMBE 4400 Dataf: absent C0-valid context, repeat decision must depend only on total errors
     {
         char imbe_d[88];
         float out[160];
-        int errs, errs2;
-        char err_str_a[96];
-        char err_str_b[96];
+        mbe_process_result result_a;
+        mbe_process_result result_b;
         mbe_parms cur_a = {0}, prev_a = {0}, prev_enh_a = {0};
         mbe_parms cur_b = {0}, prev_b = {0}, prev_enh_b = {0};
 
@@ -368,17 +379,17 @@ main(void) {
         set_imbe7200_b0(imbe_d, 0);
 
         mbe_initMbeParms(&cur_a, &prev_a, &prev_enh_a);
-        errs = 0;
-        errs2 = 11;
-        mbe_processImbe4400Dataf(out, &errs, &errs2, err_str_a, imbe_d, &cur_a, &prev_a, &prev_enh_a, 8);
+        init_result_total(&result_a, 11);
+        result_a.c0_errors = 0;
+        assert(mbe_processImbe4400Dataf(out, &result_a, imbe_d, &cur_a, &prev_a, &prev_enh_a, 8) >= 0);
 
         mbe_initMbeParms(&cur_b, &prev_b, &prev_enh_b);
-        errs = 2;
-        errs2 = 11;
-        mbe_processImbe4400Dataf(out, &errs, &errs2, err_str_b, imbe_d, &cur_b, &prev_b, &prev_enh_b, 8);
+        init_result_total(&result_b, 11);
+        result_b.c0_errors = 2;
+        assert(mbe_processImbe4400Dataf(out, &result_b, imbe_d, &cur_b, &prev_b, &prev_enh_b, 8) >= 0);
 
         assert(cur_a.repeatCount == cur_b.repeatCount);
-        assert((strchr(err_str_a, 'R') != NULL) == (strchr(err_str_b, 'R') != NULL));
+        assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
     }
 
     // AMBE C0 Golay24 parity behavior: isolated parity-bit error is corrected
@@ -406,7 +417,8 @@ main(void) {
         typedef const char hard_ambe_frame[24];
         hard_ambe_frame* hard_fr = (hard_ambe_frame*)ambe_fr;
         int hard_ret = mbe_decodeAmbe3600x2450Frame(hard_fr, hard_d, &hard_result);
-        mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u);
+        assert(mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u)
+               == 0);
         typedef const mbe_soft_bit soft_ambe_frame[24];
         soft_ambe_frame* soft_fr_const = (soft_ambe_frame*)soft_fr;
         int soft_ret = mbe_decodeAmbe3600x2450SoftFrame(soft_fr_const, soft_d, &soft_result);
@@ -422,8 +434,7 @@ main(void) {
     {
         char ambe_d[49];
         float out[160];
-        int errs, errs2;
-        char err_str[64];
+        mbe_process_result result;
         mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
 
         set_bits_zero(ambe_d, 49);
@@ -431,17 +442,15 @@ main(void) {
         set_ambe2450_b0(ambe_d, 120); /* erasure fundamental if not classified as tone */
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
-        errs = 0;
-        errs2 = 5;
-        mbe_processAmbe2450Dataf(out, &errs, &errs2, err_str, ambe_d, &cur, &prev, &prev_enh, 8);
-        assert(strchr(err_str, 'T') != NULL);
+        init_result_total(&result, 5);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(result_has_marker(&result, 'T'));
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
-        errs = 0;
-        errs2 = 6;
-        mbe_processAmbe2450Dataf(out, &errs, &errs2, err_str, ambe_d, &cur, &prev, &prev_enh, 8);
-        assert(strchr(err_str, 'T') == NULL);
-        assert(strchr(err_str, 'E') != NULL);
+        init_result_total(&result, 6);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(!result_has_marker(&result, 'T'));
+        assert(result_has_marker(&result, 'E'));
         assert(approx_equal(cur.w0, 0.0f, 1e-6f));
         assert(cur.L == 9);
         assert(approx_equal(prev.w0, 0.0f, 1e-6f));
@@ -453,8 +462,7 @@ main(void) {
         char ambe_d_a[49];
         char ambe_d_b[49];
         float out[160];
-        int errs, errs2;
-        char err_str[64];
+        mbe_process_result result;
         const float custom_w0 = 0.20f;
         const int custom_L = 22;
 
@@ -478,10 +486,9 @@ main(void) {
         prev_a.repeat = MBE_MAX_FRAME_REPEATS;
         prev_a.repeatCount = MBE_MAX_FRAME_REPEATS;
 
-        errs = 0;
-        errs2 = 0;
-        mbe_processAmbe2450Dataf(out, &errs, &errs2, err_str, ambe_d_a, &cur_a, &prev_a, &prev_enh_a, 8);
-        assert(strchr(err_str, 'T') != NULL);
+        init_result_total(&result, 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_a, &cur_a, &prev_a, &prev_enh_a, 8) >= 0);
+        assert(result_has_marker(&result, 'T'));
         assert(approx_equal(cur_a.w0, custom_w0, 1e-6f));
         assert(cur_a.L == custom_L);
 
@@ -497,10 +504,9 @@ main(void) {
         prev_b.repeat = MBE_MAX_FRAME_REPEATS;
         prev_b.repeatCount = MBE_MAX_FRAME_REPEATS;
 
-        errs = 0;
-        errs2 = 0;
-        mbe_processAmbe2450Dataf(out, &errs, &errs2, err_str, ambe_d_b, &cur_b, &prev_b, &prev_enh_b, 8);
-        assert(strchr(err_str, 'T') != NULL);
+        init_result_total(&result, 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_b, &cur_b, &prev_b, &prev_enh_b, 8) >= 0);
+        assert(result_has_marker(&result, 'T'));
         assert(approx_equal(cur_b.w0, custom_w0, 1e-6f));
         assert(cur_b.L == custom_L);
     }
@@ -639,22 +645,22 @@ main(void) {
     {
         char imbe_d[88];
         float out[160];
-        int errs = 0, errs2 = 0;
-        char err_str[96];
+        mbe_process_result result;
         mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         set_bits_zero(imbe_d, 88);
         set_imbe7200_b0(imbe_d, 0);
+        init_result_total(&result, 0);
 
         cur.errorCount4 = 7;
         prev.errorCount4 = 3;
 
-        mbe_processImbe4400Dataf(out, &errs, &errs2, err_str, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
         assert(cur.errorCount4 == 0);
     }
 
-    // IMBE V2 parameter synthesis must handle partial C0/C4 result metadata independently
+    // IMBE parameter synthesis must handle partial C0/C4 result metadata independently
     {
         char imbe_d[88];
         float out[160];
@@ -672,7 +678,7 @@ main(void) {
         result.protected_errors = 3;
         result.total_errors = 3;
 
-        mbe_processImbe4400DatafV2(out, &result, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
         assert(cur.errorCount4 == 3);
     }
 
@@ -692,59 +698,39 @@ main(void) {
         result.c0_errors = 1;
         result.total_errors = 1;
 
-        mbe_processImbe4400DatafV2(out, &result, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
         assert(cur.errorCount4 == 0);
     }
 
-    // V2 wrappers own fixed status storage and must clamp stale public error counts
+    // Result formatting must truncate large error counts to the caller-provided buffer
     {
-        enum { v2_status_safe_errors = 381 };
-
-        char ambe_d[49];
-        char imbe_d[88];
-        float out[160];
         mbe_process_result result;
-        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
-
-        set_bits_zero(ambe_d, 49);
-        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        char status[8];
         mbe_initProcessResult(&result);
         result.total_errors = 1000;
-        assert(mbe_processAmbe2400DatafV2(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) == v2_status_safe_errors);
-        assert(result.total_errors == v2_status_safe_errors);
-
-        mbe_initMbeParms(&cur, &prev, &prev_enh);
-        mbe_initProcessResult(&result);
-        result.total_errors = 1000;
-        assert(mbe_processAmbe2450DatafV2(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) == v2_status_safe_errors);
-        assert(result.total_errors == v2_status_safe_errors);
-
-        set_bits_zero(imbe_d, 88);
-        set_imbe7200_b0(imbe_d, 0);
-        mbe_initMbeParms(&cur, &prev, &prev_enh);
-        mbe_initProcessResult(&result);
-        result.total_errors = 1000;
-        assert(mbe_processImbe4400DatafV2(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) == v2_status_safe_errors);
-        assert(result.total_errors == v2_status_safe_errors);
+        result.flags = MBE_PROCESS_FLAG_REPEAT;
+        mbe_formatProcessResult(status, sizeof(status), &result);
+        assert(strlen(status) == sizeof(status) - 1u);
+        assert(status[sizeof(status) - 1u] == '\0');
     }
 
     // IMBE repeat headroom parity: prolonged repeats reset to defaults rather than muting indefinitely
     {
         char imbe_d[88];
         float out[160];
-        int errs = 0, errs2 = 6;
-        char err_str[96];
+        mbe_process_result result;
         mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         set_bits_zero(imbe_d, 88);
         set_imbe7200_b0(imbe_d, 0);
+        init_result_total(&result, 6);
 
         prev.repeat = 4;
         prev.repeatCount = 4;
         cur = prev;
 
-        mbe_processImbe4400Dataf(out, &errs, &errs2, err_str, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
 
         assert(cur.repeat == 0);
         assert(cur.repeatCount == 0);
@@ -759,13 +745,13 @@ main(void) {
     {
         char imbe_d[88];
         float out[160];
-        int errs = 0, errs2 = 0;
-        char err_str[96];
+        mbe_process_result result;
         mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         set_bits_zero(imbe_d, 88);
         set_imbe7200_b0(imbe_d, 0);
+        init_result_total(&result, 0);
 
         /* Simulate AMBE state reuse without reinit. */
         cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
@@ -775,7 +761,7 @@ main(void) {
         cur.repeatCount = 0;
 
         float noise_seed_before = prev_enh.noiseSeed;
-        mbe_processImbe4400Dataf(out, &errs, &errs2, err_str, imbe_d, &cur, &prev, &prev_enh, 8);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
         assert(float_bits_equal(prev_enh.noiseSeed, noise_seed_before));
     }
 

@@ -724,6 +724,24 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_frame_paths COMMAND test_frame_paths)
 
+    add_executable(test_input_validation tests/test_input_validation.c)
+    target_link_libraries(test_input_validation PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    target_include_directories(
+        test_input_validation
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_input_validation PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(
+            test_input_validation
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
+    endif()
+    add_test(NAME test_input_validation COMMAND test_input_validation)
+
     add_executable(test_floattoshort_parity tests/test_floattoshort_parity.c)
     target_link_libraries(
         test_floattoshort_parity
@@ -869,6 +887,7 @@ if(MBELIB_BUILD_TESTS)
         test_noise_determinism
         test_params
         test_frame_paths
+        test_input_validation
         test_floattoshort_parity
         test_golden_pcm
         test_simd_arch_detection_x64

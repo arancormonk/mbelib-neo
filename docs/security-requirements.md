@@ -104,7 +104,9 @@ Project release and repository operations do use cryptographic mechanisms:
 - signed Git tags for releases
 - GitHub HTTPS for repository and release distribution
 - SHA256 release checksums
-- optional verification instructions in `docs/release-verification.md`
+- SPDX SBOMs and GitHub artifact attestations for release packages
+- GitHub artifact attestations for checksum manifests
+- verification instructions in `docs/release-verification.md`
 
 ## Vulnerability Handling
 
