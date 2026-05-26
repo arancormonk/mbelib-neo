@@ -148,6 +148,10 @@ mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]) {
  */
 int
 mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]) {
+    int ret = mbe_validate_bits((const char*)ambe_fr, (size_t)4u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
     return mbe_eccAmbe3600C0_common(ambe_fr);
 }
 
@@ -159,6 +163,13 @@ mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]) {
  */
 int
 mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
+    if (!ambe_d) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    int ret = mbe_validate_bits((const char*)ambe_fr, (size_t)4u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
     return mbe_eccAmbe3600Data_common(ambe_fr, ambe_d);
 }
 
@@ -558,6 +569,15 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     int Ji[5];
     float deltaGamma;
     float unvc;
+    int ret;
+
+    if (!cur_mp || !prev_mp) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_bits(ambe_d, 49u);
+    if (ret < 0) {
+        return ret;
+    }
 
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\n");
@@ -618,9 +638,14 @@ mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
  * @brief Demodulate interleaved AMBE 3600x2450 data in-place.
  * @param ambe_fr Frame as 4x24 bitplanes (modified).
  */
-void
+int
 mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]) {
+    int ret = mbe_validate_bits((const char*)ambe_fr, (size_t)4u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
     mbe_demodulateAmbe3600Data_common(ambe_fr);
+    return 0;
 }
 
 int
@@ -628,14 +653,28 @@ mbe_decodeAmbe3600x2450Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_pro
     char fr[4][24];
     int c0_errors;
     int protected_errors;
-
-    memcpy(fr, ambe_fr, sizeof(fr));
-    c0_errors = mbe_eccAmbe3600x2450C0(fr);
-    mbe_demodulateAmbe3600x2450Data(fr);
-    protected_errors = mbe_eccAmbe3600x2450Data(fr, ambe_d);
+    int ret;
 
     if (result) {
         mbe_initProcessResult(result);
+    }
+    if (!ambe_d) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_bits((const char*)ambe_fr, (size_t)4u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
+
+    memcpy(fr, ambe_fr, sizeof(fr));
+    c0_errors = mbe_eccAmbe3600x2450C0(fr);
+    ret = mbe_demodulateAmbe3600x2450Data(fr);
+    if (ret < 0) {
+        return ret;
+    }
+    protected_errors = mbe_eccAmbe3600x2450Data(fr, ambe_d);
+
+    if (result) {
         result->c0_errors = c0_errors;
         result->protected_errors = protected_errors;
         result->total_errors = c0_errors + protected_errors;
@@ -649,6 +688,18 @@ mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
     mbe_soft_bit fr[4][24];
     int c0_errors;
     int protected_errors;
+    int ret;
+
+    if (result) {
+        mbe_initProcessResult(result);
+    }
+    if (!ambe_d) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_soft_bits((const mbe_soft_bit*)ambe_fr, (size_t)4u * 24u);
+    if (ret < 0) {
+        return ret;
+    }
 
     memcpy(fr, ambe_fr, sizeof(fr));
     c0_errors = mbe_eccAmbe3600C0Soft_common(fr);
@@ -656,7 +707,6 @@ mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
     protected_errors = mbe_eccAmbe3600DataSoft_common(fr, ambe_d);
 
     if (result) {
-        mbe_initProcessResult(result);
         result->c0_errors = c0_errors;
         result->protected_errors = protected_errors;
         result->total_errors = c0_errors + protected_errors;
@@ -665,17 +715,26 @@ mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
     return c0_errors + protected_errors;
 }
 
-/**
- * @brief Internal AMBE 2450 synthesis path with optional C0 error context.
- *
- * Frame decode paths provide C0 errors for JMBE repeat criteria parity.
- * Public Dataf calls do not have C0 context and use the historical total-error fallback.
- */
-static void
-mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_str, const char ambe_d[49],
-                                  mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality,
-                                  int c0_errors, int c0_errors_valid) {
-    int i, bad;
+static int
+ambe2450_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
+                         mbe_parms* prev_mp_enhanced, int* total_errors, int* c0_errors, int* c0_errors_valid) {
+    int ret;
+
+    if (!cur_mp || !prev_mp || !prev_mp_enhanced || !total_errors || !c0_errors || !c0_errors_valid) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_result_resolve_total_errors(result, total_errors);
+    if (ret < 0) {
+        return ret;
+    }
+    ret = mbe_validate_bits(ambe_d, 49u);
+    if (ret < 0) {
+        return ret;
+    }
+
+    *c0_errors_valid = (result && ((result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u));
+    *c0_errors = *c0_errors_valid ? result->c0_errors : 0;
+    mbe_result_prepare_synthesis(result, *total_errors);
 
     /* JMBE AMBE starts from W124 defaults; normalize if caller used generic init. */
     mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
@@ -683,162 +742,180 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, const int* errs2, char* err_s
     /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%). */
     cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
 
-    /* Set error metrics for adaptive smoothing (JMBE Algorithms #55-56, #111-116). */
-    cur_mp->errorCountTotal = *errs2;
+    cur_mp->errorCountTotal = *total_errors;
     cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
     cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
+    return 0;
+}
 
-    for (i = 0; i < *errs2; i++) {
-        *err_str = '=';
-        err_str++;
+static int
+ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
+    if (c0_errors_valid) {
+        /* JMBE AMBE repeat criteria when C0 errors are known. */
+        return ((c0_errors >= 4) || ((c0_errors >= 2) && (total_errors >= 6)));
     }
 
-    //it should be noted that in this context, 'bad' isn't referring to bad decode, but is a return
-    //value for which type of frame we should synthesize (voice, repeat, silence, erasure, or tone, etc)
-    bad = mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, *errs2);
+    /* Dataf callers pass parameter bits only (no C0 context); keep historical total-error fallback. */
+    return (total_errors > 3);
+}
+
+static void
+ambe2450_update_decode_state(int bad, int total_errors, int c0_errors, int c0_errors_valid, mbe_process_result* result,
+                             mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     if (bad == 2) {
-        // Erasure frame
-        *err_str = 'E';
-        err_str++;
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_ERASURE);
         cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
         /* JMBE erasure model: W120 defaults carried as previous frame state. */
         mbe_setAmbeErasureParms_common(cur_mp, prev_mp);
-    } else if (bad == 3 || bad == 7) {
-        // Tone Frame
-        *err_str = 'T';
-        err_str++;
+        return;
+    }
+    if (bad == 3 || bad == 7) {
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
         cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
-    } else {
-        int repeat_required;
-
-        if (c0_errors_valid) {
-            /* JMBE AMBE repeat criteria when C0 errors are known:
-             * errors[0] >= 4 || (errors[0] >= 2 && total >= 6). */
-            repeat_required = ((c0_errors >= 4) || ((c0_errors >= 2) && (*errs2 >= 6)));
-        } else {
-            /* Dataf callers pass parameter bits only (no C0 context); keep historical total-error fallback. */
-            repeat_required = (*errs2 > 3);
-        }
-
-        if (repeat_required) {
-            mbe_useLastMbeParms(cur_mp, prev_mp);
-            cur_mp->repeat++;
-            cur_mp->repeatCount++;
-            *err_str = 'R';
-            err_str++;
-        } else {
-            cur_mp->repeat = 0;
-            cur_mp->repeatCount = 0;
-        }
+        return;
+    }
+    if (ambe2450_repeat_required(total_errors, c0_errors, c0_errors_valid)) {
+        mbe_useLastMbeParms(cur_mp, prev_mp);
+        cur_mp->repeat++;
+        cur_mp->repeatCount++;
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
+        return;
     }
 
-    if (bad == 0) {
-        if (cur_mp->repeat <= 3) {
-            mbe_moveMbeParms(cur_mp, prev_mp);
-            float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-            mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
-            mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-        } else {
-            *err_str = 'M';
-            err_str++;
-            mbe_synthesizeComfortNoisef(aout_buf);
-            mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
-        }
-    } else if (bad == 7) {
-        /* JMBE tone behavior:
-         * - valid tone IDs synthesize tone audio without replacing previous voice model
-         * - invalid tone IDs synthesize prior voice frame unless repeat maxed */
-        if (ambe2450_is_valid_tone_id(ambe_d)) {
-            mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
-        } else if (!mbe_isMaxFrameRepeat(prev_mp)) {
-            mbe_parms synth_mp;
-            /* JMBE invalid-tone behavior reuses the prior VOICE model (enhanced amplitudes) while still advancing synth state. */
-            mbe_moveMbeParms(prev_mp_enhanced, &synth_mp);
-            mbe_synthesizeSpeechf(aout_buf, &synth_mp, prev_mp_enhanced, uvquality);
-            mbe_moveMbeParms(&synth_mp, prev_mp_enhanced);
-        } else {
-            mbe_synthesizeComfortNoisef(aout_buf);
-            mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
-        }
-    } else if (bad == 2) {
-        /* JMBE erasure behavior: synthesize white noise and keep ERASURE
-         * parameters as the previous-frame context for recovery. */
-        mbe_synthesizeComfortNoisef(aout_buf);
+    cur_mp->repeat = 0;
+    cur_mp->repeatCount = 0;
+}
+
+static void
+ambe2450_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                          mbe_parms* prev_mp_enhanced, int uvquality) {
+    if (cur_mp->repeat <= 3) {
         mbe_moveMbeParms(cur_mp, prev_mp);
+        float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-    } else {
-        mbe_synthesizeComfortNoisef(aout_buf);
-        mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+        return;
     }
-    *err_str = 0;
+
+    mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
+    mbe_synthesizeComfortNoisef(aout_buf);
+    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+}
+
+static void
+ambe2450_synthesize_tone(float* aout_buf, const char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
+                         mbe_parms* prev_mp_enhanced, int uvquality) {
+    if (ambe2450_is_valid_tone_id(ambe_d)) {
+        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+        return;
+    }
+    if (!mbe_isMaxFrameRepeat(prev_mp)) {
+        mbe_parms synth_mp;
+
+        /* JMBE invalid-tone behavior reuses the prior VOICE model while still advancing synth state. */
+        mbe_moveMbeParms(prev_mp_enhanced, &synth_mp);
+        mbe_synthesizeSpeechf(aout_buf, &synth_mp, prev_mp_enhanced, uvquality);
+        mbe_moveMbeParms(&synth_mp, prev_mp_enhanced);
+        return;
+    }
+
+    mbe_synthesizeComfortNoisef(aout_buf);
+    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+}
+
+static void
+ambe2450_synthesize_erasure(float* aout_buf, const mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    /* JMBE erasure behavior: synthesize white noise and keep ERASURE
+     * parameters as the previous-frame context for recovery. */
+    mbe_synthesizeComfortNoisef(aout_buf);
+    mbe_moveMbeParms(cur_mp, prev_mp);
+    mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+}
+
+static void
+ambe2450_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad,
+                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    if (bad == 0) {
+        ambe2450_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+        return;
+    }
+    if (bad == 7) {
+        ambe2450_synthesize_tone(aout_buf, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+        return;
+    }
+    if (bad == 2) {
+        ambe2450_synthesize_erasure(aout_buf, cur_mp, prev_mp, prev_mp_enhanced);
+        return;
+    }
+
+    mbe_synthesizeComfortNoisef(aout_buf);
+    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+}
+
+static int
+mbe_processAmbe2450Dataf_internal(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
+                                  mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    int bad;
+    int c0_errors;
+    int c0_errors_valid;
+    int total_errors;
+    int ret;
+
+    if (!aout_buf || !cur_mp || !prev_mp || !prev_mp_enhanced) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = ambe2450_prepare_process(result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, &total_errors, &c0_errors,
+                                   &c0_errors_valid);
+    if (ret < 0) {
+        return ret;
+    }
+
+    bad = mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, total_errors);
+    if (bad < 0) {
+        return bad;
+    }
+
+    ambe2450_update_decode_state(bad, total_errors, c0_errors, c0_errors_valid, result, cur_mp, prev_mp);
+    ambe2450_synthesize_frame(aout_buf, result, ambe_d, bad, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    return result ? result->total_errors : total_errors;
 }
 
 /**
  * @brief Process AMBE 2450 parameters into 160 float samples at 8 kHz.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs     Reserved input for API compatibility (currently ignored).
- * @param errs2    Input total/protected-field error count.
- * @param err_str  Output status trace string.
+ * @param result   Optional in/out status context.
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
  * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
-void
-mbe_processAmbe2450Dataf(float* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
-                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
-    (void)errs;
-    mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality, 0,
-                                      0);
-}
-
-/**
- * @brief Process AMBE 2450 parameters into 160 16-bit samples at 8 kHz.
- * @see mbe_processAmbe2450Dataf for parameter details.
- */
-void
-mbe_processAmbe2450Data(short* aout_buf, const int* errs, const int* errs2, char* err_str, const char ambe_d[49],
-                        mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
-    float float_buf[160];
-
-    mbe_processAmbe2450Dataf(float_buf, errs, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
-    mbe_floattoshort(float_buf, aout_buf);
-}
-
 int
-mbe_processAmbe2450DatafV2(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
-                           mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processAmbe2450Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
+                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     mbe_process_result local_result;
-    char status[MBE_RESULT_STATUS_SIZE];
 
     if (!result) {
         mbe_initProcessResult(&local_result);
         result = &local_result;
     }
-
-    int errs2 = result->total_errors;
-    if (errs2 == 0 && (result->c0_errors != 0 || result->protected_errors != 0)) {
-        errs2 = result->c0_errors + result->protected_errors;
-    }
-    errs2 = mbe_result_clamp_status_errors(errs2, sizeof(status));
-
-    status[0] = '\0';
-    mbe_processAmbe2450Dataf_internal(aout_buf, &errs2, status, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
-                                      result->c0_errors, (result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u);
-    result->total_errors = errs2;
-    result->protected_errors = errs2 - result->c0_errors;
-    mbe_result_apply_status(result, status);
-    return result->total_errors;
+    return mbe_processAmbe2450Dataf_internal(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
 }
 
 int
-mbe_processAmbe2450DataV2(short* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
-                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+mbe_processAmbe2450Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
+                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     float float_buf[160];
-    int ret = mbe_processAmbe2450DatafV2(float_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    int ret;
+    if (!aout_buf) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_processAmbe2450Dataf(float_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    if (ret < 0) {
+        return ret;
+    }
     mbe_floattoshort(float_buf, aout_buf);
     return ret;
 }
@@ -846,28 +923,25 @@ mbe_processAmbe2450DataV2(short* aout_buf, mbe_process_result* result, const cha
 /**
  * @brief Process a complete AMBE 3600x2450 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param errs     Output corrected C0 error count.
- * @param errs2    Output total/protected-field error count.
- * @param err_str  Output status trace string.
+ * @param result   Optional output status populated by decode and synthesis.
  * @param ambe_fr  Input frame as 4x24 bitplanes.
  * @param ambe_d   Scratch/output parameter bits (49).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
  * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
-void
-mbe_processAmbe3600x2450Framef(float* aout_buf, int* errs, int* errs2, char* err_str, char ambe_fr[4][24],
-                               char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                               int uvquality) {
-
-    *errs = 0;
-    *errs2 = 0;
-    *errs = mbe_eccAmbe3600x2450C0(ambe_fr);
-    mbe_demodulateAmbe3600x2450Data(ambe_fr);
-    *errs2 = *errs;
-    *errs2 += mbe_eccAmbe3600x2450Data(ambe_fr, ambe_d);
-
-    mbe_processAmbe2450Dataf_internal(aout_buf, errs2, err_str, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality,
-                                      *errs, 1);
+int
+mbe_processAmbe3600x2450Framef(float* aout_buf, mbe_process_result* result, const char ambe_fr[4][24], char ambe_d[49],
+                               mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+    mbe_process_result local_result;
+    int ret;
+    if (!result) {
+        result = &local_result;
+    }
+    ret = mbe_decodeAmbe3600x2450Frame(ambe_fr, ambe_d, result);
+    if (ret < 0) {
+        return ret;
+    }
+    return mbe_processAmbe2450Dataf(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
 }
 
 int
@@ -875,11 +949,15 @@ mbe_processAmbe3600x2450SoftFramef(float* aout_buf, mbe_process_result* result, 
                                    char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
                                    int uvquality) {
     mbe_process_result local_result;
+    int ret;
     if (!result) {
         result = &local_result;
     }
-    (void)mbe_decodeAmbe3600x2450SoftFrame(ambe_fr, ambe_d, result);
-    return mbe_processAmbe2450DatafV2(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    ret = mbe_decodeAmbe3600x2450SoftFrame(ambe_fr, ambe_d, result);
+    if (ret < 0) {
+        return ret;
+    }
+    return mbe_processAmbe2450Dataf(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
 }
 
 int
@@ -887,8 +965,15 @@ mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_result* result, c
                                   char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
                                   int uvquality) {
     float float_buf[160];
-    int ret = mbe_processAmbe3600x2450SoftFramef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                                 uvquality);
+    int ret;
+    if (!aout_buf) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_processAmbe3600x2450SoftFramef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                             uvquality);
+    if (ret < 0) {
+        return ret;
+    }
     mbe_floattoshort(float_buf, aout_buf);
     return ret;
 }
@@ -897,13 +982,20 @@ mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_result* result, c
  * @brief Process a complete AMBE 3600x2450 frame into 16-bit PCM.
  * @see mbe_processAmbe3600x2450Framef for details.
  */
-void
-mbe_processAmbe3600x2450Frame(short* aout_buf, int* errs, int* errs2, char* err_str, char ambe_fr[4][24],
-                              char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                              int uvquality) {
+int
+mbe_processAmbe3600x2450Frame(short* aout_buf, mbe_process_result* result, const char ambe_fr[4][24], char ambe_d[49],
+                              mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
     float float_buf[160];
+    int ret;
 
-    mbe_processAmbe3600x2450Framef(float_buf, errs, errs2, err_str, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                   uvquality);
+    if (!aout_buf) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_processAmbe3600x2450Framef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
+                                         uvquality);
+    if (ret < 0) {
+        return ret;
+    }
     mbe_floattoshort(float_buf, aout_buf);
+    return ret;
 }

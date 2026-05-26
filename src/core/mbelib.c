@@ -64,27 +64,6 @@ mbe_initProcessResult(mbe_process_result* result) {
 }
 
 void
-mbe_result_apply_status(mbe_process_result* result, const char* status) {
-    if (!result || !status) {
-        return;
-    }
-
-    result->flags &=
-        ~(MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE);
-    for (const char* p = status; *p != '\0'; ++p) {
-        if (*p == 'T') {
-            result->flags |= MBE_PROCESS_FLAG_TONE;
-        } else if (*p == 'E') {
-            result->flags |= MBE_PROCESS_FLAG_ERASURE;
-        } else if (*p == 'R') {
-            result->flags |= MBE_PROCESS_FLAG_REPEAT;
-        } else if (*p == 'M') {
-            result->flags |= MBE_PROCESS_FLAG_MUTE;
-        }
-    }
-}
-
-void
 mbe_formatProcessResult(char* str, size_t size, const mbe_process_result* result) {
     static const struct {
         unsigned flag;
@@ -149,24 +128,30 @@ mbe_softBitFromLlr(int16_t llr) {
     return soft;
 }
 
-void
+int
 mbe_softBitsFromHard(const char* bits, mbe_soft_bit* soft, size_t count, uint8_t reliability) {
-    if (!bits || !soft) {
-        return;
+    if (!soft) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    int ret = mbe_validate_bits(bits, count);
+    if (ret < 0) {
+        return ret;
     }
     for (size_t i = 0u; i < count; ++i) {
         soft[i] = mbe_softBitFromHard(bits[i], reliability);
     }
+    return 0;
 }
 
-void
+int
 mbe_softBitsFromLlr(const int16_t* llr, mbe_soft_bit* soft, size_t count) {
     if (!llr || !soft) {
-        return;
+        return MBE_STATUS_INVALID_ARGUMENT;
     }
     for (size_t i = 0u; i < count; ++i) {
         soft[i] = mbe_softBitFromLlr(llr[i]);
     }
+    return 0;
 }
 
 /**

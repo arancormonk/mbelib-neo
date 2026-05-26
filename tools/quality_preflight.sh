@@ -12,6 +12,7 @@ tools/cmake_format_check.sh
 tools/shell_lint.sh
 tools/workflow_lint.sh
 tools/check_workflow_git_pins.sh
+tools/check_workflow_download_pins.sh
 tools/zizmor.sh
 tools/osv_scan.sh
 tools/gitleaks.sh

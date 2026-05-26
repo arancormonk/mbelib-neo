@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "ecc_const.h"
+#include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
 
 /*
@@ -164,8 +165,12 @@ hamming1511_soft_common(const mbe_soft_bit* in, char* out, const int generator[4
     int best_diffs = 0x3fffffff;
     int have_best = 0;
 
-    if (!in || !out) {
-        return 0;
+    if (!out) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    int ret = mbe_validate_soft_bits(in, 15u);
+    if (ret < 0) {
+        return ret;
     }
 
     char hard_in[15];
@@ -213,13 +218,17 @@ hamming1511_soft_common(const mbe_soft_bit* in, char* out, const int generator[4
  * @brief Correct a (23,12) Golay encoded block in-place and extract data.
  * @param block Pointer to packed 23-bit codeword (LSBs contain codeword). On return, holds 12-bit data.
  */
-void
+int
 mbe_checkGolayBlock(long int* block) {
 
     int i;
     int syndrome, eccexpected, eccbits, databits;
     uint32_t mask;
     uint32_t block_u;
+
+    if (!block) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
 
     block_u = (uint32_t)(*block);
 
@@ -238,6 +247,7 @@ mbe_checkGolayBlock(long int* block) {
     databits ^= golayMatrix[syndrome];
 
     *block = (long)databits;
+    return 0;
 }
 
 /**
@@ -251,6 +261,15 @@ mbe_golay2312(const char* in, char* out) {
 
     int i, errs;
     uint32_t block = 0u;
+    int ret;
+
+    if (!out) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_bits(in, 23u);
+    if (ret < 0) {
+        return ret;
+    }
 
     for (i = 22; i >= 0; i--) {
         block <<= 1;
@@ -258,7 +277,10 @@ mbe_golay2312(const char* in, char* out) {
     }
 
     long tmp = (long)block;
-    mbe_checkGolayBlock(&tmp);
+    ret = mbe_checkGolayBlock(&tmp);
+    if (ret < 0) {
+        return ret;
+    }
     block = (uint32_t)tmp;
 
     for (i = 22; i >= 11; i--) {
@@ -287,9 +309,14 @@ mbe_golay2312Soft(const mbe_soft_bit* in, char* out) {
     int best_score = 0x3fffffff;
     int best_data_diffs = 0x3fffffff;
     int have_best = 0;
+    int ret;
 
-    if (!in || !out) {
-        return 0;
+    if (!out) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_soft_bits(in, 23u);
+    if (ret < 0) {
+        return ret;
     }
 
     for (int i = 0; i < 23; ++i) {
@@ -341,6 +368,15 @@ mbe_hamming1511(const char* in, char* out) {
     int i, j, errs;
     uint32_t block = 0u;
     int syndrome;
+    int ret;
+
+    if (!out) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_bits(in, 15u);
+    if (ret < 0) {
+        return ret;
+    }
 
     errs = 0;
 
@@ -388,6 +424,15 @@ mbe_7100x4400hamming1511(const char* in, char* out) {
     int i, j, errs;
     uint32_t block = 0u;
     int syndrome;
+    int ret;
+
+    if (!out) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    ret = mbe_validate_bits(in, 15u);
+    if (ret < 0) {
+        return ret;
+    }
 
     errs = 0;
 

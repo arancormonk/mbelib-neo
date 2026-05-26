@@ -20,6 +20,6 @@ if [[ -d "$hooks_dir" ]]; then
   shopt -u nullglob
 fi
 
-echo "Done. Commits auto-format staged C/C++ files; pushes run local CI-style strict checks (workflow Git pin guardrail, format, CMake format, clang-tidy, cppcheck, iwyu, fanalyzer, semgrep, zizmor, OSV scan, shell/workflow lint, lizard) on changed paths."
+echo "Done. Commits auto-format staged C/C++ files; pushes run local CI-style strict checks (workflow source/download pin guardrails, format, CMake format, clang-tidy, cppcheck, iwyu, fanalyzer, semgrep, zizmor, OSV scan, shell/workflow lint, lizard) on changed paths."
 echo "Tip: run tools/preflight_ci.sh to execute the same local quality gates without pushing."
 echo "Tip: set MBE_HOOK_RUN_SCAN_BUILD=1 for the heavier full scan-build pass."
