@@ -614,20 +614,20 @@ MBE_API void mbe_setThreadRngSeed(uint32_t seed);
 /**
  * @brief Copy MBE parameter set from one struct to another.
  * @param cur_mp Source parameters.
- * @param prev_mp Destination parameters.
+ * @param prev_mp Destination parameters. If either pointer is NULL, this is a no-op.
  */
 MBE_API void mbe_moveMbeParms(const mbe_parms* cur_mp, mbe_parms* prev_mp);
 /**
  * @brief Replace current parameters with the last known parameters.
  * @param cur_mp Destination parameters to fill.
- * @param prev_mp Source parameters from previous frame.
+ * @param prev_mp Source parameters from previous frame. If either pointer is NULL, this is a no-op.
  */
 MBE_API void mbe_useLastMbeParms(mbe_parms* cur_mp, const mbe_parms* prev_mp);
 /**
  * @brief Initialize parameter state for decoding and synthesis.
  * @param cur_mp Output: current parameter state.
  * @param prev_mp Output: previous parameter state (zeroed/reset).
- * @param prev_mp_enhanced Output: enhanced previous parameter state.
+ * @param prev_mp_enhanced Output: enhanced previous parameter state. If any output pointer is NULL, this is a no-op.
  */
 MBE_API void mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
@@ -642,14 +642,14 @@ MBE_API void mbe_spectralAmpEnhance(mbe_parms* cur_mp);
  * @brief Synthesize tone frame (AMBE tone indices) into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
  * @param ambe_d   AMBE parameter bits (49).
- * @param cur_mp   Current parameter set (tone synthesis state).
+ * @param cur_mp   Current parameter set (tone synthesis state). NULL or invalid tone inputs synthesize silence.
  */
 MBE_API void mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp);
 /**
  * @brief Synthesize tone for D-STAR style indices into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
  * @param ambe_d   AMBE parameter bits (49).
- * @param cur_mp   Current parameter set.
+ * @param cur_mp   Current parameter set. NULL synthesizes silence.
  * @param ID1      Tone index selector.
  */
 MBE_API void mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp, int ID1);

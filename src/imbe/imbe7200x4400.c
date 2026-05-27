@@ -24,6 +24,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -311,22 +312,44 @@ imbe_spectral_rho(int L) {
     return 0.7f;
 }
 
+static int
+imbe_clamp_harmonic_count(int L) {
+    if (L < MBE_MIN_HARMONIC_BANDS) {
+        return MBE_MIN_HARMONIC_BANDS;
+    }
+    if (L > MBE_MAX_HARMONIC_BANDS) {
+        return MBE_MAX_HARMONIC_BANDS;
+    }
+    return L;
+}
+
 static void
 imbe_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float rho) {
     int intkl[57];
     float flokl[57], deltal[57];
+    int cur_L = imbe_clamp_harmonic_count(cur_mp->L);
+    int prev_L = imbe_clamp_harmonic_count(prev_mp->L);
 
-    if (cur_mp->L > prev_mp->L) {
-        for (int l = prev_mp->L + 1; l <= cur_mp->L; l++) {
-            prev_mp->Ml[l] = prev_mp->Ml[prev_mp->L];
-            prev_mp->log2Ml[l] = prev_mp->log2Ml[prev_mp->L];
+    cur_mp->L = cur_L;
+
+    if (cur_L > prev_L) {
+        for (int l = prev_L + 1; l <= cur_L; l++) {
+            prev_mp->Ml[l] = prev_mp->Ml[prev_L];
+            prev_mp->log2Ml[l] = prev_mp->log2Ml[prev_L];
         }
     }
+    prev_mp->log2Ml[0] = prev_mp->log2Ml[1];
+    prev_mp->Ml[0] = prev_mp->Ml[1];
 
     float Sum77 = 0;
-    for (int l = 1; l <= cur_mp->L; l++) {
-        flokl[l] = ((float)prev_mp->L / (float)cur_mp->L) * (float)l;
+    for (int l = 1; l <= cur_L; l++) {
+        flokl[l] = ((float)prev_L / (float)cur_L) * (float)l;
         intkl[l] = (int)(flokl[l]);
+        if (intkl[l] < 0) {
+            intkl[l] = 0;
+        } else if (intkl[l] > MBE_MAX_HARMONIC_BANDS) {
+            intkl[l] = MBE_MAX_HARMONIC_BANDS;
+        }
 #ifdef IMBE_DEBUG
         fprintf(stderr, "flokl: %e, intkl: %i ", flokl[l], intkl[l]);
 #endif
@@ -334,18 +357,25 @@ imbe_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const flo
 #ifdef IMBE_DEBUG
         fprintf(stderr, "deltal: %e ", deltal[l]);
 #endif
-        Sum77 = Sum77
-                + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[intkl[l] + 1]));
+        int upper = intkl[l] + 1;
+        if (upper > MBE_MAX_HARMONIC_BANDS) {
+            upper = MBE_MAX_HARMONIC_BANDS;
+        }
+        Sum77 = Sum77 + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[upper]));
     }
-    Sum77 = ((rho / (float)cur_mp->L) * Sum77);
+    Sum77 = ((rho / (float)cur_L) * Sum77);
 
 #ifdef IMBE_DEBUG
     fprintf(stderr, "Sum77: %e\n", Sum77);
 #endif
 
-    for (int l = 1; l <= cur_mp->L; l++) {
+    for (int l = 1; l <= cur_L; l++) {
+        int upper = intkl[l] + 1;
+        if (upper > MBE_MAX_HARMONIC_BANDS) {
+            upper = MBE_MAX_HARMONIC_BANDS;
+        }
         float c1 = (rho * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-        float c2 = (rho * deltal[l] * prev_mp->log2Ml[intkl[l] + 1]);
+        float c2 = (rho * deltal[l] * prev_mp->log2Ml[upper]);
         cur_mp->log2Ml[l] = Tl[l] + c1 + c2 - Sum77;
         cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);
 #ifdef IMBE_DEBUG

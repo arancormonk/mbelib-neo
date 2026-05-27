@@ -343,6 +343,9 @@ mbe_versionString(void) {
  */
 void
 mbe_moveMbeParms(const mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    if (!cur_mp || !prev_mp) {
+        return;
+    }
     *prev_mp = *cur_mp;
 }
 
@@ -355,6 +358,9 @@ mbe_moveMbeParms(const mbe_parms* cur_mp, mbe_parms* prev_mp) {
  */
 void
 mbe_useLastMbeParms(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    if (!cur_mp || !prev_mp) {
+        return;
+    }
     *cur_mp = *prev_mp;
 }
 
@@ -366,6 +372,10 @@ mbe_useLastMbeParms(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
  */
 void
 mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+
+    if (!cur_mp || !prev_mp || !prev_mp_enhanced) {
+        return;
+    }
 
     int l;
     prev_mp->swn = 0;
@@ -750,6 +760,11 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
 #else
     int i;
 
+    if (!cur_mp || mbe_validate_bits(ambe_d, 49u) < 0) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
+
     int u0, u1, u2, u3;
     u0 = u1 = u2 = u3 = 0;
 
@@ -815,6 +830,11 @@ mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp,
     int AD = 103; /* JMBE nominal D-STAR tone amplitude */
     float freq1 = 0, freq2 = 0;
     (void)ambe_d;
+
+    if (!cur_mp) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
 
     switch (ID1) {
         // single tones, set frequency
