@@ -632,6 +632,9 @@ MBE_API void mbe_useLastMbeParms(mbe_parms* cur_mp, const mbe_parms* prev_mp);
 MBE_API void mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
  * @brief Apply spectral amplitude enhancement in-place.
+ *
+ * Invalid parameter state, including an out-of-range harmonic count `L`, is
+ * ignored.
  * @param cur_mp In/out parameter set to enhance.
  */
 MBE_API void mbe_spectralAmpEnhance(mbe_parms* cur_mp);
@@ -656,6 +659,9 @@ MBE_API void mbe_synthesizeSilencef(float* aout_buf);
 MBE_API void mbe_synthesizeSilence(short* aout_buf);
 /**
  * @brief Synthesize one speech frame into float PCM.
+ *
+ * If `cur_mp` or `prev_mp` has an out-of-range harmonic count `L`, the output
+ * buffer is filled with silence.
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
@@ -664,6 +670,9 @@ MBE_API void mbe_synthesizeSilence(short* aout_buf);
 MBE_API void mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality);
 /**
  * @brief Synthesize one speech frame into 16-bit PCM.
+ *
+ * If `cur_mp` or `prev_mp` has an out-of-range harmonic count `L`, the output
+ * buffer is filled with silence.
  * @param aout_buf Output buffer of 160 16-bit samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
@@ -675,8 +684,10 @@ MBE_API void mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms*
  *
  * Applies the same scaling used by the `short` entry points: a fixed gain of
  * `7.0` and soft clipping at 95% of int16 full-scale before converting to
- * `short`. This makes the output equivalent to calling the corresponding
- * `short` synthesis APIs with the same input state.
+ * `short`. Non-finite input samples are handled before conversion: NaN becomes
+ * zero and infinities clip to the corresponding bound. This makes the output
+ * equivalent to calling the corresponding `short` synthesis APIs with the same
+ * input state.
  * @param float_buf Input 160 float samples.
  * @param aout_buf  Output 160 16-bit samples.
  */
@@ -724,6 +735,9 @@ MBE_API void mbe_synthesizeComfortNoise(short* aout_buf);
 /**
  * @brief Apply adaptive smoothing to parameters based on error rates.
  *        Implements JMBE Algorithms #111-116.
+ *
+ * Invalid parameter state, including an out-of-range harmonic count `L` in
+ * either parameter set, is ignored.
  * @param cur_mp Current frame parameters (modified in-place).
  * @param prev_mp Previous frame parameters (for local energy).
  */

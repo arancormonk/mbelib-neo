@@ -43,6 +43,7 @@
 #include "mbe_result.h"
 #include "mbe_tone.h"
 #include "mbe_unvoiced_fft.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 #include "mbelib-neo/version.h"
 #include "mbelib_const.h"
@@ -641,6 +642,10 @@ mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp) {
     float Rm0, Rm1;
     float cos_tab[57];
 
+    if (MBE_UNLIKELY(!cur_mp || !mbe_harmonic_count_is_valid(cur_mp->L))) {
+        return 0.0f;
+    }
+
     mbe_precompute_harmonic_cosines(cos_tab, cur_mp->L, cur_mp->w0);
     mbe_accumulate_spectral_energy(cur_mp, cos_tab, &Rm0, &Rm1);
 
@@ -1027,6 +1032,15 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 
     const int N = 160;
 
+    if (MBE_UNLIKELY(!aout_buf)) {
+        return;
+    }
+    if (MBE_UNLIKELY(!cur_mp || !prev_mp || !mbe_harmonic_count_is_valid(cur_mp->L)
+                     || !mbe_harmonic_count_is_valid(prev_mp->L))) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
+
     /* Silence unused parameter warning - uvquality is kept for API compatibility */
     (void)uvquality;
 
@@ -1101,6 +1115,9 @@ void
 mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
     float float_buf[160];
 
+    if (MBE_UNLIKELY(!aout_buf)) {
+        return;
+    }
     mbe_synthesizeSpeechf(float_buf, cur_mp, prev_mp, uvquality);
     mbe_floattoshort(float_buf, aout_buf);
 }
@@ -1119,26 +1136,60 @@ mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int
  * @param float_buf Input 160 float samples.
  * @param aout_buf  Output 160 int16 samples.
  */
-#if defined(MBELIB_ENABLE_SIMD)
-static void
-mbe_floattoshort_scalar(const float* restrict float_buf, short* restrict aout_buf) {
-    /* JMBE-compatible soft clipping at 95% of maximum amplitude */
+static inline float
+mbe_scaleAndClipFloatSampleForShort(float sample) {
     const float again = 7.0f;
     const float max_amplitude = 32767.0f * 0.95f; /* ~31128.65 */
+    uint32_t sample_bits;
+    memcpy(&sample_bits, &sample, sizeof(sample_bits));
+
+    const uint32_t abs_bits = sample_bits & 0x7FFFFFFFu;
+    if (abs_bits > 0x7F800000u) {
+        return 0.0f;
+    }
+    if (abs_bits == 0x7F800000u) {
+        return ((sample_bits & 0x80000000u) != 0u) ? -max_amplitude : max_amplitude;
+    }
+
+    float audio = again * sample;
+    if (audio > max_amplitude) {
+#ifdef MBE_DEBUG
+        fprintf(stderr, "audio clip: %f\n", audio);
+#endif
+        return max_amplitude;
+    }
+    if (audio < -max_amplitude) {
+#ifdef MBE_DEBUG
+        fprintf(stderr, "audio clip: %f\n", audio);
+#endif
+        return -max_amplitude;
+    }
+    return audio;
+}
+
+#if defined(MBELIB_ENABLE_SIMD)
+static inline int
+mbe_floatSampleIsNonFinite(float sample) {
+    uint32_t sample_bits;
+    memcpy(&sample_bits, &sample, sizeof(sample_bits));
+
+    return (sample_bits & 0x7FFFFFFFu) >= 0x7F800000u;
+}
+
+static int
+mbe_floatBufferHasNonFinite(const float* float_buf) {
     for (int i = 0; i < 160; i++) {
-        float audio = again * float_buf[i];
-        if (audio > max_amplitude) {
-#ifdef MBE_DEBUG
-            fprintf(stderr, "audio clip: %f\n", audio);
-#endif
-            audio = max_amplitude;
-        } else if (audio < -max_amplitude) {
-#ifdef MBE_DEBUG
-            fprintf(stderr, "audio clip: %f\n", audio);
-#endif
-            audio = -max_amplitude;
+        if (mbe_floatSampleIsNonFinite(float_buf[i])) {
+            return 1;
         }
-        aout_buf[i] = (short)(audio);
+    }
+    return 0;
+}
+
+static void
+mbe_floattoshort_scalar(const float* restrict float_buf, short* restrict aout_buf) {
+    for (int i = 0; i < 160; i++) {
+        aout_buf[i] = (short)mbe_scaleAndClipFloatSampleForShort(float_buf[i]);
     }
 }
 
@@ -1235,33 +1286,27 @@ mbe_init_runtime_dispatch(void) {
 
 void
 mbe_floattoshort(const float* restrict float_buf, short* restrict aout_buf) {
+    if (MBE_UNLIKELY(!float_buf || !aout_buf)) {
+        return;
+    }
+    if (MBE_UNLIKELY(mbe_floatBufferHasNonFinite(float_buf))) {
+        mbe_floattoshort_scalar(float_buf, aout_buf);
+        return;
+    }
     if (MBE_UNLIKELY(!mbe_floattoshort_impl)) {
         mbe_init_runtime_dispatch();
     }
     mbe_floattoshort_impl(float_buf, aout_buf);
 }
 
-#else /* MBELIB_ENABLE_SIMD not set: keep scalar implementation */
+#else  /* MBELIB_ENABLE_SIMD not set: keep scalar implementation */
 void
 mbe_floattoshort(const float* restrict float_buf, short* restrict aout_buf) {
-    /* JMBE-compatible soft clipping at 95% of maximum amplitude
-     * This provides headroom and prevents harsh clipping artifacts */
-    const float again = 7.0f;
-    const float max_amplitude = 32767.0f * 0.95f; /* ~31128.65 */
+    if (MBE_UNLIKELY(!float_buf || !aout_buf)) {
+        return;
+    }
     for (int i = 0; i < 160; i++) {
-        float audio = again * float_buf[i];
-        if (audio > max_amplitude) {
-#ifdef MBE_DEBUG
-            fprintf(stderr, "audio clip: %f\n", audio);
-#endif
-            audio = max_amplitude;
-        } else if (audio < -max_amplitude) {
-#ifdef MBE_DEBUG
-            fprintf(stderr, "audio clip: %f\n", audio);
-#endif
-            audio = -max_amplitude;
-        }
-        aout_buf[i] = (short)(audio);
+        aout_buf[i] = (short)mbe_scaleAndClipFloatSampleForShort(float_buf[i]);
     }
 }
 #endif /* MBELIB_ENABLE_SIMD */

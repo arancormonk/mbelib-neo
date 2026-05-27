@@ -7,6 +7,7 @@
 #define MBELIB_NEO_INTERNAL_MBE_RESULT_H
 
 #include <stddef.h>
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
 #define MBE_RESULT_CONTEXT_FLAGS (MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID)
@@ -38,24 +39,51 @@ mbe_validate_soft_bits(const mbe_soft_bit* bits, size_t count) {
 }
 
 static inline int
+mbe_result_validate_component_errors(const mbe_process_result* result, int* component_total) {
+    if (!mbe_error_count_is_valid(result->c0_errors) || !mbe_error_count_is_valid(result->protected_errors)
+        || !mbe_error_count_is_valid(result->c4_errors) || !mbe_error_count_is_valid(result->total_errors)) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    if (result->c0_errors > MBE_MAX_FRAME_BITS - result->protected_errors) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+
+    *component_total = result->c0_errors + result->protected_errors;
+    if (!mbe_error_count_is_valid(*component_total)) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+
+    return 0;
+}
+
+static inline int
+mbe_result_total_errors_are_consistent(const mbe_process_result* result, int total, int component_total) {
+    const int c0_valid = (result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u;
+    const int c4_valid = (result->flags & MBE_PROCESS_FLAG_C4_VALID) != 0u;
+
+    return (component_total == 0 || total >= component_total) && (!c0_valid || total >= result->c0_errors)
+           && (!c4_valid || total >= result->c4_errors);
+}
+
+static inline int
 mbe_result_resolve_total_errors(const mbe_process_result* result, int* total_errors) {
+    int component_total = 0;
     int total = 0;
 
     if (!total_errors) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    if (result) {
-        if (result->c0_errors < 0 || result->protected_errors < 0 || result->c4_errors < 0
-            || result->total_errors < 0) {
-            return MBE_STATUS_INVALID_ARGUMENT;
-        }
-        total = result->total_errors;
-        if (total == 0 && (result->c0_errors != 0 || result->protected_errors != 0)) {
-            total = result->c0_errors + result->protected_errors;
-        }
-        if (((result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u) && total < result->c0_errors) {
-            return MBE_STATUS_INVALID_ARGUMENT;
-        }
+    if (!result) {
+        *total_errors = 0;
+        return 0;
+    }
+    if (mbe_result_validate_component_errors(result, &component_total) < 0) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+
+    total = (result->total_errors == 0 && component_total != 0) ? component_total : result->total_errors;
+    if (!mbe_result_total_errors_are_consistent(result, total, component_total)) {
+        return MBE_STATUS_INVALID_ARGUMENT;
     }
 
     *total_errors = total;

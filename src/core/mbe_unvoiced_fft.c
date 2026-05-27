@@ -12,6 +12,7 @@
 
 #include "mbe_compiler.h"
 #include "mbe_unvoiced_fft.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 #include "pffft.h"
 
@@ -641,6 +642,10 @@ mbe_magnitude_squared_sum(const float* restrict fft, int start, int end) {
 
 static void
 mbe_calculate_unvoiced_band_edges(int* a_min, int* b_max, int L, float w0) {
+    if (MBE_UNLIKELY(!mbe_harmonic_count_is_valid(L))) {
+        return;
+    }
+
     const float multiplier = MBE_256_OVER_2PI * w0;
 
     for (int l = 1; l <= L; l++) {
@@ -659,6 +664,10 @@ static void
 mbe_apply_unvoiced_band_scaling(float* restrict dftBinScalor, const float* restrict Uw_fft,
                                 const mbe_parms* restrict cur_mp, const int* restrict a_min,
                                 const int* restrict b_max) {
+    if (MBE_UNLIKELY(!mbe_harmonic_count_is_valid(cur_mp->L))) {
+        return;
+    }
+
     for (int l = 1; l <= cur_mp->L; l++) {
         if (cur_mp->Vl[l] == 0) {
             int bin_count = b_max[l] - a_min[l];
@@ -706,7 +715,8 @@ void
 mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict cur_mp,
                                    const mbe_parms* restrict prev_mp, mbe_fft_plan* restrict plan,
                                    const float* restrict noise_buffer) {
-    if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan || !noise_buffer)) {
+    if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan || !noise_buffer || !mbe_harmonic_count_is_valid(cur_mp->L)
+                     || !mbe_harmonic_count_is_valid(prev_mp->L))) {
         return;
     }
 
@@ -753,7 +763,8 @@ mbe_synthesizeUnvoicedFFTWithNoise(float* restrict output, mbe_parms* restrict c
 void
 mbe_synthesizeUnvoicedFFT(float* restrict output, mbe_parms* restrict cur_mp, const mbe_parms* restrict prev_mp,
                           mbe_fft_plan* restrict plan) {
-    if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan)) {
+    if (MBE_UNLIKELY(!output || !cur_mp || !prev_mp || !plan || !mbe_harmonic_count_is_valid(cur_mp->L)
+                     || !mbe_harmonic_count_is_valid(prev_mp->L))) {
         return;
     }
 

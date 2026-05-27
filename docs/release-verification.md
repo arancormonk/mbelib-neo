@@ -7,8 +7,9 @@ https://github.com/arancormonk/mbelib-neo/releases
 ## Release Identifiers
 
 Release tags use the form `vX.Y.Z`. The tag must match the project version
-declared by CMake and must be an annotated tag signed by the trusted mbelib-neo
-release key, or the release workflow fails before packaging.
+declared by CMake, must be an annotated tag signed by the trusted mbelib-neo
+release key, and must point at a commit already contained in `origin/main`, or
+the release workflow fails before packaging.
 
 ## Release Signing
 
@@ -26,7 +27,8 @@ git fetch --tags https://github.com/arancormonk/mbelib-neo.git
 git tag -v v1.2.7
 ```
 
-The expected release-signing key fingerprint for v1.2.7 is:
+The release workflow pins this exact primary key fingerprint before trusting the
+checked-in key file:
 
 ```text
 5FAF 0C47 C8E1 F95D 33CD 83B1 E42E 43AD D853 F280
