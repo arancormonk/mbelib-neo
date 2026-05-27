@@ -12,8 +12,6 @@
  */
 int
 main(void) {
-    char ver[32] = {0};
-    mbe_printVersion(ver);
-    printf("mbelib version: %s\n", ver);
+    printf("mbelib version: %s\n", mbe_versionString());
     return 0;
 }

@@ -26,8 +26,10 @@
 
 #include <math.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
+#ifdef MBE_DEBUG
+#include <stdio.h>
+#endif
 #include "mbe_compiler.h"
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(MBE_SIMD_TARGET_SSE2)
@@ -308,24 +310,8 @@ mbe_add_voiced_dual_block4(float* restrict Ss, const float* restrict W_prev, flo
 #endif
 }
 
-/**
- * @brief Write the library version string into the provided buffer.
- * @param str Output buffer receiving a NUL-terminated version string.
- *            The current ABI writes up to 31 characters plus NUL; provide at
- *            least 32 bytes.
- */
-void
-mbe_printVersion(char* str) {
-    if (!str) {
-        return;
-    }
-    /* Ensure we never overrun caller buffer; tests pass a 32B buffer. */
-    (void)snprintf(str, 32, "%s", MBELIB_VERSION);
-}
-
 /** @} */ /* end of mbe_internal */
 
-/* Convenience accessor that avoids buffer management. */
 const char*
 mbe_versionString(void) {
     return MBELIB_VERSION;

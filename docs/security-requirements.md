@@ -72,8 +72,8 @@ The project applies the following controls:
   architecture detection
 - sanitizer CI for AddressSanitizer and UndefinedBehaviorSanitizer
 - ClusterFuzzLite PR fuzzing with AddressSanitizer for frame-processing paths
-- default-on Release-like compiler/linker hardening for supported Clang/GCC
-  targets, with Linux release verification in CI
+- default-on Release-like compiler/linker hardening for supported Clang, GCC,
+  and MSVC targets, with release verification in CI
 - static analysis through CodeQL, Semgrep, clang-tidy, cppcheck, scan-build,
   GCC `-fanalyzer`, and include-what-you-use
 - Gitleaks and GitHub secret scanning for credential leakage

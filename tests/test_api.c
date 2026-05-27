@@ -13,13 +13,11 @@
 #include "mbelib-neo/version.h"
 
 /**
- * @brief Test entry: verifies mbe_printVersion matches MBELIB_VERSION.
+ * @brief Test entry: verifies version helpers match MBELIB_VERSION.
  */
 int
 main(void) {
-    char ver[32] = {0};
-    mbe_printVersion(ver);
-    assert(strcmp(ver, MBELIB_VERSION) == 0);
+    assert(strcmp(mbe_versionString(), MBELIB_VERSION) == 0);
 
     mbe_process_result result;
     mbe_initProcessResult(&result);
