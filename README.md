@@ -157,10 +157,7 @@ Minimal example
 #include <mbelib-neo/mbelib.h>
 
 int main(void) {
-  char ver[32] = {0};
-  mbe_printVersion(ver);
-  printf("mbelib version: %s\n", ver);
-  // Or: puts(mbe_versionString());
+  printf("mbelib version: %s\n", mbe_versionString());
   return 0;
 }
 ```
@@ -200,7 +197,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 - Use `mbe_formatProcessResult()` when you need a compact status string from a result. It writes `'='` repeated `total_errors` times, then any `E`, `T`, `R`, and `M` flags in that order, truncated to the supplied buffer size.
 - Hard input bits must be exactly `0` or `1`; soft `mbe_soft_bit.bit` values must also be exactly `0` or `1`. Invalid pointers/counters return `MBE_STATUS_INVALID_ARGUMENT`; invalid bit values return `MBE_STATUS_INVALID_BITS`.
 - For parameter-only processing, seed `mbe_process_result.total_errors` and any valid C0/C4 context before calling `mbe_process*Data*`.
-- `mbe_printVersion(char *str)` uses a legacy fixed write width of 32 bytes. Pass a buffer of at least 32 bytes, or prefer `mbe_versionString()` when possible.
+- Use `mbe_versionString()` for the static NUL-terminated library version string.
 
 ### Audio Sample Scaling (Float vs int16)
 
@@ -254,7 +251,7 @@ cmake --install build --prefix /mingw64
 cat > consumer.c << 'EOF'
 #include <stdio.h>
 #include <mbelib-neo/mbelib.h>
-int main(void) { char ver[32]={0}; mbe_printVersion(ver); printf("%s\n", ver); }
+int main(void) { printf("%s\n", mbe_versionString()); }
 EOF
 cc consumer.c $(pkg-config --cflags --libs libmbe-neo) -o consumer.exe
 ```
@@ -291,7 +288,7 @@ These improvements bring mbelib-neo's audio quality closer to the reference JMBE
 
 - Public API is prefixed `mbe_` and declared in `mbelib.h`.
 - Float and 16‑bit PCM variants are provided (e.g., `mbe_processAmbe3600x2400Framef` and `mbe_processAmbe3600x2400Frame`).
-- Version macro `MBELIB_VERSION` is defined in the generated header `mbelib-neo/version.h` and returned by `mbe_printVersion`.
+- Version macro `MBELIB_VERSION` is defined in the generated header `mbelib-neo/version.h`.
 - `mbe_versionString()` returns a const pointer to the version string.
 - Processing APIs return an `int` error total and use `mbe_process_result` for decode/synthesis status.
 - Soft-decision ECC helpers are public for Golay(23,12), Hamming(15,11), and the IMBE 7100x4400 Hamming mapping.

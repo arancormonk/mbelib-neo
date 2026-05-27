@@ -34,11 +34,29 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       - name: Test (${{ matrix.preset }})
         run: ctest --preset ${{ matrix.preset }} -V
-      - name: Verify release hardening
-        if: matrix.os == 'ubuntu-latest' && matrix.preset == 'dev-release'
+      - name: Verify release hardening (Unix)
+        if: matrix.os != 'windows-latest' && matrix.preset == 'dev-release'
         run: |
-          tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release
+          case "${RUNNER_OS}" in
+            Linux) lib_path="build/dev-release/libmbe-neo.so" ;;
+            macOS) lib_path="build/dev-release/libmbe-neo.dylib" ;;
+            *)
+              echo "Unsupported Unix runner OS: ${RUNNER_OS}" >&2
+              exit 1
+              ;;
+          esac
+          tools/check_release_hardening.sh "${lib_path}" build/dev-release
           tools/check_release_hardening.sh build/dev-release/example_print_version build/dev-release
+      - name: Verify release hardening (Windows)
+        if: matrix.os == 'windows-latest' && matrix.preset == 'dev-release'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path build/dev-release -Filter mbe-neo.dll -Recurse | Select-Object -First 1
+          $exe = Get-ChildItem -Path build/dev-release -Filter example_print_version.exe -Recurse | Select-Object -First 1
+          if ($null -eq $dll) { throw "mbe-neo.dll not found under build/dev-release" }
+          if ($null -eq $exe) { throw "example_print_version.exe not found under build/dev-release" }
+          ./tools/check_release_hardening.ps1 $dll.FullName
+          ./tools/check_release_hardening.ps1 $exe.FullName
 
   sanitize-linux:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
@@ -582,8 +600,7 @@ jobs:
           #include <stdio.h>
           #include <mbelib-neo/mbelib.h>
           int main(void) {
-            char ver[32] = {0};
-            mbe_printVersion(ver);
+            const char *ver = mbe_versionString();
             printf("version: %s\n", ver);
             return ver[0] ? 0 : 1;
           }
@@ -605,8 +622,7 @@ jobs:
           #include <stdio.h>
           #include <mbelib-neo/mbelib.h>
           int main(void) {
-            char ver[32] = {0};
-            mbe_printVersion(ver);
+            const char *ver = mbe_versionString();
             printf("version: %s\n", ver);
             return ver[0] ? 0 : 1;
           }
@@ -643,8 +659,7 @@ jobs:
           #include <stdio.h>
           #include <mbelib-neo/mbelib.h>
           int main(void) {
-            char ver[32] = {0};
-            mbe_printVersion(ver);
+            const char *ver = mbe_versionString();
             printf("version: %s\n", ver);
             return ver[0] ? 0 : 1;
           }
@@ -679,11 +694,29 @@ jobs:
         run: cmake --build --preset dev-release --parallel
       - name: Test (dev-release preset)
         run: ctest --preset dev-release -V
-      - name: Verify release hardening
-        if: runner.os == 'Linux'
+      - name: Verify release hardening (Unix)
+        if: runner.os != 'Windows'
         run: |
-          tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release
+          case "${RUNNER_OS}" in
+            Linux) lib_path="build/dev-release/libmbe-neo.so" ;;
+            macOS) lib_path="build/dev-release/libmbe-neo.dylib" ;;
+            *)
+              echo "Unsupported Unix runner OS: ${RUNNER_OS}" >&2
+              exit 1
+              ;;
+          esac
+          tools/check_release_hardening.sh "${lib_path}" build/dev-release
           tools/check_release_hardening.sh build/dev-release/example_print_version build/dev-release
+      - name: Verify release hardening (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path build/dev-release -Filter mbe-neo.dll -Recurse | Select-Object -First 1
+          $exe = Get-ChildItem -Path build/dev-release -Filter example_print_version.exe -Recurse | Select-Object -First 1
+          if ($null -eq $dll) { throw "mbe-neo.dll not found under build/dev-release" }
+          if ($null -eq $exe) { throw "example_print_version.exe not found under build/dev-release" }
+          ./tools/check_release_hardening.ps1 $dll.FullName
+          ./tools/check_release_hardening.ps1 $exe.FullName
       - name: Compute bundle name
         id: bundle
         shell: bash

@@ -158,51 +158,70 @@ if(MBELIB_ENABLE_HARDENING AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
 endif()
 
 function(_mbelib_apply_hardening target)
-    if(
-        NOT MBELIB_ENABLE_HARDENING
-        OR NOT (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
-    )
+    if(NOT MBELIB_ENABLE_HARDENING)
         return()
     endif()
 
-    _mbelib_flags_define_fortify(_mbelib_c_flags_define_fortify)
-    if(NOT _mbelib_c_flags_define_fortify)
-        target_compile_definitions(
-            ${target}
-            PRIVATE "$<${_mbelib_release_like_config}:_FORTIFY_SOURCE=2>"
-        )
-    endif()
-
-    if(MBELIB_C_HAS_STACK_PROTECTOR_STRONG)
-        target_compile_options(
-            ${target}
-            PRIVATE "$<${_mbelib_release_like_config}:-fstack-protector-strong>"
-        )
-    endif()
-    if(NOT APPLE AND MBELIB_C_HAS_STACK_CLASH_PROTECTION)
-        target_compile_options(
-            ${target}
-            PRIVATE "$<${_mbelib_release_like_config}:-fstack-clash-protection>"
-        )
-    endif()
-
     get_target_property(_mbelib_target_type ${target} TYPE)
-    if(
-        UNIX
-        AND NOT APPLE
+
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        _mbelib_flags_define_fortify(_mbelib_c_flags_define_fortify)
+        if(NOT _mbelib_c_flags_define_fortify)
+            target_compile_definitions(
+                ${target}
+                PRIVATE "$<${_mbelib_release_like_config}:_FORTIFY_SOURCE=2>"
+            )
+        endif()
+
+        if(MBELIB_C_HAS_STACK_PROTECTOR_STRONG)
+            target_compile_options(
+                ${target}
+                PRIVATE
+                    "$<${_mbelib_release_like_config}:-fstack-protector-strong>"
+            )
+        endif()
+        if(NOT APPLE AND MBELIB_C_HAS_STACK_CLASH_PROTECTION)
+            target_compile_options(
+                ${target}
+                PRIVATE
+                    "$<${_mbelib_release_like_config}:-fstack-clash-protection>"
+            )
+        endif()
+
+        if(
+            UNIX
+            AND NOT APPLE
+            AND NOT _mbelib_target_type STREQUAL "STATIC_LIBRARY"
+            AND NOT _mbelib_target_type STREQUAL "OBJECT_LIBRARY"
+        )
+            if(MBELIB_LD_HAS_RELRO)
+                target_link_options(
+                    ${target}
+                    PRIVATE "$<${_mbelib_release_like_config}:-Wl,-z,relro>"
+                )
+            endif()
+            if(MBELIB_LD_HAS_NOW)
+                target_link_options(
+                    ${target}
+                    PRIVATE "$<${_mbelib_release_like_config}:-Wl,-z,now>"
+                )
+            endif()
+        endif()
+    elseif(
+        MSVC
         AND NOT _mbelib_target_type STREQUAL "STATIC_LIBRARY"
         AND NOT _mbelib_target_type STREQUAL "OBJECT_LIBRARY"
     )
-        if(MBELIB_LD_HAS_RELRO)
+        target_link_options(
+            ${target}
+            PRIVATE
+                "$<${_mbelib_release_like_config}:/DYNAMICBASE>"
+                "$<${_mbelib_release_like_config}:/NXCOMPAT>"
+        )
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
             target_link_options(
                 ${target}
-                PRIVATE "$<${_mbelib_release_like_config}:-Wl,-z,relro>"
-            )
-        endif()
-        if(MBELIB_LD_HAS_NOW)
-            target_link_options(
-                ${target}
-                PRIVATE "$<${_mbelib_release_like_config}:-Wl,-z,now>"
+                PRIVATE "$<${_mbelib_release_like_config}:/HIGHENTROPYVA>"
             )
         endif()
     endif()

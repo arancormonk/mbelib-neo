@@ -32,7 +32,7 @@ Run the smallest useful set before opening a PR, then broaden it when the change
 - CMake changes: `tools/cmake_format_check.sh`.
 - Workflow changes: `tools/workflow_lint.sh` and `tools/zizmor.sh`.
 - Workflow source/download pin changes: `tools/check_workflow_git_pins.sh` and `tools/check_workflow_download_pins.sh`.
-- Release hardening changes: `tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release`.
+- Release hardening changes: run `tools/check_release_hardening.sh build/dev-release/libmbe-neo.so build/dev-release` on Linux and let CI verify macOS Mach-O and Windows PE release artifacts.
 - Dependency input changes: `tools/osv_scan.sh`.
 
 ## Required PR Status Checks

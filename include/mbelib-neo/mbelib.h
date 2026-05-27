@@ -590,14 +590,6 @@ MBE_API int mbe_processImbe7100x4400SoftFrame(short* aout_buf, mbe_process_resul
                                               const mbe_soft_bit imbe_fr[7][24], char imbe_d[88], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
 
-/* Prototypes from mbelib.c */
-/**
- * @brief Write the mbelib-neo version string into the provided buffer.
- * @param str Output buffer receiving a NUL-terminated version string.
- *            The current ABI writes up to 31 characters plus NUL; provide at
- *            least 32 bytes.
- */
-MBE_API void mbe_printVersion(char* str);
 /**
  * @brief Get a pointer to a static NUL-terminated version string.
  *        The returned pointer remains valid for the lifetime of the program.
