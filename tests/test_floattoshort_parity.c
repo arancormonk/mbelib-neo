@@ -8,6 +8,7 @@
  * @brief Exact parity checks for mbe_floattoshort().
  */
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +22,9 @@ reference_floattoshort(float sample) {
     const float again = 7.0f;
     const float max_amplitude = 32767.0f * 0.95f;
     float audio = again * sample;
+    if (audio != audio) {
+        audio = 0.0f;
+    }
     if (audio > max_amplitude) {
         audio = max_amplitude;
     } else if (audio < -max_amplitude) {
@@ -49,6 +53,9 @@ fill_test_input(float* input, uint32_t seed) {
     input[6] = -clip_point + (1.0f / 32768.0f);
     input[7] = 1.0f / 7.0f;
     input[8] = -1.0f / 7.0f;
+    input[9] = NAN;
+    input[10] = INFINITY;
+    input[11] = -INFINITY;
 }
 
 int

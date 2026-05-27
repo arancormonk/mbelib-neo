@@ -11,6 +11,7 @@
 
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Thread-local storage for comfort noise RNG to avoid cross-thread interference.
@@ -150,6 +151,9 @@ mbe_synthesizeComfortNoise(short* aout_buf) {
 static float
 mbe_current_frame_rm0(const mbe_parms* cur_mp) {
     float rm0 = 0.0f;
+    if (!cur_mp || !mbe_harmonic_count_is_valid(cur_mp->L)) {
+        return 0.0f;
+    }
     for (int l = 1; l <= cur_mp->L; l++) {
         rm0 += cur_mp->Ml[l] * cur_mp->Ml[l];
     }
@@ -253,7 +257,8 @@ mbe_applyAdaptiveSmoothingCore(mbe_parms* cur_mp, const mbe_parms* prev_mp, floa
 
 void
 mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0) {
-    if (MBE_UNLIKELY(!cur_mp || !prev_mp)) {
+    if (MBE_UNLIKELY(!cur_mp || !prev_mp || !mbe_harmonic_count_is_valid(cur_mp->L)
+                     || !mbe_harmonic_count_is_valid(prev_mp->L))) {
         return;
     }
 
@@ -262,7 +267,8 @@ mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, f
 
 void
 mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
-    if (MBE_UNLIKELY(!cur_mp || !prev_mp)) {
+    if (MBE_UNLIKELY(!cur_mp || !prev_mp || !mbe_harmonic_count_is_valid(cur_mp->L)
+                     || !mbe_harmonic_count_is_valid(prev_mp->L))) {
         return;
     }
 
