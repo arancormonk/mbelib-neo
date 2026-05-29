@@ -61,10 +61,10 @@ main(void) {
 
     /* Test 1: Determinism - same initial state produces identical output */
     fill_params_unvoiced(&cur1, &prev1);
-    mbe_synthesizeSpeechf(out1, &cur1, &prev1, 8);
+    mbe_synthesizeSpeechf(out1, &cur1, &prev1);
 
     fill_params_unvoiced(&cur2, &prev2);
-    mbe_synthesizeSpeechf(out2, &cur2, &prev2, 8);
+    mbe_synthesizeSpeechf(out2, &cur2, &prev2);
 
     for (int i = 0; i < 160; ++i) {
         if (!float_bits_equal(out1[i], out2[i])) {
@@ -76,7 +76,7 @@ main(void) {
     /* Test 2: State progression - consecutive frames produce different noise
      * (LCG state advances, so second frame should differ from first) */
     mbe_moveMbeParms(&cur1, &prev1); // advance: cur becomes prev for next frame
-    mbe_synthesizeSpeechf(out3, &cur1, &prev1, 8);
+    mbe_synthesizeSpeechf(out3, &cur1, &prev1);
 
     int diff = 0;
     for (int i = 0; i < 160; ++i) {
@@ -94,7 +94,7 @@ main(void) {
     mbe_parms cur_check, prev_check;
     fill_params_unvoiced(&cur_check, &prev_check);
     float seed_before = cur_check.noiseSeed;
-    mbe_synthesizeSpeechf(out1, &cur_check, &prev_check, 8);
+    mbe_synthesizeSpeechf(out1, &cur_check, &prev_check);
     float seed_after = cur_check.noiseSeed;
 
     if (float_bits_equal(seed_before, seed_after)) {

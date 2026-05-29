@@ -72,12 +72,6 @@ option(
     OFF
 )
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
-option(
-    MBELIB_STRICT_ORDER
-    "Reserved compatibility flag (currently no behavior change)"
-    OFF
-)
-
 # Warnings
 if(MBELIB_ENABLE_WARNINGS)
     if(MSVC)
@@ -105,7 +99,16 @@ if(MBELIB_ENABLE_WARNINGS)
             add_compile_options(/WX)
         endif()
     elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
-        add_compile_options(-Wall -Wextra -Wpedantic)
+        add_compile_options(
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wformat=2
+            -Wvla
+            -Wstrict-prototypes
+            -Wmissing-prototypes
+            -Wold-style-definition
+        )
         if(MBELIB_WARNINGS_AS_ERRORS)
             add_compile_options(-Werror)
         endif()
@@ -238,6 +241,12 @@ configure_file(
 
 # PFFFT sources (bundled, BSD-like FFTPACK license)
 set(PFFFT_SOURCES src/external/pffft/pffft.c src/external/pffft/fftpack.c)
+if(MBELIB_ENABLE_WARNINGS AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
+    set_source_files_properties(
+        ${PFFFT_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-Wno-missing-prototypes;-Wno-vla"
+    )
+endif()
 
 # Explicit source lists (avoids FILE(GLOB ...))
 set(MBELIB_FIRST_PARTY_SOURCES
@@ -326,15 +335,6 @@ if(NOTONES)
         PRIVATE DISABLE_AMBE_TONES
     )
 endif()
-if(MBELIB_STRICT_ORDER)
-    target_compile_definitions(mbe-shared PRIVATE MBELIB_STRICT_ORDER=1)
-    target_compile_definitions(mbe-static PRIVATE MBELIB_STRICT_ORDER=1)
-    target_compile_definitions(
-        mbe-codeql-first-party
-        PRIVATE MBELIB_STRICT_ORDER=1
-    )
-endif()
-
 # Documentation (Doxygen)
 if(MBELIB_BUILD_DOCS)
     find_package(Doxygen QUIET)

@@ -16,12 +16,12 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "imbe4400_internal.h"
 #include "imbe7200x4400_const.h"
 #include "mbe_adaptive.h"
+#include "mbe_bitpack.h"
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbe_validation.h"
@@ -60,7 +60,7 @@ imbe_reset_headroom_defaults(mbe_parms* mp) {
     }
 
     mp->swn = 0;
-    mp->un = 0;
+    mp->tonePhase = 0;
     /* Match JMBE IMBEModelParameters.copy() overflow path:
      * setMBEFundamentalFrequency(IMBEFundamentalFrequency.DEFAULT), then rebuild model arrays. */
     mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
@@ -74,7 +74,6 @@ imbe_reset_headroom_defaults(mbe_parms* mp) {
         mp->log2Ml[l] = 0.0f;
     }
 
-    mp->repeat = 0;
     mp->repeatCount = 0;
     mp->localEnergy = 75000.0f;
     mp->amplitudeThreshold = 20480;
@@ -117,18 +116,8 @@ imbe_get_dct_cache(void) {
 
 static int
 imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_L9) {
-    char tmpstr[13];
-    tmpstr[8] = 0;
-    tmpstr[0] = imbe_d[0] + 48;
-    tmpstr[1] = imbe_d[1] + 48;
-    tmpstr[2] = imbe_d[2] + 48;
-    tmpstr[3] = imbe_d[3] + 48;
-    tmpstr[4] = imbe_d[4] + 48;
-    tmpstr[5] = imbe_d[5] + 48;
-    tmpstr[6] = imbe_d[85] + 48;
-    tmpstr[7] = imbe_d[86] + 48;
-
-    int b0 = strtol(tmpstr, NULL, 2);
+    static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
+    int b0 = mbe_bits_by_index_to_int(imbe_d, b0_indices, sizeof(b0_indices) / sizeof(b0_indices[0]));
     if (b0 > 207) {
 #ifdef IMBE_DEBUG
         if ((b0 >= 216) && (b0 <= 219)) {
@@ -200,35 +189,19 @@ imbe_decode_voicing(mbe_parms* cur_mp, char bb[58][12]) {
 
 static void
 imbe_decode_gains(char bb[58][12], int L9, float Gm[7]) {
-    char tmpstr[13];
-    tmpstr[6] = 0;
-    tmpstr[0] = bb[2][5] + 48;
-    tmpstr[1] = bb[2][4] + 48;
-    tmpstr[2] = bb[2][3] + 48;
-    tmpstr[3] = bb[2][2] + 48;
-    tmpstr[4] = bb[2][1] + 48;
-    tmpstr[5] = bb[2][0] + 48;
-
-    int b2 = strtol(tmpstr, NULL, 2);
+    int b2 = mbe_bits_descending_to_int(bb[2], 5, 0);
     Gm[1] = B2[b2];
 #ifdef IMBE_DEBUG
-    fprintf(stderr, "G1: %e, %s, %i\n", Gm[1], tmpstr, b2);
-    fprintf(stderr, "tmpstr: %s b2: %i g1: %e\n", tmpstr, b2, Gm[1]);
+    fprintf(stderr, "b2: %i g1: %e\n", b2, Gm[1]);
 #endif
 
     const float* ba1 = ba[L9][0];
     const float* ba2 = ba1 + 1;
     for (int i = 2; i < 7; i++) {
-        tmpstr[(int)*ba1] = 0;
-        int k = 0;
-        for (int j = ((int)*ba1 - 1); j >= 0; j--) {
-            tmpstr[k] = bb[i + 1][j] + 48;
-            k++;
-        }
-        int bm = strtol(tmpstr, NULL, 2);
+        int bm = mbe_bits_descending_to_int(bb[i + 1], (int)*ba1 - 1, 0);
         Gm[i] = (*ba2 * ((float)bm - exp2f((*ba1) - 1.0f) + 0.5f));
 #ifdef IMBE_DEBUG
-        fprintf(stderr, "G%i: %e, %s, %i, ba1: %e, ba2: %e\n", i, Gm[i], tmpstr, bm, *ba1, *ba2);
+        fprintf(stderr, "G%i: %e, %i, ba1: %e, ba2: %e\n", i, Gm[i], bm, *ba1, *ba2);
 #endif
         ba1 += 2;
         ba2 += 2;
@@ -260,19 +233,14 @@ imbe_compute_ri(const float Gm[7], float Ri[7]) {
 static void
 imbe_decode_hoc_coefficients(char bb[58][12], int L9, const float Ri[7], float Cik[7][11]) {
     int m = 8;
-    char tmpstr[13];
     for (int i = 1; i <= 6; i++) {
         Cik[i][1] = Ri[i];
         for (int k = 2; k <= ImbeJi[L9][i - 1]; k++) {
             int Bm = hoba[L9][m - 8];
-            for (int b = 0; b < Bm; b++) {
-                tmpstr[b] = bb[m][(Bm - b) - 1] + 48;
-            }
             if (Bm <= 0) {
                 Cik[i][k] = 0;
             } else {
-                tmpstr[Bm] = 0;
-                int bm = strtol(tmpstr, NULL, 2);
+                int bm = mbe_bits_descending_to_int(bb[m], Bm - 1, 0);
                 Cik[i][k] = ((quantstep[Bm - 1] * standdev[k - 2]) * (((float)bm - exp2f((float)Bm - 1.0f)) + 0.5f));
             }
             m++;
@@ -634,9 +602,6 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
         return ret;
     }
 
-    // copy repeat from prev_mp
-    cur_mp->repeat = prev_mp->repeat;
-
     if (imbe_decode_fundamental(imbe_d, cur_mp, &L9) != 0) {
         return (1);
     }
@@ -674,7 +639,6 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
     int i, j, k;
     unsigned short pr[115];
     unsigned short foo;
-    char tmpstr[24];
 
     int ret = mbe_validate_bits((const char*)imbe, (size_t)8u * 23u);
     if (ret < 0) {
@@ -682,13 +646,7 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
     }
 
     // create pseudo-random modulator
-    j = 0;
-    tmpstr[12] = 0;
-    for (i = 22; i >= 11; i--) {
-        tmpstr[j] = (imbe[0][i] + 48);
-        j++;
-    }
-    foo = strtol(tmpstr, NULL, 2);
+    foo = (unsigned short)mbe_bits_descending_to_int(imbe[0], 22, 11);
     pr[0] = (16 * foo);
     for (i = 1; i < 115; i++) {
         pr[i] = (173 * pr[i - 1]) + 13849 - (65536 * (((173 * pr[i - 1]) + 13849) / 65536));
@@ -867,7 +825,6 @@ static void
 imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, mbe_parms* cur_mp,
                                const mbe_parms* prev_mp) {
     if (!repeat_required) {
-        cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
         return;
     }
@@ -877,7 +834,6 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
         imbe_reset_headroom_defaults(cur_mp);
     } else {
         mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeat++;
         cur_mp->repeatCount++;
     }
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
@@ -885,12 +841,12 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
 
 static void
 imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                          mbe_parms* prev_mp_enhanced, int uvquality) {
+                          mbe_parms* prev_mp_enhanced) {
     int frame_muted = mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp);
 
     mbe_moveMbeParms(cur_mp, prev_mp);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
@@ -901,7 +857,7 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, mbe_parms
 
 int
 mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
-                                  mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                                  mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     int bad;
     int repeat_required;
     float repeat_threshold;
@@ -927,7 +883,7 @@ mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* result, c
     repeat_required = imbe4400_repeat_required(bad, total_errors, c0_errors, c0_errors_valid, repeat_threshold);
 
     imbe4400_apply_repeat_decision(repeat_required, result, cur_mp, prev_mp);
-    imbe4400_synthesize_frame(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    imbe4400_synthesize_frame(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
     return result ? result->total_errors : total_errors;
 }
 
@@ -939,29 +895,28 @@ mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* result, c
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 int
 mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
-                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
 
     if (!result) {
         mbe_initProcessResult(&local_result);
         result = &local_result;
     }
-    return mbe_processImbe4400Dataf_internal(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    return mbe_processImbe4400Dataf_internal(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 int
 mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
-                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     float float_buf[160];
     int ret;
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = mbe_processImbe4400Dataf(float_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    ret = mbe_processImbe4400Dataf(float_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
     if (ret < 0) {
         return ret;
     }
@@ -976,11 +931,10 @@ mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char 
  * @param imbe_fr  Input frame as 8x23 bitplanes.
  * @param imbe_d   Scratch/output parameter bits (88).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 int
 mbe_processImbe7200x4400Framef(float* aout_buf, mbe_process_result* result, const char imbe_fr[8][23], char imbe_d[88],
-                               mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                               mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
     int ret;
     if (!result) {
@@ -990,13 +944,13 @@ mbe_processImbe7200x4400Framef(float* aout_buf, mbe_process_result* result, cons
     if (ret < 0) {
         return ret;
     }
-    return mbe_processImbe4400Dataf(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    return mbe_processImbe4400Dataf(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 int
 mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_result* result, const mbe_soft_bit imbe_fr[8][23],
-                                   char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                                   int uvquality) {
+                                   char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
+                                   mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
     int ret;
     if (!result) {
@@ -1006,20 +960,18 @@ mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_result* result, 
     if (ret < 0) {
         return ret;
     }
-    return mbe_processImbe4400Dataf(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    return mbe_processImbe4400Dataf(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 int
 mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result, const mbe_soft_bit imbe_fr[8][23],
-                                  char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                                  int uvquality) {
+                                  char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     float float_buf[160];
     int ret;
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = mbe_processImbe7200x4400SoftFramef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                             uvquality);
+    ret = mbe_processImbe7200x4400SoftFramef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
     if (ret < 0) {
         return ret;
     }
@@ -1033,15 +985,14 @@ mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result, c
  */
 int
 mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* result, const char imbe_fr[8][23], char imbe_d[88],
-                              mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                              mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
 
     float float_buf[160];
     int ret;
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = mbe_processImbe7200x4400Framef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                         uvquality);
+    ret = mbe_processImbe7200x4400Framef(float_buf, result, imbe_fr, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
     if (ret < 0) {
         return ret;
     }

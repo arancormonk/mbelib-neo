@@ -13,6 +13,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "bench_parse.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -59,18 +60,17 @@ main(int argc, char** argv) {
     int iters = 2000;
     int runs = 8;
     int L = 36;
-    int uvq = 8;
-    if (argc > 1) {
-        uvq = atoi(argv[1]);
+    if (argc > 1 && bench_parse_int_arg(argv[1], 8, 56, &L) < 0) {
+        fprintf(stderr, "usage: %s [L] [iters] [runs]\n", argv[0]);
+        return 2;
     }
-    if (argc > 2) {
-        L = atoi(argv[2]);
+    if (argc > 2 && bench_parse_int_arg(argv[2], 1, INT_MAX, &iters) < 0) {
+        fprintf(stderr, "usage: %s [L] [iters] [runs]\n", argv[0]);
+        return 2;
     }
-    if (argc > 3) {
-        iters = atoi(argv[3]);
-    }
-    if (argc > 4) {
-        runs = atoi(argv[4]);
+    if (argc > 3 && bench_parse_int_arg(argv[3], 1, INT_MAX, &runs) < 0) {
+        fprintf(stderr, "usage: %s [L] [iters] [runs]\n", argv[0]);
+        return 2;
     }
 
     float out[160];
@@ -84,7 +84,7 @@ main(int argc, char** argv) {
         for (int i = 0; i < iters; ++i) {
             // Wiggle w0 a bit to avoid degenerate recurrence
             cur.w0 = (i & 1) ? 0.10f : 0.12f;
-            mbe_synthesizeSpeechf(out, &cur, &prev, uvq);
+            mbe_synthesizeSpeechf(out, &cur, &prev);
             mbe_moveMbeParms(&cur, &prev);
         }
         double dt = secs() - t0;
@@ -97,7 +97,6 @@ main(int argc, char** argv) {
         }
         printf("run %d: %.6f s\n", r + 1, dt);
     }
-    printf("uvq=%d L=%d frames=%d -> avg: %.6f s, best: %.6f s, worst: %.6f s\n", uvq, L, iters * runs, total / runs,
-           best, worst);
+    printf("L=%d frames=%d -> avg: %.6f s, best: %.6f s, worst: %.6f s\n", L, iters * runs, total / runs, best, worst);
     return 0;
 }

@@ -10,6 +10,7 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "mbelib-neo/mbelib.h"
@@ -115,7 +116,7 @@ test_invalid_parameter_bits_rejected_before_synthesis(void) {
     mbe_initProcessResult(&result);
     params[8] = 3;
 
-    assert(mbe_processAmbe2400Dataf(out, &result, params, &cur, &prev, &enh, 8) == MBE_STATUS_INVALID_BITS);
+    assert(mbe_processAmbe2400Dataf(out, &result, params, &cur, &prev, &enh) == MBE_STATUS_INVALID_BITS);
     assert_float_buffer_unchanged(out, 123.0f);
 }
 
@@ -128,7 +129,7 @@ process_imbe4400_with_result_context(const mbe_process_result* context) {
 
     init_params(&cur, &prev, &enh);
 
-    return mbe_processImbe4400Dataf(out, &result, params, &cur, &prev, &enh, 8);
+    return mbe_processImbe4400Dataf(out, &result, params, &cur, &prev, &enh);
 }
 
 static void
@@ -187,6 +188,17 @@ test_invalid_result_context_rejected(void) {
     expect_invalid_result_context(result);
 
     mbe_initProcessResult(&result);
+    result.flags = 0x80000000u;
+    expect_invalid_result_context(result);
+
+    mbe_initProcessResult(&result);
+    result.flags = MBE_PROCESS_FLAG_C0_VALID;
+    result.c0_errors = 2;
+    result.protected_errors = 1;
+    result.total_errors = 4;
+    expect_invalid_result_context(result);
+
+    mbe_initProcessResult(&result);
     result.c0_errors = 100;
     result.protected_errors = 84;
     expect_valid_result_context(result);
@@ -211,7 +223,7 @@ test_invalid_harmonic_counts_rejected_by_raw_helpers(void) {
             out[j] = 123.0f;
         }
         cur.L = invalid_l;
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
         assert_float_buffer_unchanged(out, 0.0f);
 
         init_params(&cur, &prev, &enh);
@@ -219,7 +231,7 @@ test_invalid_harmonic_counts_rejected_by_raw_helpers(void) {
             out[j] = 123.0f;
         }
         prev.L = invalid_l;
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
         assert_float_buffer_unchanged(out, 0.0f);
 
         init_params(&cur, &prev, &enh);
@@ -227,7 +239,7 @@ test_invalid_harmonic_counts_rejected_by_raw_helpers(void) {
             out_s[j] = 123;
         }
         cur.L = invalid_l;
-        mbe_synthesizeSpeech(out_s, &cur, &prev, 8);
+        mbe_synthesizeSpeech(out_s, &cur, &prev);
         assert_short_buffer_unchanged(out_s, 0);
 
         init_params(&cur, &prev, &enh);
@@ -285,7 +297,7 @@ test_imbe_previous_harmonic_count_is_clamped_for_processing(void) {
         prev.log2Ml[56] = 0.5f;
         fill_float_buffer(out, 123.0f);
 
-        assert(mbe_processImbe4400Dataf(out, &result, params, &cur, &prev, &enh, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result, params, &cur, &prev, &enh) >= 0);
         assert(cur.L == 56);
     }
 }
@@ -305,7 +317,7 @@ test_imbe_previous_harmonic_count_upper_endpoint_is_safe(void) {
     prev.log2Ml[56] = 1.0f;
     fill_float_buffer(out, 123.0f);
 
-    assert(mbe_processImbe4400Dataf(out, &result, params, &cur, &prev, &enh, 8) >= 0);
+    assert(mbe_processImbe4400Dataf(out, &result, params, &cur, &prev, &enh) >= 0);
     assert(cur.L == 56);
 }
 
@@ -320,15 +332,14 @@ stamp_params(mbe_parms* mp, int marker) {
     mp->PHIl[1] = (float)marker + 1.0f;
     mp->PSIl[1] = (float)marker + 1.25f;
     mp->gamma = (float)marker + 1.5f;
-    mp->un = marker + 3;
-    mp->repeat = marker + 4;
-    mp->swn = marker + 5;
+    mp->tonePhase = (uint32_t)(marker + 3);
+    mp->swn = marker + 4;
     mp->localEnergy = (float)marker + 1.75f;
-    mp->amplitudeThreshold = marker + 6;
+    mp->amplitudeThreshold = marker + 5;
     mp->errorRate = (float)marker + 2.0f;
-    mp->errorCountTotal = marker + 7;
-    mp->errorCount4 = marker + 8;
-    mp->repeatCount = marker + 9;
+    mp->errorCountTotal = marker + 6;
+    mp->errorCount4 = marker + 7;
+    mp->repeatCount = marker + 8;
     mp->mutingThreshold = (float)marker + 2.25f;
     mp->previousUw[0] = (float)marker + 2.5f;
     mp->noiseSeed = (float)marker + 2.75f;
@@ -346,15 +357,14 @@ assert_params_stamp(const mbe_parms* mp, int marker) {
     assert(mp->PHIl[1] == (float)marker + 1.0f);
     assert(mp->PSIl[1] == (float)marker + 1.25f);
     assert(mp->gamma == (float)marker + 1.5f);
-    assert(mp->un == marker + 3);
-    assert(mp->repeat == marker + 4);
-    assert(mp->swn == marker + 5);
+    assert(mp->tonePhase == (uint32_t)(marker + 3));
+    assert(mp->swn == marker + 4);
     assert(mp->localEnergy == (float)marker + 1.75f);
-    assert(mp->amplitudeThreshold == marker + 6);
+    assert(mp->amplitudeThreshold == marker + 5);
     assert(mp->errorRate == (float)marker + 2.0f);
-    assert(mp->errorCountTotal == marker + 7);
-    assert(mp->errorCount4 == marker + 8);
-    assert(mp->repeatCount == marker + 9);
+    assert(mp->errorCountTotal == marker + 6);
+    assert(mp->errorCount4 == marker + 7);
+    assert(mp->repeatCount == marker + 8);
     assert(mp->mutingThreshold == (float)marker + 2.25f);
     assert(mp->previousUw[0] == (float)marker + 2.5f);
     assert(mp->noiseSeed == (float)marker + 2.75f);

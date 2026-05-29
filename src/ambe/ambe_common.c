@@ -195,7 +195,7 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
     }
 
     prev_mp->swn = 0;
-    prev_mp->un = 0;
+    prev_mp->tonePhase = 0;
     /* JMBE AMBEFundamentalFrequency.W124: constructor uses (frequency * 2*PI), where frequency is PI/32. */
     prev_mp->w0 = (float)((M_PI / 32.0) * (2.0 * M_PI));
     prev_mp->L = 15;
@@ -210,8 +210,6 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
         /* JMBE previous-phase arrays start at 0.0f. */
         prev_mp->PSIl[l] = 0.0f;
     }
-
-    prev_mp->repeat = 0;
 
     prev_mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
     prev_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
@@ -239,7 +237,7 @@ mbe_setAmbeErasureParms_common(mbe_parms* mp, const mbe_parms* state_src) {
     const mbe_parms* continuity = state_src ? state_src : mp;
 
     mp->swn = 0;
-    mp->un = 0;
+    mp->tonePhase = 0;
     mp->w0 = 0.0f; /* JMBE AMBEFundamentalFrequency.W120..W123 */
     mp->L = 9;
     mp->K = 0;

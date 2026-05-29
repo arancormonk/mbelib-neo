@@ -53,15 +53,13 @@ struct FuzzState {
     mbe_parms prev_enh = {};
     float out[160] = {};
     mbe_process_result result = {};
-    int uvquality = 8;
     bool raw_bits = false;
 };
 
 static FuzzState
-make_state(const std::uint8_t* data, std::size_t size) {
+make_state(const std::uint8_t* data) {
     FuzzState state = {};
     init_state(&state.cur, &state.prev, &state.prev_enh);
-    state.uvquality = (size > 1U) ? static_cast<int>((data[1] % 8U) + 1U) : 8;
     state.raw_bits = (data[0] & 0x80U) != 0U;
     return state;
 }
@@ -88,7 +86,7 @@ run_ambe2400_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[49] = {};
             fill_hard_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processAmbe3600x2400Framef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                 &state.prev_enh, state.uvquality);
+                                                 &state.prev_enh);
             break;
         }
         default: {
@@ -96,7 +94,7 @@ run_ambe2400_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[49] = {};
             fill_soft_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processAmbe3600x2400SoftFramef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                     &state.prev_enh, state.uvquality);
+                                                     &state.prev_enh);
             break;
         }
     }
@@ -124,7 +122,7 @@ run_ambe2450_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[49] = {};
             fill_hard_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processAmbe3600x2450Framef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                 &state.prev_enh, state.uvquality);
+                                                 &state.prev_enh);
             break;
         }
         default: {
@@ -132,7 +130,7 @@ run_ambe2450_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[49] = {};
             fill_soft_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processAmbe3600x2450SoftFramef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                     &state.prev_enh, state.uvquality);
+                                                     &state.prev_enh);
             break;
         }
     }
@@ -160,7 +158,7 @@ run_imbe7200_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[88] = {};
             fill_hard_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processImbe7200x4400Framef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                 &state.prev_enh, state.uvquality);
+                                                 &state.prev_enh);
             break;
         }
         default: {
@@ -168,7 +166,7 @@ run_imbe7200_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[88] = {};
             fill_soft_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processImbe7200x4400SoftFramef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                     &state.prev_enh, state.uvquality);
+                                                     &state.prev_enh);
             break;
         }
     }
@@ -196,7 +194,7 @@ run_imbe7100_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[88] = {};
             fill_hard_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processImbe7100x4400Framef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                 &state.prev_enh, state.uvquality);
+                                                 &state.prev_enh);
             break;
         }
         default: {
@@ -204,7 +202,7 @@ run_imbe7100_case(std::uint8_t mode, FuzzState& state, const std::uint8_t* data,
             char bits[88] = {};
             fill_soft_frame(frame, data, size, 2U, state.raw_bits);
             (void)mbe_processImbe7100x4400SoftFramef(state.out, &state.result, frame, bits, &state.cur, &state.prev,
-                                                     &state.prev_enh, state.uvquality);
+                                                     &state.prev_enh);
             break;
         }
     }
@@ -216,7 +214,7 @@ LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
         return 0;
     }
 
-    FuzzState state = make_state(data, size);
+    FuzzState state = make_state(data);
     const std::uint8_t choice = data[0] % 16U;
     const std::uint8_t mode = choice % 4U;
 

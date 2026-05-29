@@ -355,12 +355,13 @@ main(void) {
         mbe_initMbeParms(&cur_a, &prev_a, &prev_enh_a);
         init_result_total(&result_a, 5);
         result_a.c0_errors = 0;
-        assert(mbe_processAmbe2450Dataf(out, &result_a, ambe_d, &cur_a, &prev_a, &prev_enh_a, 8) >= 0);
+        assert(mbe_processAmbe2450Dataf(out, &result_a, ambe_d, &cur_a, &prev_a, &prev_enh_a) >= 0);
 
         mbe_initMbeParms(&cur_b, &prev_b, &prev_enh_b);
         init_result_total(&result_b, 5);
         result_b.c0_errors = 4;
-        assert(mbe_processAmbe2450Dataf(out, &result_b, ambe_d, &cur_b, &prev_b, &prev_enh_b, 8) >= 0);
+        result_b.protected_errors = 1;
+        assert(mbe_processAmbe2450Dataf(out, &result_b, ambe_d, &cur_b, &prev_b, &prev_enh_b) >= 0);
 
         assert(cur_a.repeatCount == cur_b.repeatCount);
         assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
@@ -381,12 +382,13 @@ main(void) {
         mbe_initMbeParms(&cur_a, &prev_a, &prev_enh_a);
         init_result_total(&result_a, 11);
         result_a.c0_errors = 0;
-        assert(mbe_processImbe4400Dataf(out, &result_a, imbe_d, &cur_a, &prev_a, &prev_enh_a, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result_a, imbe_d, &cur_a, &prev_a, &prev_enh_a) >= 0);
 
         mbe_initMbeParms(&cur_b, &prev_b, &prev_enh_b);
         init_result_total(&result_b, 11);
         result_b.c0_errors = 2;
-        assert(mbe_processImbe4400Dataf(out, &result_b, imbe_d, &cur_b, &prev_b, &prev_enh_b, 8) >= 0);
+        result_b.protected_errors = 9;
+        assert(mbe_processImbe4400Dataf(out, &result_b, imbe_d, &cur_b, &prev_b, &prev_enh_b) >= 0);
 
         assert(cur_a.repeatCount == cur_b.repeatCount);
         assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
@@ -443,12 +445,12 @@ main(void) {
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         init_result_total(&result, 5);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(result_has_marker(&result, 'T'));
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         init_result_total(&result, 6);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(!result_has_marker(&result, 'T'));
         assert(result_has_marker(&result, 'E'));
         assert(approx_equal(cur.w0, 0.0f, 1e-6f));
@@ -483,11 +485,10 @@ main(void) {
         cur_a.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
         prev_a.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
         prev_enh_a.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-        prev_a.repeat = MBE_MAX_FRAME_REPEATS;
         prev_a.repeatCount = MBE_MAX_FRAME_REPEATS;
 
         init_result_total(&result, 0);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_a, &cur_a, &prev_a, &prev_enh_a, 8) >= 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_a, &cur_a, &prev_a, &prev_enh_a) >= 0);
         assert(result_has_marker(&result, 'T'));
         assert(approx_equal(cur_a.w0, custom_w0, 1e-6f));
         assert(cur_a.L == custom_L);
@@ -501,11 +502,10 @@ main(void) {
         cur_b.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
         prev_b.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
         prev_enh_b.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-        prev_b.repeat = MBE_MAX_FRAME_REPEATS;
         prev_b.repeatCount = MBE_MAX_FRAME_REPEATS;
 
         init_result_total(&result, 0);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_b, &cur_b, &prev_b, &prev_enh_b, 8) >= 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_b, &cur_b, &prev_b, &prev_enh_b) >= 0);
         assert(result_has_marker(&result, 'T'));
         assert(approx_equal(cur_b.w0, custom_w0, 1e-6f));
         assert(cur_b.L == custom_L);
@@ -521,7 +521,7 @@ main(void) {
         cur.errorRate = 1.0f;
         cur.repeatCount = 0;
         float ambe_seed_before = cur.noiseSeed;
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_differ(cur.noiseSeed, ambe_seed_before));
 
         seed_speech_params(&cur, &prev);
@@ -529,7 +529,7 @@ main(void) {
         cur.errorRate = 1.0f;
         cur.repeatCount = 0;
         float imbe_seed_before = cur.noiseSeed;
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_equal(cur.noiseSeed, imbe_seed_before));
     }
 
@@ -544,7 +544,7 @@ main(void) {
         cur.repeatCount = 0;
 
         float local_before = cur.localEnergy;
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_differ(cur.localEnergy, local_before));
     }
 
@@ -558,7 +558,7 @@ main(void) {
         const float raw_prev_phase = (20.0f * (float)M_PI) + 0.321f;
         prev.PSIl[l_test] = raw_prev_phase;
 
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
 
         float wrapped_prev = fmodf(raw_prev_phase, (float)(2.0 * M_PI));
         if (wrapped_prev < 0.0f) {
@@ -613,7 +613,7 @@ main(void) {
         cur.noiseSeed = -1.0f;
         memset(cur.noiseOverlap, 0, sizeof(cur.noiseOverlap));
         mbe_setThreadRngSeed(0x1234u);
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(approx_equal(cur.noiseSeed, (float)(0x1234u % 53125u), 1e-6f));
     }
 
@@ -633,7 +633,7 @@ main(void) {
         }
         prev = cur;
 
-        mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
 
         int l_test = cur.L;
         float expected_psil = prev.PSIl[l_test] + ((prev.w0 + cur.w0) * ((float)(l_test * 160) / 2.0f));
@@ -656,7 +656,7 @@ main(void) {
         cur.errorCount4 = 7;
         prev.errorCount4 = 3;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
         assert(cur.errorCount4 == 0);
     }
 
@@ -678,7 +678,7 @@ main(void) {
         result.protected_errors = 3;
         result.total_errors = 3;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
         assert(cur.errorCount4 == 3);
     }
 
@@ -698,7 +698,7 @@ main(void) {
         result.c0_errors = 1;
         result.total_errors = 1;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
         assert(cur.errorCount4 == 0);
     }
 
@@ -726,13 +726,11 @@ main(void) {
         set_imbe7200_b0(imbe_d, 0);
         init_result_total(&result, 6);
 
-        prev.repeat = 4;
         prev.repeatCount = 4;
         cur = prev;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
 
-        assert(cur.repeat == 0);
         assert(cur.repeatCount == 0);
         assert(cur.L == 39);
         float w0_default = (float)((4.0 * M_PI) / (134.0 + 39.5));
@@ -761,7 +759,7 @@ main(void) {
         cur.repeatCount = 0;
 
         float noise_seed_before = prev_enh.noiseSeed;
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, 8) >= 0);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
         assert(float_bits_equal(prev_enh.noiseSeed, noise_seed_before));
     }
 

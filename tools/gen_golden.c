@@ -61,7 +61,7 @@ main(void) {
 
     mbe_setThreadRngSeed(0xC0FFEEu);
     fill_params(&cur, &prev);
-    mbe_synthesizeSpeechf(out_f, &cur, &prev, 8);
+    mbe_synthesizeSpeechf(out_f, &cur, &prev);
 
     // Hash float bytes and also short bytes after conversion
     uint32_t hf = fnv1a32(out_f, sizeof(out_f));

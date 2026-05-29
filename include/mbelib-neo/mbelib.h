@@ -104,10 +104,8 @@ struct mbe_parameters {
     float PSIl[57];
     /** Spectral amplitude enhancement scale. */
     float gamma;
-    /** Legacy/unused field; retained for ABI compatibility. */
-    int un;
-    /** Repeat frame flag (legacy - use repeatCount instead). */
-    int repeat;
+    /** Tone synthesis phase accumulator. */
+    uint32_t tonePhase;
     /** Sine wave increment for tone synthesis. */
     int swn;
 
@@ -332,17 +330,16 @@ MBE_API int mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
-                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process AMBE 2400 parameters into 8 kHz 16-bit PCM.
  * @see mbe_processAmbe2400Dataf for details.
  */
 MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
-                                    mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                    mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -350,19 +347,18 @@ MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result,
  * @param ambe_fr  Input frame as 4x24 bitplanes.
  * @param ambe_d   Scratch/output parameter bits (49).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processAmbe3600x2400Framef(float* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
                                            char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                           mbe_parms* prev_mp_enhanced, int uvquality);
+                                           mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz 16-bit PCM.
  * @see mbe_processAmbe3600x2400Framef for details.
  */
 MBE_API int mbe_processAmbe3600x2400Frame(short* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
                                           char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                          mbe_parms* prev_mp_enhanced, int uvquality);
+                                          mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a soft AMBE 3600x2400 frame into float PCM.
  * @param result Optional output status populated by decode and synthesis.
@@ -370,11 +366,11 @@ MBE_API int mbe_processAmbe3600x2400Frame(short* aout_buf, mbe_process_result* r
  */
 MBE_API int mbe_processAmbe3600x2400SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
-                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /** @brief Process a soft AMBE 3600x2400 frame into int16 PCM; see float variant for result semantics. */
 MBE_API int mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
-                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 /* Prototypes from ambe3600x2450.c */
 /** @brief Print AMBE 2450 parameter bits to stderr (debug). */
@@ -414,14 +410,13 @@ MBE_API int mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processAmbe2450Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
-                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /** @brief Process AMBE 2450 parameters into 16-bit PCM. */
 MBE_API int mbe_processAmbe2450Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
-                                    mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                    mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process AMBE 3600x2450 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -429,16 +424,15 @@ MBE_API int mbe_processAmbe2450Data(short* aout_buf, mbe_process_result* result,
  * @param ambe_fr  Input frame as 4x24 bitplanes.
  * @param ambe_d   Scratch/output parameter bits (49).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processAmbe3600x2450Framef(float* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
                                            char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                           mbe_parms* prev_mp_enhanced, int uvquality);
+                                           mbe_parms* prev_mp_enhanced);
 /** @brief Process AMBE 3600x2450 frame into 16-bit PCM. */
 MBE_API int mbe_processAmbe3600x2450Frame(short* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
                                           char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                          mbe_parms* prev_mp_enhanced, int uvquality);
+                                          mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a soft AMBE 3600x2450 frame into float PCM.
  * @param result Optional output status populated by decode and synthesis.
@@ -446,11 +440,11 @@ MBE_API int mbe_processAmbe3600x2450Frame(short* aout_buf, mbe_process_result* r
  */
 MBE_API int mbe_processAmbe3600x2450SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
-                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /** @brief Process a soft AMBE 3600x2450 frame into int16 PCM; see float variant for result semantics. */
 MBE_API int mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
-                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 /* Prototypes from imbe7200x4400.c */
 /** @brief Print IMBE 4400 parameter bits to stderr (debug). */
@@ -492,14 +486,13 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
-                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /** @brief Process IMBE 4400 parameters into 16-bit PCM. */
 MBE_API int mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char imbe_d[88],
-                                    mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                    mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process IMBE 7200x4400 frame into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
@@ -507,16 +500,15 @@ MBE_API int mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result,
  * @param imbe_fr  Input frame as 8x23 bitplanes.
  * @param imbe_d   Scratch/output parameter bits (88).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processImbe7200x4400Framef(float* aout_buf, mbe_process_result* result, const char imbe_fr[8][23],
                                            char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                           mbe_parms* prev_mp_enhanced, int uvquality);
+                                           mbe_parms* prev_mp_enhanced);
 /** @brief Process IMBE 7200x4400 frame into 16-bit PCM. */
 MBE_API int mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* result, const char imbe_fr[8][23],
                                           char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                          mbe_parms* prev_mp_enhanced, int uvquality);
+                                          mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a soft IMBE 7200x4400 frame into float PCM.
  * @param result Optional output status populated by decode and synthesis.
@@ -524,11 +516,11 @@ MBE_API int mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* r
  */
 MBE_API int mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
-                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /** @brief Process a soft IMBE 7200x4400 frame into int16 PCM; see float variant for result semantics. */
 MBE_API int mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
-                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 /* Prototypes from imbe7100x4400.c */
 /** @brief Print IMBE 7100x4400 parameter bits to stderr (debug). */
@@ -567,16 +559,15 @@ MBE_API int mbe_decodeImbe7100x4400SoftFrame(const mbe_soft_bit imbe_fr[7][24], 
  * @param imbe_fr  Input frame as 7x24 bitplanes.
  * @param imbe_d   Scratch/output parameter bits (88, converted to 7200 layout).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_processImbe7100x4400Framef(float* aout_buf, mbe_process_result* result, const char imbe_fr[7][24],
                                            char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                           mbe_parms* prev_mp_enhanced, int uvquality);
+                                           mbe_parms* prev_mp_enhanced);
 /** @brief Process IMBE 7100x4400 frame into 16-bit PCM. */
 MBE_API int mbe_processImbe7100x4400Frame(short* aout_buf, mbe_process_result* result, const char imbe_fr[7][24],
                                           char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                          mbe_parms* prev_mp_enhanced, int uvquality);
+                                          mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a soft IMBE 7100x4400 frame into float PCM.
  * @param result Optional output status populated by decode and synthesis.
@@ -584,11 +575,11 @@ MBE_API int mbe_processImbe7100x4400Frame(short* aout_buf, mbe_process_result* r
  */
 MBE_API int mbe_processImbe7100x4400SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit imbe_fr[7][24], char imbe_d[88], mbe_parms* cur_mp,
-                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /** @brief Process a soft IMBE 7100x4400 frame into int16 PCM; see float variant for result semantics. */
 MBE_API int mbe_processImbe7100x4400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit imbe_fr[7][24], char imbe_d[88], mbe_parms* cur_mp,
-                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality);
+                                              mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 /**
  * @brief Get a pointer to a static NUL-terminated version string.
@@ -657,9 +648,8 @@ MBE_API void mbe_synthesizeSilence(short* aout_buf);
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
-MBE_API void mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality);
+MBE_API void mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /**
  * @brief Synthesize one speech frame into 16-bit PCM.
  *
@@ -668,9 +658,8 @@ MBE_API void mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
  * @param aout_buf Output buffer of 160 16-bit samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
-MBE_API void mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality);
+MBE_API void mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /**
  * @brief Convert 160 float samples to clipped/scaled 16-bit PCM.
  *

@@ -24,6 +24,126 @@ rules:
       - pattern: posix_spawn(...)
       - pattern: posix_spawnp(...)
 
+  - id: mbelib-neo.no-production-assert
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      Use explicit runtime validation or unreachable handling in production code instead of assert(), which can compile
+      out under NDEBUG.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /examples/**
+        - /bench/**
+        - /fuzz/**
+      exclude:
+        - /src/external/**
+    pattern: assert(...)
+
+  - id: mbelib-neo.no-weak-process-rng
+    languages: [c, cpp]
+    severity: ERROR
+    message: Do not use process-global rand()/srand(); use a purpose-specific RNG.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /examples/**
+        - /bench/**
+        - /fuzz/**
+      exclude:
+        - /src/external/**
+    pattern-either:
+      - pattern: rand(...)
+      - pattern: srand(...)
+
+  - id: mbelib-neo.no-atoi-family
+    languages: [c, cpp]
+    severity: ERROR
+    message: Use checked strto* parsing instead of atoi/atol/atoll/atof.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /examples/**
+        - /bench/**
+        - /fuzz/**
+      exclude:
+        - /src/external/**
+    pattern-either:
+      - pattern: atoi(...)
+      - pattern: atol(...)
+      - pattern: atoll(...)
+      - pattern: atof(...)
+      - pattern: std::atoi(...)
+      - pattern: std::atol(...)
+      - pattern: std::atoll(...)
+      - pattern: std::atof(...)
+
+  - id: mbelib-neo.no-unchecked-strto-endptr
+    languages: [c, cpp]
+    severity: ERROR
+    message: Check the strto* end pointer and range instead of passing NULL for endptr.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /examples/**
+        - /bench/**
+        - /fuzz/**
+      exclude:
+        - /src/external/**
+    pattern-either:
+      - pattern: strtol($S, NULL, $B)
+      - pattern: strtoul($S, NULL, $B)
+      - pattern: strtoll($S, NULL, $B)
+      - pattern: strtoull($S, NULL, $B)
+      - pattern: strtod($S, NULL)
+      - pattern: strtof($S, NULL)
+      - pattern: strtol($S, nullptr, $B)
+      - pattern: strtoul($S, nullptr, $B)
+      - pattern: strtoll($S, nullptr, $B)
+      - pattern: strtoull($S, nullptr, $B)
+      - pattern: strtod($S, nullptr)
+      - pattern: strtof($S, nullptr)
+      - pattern: std::strtol($S, NULL, $B)
+      - pattern: std::strtoul($S, NULL, $B)
+      - pattern: std::strtoll($S, NULL, $B)
+      - pattern: std::strtoull($S, NULL, $B)
+      - pattern: std::strtod($S, NULL)
+      - pattern: std::strtof($S, NULL)
+      - pattern: std::strtol($S, nullptr, $B)
+      - pattern: std::strtoul($S, nullptr, $B)
+      - pattern: std::strtoll($S, nullptr, $B)
+      - pattern: std::strtoull($S, nullptr, $B)
+      - pattern: std::strtod($S, nullptr)
+      - pattern: std::strtof($S, nullptr)
+
+  - id: mbelib-neo.no-raw-file-open
+    languages: [c, cpp]
+    severity: ERROR
+    message: Use an explicit project-approved file/path helper instead of raw file open/temp APIs in project-owned code.
+    paths:
+      include:
+        - /include/**
+        - /src/**
+        - /examples/**
+        - /bench/**
+        - /fuzz/**
+      exclude:
+        - /src/external/**
+    pattern-either:
+      - pattern: fopen(...)
+      - pattern: freopen(...)
+      - pattern: open(...)
+      - pattern: creat(...)
+      - pattern: tmpfile(...)
+      - pattern: tmpnam(...)
+      - pattern: mktemp(...)
+      - pattern: mkstemp(...)
+      - pattern: mkstemps(...)
+
   - id: mbelib-neo.no-direct-third-party-include
     languages: [c]
     severity: ERROR
