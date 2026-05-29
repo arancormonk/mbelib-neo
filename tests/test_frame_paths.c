@@ -86,7 +86,7 @@ test_ambe2400_frame_paths(void) {
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
     data_result = hard_result;
-    ret = mbe_processAmbe2400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe2400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &data_result);
     assert_float_pcm_sane(out_f);
@@ -95,25 +95,25 @@ test_ambe2400_frame_paths(void) {
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
     data_result = hard_result;
-    ret = mbe_processAmbe2400Data(out_s, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe2400Data(out_s, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &data_result);
     assert_status_terminated(status, sizeof(status));
 
     init_params(&cur, &prev, &enh);
     data_result = hard_result;
-    ret = mbe_processAmbe2400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe2400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
     assert_float_pcm_sane(out_f);
 
     init_params(&cur, &prev, &enh);
     data_result = hard_result;
-    ret = mbe_processAmbe2400Data(out_s, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe2400Data(out_s, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
 
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
-    ret = mbe_processAmbe3600x2400Framef(out_f, &hard_result, const_frame, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe3600x2400Framef(out_f, &hard_result, const_frame, hard_d, &cur, &prev, &enh);
     assert_result_total(&hard_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &hard_result);
     assert_float_pcm_sane(out_f);
@@ -121,19 +121,19 @@ test_ambe2400_frame_paths(void) {
 
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
-    ret = mbe_processAmbe3600x2400Frame(out_s, &hard_result, const_frame, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe3600x2400Frame(out_s, &hard_result, const_frame, hard_d, &cur, &prev, &enh);
     assert_result_total(&hard_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &hard_result);
     assert_status_terminated(status, sizeof(status));
 
     init_params(&cur, &prev, &enh);
-    ret = mbe_processAmbe3600x2400SoftFramef(out_f, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe3600x2400SoftFramef(out_f, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh);
     assert_result_total(&soft_result, ret);
     assert((soft_result.flags & MBE_PROCESS_FLAG_SOFT_INPUT) != 0u);
     assert_float_pcm_sane(out_f);
 
     init_params(&cur, &prev, &enh);
-    ret = mbe_processAmbe3600x2400SoftFrame(out_s, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh, 8);
+    ret = mbe_processAmbe3600x2400SoftFrame(out_s, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh);
     assert_result_total(&soft_result, ret);
     assert((soft_result.flags & MBE_PROCESS_FLAG_SOFT_INPUT) != 0u);
 }
@@ -173,7 +173,7 @@ test_imbe7200_frame_paths(void) {
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
     data_result = hard_result;
-    ret = mbe_processImbe4400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe4400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &data_result);
     assert_float_pcm_sane(out_f);
@@ -182,25 +182,25 @@ test_imbe7200_frame_paths(void) {
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
     data_result = hard_result;
-    ret = mbe_processImbe4400Data(out_s, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe4400Data(out_s, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &data_result);
     assert_status_terminated(status, sizeof(status));
 
     init_params(&cur, &prev, &enh);
     data_result = hard_result;
-    ret = mbe_processImbe4400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe4400Dataf(out_f, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
     assert_float_pcm_sane(out_f);
 
     init_params(&cur, &prev, &enh);
     data_result = hard_result;
-    ret = mbe_processImbe4400Data(out_s, &data_result, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe4400Data(out_s, &data_result, hard_d, &cur, &prev, &enh);
     assert_result_total(&data_result, ret);
 
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
-    ret = mbe_processImbe7200x4400Framef(out_f, &hard_result, const_frame, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7200x4400Framef(out_f, &hard_result, const_frame, hard_d, &cur, &prev, &enh);
     assert_result_total(&hard_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &hard_result);
     assert_float_pcm_sane(out_f);
@@ -208,19 +208,19 @@ test_imbe7200_frame_paths(void) {
 
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
-    ret = mbe_processImbe7200x4400Frame(out_s, &hard_result, const_frame, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7200x4400Frame(out_s, &hard_result, const_frame, hard_d, &cur, &prev, &enh);
     assert_result_total(&hard_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &hard_result);
     assert_status_terminated(status, sizeof(status));
 
     init_params(&cur, &prev, &enh);
-    ret = mbe_processImbe7200x4400SoftFramef(out_f, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7200x4400SoftFramef(out_f, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh);
     assert_result_total(&soft_result, ret);
     assert((soft_result.flags & MBE_PROCESS_FLAG_SOFT_INPUT) != 0u);
     assert_float_pcm_sane(out_f);
 
     init_params(&cur, &prev, &enh);
-    ret = mbe_processImbe7200x4400SoftFrame(out_s, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7200x4400SoftFrame(out_s, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh);
     assert_result_total(&soft_result, ret);
     assert((soft_result.flags & MBE_PROCESS_FLAG_SOFT_INPUT) != 0u);
 }
@@ -258,7 +258,7 @@ test_imbe7100_frame_paths(void) {
 
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
-    ret = mbe_processImbe7100x4400Framef(out_f, &hard_result, const_frame, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7100x4400Framef(out_f, &hard_result, const_frame, hard_d, &cur, &prev, &enh);
     assert_result_total(&hard_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &hard_result);
     assert_float_pcm_sane(out_f);
@@ -266,19 +266,19 @@ test_imbe7100_frame_paths(void) {
 
     init_params(&cur, &prev, &enh);
     memset(status, 0, sizeof(status));
-    ret = mbe_processImbe7100x4400Frame(out_s, &hard_result, const_frame, hard_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7100x4400Frame(out_s, &hard_result, const_frame, hard_d, &cur, &prev, &enh);
     assert_result_total(&hard_result, ret);
     mbe_formatProcessResult(status, sizeof(status), &hard_result);
     assert_status_terminated(status, sizeof(status));
 
     init_params(&cur, &prev, &enh);
-    ret = mbe_processImbe7100x4400SoftFramef(out_f, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7100x4400SoftFramef(out_f, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh);
     assert_result_total(&soft_result, ret);
     assert((soft_result.flags & MBE_PROCESS_FLAG_SOFT_INPUT) != 0u);
     assert_float_pcm_sane(out_f);
 
     init_params(&cur, &prev, &enh);
-    ret = mbe_processImbe7100x4400SoftFrame(out_s, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh, 8);
+    ret = mbe_processImbe7100x4400SoftFrame(out_s, &soft_result, const_soft_frame, soft_d, &cur, &prev, &enh);
     assert_result_total(&soft_result, ret);
     assert((soft_result.flags & MBE_PROCESS_FLAG_SOFT_INPUT) != 0u);
 }

@@ -39,26 +39,25 @@ LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
     float out[160] = {};
     mbe_process_result result = {};
     result.total_errors = (size > 1U) ? static_cast<int>(data[1] & 0x0FU) : 0;
-    const int uvquality = (size > 2U) ? static_cast<int>((data[2] % 8U) + 1U) : 8;
     const bool raw_bits = (data[0] & 0x80U) != 0U;
 
     switch (data[0] % 3U) {
         case 0: {
             char imbe_d[88];
             fill_bits(imbe_d, sizeof(imbe_d), data, size, 3U, raw_bits);
-            (void)mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh, uvquality);
+            (void)mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh);
             break;
         }
         case 1: {
             char ambe_d[49];
             fill_bits(ambe_d, sizeof(ambe_d), data, size, 3U, raw_bits);
-            (void)mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh, uvquality);
+            (void)mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh);
             break;
         }
         default: {
             char ambe_d[49];
             fill_bits(ambe_d, sizeof(ambe_d), data, size, 3U, raw_bits);
-            (void)mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh, uvquality);
+            (void)mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh);
             break;
         }
     }

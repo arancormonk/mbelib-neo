@@ -13,6 +13,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "bench_parse.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -30,8 +31,9 @@ secs(void) {
 int
 main(int argc, char** argv) {
     int loops = 200000; // convert 200k frames -> ~32M samples
-    if (argc > 1) {
-        loops = atoi(argv[1]);
+    if (argc > 1 && bench_parse_int_arg(argv[1], 1, INT_MAX, &loops) < 0) {
+        fprintf(stderr, "usage: %s [loops]\n", argv[0]);
+        return 2;
     }
     float f[160];
     short s[160];

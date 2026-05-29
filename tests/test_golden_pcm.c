@@ -91,7 +91,7 @@ main(void) {
     mbe_setThreadRngSeed(0xC0FFEEu);
     fill_params(&cur, &prev);
     /* First run */
-    mbe_synthesizeSpeechf(out_f, &cur, &prev, 8);
+    mbe_synthesizeSpeechf(out_f, &cur, &prev);
     uint32_t hf1 = fnv1a32(out_f, sizeof(out_f));
     mbe_floattoshort(out_f, out_s);
     uint32_t hs1 = fnv1a32(out_s, sizeof(out_s));
@@ -103,7 +103,7 @@ main(void) {
     short out_s2[160];
     mbe_setThreadRngSeed(0xC0FFEEu);
     fill_params(&cur, &prev);
-    mbe_synthesizeSpeechf(out_f2, &cur, &prev, 8);
+    mbe_synthesizeSpeechf(out_f2, &cur, &prev);
     for (int i = 0; i < 160; ++i) {
         if (!float_bits_equal(out_f[i], out_f2[i])) {
             fprintf(stderr, "determinism failure: float sample %d differs across runs\n", i);

@@ -62,7 +62,7 @@ main(void) {
                 cur.Vl[l] = ((i + l) % 5) ? 1 : 0;
                 cur.Ml[l] = 0.04f + 0.003f * (float)((i + l) % 7);
             }
-            mbe_synthesizeSpeechf(out, &cur, &prev, 8);
+            mbe_synthesizeSpeechf(out, &cur, &prev);
             mbe_moveMbeParms(&cur, &prev);
         }
         double dt = secs() - t0;

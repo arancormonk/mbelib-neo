@@ -9,7 +9,6 @@
 #include "mbelib-neo/mbelib.h"
 
 int mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
-                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                                      int uvquality);
+                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 #endif /* MBELIB_NEO_INTERNAL_IMBE4400_INTERNAL_H */

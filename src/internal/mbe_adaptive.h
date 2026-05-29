@@ -76,11 +76,9 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp Current frame parameters.
  * @param prev_mp Previous enhanced frame parameters.
- * @param uvquality Unvoiced synthesis quality setting.
  * @param rm0 Sum of squared pre-enhancement amplitudes.
  */
-void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality,
-                                        float rm0);
+void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0);
 
 /**
  * @brief Seed the comfort-noise RNG used by mbe_synthesizeComfortNoisef().

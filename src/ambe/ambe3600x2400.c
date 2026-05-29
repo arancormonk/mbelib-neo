@@ -525,9 +525,6 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     fprintf(stderr, "\n");
 #endif
 
-    // copy repeat from prev_mp
-    cur_mp->repeat = prev_mp->repeat;
-
     int b0 = ambe2400_decode_b0(ambe_d);
     int tone_frame = ambe2400_handle_tone_frame(ambe_d, cur_mp, b0, &L);
     if (tone_frame != 0) {
@@ -665,14 +662,12 @@ ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_proce
                              const mbe_parms* prev_mp) {
     if (bad == 2) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_ERASURE);
-        cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
         mbe_setAmbeErasureParms_common(cur_mp, prev_mp);
         return;
     }
     if (bad == 3) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
-        cur_mp->repeat = 0;
         cur_mp->repeatCount = 0;
         return;
     }
@@ -681,23 +676,21 @@ ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_proce
     }
     if (total_errors > 3) {
         mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeat++;
         cur_mp->repeatCount++;
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
         return;
     }
 
-    cur_mp->repeat = 0;
     cur_mp->repeatCount = 0;
 }
 
 static void
 ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                          mbe_parms* prev_mp_enhanced, int uvquality) {
-    if (cur_mp->repeat <= 3) {
+                          mbe_parms* prev_mp_enhanced) {
+    if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
         mbe_moveMbeParms(cur_mp, prev_mp);
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0);
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         return;
     }
@@ -716,15 +709,14 @@ ambe2400_synthesize_erasure(float* aout_buf, const mbe_parms* cur_mp, mbe_parms*
 
 static void
 ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad, int c0_errors,
-                          int total_errors, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                          int uvquality) {
+                          int total_errors, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     if ((bad >= 7) && (bad <= 122) && (c0_errors < 2) && (total_errors < 3)) {
         mbe_synthesizeTonefdstar(aout_buf, ambe_d, cur_mp, bad);
         mbe_moveMbeParms(cur_mp, prev_mp);
         return;
     }
     if (bad == 0) {
-        ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+        ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
         return;
     }
     if (bad == 2) {
@@ -738,7 +730,7 @@ ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const cha
 
 int
 mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
-                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
     int bad;
     int c0_errors;
@@ -763,20 +755,20 @@ mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char
     }
 
     ambe2400_update_decode_state(bad, c0_errors, total_errors, result, cur_mp, prev_mp);
-    ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, c0_errors, total_errors, cur_mp, prev_mp, prev_mp_enhanced,
-                              uvquality);
+    ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, c0_errors, total_errors, cur_mp, prev_mp,
+                              prev_mp_enhanced);
     return result->total_errors;
 }
 
 int
 mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
-                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     float float_buf[160];
     int ret;
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = mbe_processAmbe2400Dataf(float_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    ret = mbe_processAmbe2400Dataf(float_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
     if (ret < 0) {
         return ret;
     }
@@ -791,11 +783,10 @@ mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result, const char 
  * @param ambe_fr  Input frame as 4x24 bitplanes.
  * @param ambe_d   Scratch/output parameter bits (49).
  * @param cur_mp,prev_mp,prev_mp_enhanced Parameter state as per Dataf variant.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 int
 mbe_processAmbe3600x2400Framef(float* aout_buf, mbe_process_result* result, const char ambe_fr[4][24], char ambe_d[49],
-                               mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                               mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
     int ret;
     if (!result) {
@@ -805,13 +796,13 @@ mbe_processAmbe3600x2400Framef(float* aout_buf, mbe_process_result* result, cons
     if (ret < 0) {
         return ret;
     }
-    return mbe_processAmbe2400Dataf(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    return mbe_processAmbe2400Dataf(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 int
 mbe_processAmbe3600x2400SoftFramef(float* aout_buf, mbe_process_result* result, const mbe_soft_bit ambe_fr[4][24],
-                                   char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                                   int uvquality) {
+                                   char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
+                                   mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
     int ret;
     if (!result) {
@@ -821,20 +812,18 @@ mbe_processAmbe3600x2400SoftFramef(float* aout_buf, mbe_process_result* result, 
     if (ret < 0) {
         return ret;
     }
-    return mbe_processAmbe2400Dataf(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, uvquality);
+    return mbe_processAmbe2400Dataf(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 int
 mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_result* result, const mbe_soft_bit ambe_fr[4][24],
-                                  char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced,
-                                  int uvquality) {
+                                  char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     float float_buf[160];
     int ret;
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = mbe_processAmbe3600x2400SoftFramef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                             uvquality);
+    ret = mbe_processAmbe3600x2400SoftFramef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
     if (ret < 0) {
         return ret;
     }
@@ -848,15 +837,14 @@ mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_result* result, c
  */
 int
 mbe_processAmbe3600x2400Frame(short* aout_buf, mbe_process_result* result, const char ambe_fr[4][24], char ambe_d[49],
-                              mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced, int uvquality) {
+                              mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     float float_buf[160];
     int ret;
 
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = mbe_processAmbe3600x2400Framef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced,
-                                         uvquality);
+    ret = mbe_processAmbe3600x2400Framef(float_buf, result, ambe_fr, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
     if (ret < 0) {
         return ret;
     }

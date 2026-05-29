@@ -134,7 +134,6 @@ git push origin vX.Y.Z
 - `-DMBELIB_ENABLE_LTO=ON` — Enable IPO/LTO in Release builds when supported.
 - `-DMBELIB_ENABLE_HARDENING=ON` — Enable supported Release-like compiler/linker hardening (default ON).
 - `-DMBELIB_ENABLE_SIMD=ON` — Enable SIMD-accelerated routines in hot paths (SSE2 on x86_64, NEON on ARM64, and SSE2-targeted builds on 32-bit x86). On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability.
-- `-DMBELIB_STRICT_ORDER=ON` — Compatibility flag that currently only defines `MBELIB_STRICT_ORDER` at compile time (no behavior change in this tree).
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
 - `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, and `bench_convert`.
 

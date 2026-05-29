@@ -19,7 +19,7 @@
  * These functions and utilities are used internally by the library’s synthesis
  * implementation and are not part of the public API. Names and semantics may
  * change between releases. Where appropriate, helpers note the impact of
- * `MBELIB_ENABLE_SIMD` and `MBELIB_STRICT_ORDER` on determinism and ordering.
+ * `MBELIB_ENABLE_SIMD` on determinism and ordering.
  *
  * @{ 
  */
@@ -273,40 +273,48 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float gain, f
  * a second load/store of the output buffer when both voiced components are
  * active for the same harmonic.
  */
+typedef struct mbe_voiced_block_component {
+    const float* W;
+    float gain;
+    float* c;
+    float* s;
+    float sd;
+    float cd;
+} mbe_voiced_block_component;
+
 /** @internal @ingroup mbe_internal */
 static inline void
-mbe_add_voiced_dual_block4(float* restrict Ss, const float* restrict W_prev, float gain_prev, float* restrict c_prev,
-                           float* restrict s_prev, float sd_prev, float cd_prev, const float* restrict W_cur,
-                           float gain_cur, float* restrict c_cur, float* restrict s_cur, float sd_cur, float cd_cur) {
+mbe_add_voiced_dual_block4(float* restrict Ss, const mbe_voiced_block_component* restrict prev,
+                           const mbe_voiced_block_component* restrict cur) {
     float prev_cblk[4];
     float cur_cblk[4];
 
-    mbe_fill_voiced_cos_block4(prev_cblk, c_prev, s_prev, sd_prev, cd_prev);
-    mbe_fill_voiced_cos_block4(cur_cblk, c_cur, s_cur, sd_cur, cd_cur);
+    mbe_fill_voiced_cos_block4(prev_cblk, prev->c, prev->s, prev->sd, prev->cd);
+    mbe_fill_voiced_cos_block4(cur_cblk, cur->c, cur->s, cur->sd, cur->cd);
 
 #if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
     __m128 vS = _mm_loadu_ps(Ss);
-    __m128 vPrev = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(prev_cblk), _mm_loadu_ps(W_prev)), _mm_set1_ps(gain_prev));
-    __m128 vCur = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(cur_cblk), _mm_loadu_ps(W_cur)), _mm_set1_ps(gain_cur));
+    __m128 vPrev = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(prev_cblk), _mm_loadu_ps(prev->W)), _mm_set1_ps(prev->gain));
+    __m128 vCur = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(cur_cblk), _mm_loadu_ps(cur->W)), _mm_set1_ps(cur->gain));
     vS = _mm_add_ps(vS, vPrev);
     vS = _mm_add_ps(vS, vCur);
     _mm_storeu_ps(Ss, vS);
 #elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
     float32x4_t vS = vld1q_f32(Ss);
-    float32x4_t vPrev = vmulq_f32(vmulq_f32(vld1q_f32(prev_cblk), vld1q_f32(W_prev)), vdupq_n_f32(gain_prev));
-    float32x4_t vCur = vmulq_f32(vmulq_f32(vld1q_f32(cur_cblk), vld1q_f32(W_cur)), vdupq_n_f32(gain_cur));
+    float32x4_t vPrev = vmulq_f32(vmulq_f32(vld1q_f32(prev_cblk), vld1q_f32(prev->W)), vdupq_n_f32(prev->gain));
+    float32x4_t vCur = vmulq_f32(vmulq_f32(vld1q_f32(cur_cblk), vld1q_f32(cur->W)), vdupq_n_f32(cur->gain));
     vS = vaddq_f32(vS, vPrev);
     vS = vaddq_f32(vS, vCur);
     vst1q_f32(Ss, vS);
 #else
-    Ss[0] += gain_prev * W_prev[0] * prev_cblk[0];
-    Ss[1] += gain_prev * W_prev[1] * prev_cblk[1];
-    Ss[2] += gain_prev * W_prev[2] * prev_cblk[2];
-    Ss[3] += gain_prev * W_prev[3] * prev_cblk[3];
-    Ss[0] += gain_cur * W_cur[0] * cur_cblk[0];
-    Ss[1] += gain_cur * W_cur[1] * cur_cblk[1];
-    Ss[2] += gain_cur * W_cur[2] * cur_cblk[2];
-    Ss[3] += gain_cur * W_cur[3] * cur_cblk[3];
+    Ss[0] += prev->gain * prev->W[0] * prev_cblk[0];
+    Ss[1] += prev->gain * prev->W[1] * prev_cblk[1];
+    Ss[2] += prev->gain * prev->W[2] * prev_cblk[2];
+    Ss[3] += prev->gain * prev->W[3] * prev_cblk[3];
+    Ss[0] += cur->gain * cur->W[0] * cur_cblk[0];
+    Ss[1] += cur->gain * cur->W[1] * cur_cblk[1];
+    Ss[2] += cur->gain * cur->W[2] * cur_cblk[2];
+    Ss[3] += cur->gain * cur->W[3] * cur_cblk[3];
 #endif
 }
 
@@ -365,7 +373,7 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
 
     int l;
     prev_mp->swn = 0;
-    prev_mp->un = 0;
+    prev_mp->tonePhase = 0;
     /* Match JMBE IMBEModelParameters default (IMBEFundamentalFrequency.DEFAULT, index 134). */
     prev_mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
     prev_mp->L = (int)(0.9254 * (int)((M_PI / prev_mp->w0) + 0.25));
@@ -379,8 +387,6 @@ mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhan
         /* JMBE previous-phase arrays start at 0.0f. */
         prev_mp->PSIl[l] = 0.0f;
     }
-    prev_mp->repeat = 0;
-
     /* Initialize adaptive smoothing state */
     prev_mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
     prev_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
@@ -710,7 +716,7 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
     const uint32_t step1 = mbe_tonePhaseStep((double)freq1);
     const uint32_t step2 = dual_tone ? mbe_tonePhaseStep((double)freq2) : 0u;
     uint32_t phase1 = (uint32_t)cur_mp->swn;
-    uint32_t phase2 = (uint32_t)cur_mp->un;
+    uint32_t phase2 = (uint32_t)cur_mp->tonePhase;
 
     for (int n = 0; n < 160; n++) {
         phase1 += step1;
@@ -726,7 +732,7 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
     }
 
     cur_mp->swn = (int)phase1;
-    cur_mp->un = (int)phase2;
+    cur_mp->tonePhase = phase2;
 }
 #endif
 
@@ -882,7 +888,6 @@ mbe_synthesizeSilence(short* aout_buf) {
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 /* JMBE-compatible white noise scalar for phase calculation: 2*PI / 53125 */
 #define MBE_WHITE_NOISE_SCALAR (2.0f * (float)M_PI / 53125.0f)
@@ -981,8 +986,10 @@ mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_p
         mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
 
         for (int n = 0; n < N; n += 4) {
-            mbe_add_voiced_dual_block4(Ss, Ws + n + N, gain_prev, &c_prev, &s_prev, sd_prev, cd_prev, Ws + n, gain_cur,
-                                       &c_cur, &s_cur, sd_cur, cd_cur);
+            const mbe_voiced_block_component prev_component = {Ws + n + N, gain_prev, &c_prev,
+                                                               &s_prev,    sd_prev,   cd_prev};
+            const mbe_voiced_block_component cur_component = {Ws + n, gain_cur, &c_cur, &s_cur, sd_cur, cd_cur};
+            mbe_add_voiced_dual_block4(Ss, &prev_component, &cur_component);
             Ss += 4;
         }
     } else if (prev_voiced) {
@@ -1033,7 +1040,7 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
 }
 
 static void
-mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality, int has_pre_enh_rm0,
+mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int has_pre_enh_rm0,
                          float pre_enh_rm0) {
 
     const int N = 160;
@@ -1046,9 +1053,6 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-
-    /* Silence unused parameter warning - uvquality is kept for API compatibility */
-    (void)uvquality;
 
     /* Apply adaptive smoothing (Algorithms #111-116) before muting checks.
      * JMBE computes/update smoothing state during parameter preparation even
@@ -1101,13 +1105,13 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 }
 
 void
-mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality, float rm0) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, uvquality, 1, rm0);
+mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, 1, rm0);
 }
 
 void
-mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, uvquality, 0, 0.0f);
+mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, 0, 0.0f);
 }
 
 /**
@@ -1115,16 +1119,15 @@ mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
  * @param aout_buf Output buffer of 160 16-bit samples.
  * @param cur_mp   Current parameter set.
  * @param prev_mp  Previous parameter set.
- * @param uvquality Legacy quality knob (currently ignored; kept for API compatibility).
  */
 void
-mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int uvquality) {
+mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     float float_buf[160];
 
     if (MBE_UNLIKELY(!aout_buf)) {
         return;
     }
-    mbe_synthesizeSpeechf(float_buf, cur_mp, prev_mp, uvquality);
+    mbe_synthesizeSpeechf(float_buf, cur_mp, prev_mp);
     mbe_floattoshort(float_buf, aout_buf);
 }
 

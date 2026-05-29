@@ -11,6 +11,9 @@
 #include "mbelib-neo/mbelib.h"
 
 #define MBE_RESULT_CONTEXT_FLAGS (MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID)
+#define MBE_RESULT_STATUS_FLAGS                                                                                        \
+    (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE)
+#define MBE_RESULT_ALL_FLAGS (MBE_RESULT_CONTEXT_FLAGS | MBE_RESULT_STATUS_FLAGS)
 
 static inline int
 mbe_validate_bits(const char* bits, size_t count) {
@@ -61,7 +64,7 @@ mbe_result_total_errors_are_consistent(const mbe_process_result* result, int tot
     const int c0_valid = (result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u;
     const int c4_valid = (result->flags & MBE_PROCESS_FLAG_C4_VALID) != 0u;
 
-    return (component_total == 0 || total >= component_total) && (!c0_valid || total >= result->c0_errors)
+    return (component_total == 0 || total == component_total) && (!c0_valid || total >= result->c0_errors)
            && (!c4_valid || total >= result->c4_errors);
 }
 
@@ -76,6 +79,9 @@ mbe_result_resolve_total_errors(const mbe_process_result* result, int* total_err
     if (!result) {
         *total_errors = 0;
         return 0;
+    }
+    if ((result->flags & ~MBE_RESULT_ALL_FLAGS) != 0u) {
+        return MBE_STATUS_INVALID_ARGUMENT;
     }
     if (mbe_result_validate_component_errors(result, &component_total) < 0) {
         return MBE_STATUS_INVALID_ARGUMENT;
