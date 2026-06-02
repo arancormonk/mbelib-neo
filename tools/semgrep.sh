@@ -106,10 +106,40 @@ if [[ -n "${MBE_SEMGREP_SARIF_OUT:-}" ]]; then
   ARGS+=(--sarif --output "$MBE_SEMGREP_SARIF_OUT")
 fi
 
-set +e
-semgrep "${ARGS[@]}" "${TARGETS[@]}" 2>&1 | tee "$LOG_FILE"
-rc=${PIPESTATUS[0]}
-set -e
+run_semgrep() {
+  local append_log=0
+  local rc=0
+  local -a tee_args=("$LOG_FILE")
+
+  if [[ "${1:-}" == "--append-log" ]]; then
+    append_log=1
+    shift
+  fi
+  if [[ $append_log -eq 1 ]]; then
+    tee_args=(-a "$LOG_FILE")
+  fi
+
+  set +e
+  semgrep "$@" 2>&1 | tee "${tee_args[@]}"
+  rc=${PIPESTATUS[0]}
+  set -e
+  return "$rc"
+}
+
+if run_semgrep "${ARGS[@]}" "${TARGETS[@]}"; then
+  rc=0
+else
+  rc=$?
+fi
+
+if [[ $rc -ne 0 ]] && grep -q 'io_uring_queue_init' "$LOG_FILE"; then
+  echo "Semgrep failed while initializing io_uring; retrying with legacy parallelism." | tee -a "$LOG_FILE" >&2
+  if run_semgrep --append-log --x-parmap "${ARGS[@]}" "${TARGETS[@]}"; then
+    rc=0
+  else
+    rc=$?
+  fi
+fi
 
 if [[ $rc -eq 0 ]]; then
   echo "Semgrep completed. Full output in $LOG_FILE"
