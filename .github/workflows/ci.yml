@@ -858,6 +858,40 @@ jobs:
               exit 1
             fi
           done
+          for package in "${packages[@]}"; do
+            package_name="$(basename "$package")"
+            package_stem="${package_name%.tar.gz}"
+            package_stem="${package_stem%.zip}"
+            platform_arch="${package_stem#"${ARCHIVE_PREFIX}-"}"
+            platform="${platform_arch%-*}"
+            arch="${platform_arch##*-}"
+
+            case "${platform}" in
+              linux) artifact_os="Linux" ;;
+              macos) artifact_os="macOS" ;;
+              windows) artifact_os="Windows" ;;
+              *)
+                echo "Unsupported release package platform: ${platform}" >&2
+                exit 1
+                ;;
+            esac
+            case "${arch}" in
+              x64) artifact_arch="X64" ;;
+              arm64) artifact_arch="ARM64" ;;
+              *)
+                echo "Unsupported release package architecture: ${arch}" >&2
+                exit 1
+                ;;
+            esac
+
+            artifact_sbom="dist/release-package-${artifact_os}-${artifact_arch}.spdx.json"
+            if [ ! -f "${artifact_sbom}" ]; then
+              echo "Missing SBOM artifact for ${package_name}: ${artifact_sbom}" >&2
+              find dist -maxdepth 1 -type f -print >&2
+              exit 1
+            fi
+            mv "${artifact_sbom}" "${package}.spdx.json"
+          done
           mapfile -t sboms < <(
             find dist -maxdepth 1 -type f -name "${ARCHIVE_PREFIX}-*.spdx.json" |
               sort
