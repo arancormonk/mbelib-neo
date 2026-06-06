@@ -158,7 +158,7 @@ static int
 hamming1511_soft_common(const mbe_soft_bit* in, char* out, const int generator[4], int variant7100) {
     char hard_out[15];
     char candidate[15];
-    char best[15];
+    char best[15] = {0};
     const int* data_pos = variant7100 ? ham1511_7100_data_pos : ham1511_standard_data_pos;
     const int* parity_pos = variant7100 ? ham1511_7100_parity_pos : ham1511_standard_parity_pos;
     int best_score = 0x3fffffff;
@@ -305,7 +305,7 @@ mbe_golay2312Soft(const mbe_soft_bit* in, char* out) {
     char hard_in[23];
     char hard_out[23];
     char candidate[23];
-    char best[23];
+    char best[23] = {0};
     int best_score = 0x3fffffff;
     int best_data_diffs = 0x3fffffff;
     int have_best = 0;

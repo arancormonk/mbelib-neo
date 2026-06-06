@@ -210,7 +210,7 @@ imbe_decode_gains(char bb[58][12], int L9, float Gm[7]) {
 
 static void
 imbe_compute_ri(const float Gm[7], float Ri[7]) {
-    struct imbe_dct_cache* cache = imbe_get_dct_cache();
+    const struct imbe_dct_cache* cache = imbe_get_dct_cache();
     for (int i = 1; i <= 6; i++) {
         float sum = 0;
         for (int m = 1; m <= 6; m++) {
@@ -250,7 +250,7 @@ imbe_decode_hoc_coefficients(char bb[58][12], int L9, const float Ri[7], float C
 
 static void
 imbe_inverse_dct_tl(float Cik[7][11], int L9, float Tl[57]) {
-    struct imbe_dct_cache* cache = imbe_get_dct_cache();
+    const struct imbe_dct_cache* cache = imbe_get_dct_cache();
     int l = 1;
     for (int i = 1; i <= 6; i++) {
         int ji = ImbeJi[L9][i - 1];
@@ -439,7 +439,7 @@ mbe_eccImbe7200x4400C0(char imbe_fr[8][23]) {
         imbe_fr[0][j] = out[j];
     }
 
-    return (errs);
+    return errs;
 }
 
 static int
@@ -511,7 +511,7 @@ mbe_eccImbe7200x4400DataInternal(char imbe_fr[8][23], char* imbe_d, int* errs_c4
         imbe++;
     }
 
-    return (errs);
+    return errs;
 }
 
 static int
@@ -603,7 +603,7 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     }
 
     if (imbe_decode_fundamental(imbe_d, cur_mp, &L9) != 0) {
-        return (1);
+        return 1;
     }
 
     // read bits from imbe_d into b0..bL+1
@@ -626,7 +626,7 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     // determine log2Ml by applying ci,j to previous log2Ml
     imbe_update_spectral_amplitudes(cur_mp, prev_mp, Tl, imbe_spectral_rho(cur_mp->L));
 
-    return (0);
+    return 0;
 }
 
 /**

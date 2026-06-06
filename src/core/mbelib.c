@@ -327,8 +327,8 @@ mbe_versionString(void) {
 
 /**
  * @brief Copy MBE parameter set from input to output.
- * @param cur_mp  Source parameter set.
- * @param prev_mp Destination parameter set.
+ * @param source_mp      Source parameter set.
+ * @param destination_mp Destination parameter set.
  *
  * Uses struct assignment for efficiency - the compiler generates optimal
  * code (typically a single memcpy-like operation) rather than many individual
@@ -336,11 +336,11 @@ mbe_versionString(void) {
  * is correct and safe.
  */
 void
-mbe_moveMbeParms(const mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    if (!cur_mp || !prev_mp) {
+mbe_moveMbeParms(const mbe_parms* source_mp, mbe_parms* destination_mp) {
+    if (!source_mp || !destination_mp) {
         return;
     }
-    *prev_mp = *cur_mp;
+    *destination_mp = *source_mp;
 }
 
 /**
@@ -716,7 +716,7 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
     const uint32_t step1 = mbe_tonePhaseStep((double)freq1);
     const uint32_t step2 = dual_tone ? mbe_tonePhaseStep((double)freq2) : 0u;
     uint32_t phase1 = (uint32_t)cur_mp->swn;
-    uint32_t phase2 = (uint32_t)cur_mp->tonePhase;
+    uint32_t phase2 = cur_mp->tonePhase;
 
     for (int n = 0; n < 160; n++) {
         phase1 += step1;

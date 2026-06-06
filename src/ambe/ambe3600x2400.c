@@ -316,7 +316,7 @@ ambe2400_decode_ri(const char* ambe_d, float Ri[9]) {
             Gm[3], Gm[4], b4, Gm[5], Gm[6], Gm[7], Gm[8]);
 #endif
 
-    struct ambe_dct_cache* cache = ambe_get_dct_cache();
+    const struct ambe_dct_cache* cache = ambe_get_dct_cache();
     for (int i = 1; i <= 8; i++) {
         float sum = 0;
         for (int m = 1; m <= 8; m++) {
@@ -401,8 +401,8 @@ ambe2400_decode_cik(const char* ambe_d, int L, const float Ri[9], float Cik[5][1
 }
 
 static void
-ambe2400_inverse_dct_tl(float Cik[5][18], int Ji[5], float Tl[57]) {
-    struct ambe_dct_cache* cache = ambe_get_dct_cache();
+ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]) {
+    const struct ambe_dct_cache* cache = ambe_get_dct_cache();
     int l = 1;
     for (int i = 1; i <= 4; i++) {
         int ji = Ji[i];
@@ -426,8 +426,9 @@ ambe2400_inverse_dct_tl(float Cik[5][18], int Ji[5], float Tl[57]) {
 
 static void
 ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc) {
-    int intkl[57];
-    float flokl[57], deltal[57];
+    int intkl[57] = {0};
+    float flokl[57] = {0.0f};
+    float deltal[57] = {0.0f};
     int prev_L = prev_mp->L;
     if (cur_mp->L < 1) {
         cur_mp->L = 1;

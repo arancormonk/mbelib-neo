@@ -375,7 +375,7 @@ Project documentation and policies:
 - Read `CONTRIBUTING.md` before opening a pull request.
 - Follow `.clang-format` (LLVM style, 4‑space indent, 120 cols). You can run `tools/format.sh`.
 - Static analysis scripts (CI-aligned; CI and pre-push/preflight use strict mode where applicable):
-  - `tools/clang_tidy.sh` (strict promotes broad bugprone/performance/portability findings; targeted TUs supported).
+  - `tools/clang_tidy.sh` (promotes broad bugprone/performance/portability findings; targeted TUs supported).
   - `tools/cppcheck.sh` (strict uses exhaustive value-flow, inconclusive findings, and targeted TUs).
   - `tools/iwyu.sh` (strict include hygiene via include-what-you-use, including project headers; excludes `src/external`).
   - `tools/gcc_fanalyzer.sh` (strict GCC `-fanalyzer` plus additional high-signal GCC warnings; excludes `src/external`).

@@ -596,10 +596,10 @@ MBE_API const char* mbe_versionString(void);
 MBE_API void mbe_setThreadRngSeed(uint32_t seed);
 /**
  * @brief Copy MBE parameter set from one struct to another.
- * @param cur_mp Source parameters.
- * @param prev_mp Destination parameters. If either pointer is NULL, this is a no-op.
+ * @param source_mp Source parameters.
+ * @param destination_mp Destination parameters. If either pointer is NULL, this is a no-op.
  */
-MBE_API void mbe_moveMbeParms(const mbe_parms* cur_mp, mbe_parms* prev_mp);
+MBE_API void mbe_moveMbeParms(const mbe_parms* source_mp, mbe_parms* destination_mp);
 /**
  * @brief Replace current parameters with the last known parameters.
  * @param cur_mp Destination parameters to fill.

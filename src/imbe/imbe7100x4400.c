@@ -118,7 +118,7 @@ mbe_eccImbe7100x4400C0(char imbe_fr[7][24]) {
         imbe_fr[0][j + 1] = out[j];
     }
 
-    return (errs);
+    return errs;
 }
 
 static int
@@ -208,7 +208,7 @@ mbe_eccImbe7100x4400DataInternal(char imbe_fr[7][24], char* imbe_d, int* errs_c4
         imbe++;
     }
 
-    return (errs);
+    return errs;
 }
 
 static int

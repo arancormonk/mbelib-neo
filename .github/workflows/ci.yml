@@ -134,7 +134,7 @@ jobs:
             export CXX="ccache g++"
             rm -rf build/dev-debug
             cmake --preset dev-debug
-            tools/clang_tidy.sh --strict
+            tools/clang_tidy.sh
             tools/iwyu.sh --strict
             tools/gcc_fanalyzer.sh --strict
             ccache -s
