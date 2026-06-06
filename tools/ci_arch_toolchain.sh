@@ -12,6 +12,7 @@ Environment:
   CI_ARCH_IMAGE              Container image to use (default: pinned ARCHLINUX_BASE_DEVEL_IMAGE).
   CI_ARCH_EXTRA_PACKAGES     Extra pacman packages to install before running.
   CI_ARCH_IWYU_SHA           Expected include-what-you-use commit SHA.
+  CI_ARCH_PULL_RETRIES       Docker pull attempts before failing (default: 3).
   CI_ARCH_TOOLCHAIN_PREFIX   Container path for cached Arch-only tools.
 USAGE
 }
@@ -32,7 +33,13 @@ ROOT_DIR=$(git rev-parse --show-toplevel 2> /dev/null || pwd)
 source "$ROOT_DIR/tools/ci-dependency-pins.env"
 DEFAULT_ARCH_IMAGE="${ARCHLINUX_BASE_DEVEL_IMAGE:?ARCHLINUX_BASE_DEVEL_IMAGE is required}"
 IMAGE="${CI_ARCH_IMAGE:-$DEFAULT_ARCH_IMAGE}"
+PULL_RETRIES="${CI_ARCH_PULL_RETRIES:-3}"
 ARCH_TOOLCHAIN_PREFIX="${CI_ARCH_TOOLCHAIN_PREFIX:-/workspace/.deps-arch-toolchain}"
+
+if ! [[ "$PULL_RETRIES" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CI_ARCH_PULL_RETRIES must be a positive integer." >&2
+  exit 2
+fi
 
 ARCH_PACKAGES=(
   git
@@ -80,6 +87,20 @@ for name in GITHUB_EVENT_NAME CPPCHECK_BUILD_DIR; do
   if [[ -n "${!name:-}" ]]; then
     ENV_ARGS+=(--env "$name=${!name}")
   fi
+done
+
+for ((attempt = 1; attempt <= PULL_RETRIES; ++attempt)); do
+  if docker pull "$IMAGE"; then
+    break
+  fi
+
+  if [[ "$attempt" -eq "$PULL_RETRIES" ]]; then
+    echo "docker pull failed after $attempt attempt(s): $IMAGE" >&2
+    exit 1
+  fi
+
+  echo "docker pull failed (attempt $attempt/$PULL_RETRIES); retrying in 5s: $IMAGE" >&2
+  sleep 5
 done
 
 docker run --rm \
