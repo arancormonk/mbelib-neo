@@ -48,8 +48,12 @@ def main():
         "mode": mode,
     }
     if frames.is_file() and metadata.is_file():
-        cached = json.loads(metadata.read_text(encoding="utf-8"))
-        if cached.get("inputs") == signature and cached.get("frames_sha256") == digest(frames):
+        try:
+            cached = json.loads(metadata.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cached = None
+        if (isinstance(cached, dict) and cached.get("inputs") == signature
+                and cached.get("frames_sha256") == digest(frames)):
             return
     env = dict(os.environ, LD_LIBRARY_PATH=str(Path(baseline).resolve()))
     frames.parent.mkdir(parents=True, exist_ok=True)

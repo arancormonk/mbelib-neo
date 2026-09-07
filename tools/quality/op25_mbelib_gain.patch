@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Derived from OP25 ambe_encoder.cc (Copyright 2016 Max H. Parke KA1RBI)
+# and p25p2_vf.cc (Copyright 2013, 2014, 2016 Max H. Parke KA1RBI).
 # Standalone quality encoder adaptation, not a change to the fetched checkout.
 # Target: OP25 71abcd0ead32f86f51615ea6cc8a6a4dba4c949a.
 # D-STAR: match mbelib-neo's predictive gamma and even-index b8 codebook.

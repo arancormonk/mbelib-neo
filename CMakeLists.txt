@@ -1006,6 +1006,12 @@ if(MBELIB_BUILD_TOOLS)
     add_executable(mbe_quality_eval tools/quality/mbe_quality_eval.c)
     target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
     _mbelib_apply_hardening(mbe_quality_eval)
+    if(MSVC)
+        target_compile_definitions(
+            mbe_quality_eval
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     target_include_directories(
         mbe_quality_eval
         PRIVATE "${PROJECT_SOURCE_DIR}/include"

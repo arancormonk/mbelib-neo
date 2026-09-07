@@ -106,7 +106,12 @@ tools/quality/run_quality_ab.sh build/quality/baseline build/dev-debug \
   | tee build/quality/candidate.txt
 ```
 
-Use separate baseline/candidate library directories with the same build flags.
+Use separate baseline/candidate library directories with the same build flags
+and compatible public API/`mbe_parms` layouts; this workflow cannot compare ABI
+changes safely. The runner verifies the loader selects each requested library
+before calibration or decoding; it requires `LD_TRACE_LOADED_OBJECTS` support
+and rejects `LD_PRELOAD`. Identical PCM hashes are valid for the identity check
+and do not by themselves establish which library was loaded.
 The runner writes per-file WAVs and flat JSON metrics to `build/quality/out/`,
 prints baseline/candidate columns and unweighted per-mode means, and caches
 encoded bits under `build/quality/frames/`. A third positional argument selects
@@ -135,7 +140,8 @@ another directory containing 8 kHz mono s16le `*.raw` references.
 - Calibration manifests bind cached frames to hashes of the reference, encoder,
   evaluator, baseline library, and calibration implementation. Both library
   variants decode exactly the same cached bits. Changing any calibration input
-  invalidates its cache; failed calibration is an error, not a fallback.
+  invalidates its cache; unreadable, malformed, or non-object manifests are
+  cache misses. Failed calibration is an error, not a fallback.
 
 IMBE 7200, AMBE 2450, and AMBE 2400 have encoder modes. No open IMBE 7100 encoder
 is used: that decoder converts parameters into the shared IMBE 4400 synthesis
@@ -160,18 +166,19 @@ Frame files contain one row-major literal binary string per line:
 88 bits for IMBE 4400 Dataf, 49 bits for AMBE 2400/2450 Dataf, or 96 bits for the
 AMBE 3600x2400 Framef API (including zero rectangular padding).
 The evaluator rejects invalid digits, lengths, or codec combinations with exit 2;
-a negative process status exits 3 with the frame index. It requires at least
-256 aligned samples to report spectral metrics.
+a negative process status exits 3 with the frame index. Fewer than 256 aligned
+samples is an error (exit 2) after the output WAV is written; no metrics or JSON
+are emitted.
 
 References may be headerless `.raw` s16le or RIFF/WAVE PCM `.wav`, mono, 8000 Hz,
 16-bit. WAV chunks are walked rather than assuming a 44-byte input header.
 Output WAVs are 16-bit PCM with a 44-byte header. `pcm_fnv1a` hashes the
 little-endian output sample bytes, before measurement gain normalization.
 
-- Alignment maximizes correlation of log-RMS envelopes: centered 160-sample
-  windows, 8-sample hop, lag search −160…800 samples. Reference and decoded are
-  trimmed to common overlap; active 160-sample reference frames are within 40 dB
-  of maximum energy. Positive lag means decoded speech is delayed.
+- `lag_samples`: alignment lag in samples, chosen by maximizing correlation of
+  log-RMS envelopes: centered 160-sample windows, 8-sample hop, search −160…800.
+  Reference and decoded are trimmed to common overlap; active 160-sample reference
+  frames are within 40 dB of maximum energy. Positive lag means decoded speech is delayed.
 - `level_offset_db` is decoded/reference active RMS before normalization.
   Reference-based measurements then use RMS-matched signals in int16 units.
 - `lsd_db`: mean active-frame log-spectral distance, 256-point symmetric Hann,

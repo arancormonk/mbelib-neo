@@ -367,6 +367,9 @@ align(const Signal* ref, const Signal* dec) {
 
 static void
 metric(const char* key, double value) {
+    if (metric_count >= sizeof(metrics) / sizeof(metrics[0])) {
+        fail("Metric capacity exceeded.");
+    }
     metrics[metric_count++] = (Metric){key, value};
 }
 

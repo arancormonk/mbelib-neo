@@ -5,6 +5,8 @@ set -euo pipefail
 
 # Run from the repository root. OP25 is GPL-3.0-or-later; its bundled mbelib
 # stays in this standalone executable and is never linked with mbelib-neo.
+# Requires Bash, git, patch, coreutils, gcc/g++ (C++17), and network access.
+# Each invocation refetches the pinned checkout and rebuilds the encoder.
 if [[ ! -f tools/quality/op25_encode_driver.cc || ! -x tools/fetch-pinned-git.sh ]]; then
   echo "Run $0 from the repository root." >&2
   exit 2

@@ -643,7 +643,7 @@ main(void) {
         assert(float_array_equal_exact(cur[0].PHIl, cur[1].PHIl, 57));
     }
 
-    // Flat magnitudes have zero local phase; rising/falling edges lead/lag.
+    // Unit flat magnitudes have zero local phase; rising/falling edges lead/lag.
     {
         for (int edge = 0; edge < 3; ++edge) {
             float out[160];
@@ -678,7 +678,7 @@ main(void) {
         for (int mode = 0; mode < 2; ++mode) {
             char data[49] = {0};
             if (mode == 0) {
-                // b0 = 36: fourteen harmonics, so 56 / L is exact.
+                // b0 = 36: sixteen harmonics, so 56 / L = 3.5 is exact.
                 data[1] = data[4] = 1;
             } else {
                 set_ambe2450_b0(data, 36);

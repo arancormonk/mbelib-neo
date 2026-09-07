@@ -118,9 +118,14 @@ main(int argc, char** argv) {
     }
 
     struct stat input_stat, output_stat;
-    if (stat(input_path, &input_stat) == 0 && stat(output_path, &output_stat) == 0
-        && input_stat.st_dev == output_stat.st_dev && input_stat.st_ino == output_stat.st_ino) {
+    const bool have_input_stat = stat(input_path, &input_stat) == 0;
+    if (have_input_stat && stat(output_path, &output_stat) == 0 && input_stat.st_dev == output_stat.st_dev
+        && input_stat.st_ino == output_stat.st_ino) {
         std::fprintf(stderr, "Input and output must be different files.\n");
+        return 2;
+    }
+    if (have_input_stat && S_ISREG(input_stat.st_mode) && (input_stat.st_size % 2) != 0) {
+        std::fprintf(stderr, "Input contains an odd number of bytes: %s\n", input_path);
         return 2;
     }
     std::ifstream input(input_path, std::ios::binary);

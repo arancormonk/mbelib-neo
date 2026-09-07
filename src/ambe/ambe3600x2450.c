@@ -415,6 +415,7 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
 #ifdef AMBE_DEBUG
         fprintf(stderr, "delta%i: %f ", l, deltal[l]);
 #endif
+        /* intkl[l] can reach 56; keep the upper interpolation tap inside log2Ml[57]. */
         int upper = intkl[l] + 1;
         if (upper > MBE_MAX_HARMONIC_BANDS) {
             upper = MBE_MAX_HARMONIC_BANDS;

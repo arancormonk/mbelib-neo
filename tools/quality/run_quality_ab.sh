@@ -15,6 +15,7 @@ fail() {
 
 [[ $# -ge 2 && $# -le 3 ]] || fail \
   "usage: $0 <baseline_libdir> <candidate_libdir> [corpus_dir=build/quality/corpus]"
+[[ -z ${LD_PRELOAD:-} ]] || fail "LD_PRELOAD must be unset for controlled library selection"
 [[ $(uname -s) == Linux ]] || fail "this runner requires Linux (LD_LIBRARY_PATH)"
 command -v python3 > /dev/null || fail "Python 3 is required for JSON/table rendering"
 encoder=build/quality/op25_encode
@@ -30,6 +31,46 @@ baseline=$(realpath -e -- "$1")
 candidate=$(realpath -e -- "$2")
 [[ "$baseline" != *:* && "$candidate" != *:* ]] || fail \
   "library directories must not contain ':' (LD_LIBRARY_PATH separator)"
+python3 - "$evaluator" "$baseline" "$candidate" << 'PY'
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+soname = "libmbe-neo.so.2"
+row = re.compile(r"^\s*(?:(\S+)\s+=>\s+)?(.+?)\s+\(0x[0-9a-fA-F]+\)\s*$")
+for libdir in sys.argv[2:]:
+    expected = Path(libdir) / soname
+    try:
+        result = subprocess.run(
+            [sys.argv[1]],
+            env=dict(os.environ, LD_LIBRARY_PATH=libdir, LD_TRACE_LOADED_OBJECTS="1"),
+            capture_output=True, text=True,
+        )
+        if result.returncode:
+            raise ValueError(f"loader tracing failed: {result.stderr.strip()}")
+        loaded = []
+        for line in result.stdout.splitlines():
+            match = row.fullmatch(line)
+            if match:
+                loaded.append(match.groups())
+        selected = [path for name, path in loaded if name == soname]
+        if len(selected) != 1:
+            raise ValueError(f"loader trace must contain exactly one resolved {soname} row "
+                             "(library missing or tracing unsupported)")
+        if not os.path.samefile(selected[0], expected):
+            raise ValueError(f"loader selected {selected[0]!r}, not {str(expected)!r}")
+        extras = [path for name, path in loaded
+                  if name != soname and
+                  (Path(name or path).name.startswith("libmbe") or
+                   Path(path).name.startswith("libmbe"))]
+        if extras:
+            raise ValueError(f"unexpected additional libmbe libraries: {extras!r}")
+    except (OSError, ValueError) as exc:
+        print(f"library preflight for {libdir!r}: {exc}", file=sys.stderr)
+        sys.exit(2)
+PY
 corpus=${3:-build/quality/corpus}
 [[ -d "$corpus" && -r "$corpus" && -x "$corpus" ]] || fail "unreadable corpus directory: $corpus"
 corpus=$(realpath -e -- "$corpus")
