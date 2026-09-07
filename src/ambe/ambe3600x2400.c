@@ -461,8 +461,11 @@ ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
 #ifdef AMBE_DEBUG
         fprintf(stderr, "delta%i: %f ", l, deltal[l]);
 #endif
-        Sum43 = Sum43
-                + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[intkl[l] + 1]));
+        int upper = intkl[l] + 1;
+        if (upper > MBE_MAX_HARMONIC_BANDS) {
+            upper = MBE_MAX_HARMONIC_BANDS;
+        }
+        Sum43 = Sum43 + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[upper]));
     }
     Sum43 = (((float)0.65 / (float)cur_mp->L) * Sum43);
 #ifdef AMBE_DEBUG
@@ -478,8 +481,12 @@ ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
     float BigGamma = cur_mp->gamma - (0.5f * log2f((float)cur_mp->L)) - Sum42;
 
     for (int l = 1; l <= cur_mp->L; l++) {
+        int upper = intkl[l] + 1;
+        if (upper > MBE_MAX_HARMONIC_BANDS) {
+            upper = MBE_MAX_HARMONIC_BANDS;
+        }
         float c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[intkl[l] + 1]);
+        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[upper]);
         cur_mp->log2Ml[l] = Tl[l] + c1 + c2 - Sum43 + BigGamma;
         if (cur_mp->Vl[l] == 1) {
             cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);

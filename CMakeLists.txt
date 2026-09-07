@@ -72,6 +72,11 @@ option(
     OFF
 )
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
+option(
+    MBELIB_BUILD_TOOLS
+    "Build developer quality-analysis tools (not run in CI)"
+    OFF
+)
 # Warnings
 if(MBELIB_ENABLE_WARNINGS)
     if(MSVC)
@@ -993,6 +998,25 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(bench_convert BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+endif()
+
+# Quality analysis (opt-in, public API only)
+if(MBELIB_BUILD_TOOLS)
+    add_executable(mbe_quality_eval tools/quality/mbe_quality_eval.c)
+    target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(mbe_quality_eval)
+    target_include_directories(
+        mbe_quality_eval
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
+    get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
+    if(_SAN_CFLAGS)
+        target_compile_options(mbe_quality_eval PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(mbe_quality_eval BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
 endif()
 

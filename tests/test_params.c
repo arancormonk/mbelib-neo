@@ -617,28 +617,94 @@ main(void) {
         assert(approx_equal(cur.noiseSeed, (float)(0x1234u % 53125u), 1e-6f));
     }
 
-    // JMBE parity: unvoiced-band count used for phase jitter includes index 0
+    // Fully voiced synthesis must not depend on the unvoiced-noise RNG seed.
     {
-        float out[160];
-        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
-        mbe_initMbeParms(&cur, &prev, &prev_enh);
-
-        cur.w0 = 0.10f;
-        cur.L = 12;
-        for (int l = 0; l <= 56; ++l) {
-            cur.Vl[l] = (l <= cur.L) ? 0 : 1;
-            cur.Ml[l] = (l <= cur.L) ? 0.05f : 0.0f;
-            cur.PHIl[l] = 0.0f;
-            cur.PSIl[l] = 0.0f;
+        float out[2][160];
+        mbe_parms cur[2], prev[2], prev_enh;
+        for (int i = 0; i < 2; ++i) {
+            mbe_initMbeParms(&cur[i], &prev[i], &prev_enh);
+            cur[i].w0 = 0.10f;
+            cur[i].L = 12;
+            for (int l = 1; l <= cur[i].L; ++l) {
+                cur[i].Vl[l] = 1;
+                cur[i].Ml[l] = 0.05f;
+                cur[i].PHIl[l] = cur[i].PSIl[l] = 0.0f;
+            }
+            prev[i] = cur[i];
+            mbe_setThreadRngSeed(i == 0 ? 0x1111u : 0x2222u);
+            // Cold-start and second-frame noise heads are zero. The third
+            // frame exercises seed-dependent noise at every harmonic index.
+            for (int frame = 0; frame < 3; ++frame) {
+                mbe_synthesizeSpeechf(out[i], &cur[i], &prev[i]);
+                mbe_moveMbeParms(&cur[i], &prev[i]);
+            }
         }
-        prev = cur;
+        assert(float_array_equal_exact(out[0], out[1], 160));
+        assert(float_array_equal_exact(cur[0].PHIl, cur[1].PHIl, 57));
+    }
 
-        mbe_synthesizeSpeechf(out, &cur, &prev);
+    // Flat magnitudes have zero local phase; rising/falling edges lead/lag.
+    {
+        for (int edge = 0; edge < 3; ++edge) {
+            float out[160];
+            mbe_parms cur, prev, prev_enh;
+            mbe_initMbeParms(&cur, &prev, &prev_enh);
+            cur.w0 = 0.10f;
+            cur.L = 56;
+            for (int l = 1; l <= cur.L; ++l) {
+                cur.Vl[l] = 1;
+                cur.Ml[l] = ((edge == 1 && l > 28) || (edge == 2 && l <= 28)) ? 16.0f : 1.0f;
+                cur.PHIl[l] = cur.PSIl[l] = 0.0f;
+            }
+            prev = cur;
+            mbe_synthesizeSpeechf(out, &cur, &prev);
+            if (edge == 0) {
+                // Above harmonic 37 the kernel reaches the extrapolated tail.
+                for (int l = 1; l <= 37; ++l) {
+                    assert(float_bits_equal(cur.PHIl[l], cur.PSIl[l]));
+                }
+            } else if (edge == 1) {
+                assert(cur.PHIl[28] > cur.PSIl[28]);
+                assert(cur.PHIl[29] > cur.PSIl[29]);
+            } else {
+                assert(cur.PHIl[28] < cur.PSIl[28]);
+                assert(cur.PHIl[29] < cur.PSIl[29]);
+            }
+        }
+    }
 
-        int l_test = cur.L;
-        float expected_psil = prev.PSIl[l_test] + ((prev.w0 + cur.w0) * ((float)(l_test * 160) / 2.0f));
-        float expected_phil = expected_psil + (((float)(cur.L + 1) * (-(float)M_PI)) / (float)cur.L);
-        assert(approx_equal(cur.PHIl[l_test], expected_phil, 1e-3f));
+    // AMBE prediction at the maximum previous harmonic must not read past it.
+    {
+        for (int mode = 0; mode < 2; ++mode) {
+            char data[49] = {0};
+            if (mode == 0) {
+                // b0 = 36: fourteen harmonics, so 56 / L is exact.
+                data[1] = data[4] = 1;
+            } else {
+                set_ambe2450_b0(data, 36);
+            }
+            float out[160];
+            mbe_parms cur, prev, prev_enh;
+            mbe_process_result result;
+            mbe_initMbeParms(&cur, &prev, &prev_enh);
+            int (*process)(float*, mbe_process_result*, const char*, mbe_parms*, mbe_parms*, mbe_parms*) =
+                mode == 0 ? mbe_processAmbe2400Dataf : mbe_processAmbe2450Dataf;
+            // Establish AMBE defaults before constructing the previous frame.
+            mbe_initProcessResult(&result);
+            assert(process(out, &result, data, &cur, &prev, &prev_enh) >= 0);
+            prev.L = prev_enh.L = 56;
+            prev.w0 = prev_enh.w0 = 0.05f;
+            mbe_initProcessResult(&result);
+            int status = process(out, &result, data, &cur, &prev, &prev_enh);
+            assert(status >= 0);
+            assert(cur.L < 56);
+            for (int l = 1; l <= cur.L; ++l) {
+                assert(isfinite(cur.log2Ml[l]));
+            }
+            for (int i = 0; i < 160; ++i) {
+                assert(isfinite(out[i]));
+            }
+        }
     }
 
     // IMBE Dataf path must clear stale C4 error state when no C4 context is provided
