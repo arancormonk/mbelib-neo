@@ -24,6 +24,7 @@
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -391,17 +392,8 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
     int intkl[57] = {0};
     float flokl[57] = {0.0f};
     float deltal[57] = {0.0f};
-    int prev_L = prev_mp->L;
-    if (cur_mp->L < 1) {
-        cur_mp->L = 1;
-    } else if (cur_mp->L > 56) {
-        cur_mp->L = 56;
-    }
-    if (prev_L < 1) {
-        prev_L = 1;
-    } else if (prev_L > 56) {
-        prev_L = 56;
-    }
+    int prev_L = mbe_clamp_harmonic_count(prev_mp->L);
+    cur_mp->L = mbe_clamp_harmonic_count(cur_mp->L);
 
     if (cur_mp->L > prev_L) {
         for (int l = prev_L + 1; l <= cur_mp->L; l++) {

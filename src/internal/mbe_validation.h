@@ -16,6 +16,17 @@ mbe_harmonic_count_is_valid(int L) {
 }
 
 static inline int
+mbe_clamp_harmonic_count(int L) {
+    if (L < MBE_MIN_HARMONIC_BANDS) {
+        return MBE_MIN_HARMONIC_BANDS;
+    }
+    if (L > MBE_MAX_HARMONIC_BANDS) {
+        return MBE_MAX_HARMONIC_BANDS;
+    }
+    return L;
+}
+
+static inline int
 mbe_error_count_is_valid(int count) {
     return count >= 0 && count <= MBE_MAX_FRAME_BITS;
 }
