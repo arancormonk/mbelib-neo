@@ -744,7 +744,8 @@ if(MBELIB_BUILD_TESTS)
     add_test(NAME test_noise_determinism COMMAND test_noise_determinism)
 
     add_executable(test_params tests/test_params.c)
-    target_link_libraries(test_params PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    # The WOLA invariant exercises private DSP symbols without exporting them.
+    target_link_libraries(test_params PRIVATE mbe-static)
     target_include_directories(
         test_params
         PRIVATE
@@ -759,11 +760,19 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_params COMMAND test_params)
 
-    add_executable(test_frame_paths tests/test_frame_paths.c)
+    add_executable(
+        test_frame_paths
+        tests/test_frame_paths.c
+        tools/quality/mbe_quality_frames.c
+        src/ecc/ecc_const.c
+    )
     target_link_libraries(test_frame_paths PRIVATE ${MBELIB_EXEC_LINK_TGT})
     target_include_directories(
         test_frame_paths
-        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+            "${PROJECT_SOURCE_DIR}/tools/quality"
     )
     if(_SAN_CFLAGS)
         target_compile_options(test_frame_paths PRIVATE ${_SAN_CFLAGS})
@@ -1001,9 +1010,11 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
 endif()
 
-# Quality analysis (opt-in, public API only)
+# Quality analysis and private frame fixtures (opt-in)
 if(MBELIB_BUILD_TOOLS)
     add_executable(mbe_quality_eval tools/quality/mbe_quality_eval.c)
+    # Enable the POSIX realpath/lstat interfaces used for output alias checks.
+    target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
     target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
     _mbelib_apply_hardening(mbe_quality_eval)
     if(MSVC)
@@ -1016,13 +1027,34 @@ if(MBELIB_BUILD_TOOLS)
         mbe_quality_eval
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
     )
+    add_executable(
+        mbe_quality_reframe
+        tools/quality/mbe_quality_reframe.c
+        tools/quality/mbe_quality_frames.c
+    )
+    target_link_libraries(mbe_quality_reframe PRIVATE mbe-static)
+    _mbelib_apply_hardening(mbe_quality_reframe)
+    target_include_directories(
+        mbe_quality_reframe
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(MSVC)
+        target_compile_definitions(
+            mbe_quality_reframe
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
         target_compile_options(mbe_quality_eval PRIVATE ${_SAN_CFLAGS})
+        target_compile_options(mbe_quality_reframe PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(mbe_quality_eval BEFORE PRIVATE ${_SAN_LDFLAGS})
+        target_link_options(mbe_quality_reframe BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
 endif()
 

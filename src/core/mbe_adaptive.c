@@ -248,7 +248,7 @@ mbe_applyAdaptiveSmoothingCore(mbe_parms* cur_mp, const mbe_parms* prev_mp, floa
 
     /* Algorithm #116: Scale enhanced spectral amplitudes if exceeded */
     if (Am > (float)Tm && Am > 0.0f) {
-        float scale = (float)Tm / Am;
+        float scale = (float)(Tm > 0 ? Tm : 0) / Am;
         for (int l = 1; l <= L; l++) {
             M[l] *= scale;
         }

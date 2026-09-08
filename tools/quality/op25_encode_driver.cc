@@ -33,7 +33,7 @@ static void
 usage(const char* program) {
     std::fprintf(stderr,
                  "Usage: %s --mode imbe7200|ambe2450|ambe2400 --in <s16le-8k.raw> --out <frames.txt> "
-                 "[--gain-adjust <log2 attenuation>]\n",
+                 "[--gain-adjust <log2 attenuation>] [--flush-frames <0..50>]\n",
                  program);
 }
 
@@ -85,6 +85,7 @@ main(int argc, char** argv) {
     const char* input_path = nullptr;
     const char* output_path = nullptr;
     const char* gain_option = nullptr;
+    const char* flush_option = nullptr;
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 == argc) {
             usage(argv[0]);
@@ -99,6 +100,8 @@ main(int argc, char** argv) {
             value = &output_path;
         } else if (std::strcmp(argv[i], "--gain-adjust") == 0) {
             value = &gain_option;
+        } else if (std::strcmp(argv[i], "--flush-frames") == 0) {
+            value = &flush_option;
         }
         if (value == nullptr || *value != nullptr || argv[i + 1][0] == '\0') {
             usage(argv[0]);
@@ -117,6 +120,30 @@ main(int argc, char** argv) {
         return 2;
     }
 
+    // OP25 analyzes int16-scale PCM; mbelib-neo's conversion applies gain 7.
+    // Compensate in the log2 gain quantizer, without degrading PCM analysis.
+    float gain_adjust = 2.807354922057604f; // log2(7); runner calibrates against baseline
+    if (gain_option) {
+        char* end;
+        errno = 0;
+        gain_adjust = std::strtof(gain_option, &end);
+        if (errno || end == gain_option || *end || !std::isfinite(gain_adjust) || std::fabs(gain_adjust) > 16) {
+            std::fprintf(stderr, "Gain adjustment must be finite and within [-16, 16].\n");
+            return 2;
+        }
+    }
+    int flush_frames = 5;
+    if (flush_option) {
+        char* end;
+        errno = 0;
+        const long parsed = std::strtol(flush_option, &end, 10);
+        if (errno || end == flush_option || *end || parsed < 0 || parsed > 50) {
+            std::fprintf(stderr, "Flush frames must be an integer within [0, 50].\n");
+            return 2;
+        }
+        flush_frames = static_cast<int>(parsed);
+    }
+
     struct stat input_stat, output_stat;
     const bool have_input_stat = stat(input_path, &input_stat) == 0;
     if (have_input_stat && stat(output_path, &output_stat) == 0 && input_stat.st_dev == output_stat.st_dev
@@ -133,6 +160,33 @@ main(int argc, char** argv) {
         std::fprintf(stderr, "Cannot open input: %s\n", input_path);
         return 2;
     }
+    int16_t pcm[160];
+    const auto read_pcm = [&]() {
+        unsigned char raw[320];
+        input.read(reinterpret_cast<char*>(raw), sizeof(raw));
+        const std::streamsize bytes = input.gcount();
+        if (input.bad() || (input.fail() && !input.eof())) {
+            std::fprintf(stderr, "Error reading input: %s\n", input_path);
+            return -1;
+        }
+        if ((bytes % 2) != 0) {
+            std::fprintf(stderr, "Input contains an odd number of bytes: %s\n", input_path);
+            return -1;
+        }
+        std::memset(pcm, 0, sizeof(pcm));
+        for (std::streamsize i = 0; i < bytes / 2; ++i) {
+            const int sample = raw[2 * i] | (static_cast<int>(raw[2 * i + 1]) << 8);
+            pcm[i] = static_cast<int16_t>(sample < 32768 ? sample : sample - 65536);
+        }
+        return bytes == 0 ? 0 : 1;
+    };
+    const int first_block = read_pcm();
+    if (first_block <= 0) {
+        if (first_block == 0) {
+            std::fprintf(stderr, "Input contains no PCM samples: %s\n", input_path);
+        }
+        return 2;
+    }
     std::ofstream output(output_path, std::ios::binary | std::ios::trunc);
     if (!output) {
         std::fprintf(stderr, "Cannot open output: %s\n", output_path);
@@ -141,18 +195,7 @@ main(int argc, char** argv) {
 
     std::optional<imbe_vocoder> imbe_encoder;
     std::optional<ambe_encoder> ambe;
-    // OP25 analyzes int16-scale PCM; mbelib-neo's conversion applies gain 7.
-    // Compensate in the log2 gain quantizer, without degrading PCM analysis.
-    float gain_adjust = 2.807354922057604f; // log2(7); runner calibrates against baseline
-    if (gain_option) {
-        char* end;
-        errno = 0;
-        gain_adjust = std::strtof(gain_option, &end);
-        if (errno || *end || !std::isfinite(gain_adjust) || std::fabs(gain_adjust) > 16) {
-            std::fprintf(stderr, "Gain adjustment must be finite and within [-16, 16].\n");
-            return 2;
-        }
-    }
+    bool input_done = false;
     if (imbe) {
         imbe_encoder.emplace();
         imbe_encoder->set_gain_adjust(gain_adjust);
@@ -168,25 +211,6 @@ main(int argc, char** argv) {
     }
     const int bits = imbe ? 88 : (dstar ? 96 : 49);
     for (;;) {
-        unsigned char raw[320];
-        input.read(reinterpret_cast<char*>(raw), sizeof(raw));
-        const std::streamsize bytes = input.gcount();
-        if (input.bad() || (input.fail() && !input.eof())) {
-            std::fprintf(stderr, "Error reading input: %s\n", input_path);
-            return 2;
-        }
-        if ((bytes % 2) != 0) {
-            std::fprintf(stderr, "Input contains an odd number of bytes: %s\n", input_path);
-            return 2;
-        }
-        if (bytes == 0) {
-            break;
-        }
-        int16_t pcm[160] = {};
-        for (std::streamsize i = 0; i < bytes / 2; ++i) {
-            const int sample = raw[2 * i] | (static_cast<int>(raw[2 * i + 1]) << 8);
-            pcm[i] = static_cast<int16_t>(sample < 32768 ? sample : sample - 65536);
-        }
         char line[97];
         if (imbe) {
             imbe_bits(*imbe_encoder, pcm, line);
@@ -207,9 +231,21 @@ main(int argc, char** argv) {
             std::fprintf(stderr, "Error writing output: %s\n", output_path);
             return 2;
         }
-        if (input.eof()) {
+        if (!input_done) {
+            const int next_block = read_pcm();
+            if (next_block < 0) {
+                return 2;
+            }
+            if (next_block > 0) {
+                continue;
+            }
+            input_done = true;
+        }
+        if (flush_frames == 0) {
             break;
         }
+        --flush_frames;
+        std::memset(pcm, 0, sizeof(pcm));
     }
     output.close();
     if (!output) {

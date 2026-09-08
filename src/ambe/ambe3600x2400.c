@@ -658,6 +658,11 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
     return 0;
 }
 
+static int
+ambe2400_is_accepted_tone(int bad, int c0_errors, int total_errors) {
+    return bad >= 5 && bad <= 122 && c0_errors < 2 && total_errors < 3;
+}
+
 static void
 ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_process_result* result, mbe_parms* cur_mp,
                              const mbe_parms* prev_mp) {
@@ -672,7 +677,8 @@ ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_proce
         cur_mp->repeatCount = 0;
         return;
     }
-    if ((bad >= 7) && (bad <= 122) && (c0_errors < 2) && (total_errors < 3)) {
+    if (ambe2400_is_accepted_tone(bad, c0_errors, total_errors)) {
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
         return;
     }
     if (total_errors > 3) {
@@ -711,7 +717,7 @@ ambe2400_synthesize_erasure(float* aout_buf, const mbe_parms* cur_mp, mbe_parms*
 static void
 ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad, int c0_errors,
                           int total_errors, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    if ((bad >= 7) && (bad <= 122) && (c0_errors < 2) && (total_errors < 3)) {
+    if (ambe2400_is_accepted_tone(bad, c0_errors, total_errors)) {
         mbe_synthesizeTonefdstar(aout_buf, ambe_d, cur_mp, bad);
         mbe_moveMbeParms(cur_mp, prev_mp);
         return;

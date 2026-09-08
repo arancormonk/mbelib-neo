@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -570,27 +571,99 @@ main(void) {
         assert(approx_equal(cur.PSIl[l_test], expected_psil, 1e-3f));
     }
 
-    // JMBE parity: adaptive amplitude threshold Tm is not clamped to non-negative values
+    // A negative adaptive threshold attenuates a positive spectrum without inversion.
     {
-        mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
-        mbe_initMbeParms(&cur, &prev, &prev_enh);
-
+        mbe_parms cur, prev;
+        seed_speech_params(&cur, &prev);
         cur.L = 4;
+        cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
         for (int l = 1; l <= cur.L; ++l) {
             cur.Ml[l] = 10.0f;
-            cur.Vl[l] = 0;
+            cur.Vl[l] = 1;
         }
-
+        prev = cur;
         cur.errorRate = 0.5f;
         cur.errorCountTotal = 30;
         cur.errorCount4 = 2;
         prev.amplitudeThreshold = 1;
 
-        mbe_applyAdaptiveSmoothing(&cur, &prev);
+        mbe_parms smoothed = cur;
+        mbe_applyAdaptiveSmoothing(&smoothed, &prev);
+        float magnitude_sum = 0.0f;
+        for (int l = 1; l <= smoothed.L; ++l) {
+            assert(smoothed.Ml[l] >= 0.0f);
+            magnitude_sum += smoothed.Ml[l];
+        }
+        assert(magnitude_sum <= 40.0f);
+        assert(smoothed.amplitudeThreshold == -2999);
 
-        assert(cur.amplitudeThreshold == -2999);
-        assert(cur.amplitudeThreshold < 0);
-        assert(cur.Ml[1] < 0.0f);
+        // AMBE does not error-rate mute: the previous voiced frame must fade
+        // toward zero, bounded by its linearly decreasing amplitude envelope.
+        float out[160];
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        assert(approx_equal(out[0], 80.0f, 1e-5f));
+        for (int n = 0; n < 160; ++n) {
+            float envelope = 80.0f * (1.0f - (float)n / 160.0f);
+            assert(fabsf(out[n]) <= envelope + 1e-4f);
+        }
+        for (int l = 1; l <= cur.L; ++l) {
+            assert(cur.Ml[l] == 0.0f);
+        }
+
+        // Carry the signed threshold forward, then supply a clean positive
+        // frame. The existing threshold reset must let speech fade back in.
+        mbe_moveMbeParms(&cur, &prev);
+        cur.errorRate = 0.0f;
+        cur.errorCountTotal = 0;
+        cur.errorCount4 = 0;
+        for (int l = 1; l <= cur.L; ++l) {
+            cur.Ml[l] = 10.0f;
+        }
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        float recovery_energy = 0.0f;
+        for (int n = 0; n < 160; ++n) {
+            recovery_energy += out[n] * out[n];
+        }
+        assert(recovery_energy / 160.0f > 1.0f);
+        for (int l = 1; l <= cur.L; ++l) {
+            assert(cur.Ml[l] == 10.0f);
+        }
+
+        // At the adjacent positive threshold, degraded speech is attenuated,
+        // not indiscriminately silenced (Tm = 6000 - 300 * 20 + 1 = 1).
+        cur.errorRate = 0.5f;
+        cur.errorCountTotal = 20;
+        cur.errorCount4 = 2;
+        prev.amplitudeThreshold = 1;
+        mbe_applyAdaptiveSmoothing(&cur, &prev);
+        magnitude_sum = 0.0f;
+        for (int l = 1; l <= cur.L; ++l) {
+            assert(cur.Ml[l] > 0.0f);
+            assert(cur.Ml[l] < 10.0f);
+            magnitude_sum += cur.Ml[l];
+        }
+        assert(approx_equal(magnitude_sum, 1.0f, 1e-6f));
+    }
+
+    // Analysis-windowed copies reconstruct every sample across the WOLA join.
+    {
+        float prev_uw[MBE_FFT_SIZE] = {0};
+        float curr_uw[MBE_FFT_SIZE] = {0};
+        float out[160] = {0};
+        float expected[160];
+        for (int n = 0; n < 160; ++n) {
+            expected[n] = 0.1f + 0.001f * (float)n + 0.2f * sinf(0.13f * (float)n);
+            if (n + 128 < MBE_FFT_SIZE) {
+                prev_uw[n + 128] = mbe_synthesisWindow(n) * expected[n];
+            }
+            if (n >= 32) {
+                curr_uw[n - 32] = mbe_synthesisWindow(n - 160) * expected[n];
+            }
+        }
+        mbe_wola_combine(out, prev_uw, curr_uw, 160);
+        for (int n = 0; n < 160; ++n) {
+            assert(approx_equal(out[n], expected[n], 2e-6f * (1.0f + fabsf(expected[n]))));
+        }
     }
 
     // Thread RNG seeding must drive comfort-noise and unvoiced-noise generators
