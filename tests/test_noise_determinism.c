@@ -5,102 +5,92 @@
 
 /**
  * @file
- * @brief Determinism test for unvoiced noise synthesis.
+ * @brief Sample-exact warm replay and interleaving of nonmuted FFT synthesis.
  *
- * Verifies JMBE-compatible behavior:
- * 1. Same initial state produces identical output (determinism)
- * 2. LCG state advances per frame, producing different noise sequences
- *
- * Note: JMBE uses a fixed seed (3147) per synthesizer instance. The noise
- * generator state persists in mbe_parms and advances naturally per frame.
- * There is no external seeding mechanism for unvoiced noise in JMBE.
+ * Unvoiced excitation and overlap belong to mbe_parms. Comfort noise instead
+ * uses the documented thread-local generator and is intentionally not tested
+ * as independently replayable stream state here.
  */
+#include <assert.h>
+#include <math.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include "mbelib-neo/mbelib.h"
 
+typedef struct {
+    mbe_parms cur;
+    mbe_parms prev;
+} synthesis_state;
+
 static int
-float_bits_equal(float a, float b) {
-    uint32_t a_bits;
-    uint32_t b_bits;
-    memcpy(&a_bits, &a, sizeof(a_bits));
-    memcpy(&b_bits, &b, sizeof(b_bits));
-    return a_bits == b_bits;
-}
-
-/**
- * @brief Initialize deterministic unvoiced parameter sets for testing.
- * @param cur  Output current parameters (unvoiced bands populated).
- * @param prev Output previous parameters (copy of current).
- */
-static void
-fill_params_unvoiced(mbe_parms* cur, mbe_parms* prev) {
-    mbe_parms prev_enh;                     // unused but required by init
-    mbe_initMbeParms(cur, prev, &prev_enh); // resets and copies prev->cur
-
-    // Overwrite cur/prev with deterministic unvoiced setup
-    cur->w0 = 0.10f;
-    cur->L = 24;
-    for (int l = 1; l <= cur->L; ++l) {
-        cur->Vl[l] = 0; // unvoiced
-        cur->Ml[l] = 0.04f + 0.001f * (float)l;
-        cur->PHIl[l] = 0.0f; // not used for unvoiced
-        cur->PSIl[l] = 0.0f;
+float_array_equal_exact(const float* a, const float* b, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t a_bits, b_bits;
+        memcpy(&a_bits, &a[i], sizeof(a_bits));
+        memcpy(&b_bits, &b[i], sizeof(b_bits));
+        if (a_bits != b_bits) {
+            return 0;
+        }
     }
-    *prev = *cur; // start from same state
+    return 1;
 }
 
-/**
- * @brief Test entry: verifies deterministic noise synthesis.
- */
+static void
+fill_params(synthesis_state* state, int mixed, int stream) {
+    mbe_parms enhanced;
+    mbe_initMbeParms(&state->cur, &state->prev, &enhanced);
+    state->cur.w0 = stream ? 0.125f : 0.10f;
+    state->cur.L = stream ? 20 : 24;
+    for (int l = 1; l <= state->cur.L; ++l) {
+        state->cur.Vl[l] = mixed && ((l + stream) % 3 == 0);
+        state->cur.Ml[l] = 0.04f + 0.001f * (float)(l + 3 * stream);
+    }
+    state->prev = state->cur;
+}
+
+static double
+advance(synthesis_state* state, float pcm[160]) {
+    mbe_synthesizeSpeechf(pcm, &state->cur, &state->prev);
+    double energy = 0;
+    for (int i = 0; i < 160; ++i) {
+        assert(isfinite(pcm[i]));
+        energy += (double)pcm[i] * pcm[i];
+    }
+    mbe_moveMbeParms(&state->cur, &state->prev);
+    return energy;
+}
+
+static void
+test_warm_streams(int mixed) {
+    synthesis_state a, b;
+    float discarded[160], expected[12][160], actual[160];
+    fill_params(&a, mixed, 0);
+    fill_params(&b, !mixed, 1);
+    for (int n = 0; n < 3; ++n) {
+        advance(&a, discarded);
+        advance(&b, discarded);
+    }
+
+    synthesis_state replay = a, interleaved = a;
+    /* Warm replay must exercise nonzero excitation, not equal muted buffers. */
+    for (int n = 0; n < 12; ++n) {
+        assert(advance(&a, expected[n]) > 0);
+    }
+    assert(!float_array_equal_exact(expected[0], expected[1], 160));
+    for (int n = 0; n < 12; ++n) {
+        advance(&replay, actual);
+        assert(float_array_equal_exact(expected[n], actual, 160));
+    }
+    for (int n = 0; n < 12; ++n) {
+        assert(advance(&b, discarded) > 0);
+        advance(&interleaved, actual);
+        assert(float_array_equal_exact(expected[n], actual, 160));
+    }
+}
+
 int
 main(void) {
-    float out1[160], out2[160], out3[160];
-    mbe_parms cur1, prev1, cur2, prev2;
-
-    /* Test 1: Determinism - same initial state produces identical output */
-    fill_params_unvoiced(&cur1, &prev1);
-    mbe_synthesizeSpeechf(out1, &cur1, &prev1);
-
-    fill_params_unvoiced(&cur2, &prev2);
-    mbe_synthesizeSpeechf(out2, &cur2, &prev2);
-
-    for (int i = 0; i < 160; ++i) {
-        if (!float_bits_equal(out1[i], out2[i])) {
-            fprintf(stderr, "FAIL: determinism - same state produced different output at sample %d\n", i);
-            return 1;
-        }
-    }
-
-    /* Test 2: State progression - consecutive frames produce different noise
-     * (LCG state advances, so second frame should differ from first) */
-    mbe_moveMbeParms(&cur1, &prev1); // advance: cur becomes prev for next frame
-    mbe_synthesizeSpeechf(out3, &cur1, &prev1);
-
-    int diff = 0;
-    for (int i = 0; i < 160; ++i) {
-        if (!float_bits_equal(out1[i], out3[i])) {
-            diff = 1;
-            break;
-        }
-    }
-    if (!diff) {
-        fprintf(stderr, "FAIL: state progression - consecutive frames produced identical output\n");
-        return 1;
-    }
-
-    /* Test 3: Verify noiseSeed actually advances */
-    mbe_parms cur_check, prev_check;
-    fill_params_unvoiced(&cur_check, &prev_check);
-    float seed_before = cur_check.noiseSeed;
-    mbe_synthesizeSpeechf(out1, &cur_check, &prev_check);
-    float seed_after = cur_check.noiseSeed;
-
-    if (float_bits_equal(seed_before, seed_after)) {
-        fprintf(stderr, "FAIL: noiseSeed did not advance after synthesis\n");
-        return 1;
-    }
-
+    test_warm_streams(0);
+    test_warm_streams(1);
     return 0;
 }

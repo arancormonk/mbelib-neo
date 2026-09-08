@@ -73,15 +73,15 @@ main(void) {
      * On other arches (e.g., AArch64/NEON), rounding order can differ; we use
      * determinism and sanity checks so CI remains green.
      */
-    /* Updated for PFFFT FFT implementation */
+    /* Regenerated harmonic phase and the shared spec-exact WOLA window. */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0x59741032u;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0x8A3BA58Fu;
 #ifdef MBELIB_TEST_BUILD_SIMD
-    const uint32_t X86_F32_FNV1A_SIMD = 0xFDA0A110u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0xE7D54B0Bu;
 #endif
 #endif
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
-    const uint32_t X86_S16_FNV1A = 0x4EDB8636u;
+    const uint32_t X86_S16_FNV1A = 0xE3E05C68u;
 #endif
 
     float out_f[160];

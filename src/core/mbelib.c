@@ -879,18 +879,12 @@ mbe_synthesizeSilence(short* aout_buf) {
     memset(aout_buf, 0, 160 * sizeof(*aout_buf));
 }
 
-/**
- * @brief Synthesize one speech frame into 160 float samples at 8 kHz.
- *
- * Uses FFT-based unvoiced synthesis (JMBE Algorithms #117-126) for
- * high-quality unvoiced audio with proper WOLA frame blending.
- *
- * @param aout_buf Output buffer of 160 float samples.
- * @param cur_mp   Current parameter set.
- * @param prev_mp  Previous parameter set.
- */
-/* JMBE-compatible white noise scalar for phase calculation: 2*PI / 53125 */
-#define MBE_WHITE_NOISE_SCALAR (2.0f * (float)M_PI / 53125.0f)
+/* Regenerated voiced phase (US 5,701,390 Eqs. 7-9): odd 1/m edge-detection
+ * kernel over the enhanced, smoothed log2 magnitudes rendered by synthesis. */
+#define MBE_PHASE_KERNEL_HALF_LEN 19
+#define MBE_PHASE_KERNEL_SCALE    0.44f
+#define MBE_PHASE_EXTRAP_SLOPE    0.72f
+#define MBE_PHASE_MIN_MAGNITUDE   1e-6f
 
 static int
 mbe_should_mute_speech(const mbe_parms* cur_mp) {
@@ -898,15 +892,33 @@ mbe_should_mute_speech(const mbe_parms* cur_mp) {
     return mbe_isMaxFrameRepeat(cur_mp) || (mute_on_error_rate && mbe_requiresMuting(cur_mp));
 }
 
-static int
-mbe_count_unvoiced_bands(const mbe_parms* cur_mp) {
-    int numUv = 0;
-    for (int l = 0; l <= cur_mp->L; l++) {
-        if (cur_mp->Vl[l] == 0) {
-            numUv++;
-        }
+static void
+mbe_regenerate_harmonic_phases(const mbe_parms* cur_mp, float phi[57]) {
+    const int D = MBE_PHASE_KERNEL_HALF_LEN;
+    const int L = cur_mp->L; /* Validated by the synthesis core. */
+    static const float inv_odd[10] = {
+        1.0f, 1.0f / 3, 1.0f / 5, 1.0f / 7, 1.0f / 9, 1.0f / 11, 1.0f / 13, 1.0f / 15, 1.0f / 17, 1.0f / 19,
+    };
+    float B[56 + 2 * MBE_PHASE_KERNEL_HALF_LEN + 1];
+    B[D] = 0.0f;
+    for (int l = 1; l <= L; ++l) {
+        B[D + l] = log2f(fmaxf(cur_mp->Ml[l], MBE_PHASE_MIN_MAGNITUDE));
     }
-    return numUv;
+    /* Define the tail for all 56 phases, including harmonics fading out. */
+    for (int l = L + 1; l <= 56 + D; ++l) {
+        B[D + l] = B[D + L] - MBE_PHASE_EXTRAP_SLOPE * (float)(l - L);
+    }
+    for (int l = 1; l <= D; ++l) {
+        B[D - l] = B[D + l];
+    }
+    for (int l = 1; l <= 56; ++l) {
+        float acc = 0.0f;
+        for (int k = 0; k < 10; ++k) {
+            int m = 2 * k + 1;
+            acc += (B[D + l + m] - B[D + l - m]) * inv_odd[k];
+        }
+        phi[l] = MBE_PHASE_KERNEL_SCALE * acc;
+    }
 }
 
 static int
@@ -928,10 +940,16 @@ mbe_reconcile_speech_model_lengths(mbe_parms* cur_mp, mbe_parms* prev_mp) {
     return maxl;
 }
 
+/**
+ * PSIl is integrated linear phase (pulse position). PHIl is the phase at the
+ * end of the frame: PSIl plus the regenerated spectral-envelope phase.
+ */
 static void
-mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, const float noise_buffer[256], int numUv, int N) {
+mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N) {
     const float cw0 = cur_mp->w0;
     const float pw0 = prev_mp->w0;
+    float phi[57];
+    mbe_regenerate_harmonic_phases(cur_mp, phi);
 
     for (int l = 1; l <= 56; l++) {
         float prev_psil_wrapped = fmodf(prev_mp->PSIl[l], MBE_TWO_PI);
@@ -941,12 +959,7 @@ mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, const float nois
         prev_mp->PSIl[l] = prev_psil_wrapped;
 
         cur_mp->PSIl[l] = prev_psil_wrapped + ((pw0 + cw0) * ((float)(l * N) / 2.0f));
-        if (l <= (cur_mp->L / 4)) {
-            cur_mp->PHIl[l] = cur_mp->PSIl[l];
-        } else {
-            float pl = (MBE_WHITE_NOISE_SCALAR * noise_buffer[l]) - (float)M_PI;
-            cur_mp->PHIl[l] = cur_mp->PSIl[l] + (((float)numUv * pl) / (float)cur_mp->L);
-        }
+        cur_mp->PHIl[l] = cur_mp->PSIl[l] + phi[l];
     }
 }
 
@@ -1072,8 +1085,8 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         return;
     }
 
-    /* Algorithm #117: Generate 256 white noise samples FIRST (JMBE-compatible)
-     * This buffer is used for both phase calculation and unvoiced synthesis */
+    /* Algorithm #117: generate the unvoiced noise buffer first, preserving
+     * per-stream overlap and LCG consumption independently of voiced phase. */
     float noise_buffer[256];
     mbe_generate_noise_with_overlap(noise_buffer, &cur_mp->noiseSeed, cur_mp->noiseOverlap);
 
@@ -1083,9 +1096,8 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* eq 128 and 129: Handle different L values between frames */
     int maxl = mbe_reconcile_speech_model_lengths(cur_mp, prev_mp);
 
-    /* Update phase from eq 139, 140
-     * JMBE-compatible: use noise_buffer[l] for phase randomization instead of separate RNG */
-    mbe_update_speech_phases(cur_mp, prev_mp, noise_buffer, mbe_count_unvoiced_bands(cur_mp), N);
+    /* Integrate pulse position and regenerate phase from the spectral envelope. */
+    mbe_update_speech_phases(cur_mp, prev_mp, N);
 
     /* Synthesize voiced components
      * Use phase/amplitude interpolation (Algorithms #134-138) for low harmonics
@@ -1093,8 +1105,8 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
      */
     mbe_render_voiced_speech(aout_buf, cur_mp, prev_mp, maxl, N);
 
-    /* Synthesize unvoiced components using FFT method (JMBE Algorithms #117-126)
-     * Use the same noise buffer that was used for phase calculation */
+    /* Synthesize unvoiced components from the same per-frame noise buffer
+     * (JMBE Algorithms #117-126). */
     mbe_fft_plan* plan = mbe_get_fft_plan();
     if (plan) {
         mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);

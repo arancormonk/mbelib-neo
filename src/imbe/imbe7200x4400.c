@@ -280,23 +280,12 @@ imbe_spectral_rho(int L) {
     return 0.7f;
 }
 
-static int
-imbe_clamp_harmonic_count(int L) {
-    if (L < MBE_MIN_HARMONIC_BANDS) {
-        return MBE_MIN_HARMONIC_BANDS;
-    }
-    if (L > MBE_MAX_HARMONIC_BANDS) {
-        return MBE_MAX_HARMONIC_BANDS;
-    }
-    return L;
-}
-
 static void
 imbe_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float rho) {
     int intkl[57];
     float flokl[57], deltal[57];
-    int cur_L = imbe_clamp_harmonic_count(cur_mp->L);
-    int prev_L = imbe_clamp_harmonic_count(prev_mp->L);
+    int cur_L = mbe_clamp_harmonic_count(cur_mp->L);
+    int prev_L = mbe_clamp_harmonic_count(prev_mp->L);
 
     cur_mp->L = cur_L;
 

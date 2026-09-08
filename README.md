@@ -136,6 +136,7 @@ git push origin vX.Y.Z
 - `-DMBELIB_ENABLE_SIMD=ON` — Enable SIMD-accelerated routines in hot paths (SSE2 on x86_64, NEON on ARM64, and SSE2-targeted builds on 32-bit x86). On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability.
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
 - `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, and `bench_convert`.
+- `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation).
 
 ## Using The Library
 
@@ -263,15 +264,15 @@ Notes
 
 ## Audio Quality Improvements
 
-mbelib-neo implements JMBE-compatible audio synthesis algorithms for improved audio quality:
+mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing and FFT-based unvoiced synthesis:
 
 - **FFT-based unvoiced synthesis** (Algorithms #117-126): Uses 256-point FFT with band-level scaling instead of the legacy oscillator bank approach. Provides cleaner, more natural unvoiced sounds with proper spectral shaping.
 
-- **Weighted Overlap-Add (WOLA)** (Algorithm #126): Smooth frame transitions for unvoiced synthesis using a 211-element trapezoidal synthesis window. Eliminates audible discontinuities between frames.
+- **Weighted Overlap-Add (WOLA)** (Algorithm #126): Unvoiced and voiced synthesis share the symmetric spec-exact trapezoidal window, with complementary weights across each 160-sample frame transition.
 
 - **Adaptive smoothing** (Algorithms #111-116): Error-rate-based parameter smoothing that gracefully handles corrupted frames. Includes local energy tracking, adaptive voicing thresholds, and amplitude scaling.
 
-- **Voiced phase/amplitude interpolation** (Algorithms #134-138): Smooth interpolation of pitch and amplitude for low-frequency harmonics during stable pitch periods. Reduces "buzzy" artifacts in voiced speech.
+- **Regenerated voiced phase**: The odd log-magnitude kernel from [US 5,701,390, Eqs. 7–9](https://patents.google.com/patent/US5701390A/en) derives harmonic phase from the enhanced, smoothed spectral envelope. The shared synthesizer applies it to all four codecs without changing the public API or parameter layout. Existing phase/amplitude interpolation remains in place; fully voiced output no longer depends on the unvoiced-noise RNG seed.
 
 - **Codec-specific frame repeat/muting parity**: Matches JMBE behavior where IMBE mutes on max repeats or error-rate threshold, while AMBE muting is repeat-driven in the synth path. IMBE prolonged repeat headroom resets to a default model state.
 
@@ -281,7 +282,8 @@ mbelib-neo implements JMBE-compatible audio synthesis algorithms for improved au
 
 - **Comfort-noise parity model**: Muted-frame noise follows JMBE’s low-level uniform white-noise model (`0.003` gain semantics) using Java `Random`-compatible per-thread RNG behavior.
 
-These improvements bring mbelib-neo's audio quality closer to the reference JMBE (Java Multi-Band Excitation) implementation.
+The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evaluation) compares a frozen baseline and candidate using identical encoded frames. It reports spectral, crest-factor, envelope, and reference-matched frame-join measurements; these are diagnostics, not a substitute for listening or a standardized perceptual score.
+
 
 ## API Notes
 

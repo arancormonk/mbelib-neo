@@ -24,6 +24,7 @@
 #include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -391,17 +392,8 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
     int intkl[57] = {0};
     float flokl[57] = {0.0f};
     float deltal[57] = {0.0f};
-    int prev_L = prev_mp->L;
-    if (cur_mp->L < 1) {
-        cur_mp->L = 1;
-    } else if (cur_mp->L > 56) {
-        cur_mp->L = 56;
-    }
-    if (prev_L < 1) {
-        prev_L = 1;
-    } else if (prev_L > 56) {
-        prev_L = 56;
-    }
+    int prev_L = mbe_clamp_harmonic_count(prev_mp->L);
+    cur_mp->L = mbe_clamp_harmonic_count(cur_mp->L);
 
     if (cur_mp->L > prev_L) {
         for (int l = prev_L + 1; l <= cur_mp->L; l++) {
@@ -423,8 +415,12 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
 #ifdef AMBE_DEBUG
         fprintf(stderr, "delta%i: %f ", l, deltal[l]);
 #endif
-        Sum43 = Sum43
-                + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[intkl[l] + 1]));
+        /* intkl[l] can reach 56; keep the upper interpolation tap inside log2Ml[57]. */
+        int upper = intkl[l] + 1;
+        if (upper > MBE_MAX_HARMONIC_BANDS) {
+            upper = MBE_MAX_HARMONIC_BANDS;
+        }
+        Sum43 = Sum43 + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[upper]));
     }
     Sum43 = (((float)0.65 / (float)cur_mp->L) * Sum43);
 #ifdef AMBE_DEBUG
@@ -440,8 +436,12 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
     float BigGamma = cur_mp->gamma - (0.5f * log2f((float)cur_mp->L)) - Sum42;
 
     for (int l = 1; l <= cur_mp->L; l++) {
+        int upper = intkl[l] + 1;
+        if (upper > MBE_MAX_HARMONIC_BANDS) {
+            upper = MBE_MAX_HARMONIC_BANDS;
+        }
         float c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[intkl[l] + 1]);
+        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[upper]);
         cur_mp->log2Ml[l] = Tl[l] + c1 + c2 - Sum43 + BigGamma;
         if (cur_mp->Vl[l] == 1) {
             cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);

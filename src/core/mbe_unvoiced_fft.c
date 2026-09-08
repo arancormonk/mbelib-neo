@@ -14,6 +14,7 @@
 #include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
+#include "mbelib_const.h"
 #include "pffft.h"
 
 /* LCG integer constants matching the float #defines in the header */
@@ -38,44 +39,6 @@ static MBE_THREAD_LOCAL int mbe_unvoiced_seed_override = 0;
 #include <arm_neon.h>
 #endif
 #endif
-
-/**
- * @brief 211-element synthesis window (indices -105 to +105).
- *
- * Trapezoidal window with linear ramps at edges and flat region in center.
- * Matches JMBE specification for WOLA synthesis.
- */
-static const float Ws_synthesis[211] = {
-    /* Indices -105 to -56: linear ramp up from 0.0 to ~0.98 */
-    0.000f, 0.020f, 0.040f, 0.060f, 0.080f, 0.100f, 0.120f, 0.140f, 0.160f, 0.180f, 0.200f, 0.220f, 0.240f, 0.260f,
-    0.280f, 0.300f, 0.320f, 0.340f, 0.360f, 0.380f, 0.400f, 0.420f, 0.440f, 0.460f, 0.480f, 0.500f, 0.520f, 0.540f,
-    0.560f, 0.580f, 0.600f, 0.620f, 0.640f, 0.660f, 0.680f, 0.700f, 0.720f, 0.740f, 0.760f, 0.780f, 0.800f, 0.820f,
-    0.840f, 0.860f, 0.880f, 0.900f, 0.920f, 0.940f, 0.960f, 0.980f,
-    /* Indices -55 to +55: flat region at 1.0 (111 values) */
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f, 1.000f,
-    /* Indices +56 to +105: linear ramp down from ~0.98 to 0.0 */
-    0.980f, 0.960f, 0.940f, 0.920f, 0.900f, 0.880f, 0.860f, 0.840f, 0.820f, 0.800f, 0.780f, 0.760f, 0.740f, 0.720f,
-    0.700f, 0.680f, 0.660f, 0.640f, 0.620f, 0.600f, 0.580f, 0.560f, 0.540f, 0.520f, 0.500f, 0.480f, 0.460f, 0.440f,
-    0.420f, 0.400f, 0.380f, 0.360f, 0.340f, 0.320f, 0.300f, 0.300f, 0.280f, 0.260f, 0.240f, 0.220f, 0.200f, 0.180f,
-    0.160f, 0.140f, 0.120f, 0.100f, 0.080f, 0.060f, 0.040f, 0.020f, 0.000f};
-
-/**
- * @brief Fast inline window lookup for hot paths.
- *
- * Directly indexes the window table without function call overhead.
- * Caller must ensure n is in [-105, +105] for valid results.
- */
-static inline float
-mbe_synthesisWindow_fast(int n) {
-    return Ws_synthesis[n + 105];
-}
 
 /* Frame length for WOLA (always 160 samples) */
 #define MBE_FRAME_LEN 160
@@ -171,7 +134,7 @@ mbe_fft_plan_alloc(void) {
 
     for (int i = 0; i < MBE_FFT_SIZE; i++) {
         int win_idx = i - 128;
-        plan->synthesis_window[i] = (win_idx >= -105 && win_idx <= 105) ? mbe_synthesisWindow_fast(win_idx) : 0.0f;
+        plan->synthesis_window[i] = mbe_synthesisWindow(win_idx);
     }
 
     return plan;
@@ -201,10 +164,7 @@ mbe_fft_plan_free(mbe_fft_plan* plan) {
 
 float
 mbe_synthesisWindow(int n) {
-    if (n < -105 || n > 105) {
-        return 0.0f;
-    }
-    return Ws_synthesis[n + 105];
+    return (n < -105 || n > 105) ? 0.0f : Ws[n + 160];
 }
 
 static void

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Derived from OP25 ambe_encoder.cc (Copyright 2016 Max H. Parke KA1RBI)
+# and p25p2_vf.cc (Copyright 2013, 2014, 2016 Max H. Parke KA1RBI).
+# Standalone quality encoder adaptation, not a change to the fetched checkout.
+# Target: OP25 71abcd0ead32f86f51615ea6cc8a6a4dba4c949a.
+# D-STAR: match mbelib-neo's predictive gamma and even-index b8 codebook.
+# The encoder's local reconstruction must use the same indices it transmits.
+--- ambe_encoder.cc
++++ ambe_encoder.cc
+@@ -247,11 +247,8 @@
+ 		lsa_sum += lsa[i1];
+ 	}
+ 	float gain = lsa_sum / num_harms_f;
+-	float diff_gain;
+-	if (dstar)
+-		diff_gain = gain;
+-	else
+-		diff_gain = gain - 0.5 * prev_mp->gamma;
++	// mbelib-neo reconstructs predictive gain for both AMBE modes.
++	float diff_gain = gain - 0.5 * prev_mp->gamma;
+ 
+ 	diff_gain -= gain_adjust;
+ 
+@@ -464,7 +461,8 @@
+ 		b[4+ii] = 0.0;
+ 	} else {
+ 		int max_8 = (dstar) ? 16 : 8;
+-		for (int n=0; n < max_8; n++) {
++		// The three D-STAR b8 bits address even entries of the 16-vector table.
++		for (int n=0; n < max_8; n += dstar ? 2 : 1) {
+ 			float err=0.0;
+ 			float diff;
+ 			for (int j=1; j <= J[ii-1]-2 && j <= 4; j++) {
+--- p25p2_vf.cc
++++ p25p2_vf.cc
+@@ -836,7 +836,8 @@
+ 
+ 	int tbufp = 0;
+ 	for (int i=0; i < 9; i++) {
+-		store_reg(b[i], &tbuf[tbufp], b_lengths[i]);
++		// The decoder restores b8's implicit zero least-significant bit.
++		store_reg(i == 8 ? b[i] >> 1 : b[i], &tbuf[tbufp], b_lengths[i]);
+ 		tbufp += b_lengths[i];
+ 	}
+ 	for (int i=0; i < 48; i++)

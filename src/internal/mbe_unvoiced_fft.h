@@ -125,7 +125,7 @@ void mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, const 
                                         const float* noise_buffer);
 
 /**
- * @brief Get the 211-element synthesis window value.
+ * @brief Look up the shared synthesis window at an offset from its center.
  *
  * The window is defined for indices -105 to +105.
  * Returns 0 for out-of-range indices.
