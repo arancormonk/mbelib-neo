@@ -10,6 +10,10 @@
 #include "mbelib-neo/mbelib.h"
 
 #ifdef MBE_ENCODER_TEST_OOM
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 /* GNU link wrapping injects failure at each project-owned aligned allocation.
  * PFFFT's own internal calls are defined in its object, so are not wrapped. */
 void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
@@ -41,19 +45,58 @@ encoder_track_free(void* ptr) {
     encoder_real_free(ptr);
 }
 
+static int
+encode_fresh_frame(const float pcm[160], char bits[49]) {
+    int channel[2];
+    if (pipe(channel) != 0) {
+        perror("fresh encoder pipe");
+        return 1;
+    }
+    /* Fork before either process encodes, so the child starts with fresh TLS. */
+    pid_t child = fork();
+    if (child < 0) {
+        perror("fresh encoder fork");
+        (void)close(channel[0]);
+        (void)close(channel[1]);
+        return 1;
+    }
+    if (child == 0) {
+        mbe_parms cur, prev, enhanced;
+        char fresh_bits[49];
+        (void)close(channel[0]);
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        int status = mbe_encodeAmbe2400Parms(pcm, fresh_bits, &cur, &prev);
+        int failed = status != 0 || write(channel[1], fresh_bits, sizeof(fresh_bits)) != sizeof(fresh_bits);
+        (void)close(channel[1]);
+        _exit(failed);
+    }
+    (void)close(channel[1]);
+    ssize_t count = read(channel[0], bits, 49);
+    (void)close(channel[0]);
+    int status = 0;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0 || count != 49) {
+        (void)fprintf(stderr, "fresh encoder reference failed\n");
+        return 1;
+    }
+    return 0;
+}
+
 int
 main(int argc, char** argv) {
     if (argc != 2 || strlen(argv[1]) != 1 || argv[1][0] < '1' || argv[1][0] > '5') {
         return 1;
     }
-    fail_at = argv[1][0] - '0';
     mbe_parms cur, prev, enhanced;
     float pcm[160];
-    char bits[49];
+    char bits[49], fresh_bits[49];
     mbe_initMbeParms(&cur, &prev, &enhanced);
     for (int i = 0; i < 160; i++) {
         pcm[i] = 0.1f * sinf(0.1f * (float)i);
     }
+    if (encode_fresh_frame(pcm, fresh_bits) != 0) {
+        return 1;
+    }
+    fail_at = argv[1][0] - '0';
     int status = mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev);
     if (status >= 0 || live_allocations != 0) {
         (void)fprintf(stderr, "failed allocation %d: status=%d live=%d\n", fail_at, status, live_allocations);
@@ -61,9 +104,14 @@ main(int argc, char** argv) {
     }
     fail_at = 0;
     if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+        (void)fprintf(stderr, "encode retry after allocation failure failed\n");
         return 1;
     }
-    (void)puts("allocation failure: propagated, cleaned up, retry succeeded");
+    if (memcmp(bits, fresh_bits, sizeof(bits)) != 0) {
+        (void)fprintf(stderr, "encode retry after allocation failure differs from fresh frame\n");
+        return 1;
+    }
+    (void)puts("allocation failure: propagated, cleaned up, retry matches all 49 fresh-frame bits");
     return 0;
 }
 #else
@@ -293,7 +341,7 @@ test_state_parity(void) {
     int bad_frames = 0, silence = 0, voice = 0, first_bad = -1;
     float worst = 0;
     int worst_frame = -1, worst_l = -1;
-    int L_mism = 0, Vl_mism = 0, gamma_mism = 0;
+    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0;
     for (int f = 0; f < FRAMES; f++) {
         char d[49];
         unsigned char saved_prev[sizeof(e_prev)];
@@ -324,6 +372,10 @@ test_state_parity(void) {
                 bad_frames++;
             }
             int frame_bad = 0;
+            if (memcmp(&d_cur.w0, &e_cur.w0, sizeof(d_cur.w0)) != 0) {
+                w0_mism++;
+                frame_bad = 1;
+            }
             if (d_cur.L != e_cur.L) {
                 L_mism++;
                 frame_bad = 1;
@@ -364,6 +416,7 @@ test_state_parity(void) {
     printf("encoder/decoder state parity over %d frames (%d voice, %d silence):\n", FRAMES, voice, silence);
     printf("  frames with any mismatch: %d (first at %d)\n", bad_frames, first_bad);
     printf("  L mismatches: %d, gamma mismatches: %d, Vl mismatches: %d\n", L_mism, gamma_mism, Vl_mism);
+    printf("  bitwise w0 mismatches: %d\n", w0_mism);
     printf("  worst |log2Ml| diff: %g (frame %d, l=%d)\n", worst, worst_frame, worst_l);
     return bad_frames ? 1 : 0;
 }

@@ -133,12 +133,6 @@ ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], in
     const float f0_bin = f0q * (float)AMBE2400_ENC_FFT_SIZE;
     float max_band_energy = 0.0f;
 
-    if (ambe2400_enc_state.fft == NULL) {
-        ambe2400_enc_state.fft = mbe_fft_plan_alloc();
-        if (ambe2400_enc_state.fft == NULL) {
-            return MBE_STATUS_INVALID_ARGUMENT;
-        }
-    }
     int status = mbe_fft_forward_real(ambe2400_enc_state.fft, windowed, fft_out);
     if (status < 0) {
         return status;
@@ -516,12 +510,6 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
         float v_lo;
         float v_hi;
 
-        if (intkl < 0) {
-            intkl = 0;
-        }
-        if (upper < 1) {
-            upper = 1;
-        }
         if (intkl > MBE_MAX_HARMONIC_BANDS) {
             intkl = MBE_MAX_HARMONIC_BANDS;
         }
@@ -809,7 +797,7 @@ ambe2400_enc_pack(const struct ambe2400_enc_frame* q, char ambe_d[49]) {
 static void
 ambe2400_enc_fill_parms(const struct ambe2400_enc_frame* q, mbe_parms* cur_mp) {
     /* Write quantized parameters to cur_mp (decoder-equivalent state) */
-    cur_mp->w0 = q->f0q * (float)(2.0 * M_PI);
+    cur_mp->w0 = q->f0q * (float)2 * M_PI;
     cur_mp->L = q->L;
     cur_mp->K = 0;
     cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
@@ -951,6 +939,14 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
 
     if (samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
+    }
+
+    /* Allocate before advancing any per-stream analysis state. */
+    if (ambe2400_enc_state.fft == NULL) {
+        ambe2400_enc_state.fft = mbe_fft_plan_alloc();
+        if (ambe2400_enc_state.fft == NULL) {
+            return MBE_STATUS_INVALID_ARGUMENT;
+        }
     }
 
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
