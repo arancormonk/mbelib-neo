@@ -219,6 +219,7 @@ test_dv_bytes(void) {
         char fr[4][24];
         unsigned char b[9];
         int hits = 0;
+        int used_ok = 1;
         for (int p = 0; p < 4; p++) {
             for (int i = 0; i < 24; i++) {
                 memset(fr, 0, sizeof fr);
@@ -232,20 +233,6 @@ test_dv_bytes(void) {
                 }
                 if (ones == 1) {
                     hits++;
-                }
-            }
-        }
-        int used_ok = 1;
-        for (int p = 0; p < 4; p++) {
-            for (int i = 0; i < 24; i++) {
-                memset(fr, 0, sizeof fr);
-                fr[p][i] = 1;
-                mbe_encodeDStarDVData((const char (*)[24])fr, b);
-                int ones = 0;
-                for (int k = 0; k < 9; k++) {
-                    for (int q = 0; q < 8; q++) {
-                        ones += (b[k] >> q) & 1;
-                    }
                 }
                 int expect = (p == 0) || (p == 1 && i <= 22) || (p == 2 && i <= 10) || (p == 3 && i <= 13);
                 if (ones != expect) {
@@ -432,6 +419,7 @@ test_c1_parity(void) {
             d[i] = (char)(rnd() & 1u);
         }
         if (mbe_encodeAmbe3600x2400Frame(d, fr) != 0) {
+            printf("C1 parity: frame encode failed for seed %u\n", word);
             return 1;
         }
         mbe_golay2312_encode(d + 12, cw);
@@ -444,6 +432,7 @@ test_c1_parity(void) {
             pr = (173u * pr + 13849u) & 65535u;
         }
         if (fr[2][10] != (char)(parity ^ (pr >> 15))) {
+            printf("C1 parity: scrambled parity mismatch for seed %u\n", word);
             return 1;
         }
     }
@@ -460,26 +449,37 @@ test_invalid_arguments(void) {
     mbe_parms c, p, h;
     mbe_initMbeParms(&c, &p, &h);
     const int invalid = MBE_STATUS_INVALID_ARGUMENT;
-    if (mbe_encodeAmbe2400Parms(NULL, d, &c, &p) != invalid || mbe_encodeAmbe2400Parms(pcm, NULL, &c, &p) != invalid
-        || mbe_encodeAmbe2400Parms(pcm, d, NULL, &p) != invalid
-        || mbe_encodeAmbe2400Parms(pcm, d, &c, NULL) != invalid) {
-        return 1;
-    }
-    if (mbe_encodeAmbe2400ParmsShort(NULL, d, &c, &p) != invalid
-        || mbe_encodeAmbe2400ParmsShort(shorts, NULL, &c, &p) != invalid
-        || mbe_encodeAmbe2400ParmsShort(shorts, d, NULL, &p) != invalid
-        || mbe_encodeAmbe2400ParmsShort(shorts, d, &c, NULL) != invalid) {
-        return 1;
-    }
-    if (mbe_encodeAmbe3600x2400Frame(NULL, fr) != invalid || mbe_encodeAmbe3600x2400Frame(d, NULL) != invalid
-        || mbe_encodeDStarDVData(NULL, bytes) != invalid
-        || mbe_encodeDStarDVData((const char (*)[24])fr, NULL) != invalid || mbe_decodeDStarDVData(NULL, fr) != invalid
-        || mbe_decodeDStarDVData(bytes, NULL) != invalid) {
-        return 1;
+
+    const struct {
+        const char* name;
+        int status;
+    } cases[] = {
+        {"float PCM: null samples", mbe_encodeAmbe2400Parms(NULL, d, &c, &p)},
+        {"float PCM: null bits", mbe_encodeAmbe2400Parms(pcm, NULL, &c, &p)},
+        {"float PCM: null current parameters", mbe_encodeAmbe2400Parms(pcm, d, NULL, &p)},
+        {"float PCM: null previous parameters", mbe_encodeAmbe2400Parms(pcm, d, &c, NULL)},
+        {"short PCM: null samples", mbe_encodeAmbe2400ParmsShort(NULL, d, &c, &p)},
+        {"short PCM: null bits", mbe_encodeAmbe2400ParmsShort(shorts, NULL, &c, &p)},
+        {"short PCM: null current parameters", mbe_encodeAmbe2400ParmsShort(shorts, d, NULL, &p)},
+        {"short PCM: null previous parameters", mbe_encodeAmbe2400ParmsShort(shorts, d, &c, NULL)},
+        {"frame encode: null bits", mbe_encodeAmbe3600x2400Frame(NULL, fr)},
+        {"frame encode: null frame", mbe_encodeAmbe3600x2400Frame(d, NULL)},
+        {"DV encode: null frame", mbe_encodeDStarDVData(NULL, bytes)},
+        {"DV encode: null bytes", mbe_encodeDStarDVData((const char (*)[24])fr, NULL)},
+        {"DV decode: null bytes", mbe_decodeDStarDVData(NULL, fr)},
+        {"DV decode: null frame", mbe_decodeDStarDVData(bytes, NULL)},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (cases[i].status != invalid) {
+            printf("invalid arguments: %s returned %d (expected %d)\n", cases[i].name, cases[i].status, invalid);
+            return 1;
+        }
     }
     for (int i = 0; i < 49; i++) {
         d[i] = 2;
         if (mbe_encodeAmbe3600x2400Frame(d, fr) != MBE_STATUS_INVALID_BITS) {
+            printf("invalid arguments: frame encode accepted invalid bit at index %d\n", i);
             return 1;
         }
         d[i] = 0;
@@ -580,7 +580,8 @@ test_pitch_endpoint(int period, int expected_b0) {
     char d[49];
     float pcm[160];
     mbe_initMbeParms(&c, &p, &h);
-    for (int frame = 0; frame < 16; frame++) {
+    /* Let the AGC converge so period 20 exposes the old interior-minimum fallback. */
+    for (int frame = 0; frame < 200; frame++) {
         for (int i = 0; i < 160; i++) {
             int phase = (frame * 160 + i) % period;
             pcm[i] = 0.1f * sinf((float)(2.0 * M_PI * phase / period));
@@ -630,6 +631,7 @@ main(int argc, char** argv) {
         return test_pitch_endpoint(20, 0);
     }
     if (argc == 2 && strcmp(argv[1], "pitch127") == 0) {
+        /* Upper-endpoint smoke test; this fixture also passes with the old pitch search. */
         return test_pitch_endpoint(127, 125);
     }
     if (argc == 2 && strcmp(argv[1], "hysteresis") == 0) {
