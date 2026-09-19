@@ -29,6 +29,7 @@ fuzz_wire_frame(const std::uint8_t* data) {
 
 static void
 fuzz_pcm(const std::uint8_t* data, std::size_t size) {
+    // Analysis TLS persists across inputs without a reset API; reproducers may depend on earlier inputs.
     mbe_parms cur = {}, prev = {}, enhanced = {};
     mbe_initMbeParms(&cur, &prev, &enhanced);
     // Bound the work per input while exercising state transitions and partial PCM.
