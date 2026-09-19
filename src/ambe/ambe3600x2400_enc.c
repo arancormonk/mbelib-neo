@@ -510,9 +510,6 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
         float v_lo;
         float v_hi;
 
-        if (intkl > MBE_MAX_HARMONIC_BANDS) {
-            intkl = MBE_MAX_HARMONIC_BANDS;
-        }
         if (upper > MBE_MAX_HARMONIC_BANDS) {
             upper = MBE_MAX_HARMONIC_BANDS;
         }

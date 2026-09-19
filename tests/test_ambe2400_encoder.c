@@ -90,8 +90,9 @@ main(int argc, char** argv) {
     float pcm[160];
     char bits[49], fresh_bits[49];
     mbe_initMbeParms(&cur, &prev, &enhanced);
+    /* A quiet tone makes an extra AGC update change the quantized frame. */
     for (int i = 0; i < 160; i++) {
-        pcm[i] = 0.1f * sinf(0.1f * (float)i);
+        pcm[i] = 0.01f * sinf(0.1f * (float)i);
     }
     if (encode_fresh_frame(pcm, fresh_bits) != 0) {
         return 1;
@@ -359,7 +360,10 @@ test_state_parity(void) {
                 bad_frames++;
             }
             int frame_bad = 0;
-            if (memcmp(&d_cur.w0, &e_cur.w0, sizeof(d_cur.w0)) != 0) {
+            unsigned char decoder_w0[sizeof(d_cur.w0)], encoder_w0[sizeof(e_cur.w0)];
+            memcpy(decoder_w0, &d_cur.w0, sizeof(decoder_w0));
+            memcpy(encoder_w0, &e_cur.w0, sizeof(encoder_w0));
+            if (memcmp(decoder_w0, encoder_w0, sizeof(decoder_w0)) != 0) {
                 w0_mism++;
                 frame_bad = 1;
             }
