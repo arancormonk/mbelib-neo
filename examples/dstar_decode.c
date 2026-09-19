@@ -44,8 +44,9 @@ write_wav_header(FILE* fp, uint32_t data_size) {
 
 static int
 write_samples(FILE* fp, short pcm[FRAME_SAMPLES], const char bits[49]) {
-    /* The example emits true silence for the codec's comfort-noise frame. */
-    if (bits[0] && bits[1] && bits[2] && bits[3] && bits[4] && bits[5] && bits[48]) {
+    /* Only b0 == 127 with tone index 128 (all eight tone bits zero) is silence. */
+    int tone_bits = bits[6] | bits[7] | bits[8] | bits[9] | bits[10] | bits[11] | bits[42] | bits[43];
+    if (bits[0] && bits[1] && bits[2] && bits[3] && bits[4] && bits[5] && bits[48] && tone_bits == 0) {
         memset(pcm, 0, FRAME_SAMPLES * sizeof(short));
     }
     unsigned char bytes[FRAME_SAMPLES * 2];
