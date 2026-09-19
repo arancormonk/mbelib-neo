@@ -652,8 +652,8 @@ ambe2400_enc_quantize_hoc(struct ambe2400_enc_frame* q) {
 static void
 ambe2400_enc_reconstruct_coefficients(struct ambe2400_enc_frame* q) {
     float Ri_q[9];
-    ambe2400_reconstruct_prba(q->b[3], q->b[4], Ri_q);
-    ambe2400_reconstruct_cik(Ri_q, q->b + 5, q->Ji, q->Cik_q);
+    mbe_ambe2400_reconstruct_prba(q->b[3], q->b[4], Ri_q);
+    mbe_ambe2400_reconstruct_cik(Ri_q, q->b + 5, q->Ji, q->Cik_q);
 }
 
 static void
@@ -742,7 +742,7 @@ static int
 ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[49], mbe_parms* cur_mp,
                       const mbe_parms* prev_mp) {
     struct ambe2400_enc_frame q = {0};
-    q.cache = ambe2400_get_dct_cache();
+    q.cache = mbe_ambe2400_get_dct_cache();
     ambe2400_enc_window(enc, &q, pcm);
     ambe2400_enc_quantize_pitch(enc, &q);
     int status = ambe2400_enc_spectrum(enc, q.windowed, q.f0q, q.L, q.mag, q.Vl_ana);
@@ -758,12 +758,12 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[4
     ambe2400_enc_quantize_prba(&q);
     ambe2400_enc_quantize_hoc(&q);
     ambe2400_enc_reconstruct_coefficients(&q);
-    ambe2400_inverse_dct_tl(q.Cik_q, q.Ji, q.Tl_q);
+    mbe_ambe2400_inverse_dct_tl(q.Cik_q, q.Ji, q.Tl_q);
     ambe2400_enc_pack(&q, ambe_d);
     ambe2400_enc_fill_parms(&q, cur_mp);
     /* Share the decoder update without changing the caller's predictor. */
     mbe_parms prediction_prev = *prev_mp;
-    ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
+    mbe_ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
     return 0;
 }
 
@@ -807,8 +807,8 @@ ambe2400_enc_silence_gate(mbe_ambe2400_encoder* enc, float rms) {
     /* Silence gate with hang-over: a frame is only "silence" after a few
      * consecutive quiet frames (squelch close delay); speech opens the gate
      * immediately. This avoids the squelch-like flapping between silence and
-     * speech on boundary frames. In-speech noise is handled by the optional
-     * libspecbleach front-end in the caller, not here. */
+     * speech on boundary frames. Noise within speech is left to caller-side
+     * preprocessing; the gate only decides silence frames. */
     bool is_silence = false;
     if (rms < AMBE2400_ENC_SILENCE_RMS) {
         if (enc->silence_run < 5) {

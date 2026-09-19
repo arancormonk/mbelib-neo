@@ -353,7 +353,13 @@ typedef struct mbe_ambe2400_encoder mbe_ambe2400_encoder;
 
 /**
  * @brief Allocate a fresh encoder context, including its FFT plan.
- * @return Owned context, or NULL on allocation failure. Encoding never allocates.
+ *
+ * Encoding never allocates. Allocation failures inside the vendored pffft
+ * setup are not recoverable; the same limitation applies to decoder plan
+ * allocation.
+ *
+ * @return Owned context, or NULL when the context or its FFT plan buffers
+ * cannot be allocated.
  * @see mbe_ambe2400EncoderFree
  */
 MBE_API mbe_ambe2400_encoder* mbe_ambe2400EncoderAlloc(void);
@@ -422,6 +428,7 @@ MBE_API int mbe_encodeAmbe2400ParmsShort(mbe_ambe2400_encoder* enc, const short*
  * @return 0 on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_encodeAmbe3600x2400Frame(const char ambe_d[49], char ambe_fr[4][24]);
+
 /* === D-STAR DV framing === */
 
 /**
@@ -446,6 +453,8 @@ MBE_API int mbe_encodeDStarDVData(const char ambe_fr[4][24], unsigned char bytes
  * @return 0 on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_decodeDStarDVData(const unsigned char bytes9[9], char ambe_fr[4][24]);
+
+/* === AMBE 3600x2400 frame processing === */
 
 /**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz float PCM.

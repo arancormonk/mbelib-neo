@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2026 Rhizomatica
+ * Author: Rafael Diniz <rafael@rhizomatica.org>
+ *
+ * Copyright (C) 2010 mbelib Author
+ * GPG Key ID: 0xEA5EFE2C (9E7A 5527 9CDC EBF7 BF1B  D772 4F98 E863 EA5E FE2C)
+ *
+ * Portions were originally under the ISC license; this mbelib-neo
+ * distribution is provided under GPL-2.0-or-later. See LICENSE for details.
+ */
+
 /** @file D-STAR DV air-interface mapping for the 72-bit AMBE frame. */
 
 #include <string.h>

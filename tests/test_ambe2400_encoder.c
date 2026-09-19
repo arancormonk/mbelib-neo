@@ -10,8 +10,11 @@
 #include "mbelib-neo/mbelib.h"
 
 #ifdef MBE_ENCODER_TEST_OOM
-/* GNU link wrapping covers the context and each project-owned aligned
- * allocation. PFFFT's same-object internal aligned calls are not wrapped. */
+/* GNU link wrapping covers six allocation points: the context and its
+ * project-owned FFT plan buffers. These failures return NULL. Allocation
+ * failures inside the vendored pffft setup are not recoverable; the same
+ * limitation applies to decoder plan allocation. PFFFT's same-object internal
+ * aligned calls are not wrapped. */
 void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
 void encoder_real_free(void* ptr) __asm__("__real_pffft_aligned_free");
 void* encoder_real_calloc(size_t count, size_t size) __asm__("__real_calloc");
@@ -389,7 +392,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
                 L_mism++;
                 frame_bad = 1;
             }
-            if (fabsf(d_cur.gamma - e_cur.gamma) > 1e-4f) {
+            if (!float_bits_equal(d_cur.gamma, e_cur.gamma)) {
                 gamma_mism++;
                 frame_bad = 1;
             }
@@ -408,8 +411,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
                     log2_mism++;
                     frame_bad = 1;
                 }
-                float scale = fmaxf(1.0f, fabsf(d_cur.Ml[l]));
-                if (fabsf(d_cur.Ml[l] - e_cur.Ml[l]) > 1e-4f * scale) {
+                if (!float_bits_equal(d_cur.Ml[l], e_cur.Ml[l])) {
                     frame_bad = 1;
                 }
             }
@@ -539,7 +541,7 @@ test_prediction_boundaries(mbe_ambe2400_encoder* enc) {
             || mbe_decodeAmbe2400Parms(bits, &decoded, &decode_prev) != 0) {
             return 1;
         }
-        if (cur.L != decoded.L || fabsf(cur.gamma - decoded.gamma) > 1e-4f) {
+        if (cur.L != decoded.L || !float_bits_equal(cur.gamma, decoded.gamma)) {
             return 1;
         }
         for (int l = 1; l <= cur.L; l++) {

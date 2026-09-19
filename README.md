@@ -193,9 +193,11 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 - `mbe_encodeDStarDVData()` packs a frame into nine D-STAR DV data bytes in air order, LSB first, without the sync word.
 - `mbe_decodeDStarDVData()` unpacks nine D-STAR DV data bytes into `char ambe_fr[4][24]`.
 
-### Stateful Decode Workflow
+### Encoder Workflow
 
 - Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail.
+
+### Stateful Decode Workflow
 
 - Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
 - Initialize once before decoding with `mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced)`.

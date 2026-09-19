@@ -1,4 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2025 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ *
+ * Copyright (C) 2010 mbelib Author
+ * GPG Key ID: 0xEA5EFE2C (9E7A 5527 9CDC EBF7 BF1B  D772 4F98 E863 EA5E FE2C)
+ *
+ * Portions were originally under the ISC license; this mbelib-neo
+ * distribution is provided under GPL-2.0-or-later. See LICENSE for details.
+ */
+
 /** @file Shared AMBE 2400 DCT and spectral reconstruction (private API). */
 #ifndef MBELIB_NEO_INTERNAL_AMBE3600X2400_H
 #define MBELIB_NEO_INTERNAL_AMBE3600X2400_H
@@ -11,18 +21,19 @@ struct ambe_dct_cache {
     float idct_cos[18][18][18]; /* [ji][j][k] for ji=1..17, j=1..ji, k=1..ji */
 };
 
-/* Hidden by the library's default visibility, like ambe_common.h helpers.
+/* Not exported from the shared library; present as ordinary globals in the
+ * static archive, hence the mbe_ prefix.
  * Arrays use one-based harmonic/block indices. L and prev_L must be clamped
  * to 1..56; Ji comes from AmbePlusLmprbl and codes contains b5..b8. */
-const struct ambe_dct_cache* ambe2400_get_dct_cache(void);
-void ambe2400_reconstruct_prba(int b3, int b4, float Ri[9]);
-void ambe2400_reconstruct_ri(const float Gm[9], float Ri[9]);
-void ambe2400_reconstruct_cik(const float Ri[9], const int codes[4], const int Ji[5], float Cik[5][18]);
-void ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]);
+const struct ambe_dct_cache* mbe_ambe2400_get_dct_cache(void);
+void mbe_ambe2400_reconstruct_prba(int b3, int b4, float Ri[9]);
+void mbe_ambe2400_reconstruct_ri(const float Gm[9], float Ri[9]);
+void mbe_ambe2400_reconstruct_cik(const float Ri[9], const int codes[4], const int Ji[5], float Cik[5][18]);
+void mbe_ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]);
 
 /* Preserve the decoder's full update loop, including its previous-spectrum
  * fix-ups and Ml scaling. The encoder passes a private copy of prev_mp. */
-void ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc);
+void mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc);
 
 /* Small arithmetic helpers stay inline to preserve the decoder's evaluation
  * order before fast-math/LTO transforms its surrounding loops. */
