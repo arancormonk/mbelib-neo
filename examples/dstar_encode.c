@@ -117,9 +117,12 @@ main(int argc, char** argv) {
     int rate;
     int channels;
     int ret = 1;
-    bool denoise = (getenv("DSTAR_DENOISE") == NULL) || (strcmp(getenv("DSTAR_DENOISE"), "0") != 0);
+#ifdef HAVE_SPECBLEACH
+    const char* denoise_env = getenv("DSTAR_DENOISE");
+    bool denoise = (denoise_env == NULL) || (strcmp(denoise_env, "0") != 0);
     void* nr = NULL;
     uint32_t nr_latency = 0U;
+#endif
 
     if (argc != 3) {
         fprintf(stderr, "usage: %s input.wav output.dstar\n", argv[0]);
@@ -174,14 +177,16 @@ main(int argc, char** argv) {
     {
         int n;
         /* Trim the denoiser latency off the front of the stream. */
+#ifdef HAVE_SPECBLEACH
         uint32_t denoised_total = 0U;
+#endif
         while ((n = read_samples(fin, pcm, FRAME_SAMPLES)) == FRAME_SAMPLES) {
             char ambe_d[49];
             char frame_buf[4 * 24];
             unsigned char dv[DV_FRAME_BYTES];
 
-            if (denoise) {
 #ifdef HAVE_SPECBLEACH
+            if (denoise) {
                 float finf[FRAME_SAMPLES];
                 float foutf[FRAME_SAMPLES];
                 for (int i = 0; i < FRAME_SAMPLES; i++)
@@ -197,8 +202,8 @@ main(int argc, char** argv) {
                     if (s < -1.0f) s = -1.0f;
                     pcm[i] = (short)(s * 32767.0f);
                 }
-#endif
             }
+#endif
 
             mbe_encodeAmbe2400ParmsShort(pcm, ambe_d, &cur_mp, &prev_mp);
             mbe_encodeAmbe3600x2400Frame(ambe_d, (char(*)[24])frame_buf);
