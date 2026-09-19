@@ -1129,7 +1129,7 @@ if(MBELIB_BUILD_TESTS)
     )
 
     if(MBELIB_BUILD_EXAMPLES AND NOT CMAKE_CROSSCOMPILING)
-        find_package(Python3 QUIET COMPONENTS Interpreter)
+        find_package(Python3 3.7 QUIET COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
             add_test(
                 NAME test_dstar_examples
