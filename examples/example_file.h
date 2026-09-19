@@ -4,28 +4,43 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
 #include <sys/stat.h>
 #endif
 
-/* Check before opening the output, including existing symlink/hardlink aliases. */
+/* Check before opening the output; POSIX also checks symlink/hardlink aliases. */
 static inline int
 example_paths_differ(const char* input, const char* output) {
     if (strcmp(input, output) == 0) {
         (void)fprintf(stderr, "input and output must be different files\n");
         return 0;
     }
-#ifndef _WIN32
+#ifdef _WIN32
     /* Windows CRT stat does not provide meaningful inode identities. */
+    char* in_path = _fullpath(NULL, input, 0);
+    char* out_path = _fullpath(NULL, output, 0);
+    int different = 0;
+    if (in_path == NULL || out_path == NULL) {
+        (void)fprintf(stderr, "cannot resolve input or output path\n");
+    } else if (_stricmp(in_path, out_path) == 0) {
+        (void)fprintf(stderr, "input and output must be different files\n");
+    } else {
+        different = 1;
+    }
+    free(in_path);
+    free(out_path);
+    return different;
+#else
     struct stat in_stat, out_stat;
     if (stat(input, &in_stat) == 0 && stat(output, &out_stat) == 0 && in_stat.st_dev == out_stat.st_dev
         && in_stat.st_ino == out_stat.st_ino) {
         (void)fprintf(stderr, "input and output must be different files\n");
         return 0;
     }
-#endif
     return 1;
+#endif
 }
 
 static inline FILE*
