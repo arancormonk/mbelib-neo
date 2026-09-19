@@ -46,7 +46,12 @@ example_windows_paths_differ(const char* input, const char* output) {
     /* Windows CRT stat does not provide meaningful inode identities. */
     HANDLE in_handle = example_open_identity_handle(input);
     if (in_handle == INVALID_HANDLE_VALUE) {
-        return 1; /* Let example_open_file report the input error. */
+        DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+            return 1; /* Let example_open_file report the input error. */
+        }
+        (void)fprintf(stderr, "cannot inspect input file: Windows error %lu\n", (unsigned long)error);
+        return 0;
     }
     HANDLE out_handle = example_open_identity_handle(output);
     if (out_handle == INVALID_HANDLE_VALUE) {
