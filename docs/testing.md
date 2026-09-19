@@ -9,7 +9,7 @@ The CTest suite includes:
 
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
-- AMBE 2400 encoder round trips, parameter parity, pitch endpoints, independent contexts and reset replay in one thread (`test_ambe2400_encoder`)
+- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread (`test_ambe2400_encoder`)
 - Encoder context/FFT allocation failures clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks

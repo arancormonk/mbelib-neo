@@ -41,6 +41,7 @@
 #include <string.h>
 
 #include "ambe3600x2400_const.h"
+#include "ambe3600x2400_internal.h"
 #include "mbe_compiler.h"
 #include "mbe_ecc.h"
 #include "mbe_unvoiced_fft.h"
@@ -77,12 +78,6 @@
  * a 256 sample (32 ms) window centred on the current frame start without
  * blocking for look-ahead.
  */
-struct ambe2400_dct_cache {
-    int inited;
-    float blk_cos[18][18][18]; /* [ji][j][k], ji=1..17, j,k=1..ji */
-    float prba_cos[9][9];      /* [m][i] 8-point DCT basis */
-};
-
 struct mbe_ambe2400_encoder {
     float history[AMBE2400_ENC_SAMPLES];
     float agc_gain;
@@ -92,7 +87,6 @@ struct mbe_ambe2400_encoder {
     float prev_lag;
     float max_energy;
     mbe_fft_plan* fft;
-    struct ambe2400_dct_cache cache;
 };
 
 void
@@ -130,33 +124,6 @@ mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc) {
         mbe_fft_plan_free(enc->fft);
         free(enc);
     }
-}
-
-static struct ambe2400_dct_cache*
-ambe2400_enc_get_dct_cache(mbe_ambe2400_encoder* enc) {
-    struct ambe2400_dct_cache* cache = &enc->cache;
-    if (cache->inited) {
-        return cache;
-    }
-
-    /* blk_cos[ji][j][k] = cos(pi*(k-1)*(j-0.5)/ji) */
-    for (int ji = 1; ji <= 17; ji++) {
-        for (int j = 1; j <= ji; j++) {
-            for (int k = 1; k <= ji; k++) {
-                cache->blk_cos[ji][j][k] = cosf((M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
-            }
-        }
-    }
-
-    /* prba_cos[m][i] = cos(pi*(m-1)*(i-0.5)/8), m,i = 1..8 */
-    for (int m = 1; m <= 8; m++) {
-        for (int i = 1; i <= 8; i++) {
-            cache->prba_cos[m][i] = cosf((M_PI * (float)(m - 1) * ((float)i - 0.5f)) / 8.0f);
-        }
-    }
-
-    cache->inited = 1;
-    return cache;
 }
 
 /*
@@ -358,10 +325,11 @@ ambe2400_enc_pitch(mbe_ambe2400_encoder* enc, const float* buf, int n, float* st
 
 /* Temporary analysis and quantization workspace; no inter-frame state. */
 struct ambe2400_enc_frame {
-    const struct ambe2400_dct_cache* cache;
+    const struct ambe_dct_cache* cache;
     float buf[AMBE2400_ENC_FFT_SIZE];
     float windowed[AMBE2400_ENC_FFT_SIZE];
-    float mag[57], a[57], p[57], Tl[57], Tl_q[57], log2Ml_q[57];
+    float p[57];
+    float mag[57], a[57], Tl[57], Tl_q[57];
     float Cik[5][18], Cik_q[5][18], Gm[9];
     int Vl_ana[57], Ji[5], L, b[9];
     float f0q, gamma_q, mean_a, mean_p, strength;
@@ -540,21 +508,14 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
 
     q->mean_p = 0.0f;
     for (int l = 1; l <= q->L; l++) {
-        float flokl = ((float)prev_L / (float)q->L) * (float)l;
+        float flokl = ambe2400_prediction_position(prev_L, q->L, l);
         int intkl = (int)flokl;
         float deltal = flokl - (float)intkl;
         int upper = intkl + 1;
-        float v_lo;
-        float v_hi;
-
         if (upper > MBE_MAX_HARMONIC_BANDS) {
             upper = MBE_MAX_HARMONIC_BANDS;
         }
-
-        v_lo = prev_log2Ml[intkl];
-        v_hi = prev_log2Ml[upper];
-
-        q->p[l] = ((1.0f - deltal) * v_lo) + (deltal * v_hi);
+        q->p[l] = ambe2400_interpolate_prediction(deltal, prev_log2Ml[intkl], prev_log2Ml[upper]);
         q->mean_p += q->p[l];
     }
     q->mean_p /= (float)q->L;
@@ -579,7 +540,7 @@ ambe2400_enc_block_dct(struct ambe2400_enc_frame* q) {
             for (int k = 1; k <= ji; k++) {
                 float sum = 0.0f;
                 for (int j = 1; j <= ji; j++) {
-                    sum += q->Tl[l + j - 1] * q->cache->blk_cos[ji][j][k];
+                    sum += q->Tl[l + j - 1] * q->cache->idct_cos[ji][j][k];
                 }
                 /* Decoder IDCT is Tl[j] = sum_k a_k Cik[k] cos(theta_kj),
                  * a_1=1, a_k=2. Exact inverse: Cik[k] = (1/ji) sum_j Tl[j] cos. */
@@ -608,7 +569,7 @@ ambe2400_enc_prba_dct(struct ambe2400_enc_frame* q) {
     for (int m = 2; m <= 8; m++) {
         float sum = 0.0f;
         for (int i = 1; i <= 8; i++) {
-            sum += Ri[i] * q->cache->prba_cos[m][i];
+            sum += Ri[i] * q->cache->ri_cos[m][i];
         }
         q->Gm[m] = sum / 8.0f;
     }
@@ -691,80 +652,8 @@ ambe2400_enc_quantize_hoc(struct ambe2400_enc_frame* q) {
 static void
 ambe2400_enc_reconstruct_coefficients(struct ambe2400_enc_frame* q) {
     float Ri_q[9];
-    float Gm_q[9];
-    memset(Gm_q, 0, sizeof(Gm_q));
-    Gm_q[1] = 0.0f;
-    for (int m = 0; m < 3; m++) {
-        Gm_q[2 + m] = AmbePlusPRBA24[q->b[3]][m];
-    }
-    for (int m = 0; m < 4; m++) {
-        Gm_q[5 + m] = AmbePlusPRBA58[q->b[4]][m];
-    }
-
-    for (int i = 1; i <= 8; i++) {
-        float sum = 0.0f;
-        for (int m = 1; m <= 8; m++) {
-            int am = (m == 1) ? 1 : 2;
-            sum += (float)am * Gm_q[m] * q->cache->prba_cos[m][i];
-        }
-        Ri_q[i] = sum;
-    }
-
-    const float rconst = 1.0f / (2.0f * 1.41421356237f);
-    q->Cik_q[1][1] = 0.5f * (Ri_q[1] + Ri_q[2]);
-    q->Cik_q[1][2] = rconst * (Ri_q[1] - Ri_q[2]);
-    q->Cik_q[2][1] = 0.5f * (Ri_q[3] + Ri_q[4]);
-    q->Cik_q[2][2] = rconst * (Ri_q[3] - Ri_q[4]);
-    q->Cik_q[3][1] = 0.5f * (Ri_q[5] + Ri_q[6]);
-    q->Cik_q[3][2] = rconst * (Ri_q[5] - Ri_q[6]);
-    q->Cik_q[4][1] = 0.5f * (Ri_q[7] + Ri_q[8]);
-    q->Cik_q[4][2] = rconst * (Ri_q[7] - Ri_q[8]);
-
-    {
-        const int codes[4] = {q->b[5], q->b[6], q->b[7], q->b[8]};
-        for (int blk = 0; blk < 4; blk++) {
-            int ji = q->Ji[blk + 1];
-            int kmax = (ji < 6) ? ji : 6;
-            for (int k = 3; k <= kmax; k++) {
-                q->Cik_q[blk + 1][k] = ambe2400_hoc_tables[blk][codes[blk]][k - 3];
-            }
-        }
-    }
-}
-
-static void
-ambe2400_enc_block_idct(struct ambe2400_enc_frame* q) {
-    /* Block IDCT back to Tl_q */
-    {
-        int l = 1;
-        for (int blk = 1; blk <= 4; blk++) {
-            int ji = q->Ji[blk];
-            for (int j = 1; j <= ji; j++) {
-                float sum = 0.0f;
-                for (int k = 1; k <= ji; k++) {
-                    int ak = (k == 1) ? 1 : 2;
-                    sum += (float)ak * q->Cik_q[blk][k] * q->cache->blk_cos[ji][j][k];
-                }
-                q->Tl_q[l] = sum;
-                l++;
-            }
-        }
-    }
-}
-
-static void
-ambe2400_enc_reconstruct_amplitudes(struct ambe2400_enc_frame* q) {
-    /* Mirror of ambe2400_update_spectral_amplitudes() */
-    float mean_tlq = 0.0f;
-    for (int l = 1; l <= q->L; l++) {
-        mean_tlq += q->Tl_q[l];
-    }
-    mean_tlq /= (float)q->L;
-
-    for (int l = 1; l <= q->L; l++) {
-        q->log2Ml_q[l] =
-            q->Tl_q[l] - mean_tlq + (0.65f * (q->p[l] - q->mean_p)) + q->gamma_q - (0.5f * log2f((float)q->L));
-    }
+    ambe2400_reconstruct_prba(q->b[3], q->b[4], Ri_q);
+    ambe2400_reconstruct_cik(Ri_q, q->b + 5, q->Ji, q->Cik_q);
 }
 
 static void
@@ -844,11 +733,6 @@ ambe2400_enc_fill_parms(const struct ambe2400_enc_frame* q, mbe_parms* cur_mp) {
         if (cur_mp->Vl[l] == 1) {
             cur_mp->K++;
         }
-        cur_mp->log2Ml[l] = q->log2Ml_q[l];
-        cur_mp->Ml[l] = exp2f(q->log2Ml_q[l]);
-        if (cur_mp->Vl[l] == 0) {
-            cur_mp->Ml[l] *= 0.2046f / sqrtf(cur_mp->w0);
-        }
     }
     cur_mp->gamma = q->gamma_q;
 }
@@ -858,7 +742,7 @@ static int
 ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[49], mbe_parms* cur_mp,
                       const mbe_parms* prev_mp) {
     struct ambe2400_enc_frame q = {0};
-    q.cache = ambe2400_enc_get_dct_cache(enc);
+    q.cache = ambe2400_get_dct_cache();
     ambe2400_enc_window(enc, &q, pcm);
     ambe2400_enc_quantize_pitch(enc, &q);
     int status = ambe2400_enc_spectrum(enc, q.windowed, q.f0q, q.L, q.mag, q.Vl_ana);
@@ -874,10 +758,12 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[4
     ambe2400_enc_quantize_prba(&q);
     ambe2400_enc_quantize_hoc(&q);
     ambe2400_enc_reconstruct_coefficients(&q);
-    ambe2400_enc_block_idct(&q);
-    ambe2400_enc_reconstruct_amplitudes(&q);
+    ambe2400_inverse_dct_tl(q.Cik_q, q.Ji, q.Tl_q);
     ambe2400_enc_pack(&q, ambe_d);
     ambe2400_enc_fill_parms(&q, cur_mp);
+    /* Share the decoder update without changing the caller's predictor. */
+    mbe_parms prediction_prev = *prev_mp;
+    ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
     return 0;
 }
 
