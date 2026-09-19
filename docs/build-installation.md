@@ -20,6 +20,9 @@ The project may add warning, sanitizer, SIMD, LTO, hardening, or platform flags
 based on explicit CMake options, but should not discard user-supplied compiler
 or linker settings.
 
+`MBELIB_EXAMPLE_SPECBLEACH=ON` enables the optional `dstar_encode` denoiser (default OFF).
+It requires libspecbleach headers and a library with the supported parameter fields; incompatible versions fail configuration.
+
 ## Debug Information
 
 The install rules do not strip binaries. If users request debug information

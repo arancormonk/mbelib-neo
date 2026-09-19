@@ -41,6 +41,11 @@ endfunction()
 option(NOTONES "Disable AMBE+2 Tones" OFF)
 option(MBELIB_BUILD_TESTS "Build mbelib tests" ON)
 option(MBELIB_BUILD_EXAMPLES "Build examples" ON)
+option(
+    MBELIB_EXAMPLE_SPECBLEACH
+    "Build the dstar_encode example with the optional libspecbleach denoiser"
+    OFF
+)
 option(MBELIB_BUILD_DOCS "Generate API docs with Doxygen" OFF)
 option(MBELIB_ENABLE_ASAN "Enable AddressSanitizer in Debug builds" OFF)
 option(
@@ -689,8 +694,54 @@ if(MBELIB_BUILD_EXAMPLES)
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
     )
     # Optional in-speech noise reduction front-end (libspecbleach).
-    find_library(SPECBLEACH_LIBRARY specbleach)
-    if(SPECBLEACH_LIBRARY)
+    if(MBELIB_EXAMPLE_SPECBLEACH)
+        find_path(SPECBLEACH_INCLUDE_DIR specbleach_denoiser.h)
+        find_library(SPECBLEACH_LIBRARY specbleach)
+        if(NOT SPECBLEACH_INCLUDE_DIR)
+            message(
+                FATAL_ERROR
+                "MBELIB_EXAMPLE_SPECBLEACH requires the missing header specbleach_denoiser.h"
+            )
+        endif()
+        if(NOT SPECBLEACH_LIBRARY)
+            message(
+                FATAL_ERROR
+                "MBELIB_EXAMPLE_SPECBLEACH requires the missing library libspecbleach"
+            )
+        endif()
+        include(CheckStructHasMember)
+        include(CMakePushCheckState)
+        cmake_push_check_state(RESET)
+        set(CMAKE_REQUIRED_INCLUDES "${SPECBLEACH_INCLUDE_DIR}")
+        foreach(
+            _specbleach_member
+            IN
+            ITEMS
+                adaptive_noise
+                noise_estimation_method
+                masking_depth
+                suppression_strength
+        )
+            unset(SPECBLEACH_HAS_${_specbleach_member} CACHE)
+            check_struct_has_member(
+                SpectralBleachDenoiserParameters
+                ${_specbleach_member}
+                specbleach_denoiser.h
+                SPECBLEACH_HAS_${_specbleach_member}
+                LANGUAGE C
+            )
+            if(NOT SPECBLEACH_HAS_${_specbleach_member})
+                message(
+                    FATAL_ERROR
+                    "MBELIB_EXAMPLE_SPECBLEACH requires missing SpectralBleachDenoiserParameters.${_specbleach_member}"
+                )
+            endif()
+        endforeach()
+        cmake_pop_check_state()
+        target_include_directories(
+            example_dstar_encode
+            PRIVATE ${SPECBLEACH_INCLUDE_DIR}
+        )
         target_compile_definitions(
             example_dstar_encode
             PRIVATE HAVE_SPECBLEACH=1
