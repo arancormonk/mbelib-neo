@@ -14,13 +14,13 @@
  * PFFFT's own internal calls are defined in its object, so are not wrapped. */
 void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
 void encoder_real_free(void* ptr) __asm__("__real_pffft_aligned_free");
-void* encoder_fault_alloc(size_t size) __asm__("__wrap_pffft_aligned_malloc");
-void encoder_track_free(void* ptr) __asm__("__wrap_pffft_aligned_free");
+extern void* encoder_fault_alloc(size_t size) __asm__("__wrap_pffft_aligned_malloc");
+extern void encoder_track_free(void* ptr) __asm__("__wrap_pffft_aligned_free");
 static int allocation_count;
 static int fail_at;
 static int live_allocations;
 
-void*
+extern void*
 encoder_fault_alloc(size_t size) {
     allocation_count++;
     if (allocation_count == fail_at) {
@@ -33,7 +33,7 @@ encoder_fault_alloc(size_t size) {
     return ptr;
 }
 
-void
+extern void
 encoder_track_free(void* ptr) {
     if (ptr != NULL) {
         live_allocations--;
@@ -430,6 +430,92 @@ test_invalid_arguments(void) {
     return 0;
 }
 
+static int
+test_prediction_boundaries(void) {
+    const int counts[] = {-7, 1, 10, 56, 99};
+    for (size_t test = 0; test < sizeof(counts) / sizeof(counts[0]); test++) {
+        mbe_parms cur, prev, enhanced, decoded, decode_prev;
+        char bits[49];
+        short pcm[160];
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        prev.L = counts[test];
+        for (int l = 0; l <= 56; l++) {
+            prev.log2Ml[l] = (float)l * 0.125f;
+            prev.Ml[l] = exp2f(prev.log2Ml[l]);
+        }
+        /* Deliberately poison the zero tap; the decoder replaces it with [1]. */
+        prev.log2Ml[0] = -12.0f;
+        decode_prev = prev;
+        decoded = cur;
+        for (int i = 0; i < 160; i++) {
+            pcm[i] = (short)(3000.0f * sinf(0.08f * (float)i));
+        }
+        if (mbe_encodeAmbe2400ParmsShort(pcm, bits, &cur, &prev) != 0
+            || mbe_decodeAmbe2400Parms(bits, &decoded, &decode_prev) != 0) {
+            return 1;
+        }
+        if (cur.L != decoded.L || fabsf(cur.gamma - decoded.gamma) > 1e-4f) {
+            return 1;
+        }
+        for (int l = 1; l <= cur.L; l++) {
+            if (fabsf(cur.log2Ml[l] - decoded.log2Ml[l]) > 1e-3f) {
+                return 1;
+            }
+        }
+        if (prev.L != counts[test] || prev.log2Ml[0] != -12.0f) {
+            return 1;
+        }
+    }
+    puts("prediction boundary taps and harmonic-count clamps: ok");
+    return 0;
+}
+
+static int
+test_vuv_hysteresis(void) {
+    int retained = 0;
+    for (int fixture = 0; fixture < 64; fixture++) {
+        mbe_parms cur, prev, enhanced;
+        float pcm[160];
+        char bits[49];
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int i = 0; i < 160; i++) {
+            pcm[i] = 0.0001f * ((float)(rnd() & 65535u) / 32768.0f - 1.0f)
+                     + 0.03f * sinf((float)(2.0 * M_PI * (fixture % 8 + 1) * i / 160));
+            if (i == 0) {
+                pcm[i] += 0.01f * (float)(fixture + 1);
+            }
+        }
+        /* Repetition makes the analysis window, pitch and AGC settle. */
+        for (int frame = 0; frame < 200; frame++) {
+            if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+                return 1;
+            }
+        }
+        for (int l = 1; l <= 56; l++) {
+            prev.Vl[l] = 0;
+        }
+        if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+            return 1;
+        }
+        int without_history = cur.K;
+        int harmonics = cur.L;
+        for (int l = 1; l <= 56; l++) {
+            prev.Vl[l] = 1;
+        }
+        if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+            return 1;
+        }
+        if (cur.L != harmonics || cur.K < without_history) {
+            return 1;
+        }
+        if (cur.K > without_history) {
+            retained++;
+        }
+    }
+    printf("voiced history retains additional bands in %d fixtures\n", retained);
+    return retained == 0;
+}
+
 /* Each analysis case runs in its own process because analysis state is TLS. */
 static int
 test_pitch_endpoint(int period, int expected_b0) {
@@ -489,6 +575,9 @@ main(int argc, char** argv) {
     if (argc == 2 && strcmp(argv[1], "pitch127") == 0) {
         return test_pitch_endpoint(127, 125);
     }
+    if (argc == 2 && strcmp(argv[1], "hysteresis") == 0) {
+        return test_vuv_hysteresis();
+    }
     if (argc == 2 && strcmp(argv[1], "dc_noise") == 0) {
         return test_dc_noise();
     }
@@ -500,6 +589,7 @@ main(int argc, char** argv) {
     fails += test_frame_single_bit_errors();
     fails += test_dv_bytes();
     fails += test_state_parity();
+    fails += test_prediction_boundaries();
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;
 }

@@ -803,7 +803,7 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
-    foreach(case pitch20 pitch127 dc_noise)
+    foreach(case pitch20 pitch127 dc_noise hysteresis)
         add_test(
             NAME test_ambe2400_encoder_${case}
             COMMAND test_ambe2400_encoder ${case}
