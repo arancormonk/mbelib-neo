@@ -1221,6 +1221,12 @@ if(MBELIB_BUILD_TOOLS)
     target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
     target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
     _mbelib_apply_hardening(mbe_quality_eval)
+    if(MSVC)
+        target_compile_definitions(
+            mbe_quality_eval
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     target_include_directories(
         mbe_quality_eval
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
@@ -1238,6 +1244,12 @@ if(MBELIB_BUILD_TOOLS)
             "${PROJECT_SOURCE_DIR}/include"
             "${PROJECT_SOURCE_DIR}/src/internal"
     )
+    if(MSVC)
+        target_compile_definitions(
+            mbe_quality_reframe
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
