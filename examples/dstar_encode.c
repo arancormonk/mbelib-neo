@@ -6,14 +6,13 @@
 
 /**
  * @file
- * @brief D-STAR DV audio encoder sample app.
+ * @brief Encode an 8 kHz mono 16-bit PCM WAV into the private .dstar example container.
  *
- * Reads an 8 kHz mono 16-bit WAV and writes a .dstar file made of
- * 12-byte D-STAR DV frames (24-bit sync word 0x55 0x2D 0x16 + 72-bit
- * AMBE+FEC data), one per 20 ms, in air order.
+ * Each 20 ms frame is a sync word (0x55 0x2D 0x16) plus 9 AMBE payload bytes.
+ * This is not the D-STAR air-interface stream, which has a radio header and
+ * slow-data/sync framing every 21 voice frames.
  */
 
-#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,217 +21,258 @@
 
 #include <mbelib-neo/mbelib.h>
 
-/* Optional in-speech noise reduction front-end (libspecbleach). Disable
- * with DSTAR_DENOISE=0 if the input is already clean. */
+#include "example_file.h"
+
+/* Optional in-speech noise reduction; DSTAR_DENOISE=0 disables it. */
 #ifdef HAVE_SPECBLEACH
 #include <specbleach_denoiser.h>
 #endif
 
-#define FRAME_SAMPLES 160
+#define FRAME_SAMPLES  160
 #define DV_FRAME_BYTES 12
-#define DV_SYNC_0      0x55
-#define DV_SYNC_1      0x2D
-#define DV_SYNC_2      0x16
 
-struct wav_header {
-    uint32_t riff_tag;
-    uint32_t riff_size;
-    uint32_t wave_tag;
-};
+static uint16_t
+read_le16(const unsigned char* p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
 
-static int
-read_samples(FILE* fp, short* buf, int n) {
-    return (int)fread(buf, sizeof(short), (size_t)n, fp);
+static uint32_t
+read_le32(const unsigned char* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 static int
-read_wav_pcm(FILE* fp, int* rate, int* channels, uint32_t* data_size) {
-    uint8_t tag[4];
-    uint32_t size;
-    uint16_t fmt_tag;
-    uint16_t bits;
-    struct wav_header hdr;
-
-    if (fread(&hdr, sizeof(hdr), 1, fp) != 1) {
-        return -1;
-    }
-    if (hdr.riff_tag != 0x46464952U || hdr.wave_tag != 0x45564157U) { /* RIFF/WAVE */
-        return -1;
-    }
-
-    for (;;) {
-        if (fread(tag, 4, 1, fp) != 1) {
+skip_bytes(FILE* fp, uint32_t count) {
+    unsigned char buf[256];
+    while (count > 0) {
+        size_t n = count < sizeof(buf) ? (size_t)count : sizeof(buf);
+        if (fread(buf, 1, n, fp) != n) {
             return -1;
         }
-        if (fread(&size, 4, 1, fp) != 1) {
+        count -= (uint32_t)n;
+    }
+    return 0;
+}
+
+static int
+read_wav_format(FILE* fp, uint32_t size) {
+    unsigned char fmt[16];
+    if (size < sizeof(fmt) || fread(fmt, 1, sizeof(fmt), fp) != sizeof(fmt)) {
+        return -1;
+    }
+    if (read_le16(fmt) != 1 || read_le16(fmt + 2) != 1 || read_le32(fmt + 4) != 8000 || read_le32(fmt + 8) != 16000
+        || read_le16(fmt + 12) != 2 || read_le16(fmt + 14) != 16) {
+        (void)fprintf(stderr, "expected uncompressed 8 kHz mono 16-bit PCM WAV\n");
+        return -1;
+    }
+    return skip_bytes(fp, size - 16 + (size & 1u));
+}
+
+static int
+read_wav_pcm(FILE* fp, uint32_t* data_size) {
+    unsigned char hdr[12];
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        return -1;
+    }
+    long file_size = ftell(fp);
+    if (file_size < 12 || fseek(fp, 0, SEEK_SET) != 0 || fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) {
+        return -1;
+    }
+    uint32_t remaining = read_le32(hdr + 4);
+    if (memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0 || remaining < 4
+        || (uint64_t)remaining + 8 > (uint64_t)file_size) {
+        return -1;
+    }
+    remaining -= 4;
+    bool have_fmt = false;
+    while (remaining >= 8) {
+        unsigned char chunk[8];
+        if (fread(chunk, 1, sizeof(chunk), fp) != sizeof(chunk)) {
             return -1;
         }
-
-        if (memcmp(tag, "fmt ", 4) == 0) {
-            if (fread(&fmt_tag, 2, 1, fp) != 1) {
+        remaining -= 8;
+        uint32_t size = read_le32(chunk + 4);
+        if ((uint64_t)size + (size & 1u) > remaining) {
+            return -1;
+        }
+        if (memcmp(chunk, "data", 4) == 0) {
+            if (!have_fmt || (size & 1u) != 0) {
                 return -1;
             }
-            if (fmt_tag != 1) {
-                fprintf(stderr, "only uncompressed PCM WAV is supported\n");
-                return -1;
-            }
-            if (fread(channels, 2, 1, fp) != 1) {
-                return -1;
-            }
-            if (fread(rate, 4, 1, fp) != 1) {
-                return -1;
-            }
-            fseek(fp, 6, SEEK_CUR); /* byte rate + block align */
-            if (fread(&bits, 2, 1, fp) != 1) {
-                return -1;
-            }
-            if (*rate != 8000 || *channels != 1 || bits != 16) {
-                fprintf(stderr, "expected 8 kHz mono 16-bit WAV, got %d Hz %d ch %d bit\n", *rate, *channels, bits);
-                return -1;
-            }
-            if (size > 16) {
-                fseek(fp, (long)(size - 16), SEEK_CUR);
-            }
-        } else if (memcmp(tag, "data", 4) == 0) {
             *data_size = size;
             return 0;
-        } else {
-            if (size & 1) {
-                size++;
+        }
+        if (memcmp(chunk, "fmt ", 4) == 0) {
+            if (read_wav_format(fp, size) < 0) {
+                return -1;
             }
-            fseek(fp, (long)size, SEEK_CUR);
+            have_fmt = true;
+        } else if (skip_bytes(fp, size + (size & 1u)) < 0) {
+            return -1;
+        }
+        remaining -= size + (size & 1u);
+    }
+    return -1;
+}
+
+static int
+read_samples(FILE* fp, short pcm[FRAME_SAMPLES], uint32_t* remaining) {
+    unsigned char bytes[FRAME_SAMPLES * 2];
+    size_t count = *remaining < sizeof(bytes) ? (size_t)*remaining : sizeof(bytes);
+    if (fread(bytes, 1, count, fp) != count) {
+        return -1;
+    }
+    *remaining -= (uint32_t)count;
+    for (size_t i = 0; i < count / 2; i++) {
+        int value = read_le16(bytes + 2 * i);
+        pcm[i] = (short)(value >= 32768 ? value - 65536 : value);
+    }
+    return (int)(count / 2);
+}
+
+#ifdef HAVE_SPECBLEACH
+struct denoiser {
+    void* handle;
+    uint32_t latency_remaining;
+};
+
+static struct denoiser
+init_denoiser(void) {
+    struct denoiser nr = {0};
+    const char* env = getenv("DSTAR_DENOISE");
+    if (env != NULL && strcmp(env, "0") == 0) {
+        return nr;
+    }
+    nr.handle = specbleach_initialize(8000, 20.0f);
+    if (nr.handle != NULL) {
+        SpectralBleachDenoiserParameters p = {0};
+        p.reduction_amount = 12.0f;
+        p.smoothing_factor = 30.0f;
+        p.whitening_factor = 15.0f;
+        p.adaptive_noise = 1;
+        p.noise_estimation_method = 2; /* Martin Minimum Statistics */
+        p.masking_depth = 0.5f;
+        p.suppression_strength = 0.6f;
+        specbleach_load_parameters(nr.handle, p);
+        nr.latency_remaining = specbleach_get_latency(nr.handle);
+    }
+    return nr;
+}
+
+static bool
+denoise_frame(struct denoiser* nr, short pcm[FRAME_SAMPLES]) {
+    if (nr->handle == NULL) {
+        return true;
+    }
+    float input[FRAME_SAMPLES], output[FRAME_SAMPLES];
+    for (int i = 0; i < FRAME_SAMPLES; i++) {
+        input[i] = (float)pcm[i] / 32768.0f;
+    }
+    specbleach_process(nr->handle, FRAME_SAMPLES, input, output);
+    if (nr->latency_remaining >= FRAME_SAMPLES) {
+        nr->latency_remaining -= FRAME_SAMPLES;
+        return false;
+    }
+    nr->latency_remaining = 0;
+    for (int i = 0; i < FRAME_SAMPLES; i++) {
+        float sample = output[i];
+        if (sample > 1.0f) {
+            sample = 1.0f;
+        }
+        if (sample < -1.0f) {
+            sample = -1.0f;
+        }
+        pcm[i] = (short)(sample * 32767.0f);
+    }
+    return true;
+}
+#endif
+
+static int
+write_frame(FILE* fp, const short pcm[FRAME_SAMPLES], mbe_parms* cur, mbe_parms* prev) {
+    char bits[49], frame[4][24];
+    unsigned char dv[DV_FRAME_BYTES] = {0x55, 0x2D, 0x16};
+    if (mbe_encodeAmbe2400ParmsShort(pcm, bits, cur, prev) < 0 || mbe_encodeAmbe3600x2400Frame(bits, frame) < 0
+        || mbe_encodeDStarDVData((const char (*)[24])frame, dv + 3) < 0) {
+        (void)fprintf(stderr, "encode error\n");
+        return -1;
+    }
+    if (fwrite(dv, 1, sizeof(dv), fp) != sizeof(dv)) {
+        (void)fprintf(stderr, "write error: %s\n", strerror(errno));
+        return -1;
+    }
+    mbe_moveMbeParms(cur, prev);
+    return 0;
+}
+
+static int
+encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
+    mbe_parms cur, prev, enhanced;
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+#ifdef HAVE_SPECBLEACH
+    struct denoiser nr = init_denoiser();
+#endif
+    int ret = 0;
+    while (data_size > 0) {
+        short pcm[FRAME_SAMPLES];
+        int n = read_samples(fin, pcm, &data_size);
+        if (n < 0) {
+            (void)fprintf(stderr, "truncated WAV data or read error\n");
+            ret = 1;
+            break;
+        }
+        if (n < FRAME_SAMPLES) {
+            (void)fprintf(stderr, "warning: %d trailing samples ignored (not a full frame)\n", n);
+            break;
+        }
+#ifdef HAVE_SPECBLEACH
+        if (!denoise_frame(&nr, pcm)) {
+            continue;
+        }
+#endif
+        if (write_frame(fout, pcm, &cur, &prev) < 0) {
+            ret = 1;
+            break;
         }
     }
+#ifdef HAVE_SPECBLEACH
+    if (nr.handle != NULL) {
+        specbleach_free(nr.handle);
+    }
+#endif
+    return ret;
 }
 
 int
 main(int argc, char** argv) {
-    FILE* fin = NULL;
-    FILE* fout = NULL;
-    short pcm[FRAME_SAMPLES];
-    mbe_parms cur_mp;
-    mbe_parms prev_mp;
-    mbe_parms prev_mp_enhanced;
-    uint32_t data_size;
-    int rate;
-    int channels;
-    int ret = 1;
-#ifdef HAVE_SPECBLEACH
-    const char* denoise_env = getenv("DSTAR_DENOISE");
-    bool denoise = (denoise_env == NULL) || (strcmp(denoise_env, "0") != 0);
-    void* nr = NULL;
-    uint32_t nr_latency = 0U;
-#endif
-
     if (argc != 3) {
-        fprintf(stderr, "usage: %s input.wav output.dstar\n", argv[0]);
+        (void)fprintf(stderr, "usage: %s input.wav output.dstar\n", argv[0]);
         return 1;
     }
-
-    fin = fopen(argv[1], "rb");
+    if (!example_paths_differ(argv[1], argv[2])) {
+        return 1;
+    }
+    FILE* fin = example_open_file(argv[1], "rb");
     if (fin == NULL) {
-        fprintf(stderr, "cannot open %s: %s\n", argv[1], strerror(errno));
         return 1;
     }
-    fout = fopen(argv[2], "wb");
-    if (fout == NULL) {
-        fprintf(stderr, "cannot open %s: %s\n", argv[2], strerror(errno));
-        fclose(fin);
-        return 1;
-    }
-
-    if (read_wav_pcm(fin, &rate, &channels, &data_size) < 0) {
+    FILE* fout = NULL;
+    int ret = 1;
+    uint32_t data_size;
+    if (read_wav_pcm(fin, &data_size) < 0) {
+        (void)fprintf(stderr, "invalid or truncated WAV\n");
         goto done;
     }
-    (void)rate;
-    (void)channels;
-
-#ifdef HAVE_SPECBLEACH
-    if (denoise) {
-        nr = specbleach_initialize(8000, 20.0f);
-        if (nr != NULL) {
-            SpectralBleachDenoiserParameters p;
-            memset(&p, 0, sizeof(p));
-            p.learn_noise = 0;
-            p.residual_listen = false;
-            p.reduction_amount = 12.0f;
-            p.smoothing_factor = 30.0f;
-            p.whitening_factor = 15.0f;
-            p.adaptive_noise = 1;
-            p.noise_estimation_method = 2;   /* Martin Minimum Statistics */
-            p.masking_depth = 0.5f;
-            p.suppression_strength = 0.6f;
-            p.aggressiveness = 0.0f;
-            p.tonal_reduction = 0.0f;
-            specbleach_load_parameters(nr, p);
-            nr_latency = specbleach_get_latency(nr);
-        } else {
-            denoise = false;
-        }
+    fout = example_open_file(argv[2], "wb");
+    if (fout != NULL) {
+        ret = encode_wav(fin, fout, data_size);
     }
-#endif
-
-    mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced);
-
-    {
-        int n;
-        /* Trim the denoiser latency off the front of the stream. */
-#ifdef HAVE_SPECBLEACH
-        uint32_t denoised_total = 0U;
-#endif
-        while ((n = read_samples(fin, pcm, FRAME_SAMPLES)) == FRAME_SAMPLES) {
-            char ambe_d[49];
-            char frame_buf[4 * 24];
-            unsigned char dv[DV_FRAME_BYTES];
-
-#ifdef HAVE_SPECBLEACH
-            if (denoise) {
-                float finf[FRAME_SAMPLES];
-                float foutf[FRAME_SAMPLES];
-                for (int i = 0; i < FRAME_SAMPLES; i++)
-                    finf[i] = (float)pcm[i] / 32768.0f;
-                specbleach_process(nr, FRAME_SAMPLES, finf, foutf);
-                denoised_total += FRAME_SAMPLES;
-                if (denoised_total <= nr_latency) {
-                    continue;   /* still inside the filter warm-up */
-                }
-                for (int i = 0; i < FRAME_SAMPLES; i++) {
-                    float s = foutf[i];
-                    if (s > 1.0f) s = 1.0f;
-                    if (s < -1.0f) s = -1.0f;
-                    pcm[i] = (short)(s * 32767.0f);
-                }
-            }
-#endif
-
-            mbe_encodeAmbe2400ParmsShort(pcm, ambe_d, &cur_mp, &prev_mp);
-            mbe_encodeAmbe3600x2400Frame(ambe_d, (char(*)[24])frame_buf);
-
-            dv[0] = DV_SYNC_0;
-            dv[1] = DV_SYNC_1;
-            dv[2] = DV_SYNC_2;
-            mbe_encodeDStarDVData((const char(*)[24])frame_buf, dv + 3);
-
-            if (fwrite(dv, 1, DV_FRAME_BYTES, fout) != DV_FRAME_BYTES) {
-                fprintf(stderr, "write error: %s\n", strerror(errno));
-                goto done;
-            }
-
-            mbe_moveMbeParms(&cur_mp, &prev_mp);
-        }
-        if (n > 0) {
-            fprintf(stderr, "warning: %d trailing samples ignored (not a full frame)\n", n);
-        }
-    }
-
-    ret = 0;
-
 done:
-#ifdef HAVE_SPECBLEACH
-    if (nr != NULL)
-        specbleach_free(nr);
-#endif
-    fclose(fin);
-    fclose(fout);
+    if (example_close_file(fin) < 0) {
+        ret = 1;
+    }
+    if (example_close_file(fout) < 0) {
+        ret = 1;
+    }
     return ret;
 }

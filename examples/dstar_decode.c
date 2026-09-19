@@ -6,151 +6,136 @@
 
 /**
  * @file
- * @brief D-STAR DV audio decoder sample app.
+ * @brief Decode the private .dstar example container to an 8 kHz mono PCM WAV.
  *
- * Reads a .dstar file of 12-byte D-STAR DV frames (sync word + 72-bit
- * AMBE+FEC data) as produced by dstar_encode, and writes an 8 kHz mono
- * 16-bit WAV.
+ * Each 20 ms frame is a sync word (0x55 0x2D 0x16) plus 9 AMBE payload bytes.
+ * This is not the D-STAR air-interface stream, which has a radio header and
+ * slow-data/sync framing every 21 voice frames.
  */
 
-#include <errno.h>
-#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <mbelib-neo/mbelib.h>
 
-#define FRAME_SAMPLES 160
+#include "example_file.h"
+
+#define FRAME_SAMPLES  160
 #define DV_FRAME_BYTES 12
-#define DV_SYNC_0      0x55
-#define DV_SYNC_1      0x2D
-#define DV_SYNC_2      0x16
+
+static void
+write_le32(unsigned char* bytes, uint32_t value) {
+    for (int i = 0; i < 4; i++) {
+        bytes[i] = (unsigned char)(value >> (8 * i));
+    }
+}
 
 static int
 write_wav_header(FILE* fp, uint32_t data_size) {
-    uint32_t u32;
-    uint16_t u16;
+    unsigned char header[44] = {'R', 'I', 'F', 'F', 0,  0, 0,   0,   'W', 'A',  'V',  'E', 'f', 'm',  't',
+                                ' ', 16,  0,   0,   0,  1, 0,   1,   0,   0x40, 0x1f, 0,   0,   0x80, 0x3e,
+                                0,   0,   2,   0,   16, 0, 'd', 'a', 't', 'a',  0,    0,   0,   0};
+    write_le32(header + 4, 36 + data_size);
+    write_le32(header + 40, data_size);
+    return fwrite(header, 1, sizeof(header), fp) == sizeof(header) ? 0 : -1;
+}
 
-    u32 = 0x46464952U; /* RIFF */
-    fwrite(&u32, 4, 1, fp);
-    u32 = 36 + data_size;
-    fwrite(&u32, 4, 1, fp);
-    u32 = 0x45564157U; /* WAVE */
-    fwrite(&u32, 4, 1, fp);
+static int
+write_samples(FILE* fp, short pcm[FRAME_SAMPLES], const char bits[49]) {
+    /* The example emits true silence for the codec's comfort-noise frame. */
+    if (bits[0] && bits[1] && bits[2] && bits[3] && bits[4] && bits[5] && bits[48]) {
+        memset(pcm, 0, FRAME_SAMPLES * sizeof(short));
+    }
+    unsigned char bytes[FRAME_SAMPLES * 2];
+    for (int i = 0; i < FRAME_SAMPLES; i++) {
+        int value = pcm[i];
+        if (value > 31128) {
+            value = 31128;
+        }
+        if (value < -31128) {
+            value = -31128;
+        }
+        uint16_t sample = (uint16_t)value;
+        bytes[2 * i] = (unsigned char)sample;
+        bytes[2 * i + 1] = (unsigned char)(sample >> 8);
+    }
+    return fwrite(bytes, 1, sizeof(bytes), fp) == sizeof(bytes) ? 0 : -1;
+}
 
-    u32 = 0x20746d66U; /* fmt  */
-    fwrite(&u32, 4, 1, fp);
-    u32 = 16;
-    fwrite(&u32, 4, 1, fp);
-    u16 = 1;
-    fwrite(&u16, 2, 1, fp);
-    u16 = 1;
-    fwrite(&u16, 2, 1, fp);
-    u32 = 8000;
-    fwrite(&u32, 4, 1, fp);
-    u32 = 16000;
-    fwrite(&u32, 4, 1, fp);
-    u16 = 2;
-    fwrite(&u16, 2, 1, fp);
-    u16 = 16;
-    fwrite(&u16, 2, 1, fp);
-
-    u32 = 0x61746164U; /* data */
-    fwrite(&u32, 4, 1, fp);
-    u32 = data_size;
-    fwrite(&u32, 4, 1, fp);
+static int
+decode_frames(FILE* fin, FILE* fout, uint32_t* data_size) {
+    mbe_parms cur, prev, enhanced;
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    unsigned char dv[DV_FRAME_BYTES];
+    uint32_t frames = 0, sync_errors = 0;
+    size_t n;
+    while ((n = fread(dv, 1, sizeof(dv), fin)) == sizeof(dv)) {
+        short pcm[FRAME_SAMPLES];
+        char frame[4][24], bits[49];
+        if (dv[0] != 0x55 || dv[1] != 0x2D || dv[2] != 0x16) {
+            sync_errors++;
+        }
+        if (mbe_decodeDStarDVData(dv + 3, frame) < 0
+            || mbe_processAmbe3600x2400Frame(pcm, NULL, (const char (*)[24])frame, bits, &cur, &prev, &enhanced) < 0) {
+            (void)fprintf(stderr, "decode error\n");
+            return -1;
+        }
+        if (*data_size > UINT32_MAX - 36u - FRAME_SAMPLES * 2u) {
+            (void)fprintf(stderr, "WAV size limit exceeded\n");
+            return -1;
+        }
+        if (write_samples(fout, pcm, bits) < 0) {
+            (void)fprintf(stderr, "write error: %s\n", strerror(errno));
+            return -1;
+        }
+        *data_size += FRAME_SAMPLES * 2u;
+        frames++;
+    }
+    if (ferror(fin) != 0 || n != 0) {
+        (void)fprintf(stderr, "read error or trailing partial .dstar frame\n");
+        return -1;
+    }
+    if (sync_errors > 0) {
+        (void)fprintf(stderr, "warning: %u of %u frames had sync word mismatches\n", sync_errors, frames);
+    }
+    (void)fprintf(stderr, "decoded %u frames\n", frames);
     return 0;
 }
 
 int
 main(int argc, char** argv) {
-    FILE* fin = NULL;
-    FILE* fout = NULL;
-    unsigned char dv[DV_FRAME_BYTES];
-    mbe_parms cur_mp;
-    mbe_parms prev_mp;
-    mbe_parms prev_mp_enhanced;
-    int ret = 1;
-    long frames = 0;
-    long sync_errors = 0;
-
     if (argc != 3) {
-        fprintf(stderr, "usage: %s input.dstar output.wav\n", argv[0]);
+        (void)fprintf(stderr, "usage: %s input.dstar output.wav\n", argv[0]);
         return 1;
     }
-
-    fin = fopen(argv[1], "rb");
+    if (!example_paths_differ(argv[1], argv[2])) {
+        return 1;
+    }
+    FILE* fin = example_open_file(argv[1], "rb");
     if (fin == NULL) {
-        fprintf(stderr, "cannot open %s: %s\n", argv[1], strerror(errno));
         return 1;
     }
-    fout = fopen(argv[2], "wb");
+    FILE* fout = example_open_file(argv[2], "wb");
+    int ret = 1;
+    uint32_t data_size = 0;
     if (fout == NULL) {
-        fprintf(stderr, "cannot open %s: %s\n", argv[2], strerror(errno));
-        fclose(fin);
-        return 1;
-    }
-
-    /* Placeholder header; patched before closing. */
-    write_wav_header(fout, 0);
-
-    mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced);
-
-    while (fread(dv, 1, DV_FRAME_BYTES, fin) == DV_FRAME_BYTES) {
-        short pcm[FRAME_SAMPLES];
-        char frame_buf[4 * 24];
-        char ambe_d[49];
-
-        if (dv[0] != DV_SYNC_0 || dv[1] != DV_SYNC_1 || dv[2] != DV_SYNC_2) {
-            sync_errors++;
-        }
-
-        mbe_decodeDStarDVData(dv + 3, (char(*)[24])frame_buf);
-        mbe_processAmbe3600x2400Frame(pcm, NULL, (const char(*)[24])frame_buf, ambe_d,
-                                      &cur_mp, &prev_mp, &prev_mp_enhanced);
-
-        /* A silence frame (b0 == 127) would otherwise be rendered as loud
-         * comfort noise; emit true silence instead. */
-        if (ambe_d[0] && ambe_d[1] && ambe_d[2] && ambe_d[3] && ambe_d[4] && ambe_d[5] && ambe_d[48])
-            memset(pcm, 0, sizeof(pcm));
-
-        for (int i = 0; i < FRAME_SAMPLES; i++) {
-            int v = (int)pcm[i];
-            if (v > 31128)  v = 31128;
-            if (v < -31128) v = -31128;
-            pcm[i] = (short)v;
-        }
-
-        if (fwrite(pcm, sizeof(short), FRAME_SAMPLES, fout) != FRAME_SAMPLES) {
-            fprintf(stderr, "write error: %s\n", strerror(errno));
-            goto done;
-        }
-
-        mbe_moveMbeParms(&cur_mp, &prev_mp);
-        frames++;
-    }
-
-    if (!feof(fin)) {
-        fprintf(stderr, "read error: %s\n", strerror(errno));
         goto done;
     }
-
-    ret = 0;
-
-done:
-    if (ret == 0) {
-        long bytes = frames * FRAME_SAMPLES * (long)sizeof(short);
-        fseek(fout, 0, SEEK_SET);
-        write_wav_header(fout, (uint32_t)bytes);
-        if (sync_errors > 0) {
-            fprintf(stderr, "warning: %ld of %ld frames had sync word mismatches\n", sync_errors, frames);
-        }
-        fprintf(stderr, "decoded %ld frames (%ld ms)\n", frames, frames * 20);
+    if (write_wav_header(fout, 0) < 0 || decode_frames(fin, fout, &data_size) < 0) {
+        goto done;
     }
-
-    fclose(fin);
-    fclose(fout);
+    if (fseek(fout, 0, SEEK_SET) != 0 || write_wav_header(fout, data_size) < 0) {
+        (void)fprintf(stderr, "WAV header write error: %s\n", strerror(errno));
+        goto done;
+    }
+    ret = 0;
+done:
+    if (example_close_file(fin) < 0) {
+        ret = 1;
+    }
+    if (example_close_file(fout) < 0) {
+        ret = 1;
+    }
     return ret;
 }
