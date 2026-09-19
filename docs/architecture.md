@@ -23,6 +23,8 @@ the library.
 - `src/core/`: shared synthesis, parameter, adaptive, and unvoiced FFT logic.
 - `src/ecc/`: error-correction helpers and constants.
 - `src/ambe/`: AMBE frame and data processing.
+- `src/ambe/ambe3600x2400_enc.c`: AMBE 2400 speech analysis and encoding.
+- `src/ambe/dstar_frame.c`: D-STAR DV air-interface byte mapping.
 - `src/imbe/`: IMBE frame and data processing.
 - `src/internal/`: private headers shared by implementation units.
 - `src/external/pffft/`: vendored third-party FFT sources.

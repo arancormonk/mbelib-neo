@@ -391,6 +391,8 @@ MBE_API int mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], 
  * @return 0 on success, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_encodeAmbe3600x2400Frame(const char ambe_d[49], char ambe_fr[4][24]);
+/* === D-STAR DV framing === */
+
 /**
  * @brief Serialize a 72-bit AMBE 3600x2400 frame into the 9 data bytes
  *        of a D-STAR DV frame (sync word not included).
@@ -414,34 +416,6 @@ MBE_API int mbe_encodeDStarDVData(const char ambe_fr[4][24], unsigned char bytes
  */
 MBE_API int mbe_decodeDStarDVData(const unsigned char bytes9[9], char ambe_fr[4][24]);
 
-/* === Simple additive AMBE 2400 synthesizer === */
-
-/** State for the compact additive synthesizer. */
-typedef struct mbe_synth_state {
-    float phase[57]; /* per-harmonic phase accumulator (rad) */
-    float prev_Ml[57];
-    float prev_Vl[57];
-    float smooth_Ml[57];
-    int prev_L;
-    int inited;
-    uint32_t rng;
-    float gain;
-} mbe_synth_state;
-
-/**
- * @brief Reset synthesizer state (call before the first frame).
- * @param st State to reset.
- */
-MBE_API void mbe_synthInit(mbe_synth_state* st);
-/**
- * @brief Synthesize one 20 ms frame of AMBE 2400 speech from decoded
- *        parameters into 160 float samples (nominal range roughly [-1, 1]
- *        after the internal output AGC).
- * @param st     In/out synthesizer state.
- * @param cur    Decoded parameters (see mbe_decodeAmbe2400Parms()).
- * @param out160 Output buffer of 160 float samples.
- */
-MBE_API void mbe_synthFrame(mbe_synth_state* st, const mbe_parms* cur, float* out160);
 /**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz float PCM.
  * @param aout_buf Output buffer of 160 float samples.

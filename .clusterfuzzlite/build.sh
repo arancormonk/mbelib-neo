@@ -33,6 +33,7 @@ PROJECT_WARNING_FLAGS=(
 sources=(
   src/ambe/ambe3600x2400.c
   src/ambe/ambe3600x2400_enc.c
+  src/ambe/dstar_frame.c
   src/ambe/ambe3600x2450.c
   src/ambe/ambe_common.c
   src/ecc/ecc.c
