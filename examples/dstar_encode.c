@@ -70,6 +70,37 @@ read_wav_format(FILE* fp, uint32_t size) {
     return skip_bytes(fp, size - 16 + (size & 1u));
 }
 
+/* Return 1 at PCM data, 0 after another chunk, or -1 on invalid/truncated input. */
+static int
+read_wav_chunk(FILE* fp, uint32_t* remaining, bool* have_fmt, uint32_t* data_size) {
+    unsigned char chunk[8];
+    if (fread(chunk, 1, sizeof(chunk), fp) != sizeof(chunk)) {
+        return -1;
+    }
+    *remaining -= 8;
+    uint32_t size = read_le32(chunk + 4);
+    if ((uint64_t)size + (size & 1u) > *remaining) {
+        return -1;
+    }
+    if (memcmp(chunk, "data", 4) == 0) {
+        if (!*have_fmt || (size & 1u) != 0) {
+            return -1;
+        }
+        *data_size = size;
+        return 1;
+    }
+    if (memcmp(chunk, "fmt ", 4) == 0) {
+        if (read_wav_format(fp, size) < 0) {
+            return -1;
+        }
+        *have_fmt = true;
+    } else if (skip_bytes(fp, size + (size & 1u)) < 0) {
+        return -1;
+    }
+    *remaining -= size + (size & 1u);
+    return 0;
+}
+
 static int
 read_wav_pcm(FILE* fp, uint32_t* data_size) {
     unsigned char hdr[12];
@@ -88,31 +119,10 @@ read_wav_pcm(FILE* fp, uint32_t* data_size) {
     remaining -= 4;
     bool have_fmt = false;
     while (remaining >= 8) {
-        unsigned char chunk[8];
-        if (fread(chunk, 1, sizeof(chunk), fp) != sizeof(chunk)) {
-            return -1;
+        int result = read_wav_chunk(fp, &remaining, &have_fmt, data_size);
+        if (result != 0) {
+            return result > 0 ? 0 : -1;
         }
-        remaining -= 8;
-        uint32_t size = read_le32(chunk + 4);
-        if ((uint64_t)size + (size & 1u) > remaining) {
-            return -1;
-        }
-        if (memcmp(chunk, "data", 4) == 0) {
-            if (!have_fmt || (size & 1u) != 0) {
-                return -1;
-            }
-            *data_size = size;
-            return 0;
-        }
-        if (memcmp(chunk, "fmt ", 4) == 0) {
-            if (read_wav_format(fp, size) < 0) {
-                return -1;
-            }
-            have_fmt = true;
-        } else if (skip_bytes(fp, size + (size & 1u)) < 0) {
-            return -1;
-        }
-        remaining -= size + (size & 1u);
     }
     return -1;
 }
