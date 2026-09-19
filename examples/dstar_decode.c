@@ -8,22 +8,34 @@
  * @file
  * @brief Decode the private .dstar example container to an 8 kHz mono PCM WAV.
  *
+ * Usage: dstar_decode < input.dstar > output.wav
+ *
  * Each 20 ms frame is a sync word (0x55 0x2D 0x16) plus 9 AMBE payload bytes.
  * This is not the D-STAR air-interface stream, which has a radio header and
  * slow-data/sync framing every 21 voice frames.
  */
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <mbelib-neo/mbelib.h>
 
-#include "example_file.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
-#define FRAME_SAMPLES  160
-#define DV_FRAME_BYTES 12
+#define FRAME_SAMPLES     160
+#define DV_FRAME_BYTES    12
+#define MAX_WAV_DATA_SIZE (UINT32_MAX - 36u)
+
+struct pcm_buffer {
+    unsigned char* data;
+    size_t size;
+    size_t capacity;
+};
 
 static void
 write_le32(unsigned char* bytes, uint32_t value) {
@@ -42,14 +54,13 @@ write_wav_header(FILE* fp, uint32_t data_size) {
     return fwrite(header, 1, sizeof(header), fp) == sizeof(header) ? 0 : -1;
 }
 
-static int
-write_samples(FILE* fp, short pcm[FRAME_SAMPLES], const char bits[49]) {
+static void
+store_samples(unsigned char* bytes, short pcm[FRAME_SAMPLES], const char bits[49]) {
     /* Only b0 == 127 with tone index 128 (all eight tone bits zero) is silence. */
     int tone_bits = bits[6] | bits[7] | bits[8] | bits[9] | bits[10] | bits[11] | bits[42] | bits[43];
     if (bits[0] && bits[1] && bits[2] && bits[3] && bits[4] && bits[5] && bits[48] && tone_bits == 0) {
         memset(pcm, 0, FRAME_SAMPLES * sizeof(short));
     }
-    unsigned char bytes[FRAME_SAMPLES * 2];
     for (int i = 0; i < FRAME_SAMPLES; i++) {
         int value = pcm[i];
         if (value > 31128) {
@@ -62,11 +73,37 @@ write_samples(FILE* fp, short pcm[FRAME_SAMPLES], const char bits[49]) {
         bytes[2 * (size_t)i] = (unsigned char)sample;
         bytes[2 * (size_t)i + 1] = (unsigned char)(sample >> 8);
     }
-    return fwrite(bytes, 1, sizeof(bytes), fp) == sizeof(bytes) ? 0 : -1;
 }
 
 static int
-decode_frames(FILE* fin, FILE* fout, uint32_t* data_size) {
+append_samples(struct pcm_buffer* buffer, short pcm[FRAME_SAMPLES], const char bits[49]) {
+    if (buffer->size > MAX_WAV_DATA_SIZE - FRAME_SAMPLES * 2u) {
+        (void)fprintf(stderr, "WAV size limit exceeded\n");
+        return -1;
+    }
+    size_t needed = buffer->size + (size_t)FRAME_SAMPLES * 2;
+    if (needed > buffer->capacity) {
+        size_t capacity = buffer->capacity;
+        if (capacity > MAX_WAV_DATA_SIZE / 2u) {
+            capacity = MAX_WAV_DATA_SIZE;
+        } else {
+            capacity *= 2;
+        }
+        unsigned char* data = (unsigned char*)realloc(buffer->data, capacity);
+        if (data == NULL) {
+            (void)fprintf(stderr, "out of memory buffering decoded PCM\n");
+            return -1;
+        }
+        buffer->data = data;
+        buffer->capacity = capacity;
+    }
+    store_samples(buffer->data + buffer->size, pcm, bits);
+    buffer->size = needed;
+    return 0;
+}
+
+static int
+decode_frames(FILE* fin, struct pcm_buffer* buffer) {
     mbe_parms cur, prev, enhanced;
     mbe_initMbeParms(&cur, &prev, &enhanced);
     unsigned char dv[DV_FRAME_BYTES];
@@ -83,15 +120,9 @@ decode_frames(FILE* fin, FILE* fout, uint32_t* data_size) {
             (void)fprintf(stderr, "decode error\n");
             return -1;
         }
-        if (*data_size > UINT32_MAX - 36u - FRAME_SAMPLES * 2u) {
-            (void)fprintf(stderr, "WAV size limit exceeded\n");
+        if (append_samples(buffer, pcm, bits) < 0) {
             return -1;
         }
-        if (write_samples(fout, pcm, bits) < 0) {
-            (void)fprintf(stderr, "write error: %s\n", strerror(errno));
-            return -1;
-        }
-        *data_size += FRAME_SAMPLES * 2u;
         frames++;
     }
     if (ferror(fin) != 0 || n != 0) {
@@ -107,36 +138,34 @@ decode_frames(FILE* fin, FILE* fout, uint32_t* data_size) {
 
 int
 main(int argc, char** argv) {
-    if (argc != 3) {
-        (void)fprintf(stderr, "usage: %s input.dstar output.wav\n", argv[0]);
+    if (argc != 1) {
+        (void)fprintf(stderr, "usage: %s < input.dstar > output.wav\n", argv[0]);
         return 1;
     }
-    if (!example_paths_differ(argv[1], argv[2])) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1 || _setmode(_fileno(stdout), _O_BINARY) == -1) {
+        perror("cannot set binary stdin/stdout");
         return 1;
     }
-    FILE* fin = example_open_file(argv[1], "rb");
-    if (fin == NULL) {
+#endif
+    struct pcm_buffer buffer = {NULL, 0, (size_t)FRAME_SAMPLES * 2};
+    buffer.data = (unsigned char*)malloc(buffer.capacity);
+    if (buffer.data == NULL) {
+        (void)fprintf(stderr, "out of memory buffering decoded PCM\n");
         return 1;
     }
-    FILE* fout = example_open_file(argv[2], "wb");
     int ret = 1;
-    uint32_t data_size = 0;
-    if (fout == NULL) {
-        goto done;
+    if (decode_frames(stdin, &buffer) == 0) {
+        if (write_wav_header(stdout, (uint32_t)buffer.size) < 0
+            || fwrite(buffer.data, 1, buffer.size, stdout) != buffer.size) {
+            perror("WAV write error");
+        } else {
+            ret = 0;
+        }
     }
-    if (write_wav_header(fout, 0) < 0 || decode_frames(fin, fout, &data_size) < 0) {
-        goto done;
-    }
-    if (fseek(fout, 0, SEEK_SET) != 0 || write_wav_header(fout, data_size) < 0) {
-        (void)fprintf(stderr, "WAV header write error: %s\n", strerror(errno));
-        goto done;
-    }
-    ret = 0;
-done:
-    if (example_close_file(fin) < 0) {
-        ret = 1;
-    }
-    if (example_close_file(fout) < 0) {
+    free(buffer.data);
+    if (fflush(stdout) != 0 || ferror(stdout) != 0) {
+        perror("write error");
         ret = 1;
     }
     return ret;

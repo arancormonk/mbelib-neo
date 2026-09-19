@@ -23,6 +23,10 @@ or linker settings.
 `MBELIB_EXAMPLE_SPECBLEACH=ON` enables the optional `dstar_encode` denoiser (default OFF).
 It requires libspecbleach headers and a library with the supported parameter fields; incompatible versions fail configuration.
 
+The examples accept no path arguments and support pipes: `dstar_encode < input.wav > output.dstar`
+and `dstar_decode < output.dstar > output.wav`. Diagnostics go to stderr. The decoder buffers
+PCM in memory before writing the WAV header and data to stdout.
+
 ## Debug Information
 
 The install rules do not strip binaries. If users request debug information

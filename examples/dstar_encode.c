@@ -8,12 +8,13 @@
  * @file
  * @brief Encode an 8 kHz mono 16-bit PCM WAV into the private .dstar example container.
  *
+ * Usage: dstar_encode < input.wav > output.dstar
+ *
  * Each 20 ms frame is a sync word (0x55 0x2D 0x16) plus 9 AMBE payload bytes.
  * This is not the D-STAR air-interface stream, which has a radio header and
  * slow-data/sync framing every 21 voice frames.
  */
 
-#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -21,7 +22,10 @@
 
 #include <mbelib-neo/mbelib.h>
 
-#include "example_file.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 /* Optional in-speech noise reduction; DSTAR_DENOISE=0 disables it. */
 #ifdef HAVE_SPECBLEACH
@@ -70,16 +74,27 @@ read_wav_format(FILE* fp, uint32_t size) {
     return skip_bytes(fp, size - 16 + (size & 1u));
 }
 
+/* Account for the entire padded chunk within the declared RIFF boundary. */
+static int
+read_chunk_header(FILE* fp, uint32_t* remaining, unsigned char chunk[8], uint32_t* size) {
+    if (*remaining < 8 || fread(chunk, 1, 8, fp) != 8) {
+        return -1;
+    }
+    *remaining -= 8;
+    *size = read_le32(chunk + 4);
+    if ((uint64_t)*size + (*size & 1u) > *remaining) {
+        return -1;
+    }
+    *remaining -= *size + (*size & 1u);
+    return 0;
+}
+
 /* Return 1 at PCM data, 0 after another chunk, or -1 on invalid/truncated input. */
 static int
 read_wav_chunk(FILE* fp, uint32_t* remaining, bool* have_fmt, uint32_t* data_size) {
     unsigned char chunk[8];
-    if (fread(chunk, 1, sizeof(chunk), fp) != sizeof(chunk)) {
-        return -1;
-    }
-    *remaining -= 8;
-    uint32_t size = read_le32(chunk + 4);
-    if ((uint64_t)size + (size & 1u) > *remaining) {
+    uint32_t size;
+    if (read_chunk_header(fp, remaining, chunk, &size) < 0) {
         return -1;
     }
     if (memcmp(chunk, "data", 4) == 0) {
@@ -97,23 +112,17 @@ read_wav_chunk(FILE* fp, uint32_t* remaining, bool* have_fmt, uint32_t* data_siz
     } else if (skip_bytes(fp, size + (size & 1u)) < 0) {
         return -1;
     }
-    *remaining -= size + (size & 1u);
     return 0;
 }
 
 static int
-read_wav_pcm(FILE* fp, uint32_t* data_size) {
+read_wav_pcm(FILE* fp, uint32_t* data_size, uint32_t* trailing_size) {
     unsigned char hdr[12];
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        return -1;
-    }
-    long file_size = ftell(fp);
-    if (file_size < 12 || fseek(fp, 0, SEEK_SET) != 0 || fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) {
+    if (fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) {
         return -1;
     }
     uint32_t remaining = read_le32(hdr + 4);
-    if (memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0 || remaining < 4
-        || (uint64_t)remaining + 8 > (uint64_t)file_size) {
+    if (memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0 || remaining < 4) {
         return -1;
     }
     remaining -= 4;
@@ -121,10 +130,23 @@ read_wav_pcm(FILE* fp, uint32_t* data_size) {
     while (remaining >= 8) {
         int result = read_wav_chunk(fp, &remaining, &have_fmt, data_size);
         if (result != 0) {
+            *trailing_size = remaining;
             return result > 0 ? 0 : -1;
         }
     }
     return -1;
+}
+
+static int
+read_wav_tail(FILE* fp, uint32_t remaining) {
+    while (remaining > 0) {
+        unsigned char chunk[8];
+        uint32_t size;
+        if (read_chunk_header(fp, &remaining, chunk, &size) < 0 || skip_bytes(fp, size + (size & 1u)) < 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int
@@ -146,13 +168,29 @@ read_samples(FILE* fp, short pcm[FRAME_SAMPLES], uint32_t* remaining) {
 struct denoiser {
     void* handle;
     uint32_t latency_remaining;
+    size_t pending_samples;
+    short pending_pcm[FRAME_SAMPLES];
 };
+
+static int
+denoiser_disabled(void) {
+#ifdef _MSC_VER
+    char env[2];
+    size_t length;
+    if (getenv_s(&length, NULL, 0, "DSTAR_DENOISE") != 0 || length != sizeof(env)) {
+        return 0;
+    }
+    return getenv_s(&length, env, sizeof(env), "DSTAR_DENOISE") == 0 && strcmp(env, "0") == 0;
+#else
+    const char* env = getenv("DSTAR_DENOISE");
+    return env != NULL && strcmp(env, "0") == 0;
+#endif
+}
 
 static struct denoiser
 init_denoiser(void) {
     struct denoiser nr = {0};
-    const char* env = getenv("DSTAR_DENOISE");
-    if (env != NULL && strcmp(env, "0") == 0) {
+    if (denoiser_disabled()) {
         return nr;
     }
     nr.handle = specbleach_initialize(8000, 20.0f);
@@ -181,12 +219,14 @@ denoise_frame(struct denoiser* nr, short pcm[FRAME_SAMPLES]) {
         input[i] = (float)pcm[i] / 32768.0f;
     }
     specbleach_process(nr->handle, FRAME_SAMPLES, input, output);
-    if (nr->latency_remaining >= FRAME_SAMPLES) {
-        nr->latency_remaining -= FRAME_SAMPLES;
-        return false;
-    }
-    nr->latency_remaining = 0;
+    bool ready = false;
     for (int i = 0; i < FRAME_SAMPLES; i++) {
+        /* Drop the exact delay, retaining partial output until a full frame
+         * is ready. Latency need not be a multiple of FRAME_SAMPLES. */
+        if (nr->latency_remaining > 0) {
+            nr->latency_remaining--;
+            continue;
+        }
         float sample = output[i];
         if (sample > 1.0f) {
             sample = 1.0f;
@@ -194,9 +234,14 @@ denoise_frame(struct denoiser* nr, short pcm[FRAME_SAMPLES]) {
         if (sample < -1.0f) {
             sample = -1.0f;
         }
-        pcm[i] = (short)(sample * 32767.0f);
+        nr->pending_pcm[nr->pending_samples++] = (short)(sample * 32767.0f);
+        if (nr->pending_samples == FRAME_SAMPLES) {
+            memcpy(pcm, nr->pending_pcm, sizeof(nr->pending_pcm));
+            nr->pending_samples = 0;
+            ready = true;
+        }
     }
-    return true;
+    return ready;
 }
 #endif
 
@@ -210,7 +255,7 @@ write_frame(FILE* fp, const short pcm[FRAME_SAMPLES], mbe_parms* cur, mbe_parms*
         return -1;
     }
     if (fwrite(dv, 1, sizeof(dv), fp) != sizeof(dv)) {
-        (void)fprintf(stderr, "write error: %s\n", strerror(errno));
+        perror("write error");
         return -1;
     }
     mbe_moveMbeParms(cur, prev);
@@ -264,33 +309,32 @@ encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
 
 int
 main(int argc, char** argv) {
-    if (argc != 3) {
-        (void)fprintf(stderr, "usage: %s input.wav output.dstar\n", argv[0]);
+    if (argc != 1) {
+        (void)fprintf(stderr, "usage: %s < input.wav > output.dstar\n", argv[0]);
         return 1;
     }
-    if (!example_paths_differ(argv[1], argv[2])) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1 || _setmode(_fileno(stdout), _O_BINARY) == -1) {
+        perror("cannot set binary stdin/stdout");
         return 1;
     }
-    FILE* fin = example_open_file(argv[1], "rb");
-    if (fin == NULL) {
-        return 1;
-    }
-    FILE* fout = NULL;
-    int ret = 1;
-    uint32_t data_size;
-    if (read_wav_pcm(fin, &data_size) < 0) {
+#endif
+    uint32_t data_size, trailing_size;
+    if (read_wav_pcm(stdin, &data_size, &trailing_size) < 0) {
         (void)fprintf(stderr, "invalid or truncated WAV\n");
-        goto done;
+        return 1;
     }
-    fout = example_open_file(argv[2], "wb");
-    if (fout != NULL) {
-        ret = encode_wav(fin, fout, data_size);
-    }
-done:
-    if (example_close_file(fin) < 0) {
+    int ret = encode_wav(stdin, stdout, data_size);
+    if (ret == 0 && read_wav_tail(stdin, trailing_size) < 0) {
+        (void)fprintf(stderr, "invalid or truncated trailing WAV chunk\n");
         ret = 1;
     }
-    if (example_close_file(fout) < 0) {
+    if (ferror(stdin) != 0) {
+        perror("read error");
+        ret = 1;
+    }
+    if (fflush(stdout) != 0 || ferror(stdout) != 0) {
+        perror("write error");
         ret = 1;
     }
     return ret;

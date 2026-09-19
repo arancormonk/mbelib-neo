@@ -787,17 +787,6 @@ if(MBELIB_BUILD_EXAMPLES)
     if(_SAN_LDFLAGS)
         target_link_options(example_dstar_decode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
-    if(MSVC)
-        # The examples use portable C file and error-reporting functions.
-        target_compile_definitions(
-            example_dstar_encode
-            PRIVATE _CRT_SECURE_NO_WARNINGS
-        )
-        target_compile_definitions(
-            example_dstar_decode
-            PRIVATE _CRT_SECURE_NO_WARNINGS
-        )
-    endif()
 endif()
 
 # Tests
@@ -1139,6 +1128,20 @@ if(MBELIB_BUILD_TESTS)
         COMMAND test_simd_arch_detection_x86_32_msvc_sse2
     )
 
+    if(MBELIB_BUILD_EXAMPLES AND NOT CMAKE_CROSSCOMPILING)
+        find_package(Python3 QUIET COMPONENTS Interpreter)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME test_dstar_examples
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_dstar_examples.py
+                    $<TARGET_FILE:example_dstar_encode>
+                    $<TARGET_FILE:example_dstar_decode>
+            )
+        endif()
+    endif()
+
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
@@ -1218,12 +1221,6 @@ if(MBELIB_BUILD_TOOLS)
     target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
     target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
     _mbelib_apply_hardening(mbe_quality_eval)
-    if(MSVC)
-        target_compile_definitions(
-            mbe_quality_eval
-            PRIVATE _CRT_SECURE_NO_WARNINGS
-        )
-    endif()
     target_include_directories(
         mbe_quality_eval
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
@@ -1241,12 +1238,6 @@ if(MBELIB_BUILD_TOOLS)
             "${PROJECT_SOURCE_DIR}/include"
             "${PROJECT_SOURCE_DIR}/src/internal"
     )
-    if(MSVC)
-        target_compile_definitions(
-            mbe_quality_reframe
-            PRIVATE _CRT_SECURE_NO_WARNINGS
-        )
-    endif()
     get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
