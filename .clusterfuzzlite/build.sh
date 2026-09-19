@@ -32,6 +32,8 @@ PROJECT_WARNING_FLAGS=(
 
 sources=(
   src/ambe/ambe3600x2400.c
+  src/ambe/ambe3600x2400_enc.c
+  src/ambe/ambe3600x2400_synth.c
   src/ambe/ambe3600x2450.c
   src/ambe/ambe_common.c
   src/ecc/ecc.c
@@ -70,6 +72,7 @@ build_fuzzer() {
 fuzzers=(
   fuzz/fuzz_process_frame.cc
   fuzz/fuzz_frame_decode.cc
+  fuzz/fuzz_encode_frame.cc
 )
 
 for fuzzer in "${fuzzers[@]}"; do
