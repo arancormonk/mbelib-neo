@@ -5,18 +5,26 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/stat.h>
+#endif
 
 /* Check before opening the output, including existing symlink/hardlink aliases. */
 static inline int
 example_paths_differ(const char* input, const char* output) {
-    struct stat in_stat, out_stat;
-    if (strcmp(input, output) == 0
-        || (stat(input, &in_stat) == 0 && stat(output, &out_stat) == 0 && in_stat.st_dev == out_stat.st_dev
-            && in_stat.st_ino == out_stat.st_ino)) {
+    if (strcmp(input, output) == 0) {
         (void)fprintf(stderr, "input and output must be different files\n");
         return 0;
     }
+#ifndef _WIN32
+    /* Windows CRT stat does not provide meaningful inode identities. */
+    struct stat in_stat, out_stat;
+    if (stat(input, &in_stat) == 0 && stat(output, &out_stat) == 0 && in_stat.st_dev == out_stat.st_dev
+        && in_stat.st_ino == out_stat.st_ino) {
+        (void)fprintf(stderr, "input and output must be different files\n");
+        return 0;
+    }
+#endif
     return 1;
 }
 

@@ -71,8 +71,8 @@
 /*
  * Thread-local analysis state: one encode session per thread.
  *
- * pcm_history holds the previous 160 samples so the encoder can analyse
- * a 256 sample (32 ms) window centred on the current frame without
+ * history holds the previous 160 samples so the encoder can analyse
+ * a 256 sample (32 ms) window centred on the current frame start without
  * blocking for look-ahead.
  */
 struct ambe2400_dct_cache {
@@ -195,7 +195,7 @@ static float
 ambe2400_enc_pitch_strength(const float* buf, int n, float lag_f) {
     float strength;
     /* Voicing strength: normalized autocorrelation at the chosen lag.
-         * ~1.0 for clean periodic speech, ~0.0 for noise. */
+     * ~1.0 for clean periodic speech, ~0.0 for noise. */
     int lag = (int)(lag_f + 0.5f);
     if (lag < 20) {
         lag = 20;

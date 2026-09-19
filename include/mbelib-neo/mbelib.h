@@ -352,9 +352,6 @@ MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result,
  * effort) DVSI AMBE-3000 based receivers. Silent input produces the
  * standard AMBE silence frame.
  *
- * @param samples Input PCM floats (160), nominal range [-1, 1].
- * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
- * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * Initialize with mbe_initMbeParms(), then advance the encoder state with
  * mbe_moveMbeParms(cur_mp, prev_mp) between frames. prev_mp is read-only.
  * State equivalence applies to the mbe_processAmbe* path, which resets on a
@@ -365,6 +362,9 @@ MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result,
  * a final frame of zeros to flush the tail.
  * Analysis state is currently per-thread: one stream per thread, no reset API.
  *
+ * @param samples Input PCM floats (160), nominal range [-1, 1].
+ * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
+ * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous quantized frame state; never modified.
  * @return 0 for a voice frame, 1 for a silence frame, or a negative
  *         `MBE_STATUS_*` code.
