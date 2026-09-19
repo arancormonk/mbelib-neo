@@ -22,8 +22,11 @@
  *  - Every parameter is quantized against the exact tables the decoder
  *    dequantizes from (AmbePlusLtable/AmbePlusVuv/AmbePlusDg/
  *    AmbePlusPRBA24/AmbePlusPRBA58/AmbePlusHOCb5..b8), so the
- *    reconstructed frame is bit-compatible with this library's decoder
- *    and (best effort) with DVSI AMBE-3000 based receivers.
+ *    reconstructed frame is bit-compatible with this library's
+ *    mbe_decodeAmbe2400Parms()/mbe_processAmbe3600x2400*() path and follows
+ *    the D-STAR AMBE bit layout (interleave, scrambler and Golay parity
+ *    cross-checked against the MMDVM tables). Interoperability with DVSI
+ *    hardware has not been verified.
  *  - The prediction state (log2Ml, gamma) is advanced with the
  *    QUANTIZED values, mirroring the decoder state so the encoder and
  *    decoder never drift apart.
@@ -34,6 +37,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ambe3600x2400_const.h"
@@ -53,7 +57,7 @@
 
 /*
  * Calibration: the AMBE 2400 gain field (AmbePlusDg) is non-negative and
- * spans ~5.3 dB, so the encoder must keep the input at a fixed nominal
+ * spans about 5.35 log2 units (32 dB), so the encoder keeps a fixed nominal
  * level. An input AGC normalizes every frame to AMBE2400_ENC_AGC_TARGET
  * RMS and this scale places that nominal level in the middle of the
  * codec's magnitude range. 77.0 was tuned empirically so that encoded
@@ -67,7 +71,7 @@
 #define AMBE2400_ENC_AGC_MAX     10.0f
 
 /*
- * Thread-local analysis state: one encode session per thread.
+ * Caller-owned analysis state: one context per stream.
  *
  * history holds the previous 160 samples so the encoder can analyse
  * a 256 sample (32 ms) window centred on the current frame start without
@@ -79,7 +83,7 @@ struct ambe2400_dct_cache {
     float prba_cos[9][9];      /* [m][i] 8-point DCT basis */
 };
 
-static MBE_THREAD_LOCAL struct {
+struct mbe_ambe2400_encoder {
     float history[AMBE2400_ENC_SAMPLES];
     float agc_gain;
     float agc_rms;
@@ -89,16 +93,48 @@ static MBE_THREAD_LOCAL struct {
     float max_energy;
     mbe_fft_plan* fft;
     struct ambe2400_dct_cache cache;
-} ambe2400_enc_state = {
-    .agc_gain = 1.0f,
-    .agc_rms = AMBE2400_ENC_AGC_TARGET,
-    .hist_gain = 1.0f,
-    .max_energy = 1e-6f,
 };
 
+void
+mbe_ambe2400EncoderReset(mbe_ambe2400_encoder* enc) {
+    if (enc == NULL) {
+        return;
+    }
+    mbe_fft_plan* fft = enc->fft;
+    memset(enc, 0, sizeof(*enc));
+    enc->fft = fft;
+    enc->agc_gain = 1.0f;
+    enc->agc_rms = AMBE2400_ENC_AGC_TARGET;
+    enc->hist_gain = 1.0f;
+    enc->max_energy = 1e-6f;
+}
+
+mbe_ambe2400_encoder*
+mbe_ambe2400EncoderAlloc(void) {
+    mbe_ambe2400_encoder* enc = calloc(1, sizeof(*enc));
+    if (enc == NULL) {
+        return NULL;
+    }
+    enc->fft = mbe_fft_plan_alloc();
+    if (enc->fft == NULL) {
+        free(enc);
+        return NULL;
+    }
+    mbe_ambe2400EncoderReset(enc);
+    return enc;
+}
+
+void
+mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc) {
+    if (enc != NULL) {
+        mbe_fft_plan_free(enc->fft);
+        free(enc);
+    }
+}
+
 static struct ambe2400_dct_cache*
-ambe2400_enc_get_dct_cache(void) {
-    struct ambe2400_dct_cache* cache = &ambe2400_enc_state.cache;
+ambe2400_enc_get_dct_cache(mbe_ambe2400_encoder* enc) {
+    struct ambe2400_dct_cache* cache = &enc->cache;
     if (cache->inited) {
         return cache;
     }
@@ -128,12 +164,13 @@ ambe2400_enc_get_dct_cache(void) {
  * pitch estimate over the windowed analysis buffer.
  */
 static int
-ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], int vl_ana[57]) {
+ambe2400_enc_spectrum(mbe_ambe2400_encoder* enc, const float* windowed, float f0q, int L, float mag[57],
+                      int vl_ana[57]) {
     float fft_out[AMBE2400_ENC_FFT_SIZE];
     const float f0_bin = f0q * (float)AMBE2400_ENC_FFT_SIZE;
     float max_band_energy = 0.0f;
 
-    int status = mbe_fft_forward_real(ambe2400_enc_state.fft, windowed, fft_out);
+    int status = mbe_fft_forward_real(enc->fft, windowed, fft_out);
     if (status < 0) {
         return status;
     }
@@ -234,9 +271,9 @@ ambe2400_enc_refine_lag(const float amdf[128], int lag) {
 }
 
 static float
-ambe2400_enc_pitch_candidate(const float amdf[128], float global_min) {
+ambe2400_enc_pitch_candidate(const mbe_ambe2400_encoder* enc, const float amdf[128], float global_min) {
     const float tol = global_min * 1.4f;
-    int have_prev = (ambe2400_enc_state.prev_lag >= (float)20);
+    int have_prev = (enc->prev_lag >= (float)20);
 
     float best_lag_f = 20.0f;
     float best_score = 1e30f;
@@ -254,7 +291,7 @@ ambe2400_enc_pitch_candidate(const float amdf[128], float global_min) {
         float score;
         if (have_prev) {
             /* AMDF quality + continuity (octave-aware). */
-            score = (amdf[lag] / (global_min + 1e-12f)) + (0.8f * fabsf(log2f(lag_f / ambe2400_enc_state.prev_lag)));
+            score = (amdf[lag] / (global_min + 1e-12f)) + (0.8f * fabsf(log2f(lag_f / enc->prev_lag)));
         } else {
             /* Cold start: among the tied minima, the shortest period is
              * the true fundamental (kills the octave-down error). */
@@ -279,7 +316,7 @@ ambe2400_enc_pitch_candidate(const float amdf[128], float global_min) {
  * them by continuity (and, on cold start, the shortest period).
  */
 static float
-ambe2400_enc_pitch(const float* buf, int n, float* strength) {
+ambe2400_enc_pitch(mbe_ambe2400_encoder* enc, const float* buf, int n, float* strength) {
     const int min_lag = 20;
     const int max_lag = 127;
     float amdf[128];
@@ -299,19 +336,19 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
         }
     }
 
-    float best_lag_f = ambe2400_enc_pitch_candidate(amdf, global_min);
-    int have_prev = (ambe2400_enc_state.prev_lag >= (float)min_lag);
+    float best_lag_f = ambe2400_enc_pitch_candidate(enc, amdf, global_min);
+    int have_prev = (enc->prev_lag >= (float)min_lag);
 
     /* Final guard: limit frame-to-frame jumps to 25%. */
     if (have_prev) {
-        float max_jump = 0.25f * ambe2400_enc_state.prev_lag;
-        float diff = best_lag_f - ambe2400_enc_state.prev_lag;
+        float max_jump = 0.25f * enc->prev_lag;
+        float diff = best_lag_f - enc->prev_lag;
         if (fabsf(diff) > max_jump) {
-            best_lag_f = ambe2400_enc_state.prev_lag + (diff > 0.0f ? max_jump : -max_jump);
+            best_lag_f = enc->prev_lag + (diff > 0.0f ? max_jump : -max_jump);
         }
     }
 
-    ambe2400_enc_state.prev_lag = best_lag_f;
+    enc->prev_lag = best_lag_f;
 
     if (strength != NULL) {
         *strength = ambe2400_enc_pitch_strength(buf, n, best_lag_f);
@@ -331,20 +368,20 @@ struct ambe2400_enc_frame {
 };
 
 static void
-ambe2400_enc_window(struct ambe2400_enc_frame* q, const float* pcm) {
+ambe2400_enc_window(const mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame* q, const float* pcm) {
     /* Build the centred analysis window: last 128 of history + first 128 of pcm.
      * The AGC gain is applied per frame; ramp it smoothly across the window so
      * the frame boundary does not introduce a step discontinuity (which smears
      * the spectrum and destroys the voicing decision). */
     for (int i = 0; i < 128; i++) {
-        q->buf[i] = ambe2400_enc_state.history[AMBE2400_ENC_SAMPLES - 128 + i] / ambe2400_enc_state.hist_gain;
+        q->buf[i] = enc->history[AMBE2400_ENC_SAMPLES - 128 + i] / enc->hist_gain;
     }
     for (int i = 0; i < 128; i++) {
-        q->buf[128 + i] = pcm[i] / ambe2400_enc_state.agc_gain;
+        q->buf[128 + i] = pcm[i] / enc->agc_gain;
     }
     for (int i = 0; i < AMBE2400_ENC_FFT_SIZE; i++) {
         float t = (float)i / (float)(AMBE2400_ENC_FFT_SIZE - 1);
-        float g = ambe2400_enc_state.hist_gain + (ambe2400_enc_state.agc_gain - ambe2400_enc_state.hist_gain) * t;
+        float g = enc->hist_gain + (enc->agc_gain - enc->hist_gain) * t;
         q->buf[i] *= g;
     }
 
@@ -363,10 +400,10 @@ ambe2400_enc_window(struct ambe2400_enc_frame* q, const float* pcm) {
 }
 
 static void
-ambe2400_enc_quantize_pitch(struct ambe2400_enc_frame* q) {
+ambe2400_enc_quantize_pitch(mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame* q) {
     /* Pitch */
     q->strength = 0.0f;
-    float lag_f = ambe2400_enc_pitch(q->buf, AMBE2400_ENC_FFT_SIZE, &q->strength);
+    float lag_f = ambe2400_enc_pitch(enc, q->buf, AMBE2400_ENC_FFT_SIZE, &q->strength);
     float f0 = 1.0f / lag_f;
 
     q->b[0] = (int)lroundf((log2f(f0) - AMBE2400_ENC_F0_OFFSET) / AMBE2400_ENC_F0_STEP - 0.5f);
@@ -382,7 +419,7 @@ ambe2400_enc_quantize_pitch(struct ambe2400_enc_frame* q) {
 }
 
 static void
-ambe2400_enc_voicing(struct ambe2400_enc_frame* q) {
+ambe2400_enc_voicing(mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame* q) {
     /* Voicing: energy-aware. Track the frame's energy against a
      * running max and bias weak, non-periodic frames toward unvoiced. A weak
      * frame the AMDF still judges periodic is kept voiced; weak + noisy
@@ -398,13 +435,13 @@ ambe2400_enc_voicing(struct ambe2400_enc_frame* q) {
         }
         frame_e /= (float)AMBE2400_ENC_FFT_SIZE;
 
-        if (frame_e > ambe2400_enc_state.max_energy) {
-            ambe2400_enc_state.max_energy = frame_e;
+        if (frame_e > enc->max_energy) {
+            enc->max_energy = frame_e;
         } else {
-            ambe2400_enc_state.max_energy = (0.99f * ambe2400_enc_state.max_energy) + (0.01f * frame_e);
+            enc->max_energy = (0.99f * enc->max_energy) + (0.01f * frame_e);
         }
 
-        float rel = frame_e / (ambe2400_enc_state.max_energy + 1e-12f);
+        float rel = frame_e / (enc->max_energy + 1e-12f);
 
         if (rel < 0.03f && q->strength < 0.65f) {
             for (int l = 1; l <= q->L; l++) {
@@ -818,16 +855,17 @@ ambe2400_enc_fill_parms(const struct ambe2400_enc_frame* q, mbe_parms* cur_mp) {
 
 /* Quantize a voice frame, reconstruct its predictor state, and pack 49 bits. */
 static int
-ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[49], mbe_parms* cur_mp,
+                      const mbe_parms* prev_mp) {
     struct ambe2400_enc_frame q = {0};
-    q.cache = ambe2400_enc_get_dct_cache();
-    ambe2400_enc_window(&q, pcm);
-    ambe2400_enc_quantize_pitch(&q);
-    int status = ambe2400_enc_spectrum(q.windowed, q.f0q, q.L, q.mag, q.Vl_ana);
+    q.cache = ambe2400_enc_get_dct_cache(enc);
+    ambe2400_enc_window(enc, &q, pcm);
+    ambe2400_enc_quantize_pitch(enc, &q);
+    int status = ambe2400_enc_spectrum(enc, q.windowed, q.f0q, q.L, q.mag, q.Vl_ana);
     if (status < 0) {
         return status;
     }
-    ambe2400_enc_voicing(&q);
+    ambe2400_enc_voicing(enc, &q);
     ambe2400_enc_quantize_vuv(&q, prev_mp);
     ambe2400_enc_quantize_gain(&q, prev_mp);
     ambe2400_enc_prediction(&q, prev_mp);
@@ -879,7 +917,7 @@ ambe2400_encode_silence(char ambe_d[49], mbe_parms* cur_mp) {
 }
 
 static bool
-ambe2400_enc_silence_gate(float rms) {
+ambe2400_enc_silence_gate(mbe_ambe2400_encoder* enc, float rms) {
     /* Silence gate with hang-over: a frame is only "silence" after a few
      * consecutive quiet frames (squelch close delay); speech opens the gate
      * immediately. This avoids the squelch-like flapping between silence and
@@ -887,35 +925,34 @@ ambe2400_enc_silence_gate(float rms) {
      * libspecbleach front-end in the caller, not here. */
     bool is_silence = false;
     if (rms < AMBE2400_ENC_SILENCE_RMS) {
-        if (ambe2400_enc_state.silence_run < 5) {
-            ambe2400_enc_state.silence_run++;
+        if (enc->silence_run < 5) {
+            enc->silence_run++;
         }
-        is_silence = (ambe2400_enc_state.silence_run >= 5);
+        is_silence = (enc->silence_run >= 5);
     } else {
-        ambe2400_enc_state.silence_run = 0;
+        enc->silence_run = 0;
     }
 
     return is_silence;
 }
 
 static void
-ambe2400_enc_apply_agc(const float* samples, float rms, bool is_silence, float* agc_buf) {
+ambe2400_enc_apply_agc(mbe_ambe2400_encoder* enc, const float* samples, float rms, bool is_silence, float* agc_buf) {
     /* Input AGC: track level only on speech frames, normalize to the
      * nominal target. Noise frames would drag the level estimate down and
      * over-drive the speech. */
     if (!is_silence && rms > 1e-6f) {
-        ambe2400_enc_state.agc_rms =
-            (AMBE2400_ENC_AGC_ALPHA * ambe2400_enc_state.agc_rms) + ((1.0f - AMBE2400_ENC_AGC_ALPHA) * rms);
+        enc->agc_rms = (AMBE2400_ENC_AGC_ALPHA * enc->agc_rms) + ((1.0f - AMBE2400_ENC_AGC_ALPHA) * rms);
     }
-    ambe2400_enc_state.agc_gain = AMBE2400_ENC_AGC_TARGET / (ambe2400_enc_state.agc_rms + 1e-9f);
-    if (ambe2400_enc_state.agc_gain < AMBE2400_ENC_AGC_MIN) {
-        ambe2400_enc_state.agc_gain = AMBE2400_ENC_AGC_MIN;
+    enc->agc_gain = AMBE2400_ENC_AGC_TARGET / (enc->agc_rms + 1e-9f);
+    if (enc->agc_gain < AMBE2400_ENC_AGC_MIN) {
+        enc->agc_gain = AMBE2400_ENC_AGC_MIN;
     }
-    if (ambe2400_enc_state.agc_gain > AMBE2400_ENC_AGC_MAX) {
-        ambe2400_enc_state.agc_gain = AMBE2400_ENC_AGC_MAX;
+    if (enc->agc_gain > AMBE2400_ENC_AGC_MAX) {
+        enc->agc_gain = AMBE2400_ENC_AGC_MAX;
     }
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
-        agc_buf[i] = samples[i] * ambe2400_enc_state.agc_gain;
+        agc_buf[i] = samples[i] * enc->agc_gain;
     }
 }
 
@@ -930,20 +967,13 @@ ambe2400_enc_apply_agc(const float* samples, float rms, bool is_silence, float* 
  * @return 0 for a voice frame, 1 for a silence frame, negative on error.
  */
 int
-mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
+                        const mbe_parms* prev_mp) {
     float agc_buf[AMBE2400_ENC_SAMPLES];
     float rms = 0.0f;
 
-    if (samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
+    if (enc == NULL || samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
-    }
-
-    /* Allocate before advancing any per-stream analysis state. */
-    if (ambe2400_enc_state.fft == NULL) {
-        ambe2400_enc_state.fft = mbe_fft_plan_alloc();
-        if (ambe2400_enc_state.fft == NULL) {
-            return MBE_STATUS_INVALID_ARGUMENT;
-        }
     }
 
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
@@ -951,21 +981,21 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
     }
     rms = sqrtf(rms / (float)AMBE2400_ENC_SAMPLES);
 
-    bool is_silence = ambe2400_enc_silence_gate(rms);
+    bool is_silence = ambe2400_enc_silence_gate(enc, rms);
 
-    ambe2400_enc_apply_agc(samples, rms, is_silence, agc_buf);
+    ambe2400_enc_apply_agc(enc, samples, rms, is_silence, agc_buf);
 
     if (is_silence) {
         ambe2400_encode_silence(ambe_d, cur_mp);
     } else {
-        int ret = ambe2400_encode_voice(agc_buf, ambe_d, cur_mp, prev_mp);
+        int ret = ambe2400_encode_voice(enc, agc_buf, ambe_d, cur_mp, prev_mp);
         if (ret < 0) {
             return ret;
         }
     }
 
-    memcpy(ambe2400_enc_state.history, agc_buf, (size_t)AMBE2400_ENC_SAMPLES * sizeof(float));
-    ambe2400_enc_state.hist_gain = ambe2400_enc_state.agc_gain;
+    memcpy(enc->history, agc_buf, (size_t)AMBE2400_ENC_SAMPLES * sizeof(float));
+    enc->hist_gain = enc->agc_gain;
 
     return (int)is_silence;
 }
@@ -977,7 +1007,8 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
  * @see mbe_encodeAmbe2400Parms for details.
  */
 int
-mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+mbe_encodeAmbe2400ParmsShort(mbe_ambe2400_encoder* enc, const short* samples, char ambe_d[49], mbe_parms* cur_mp,
+                             const mbe_parms* prev_mp) {
     float float_buf[AMBE2400_ENC_SAMPLES];
 
     if (samples == NULL) {
@@ -986,7 +1017,7 @@ mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* c
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
         float_buf[i] = (float)samples[i] / 32768.0f;
     }
-    return mbe_encodeAmbe2400Parms(float_buf, ambe_d, cur_mp, prev_mp);
+    return mbe_encodeAmbe2400Parms(enc, float_buf, ambe_d, cur_mp, prev_mp);
 }
 
 static void

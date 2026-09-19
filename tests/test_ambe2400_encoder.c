@@ -10,19 +10,47 @@
 #include "mbelib-neo/mbelib.h"
 
 #ifdef MBE_ENCODER_TEST_OOM
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-/* GNU link wrapping injects failure at each project-owned aligned allocation.
- * PFFFT's own internal calls are defined in its object, so are not wrapped. */
+/* GNU link wrapping covers the context and each project-owned aligned
+ * allocation. PFFFT's same-object internal aligned calls are not wrapped. */
 void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
 void encoder_real_free(void* ptr) __asm__("__real_pffft_aligned_free");
+void* encoder_real_calloc(size_t count, size_t size) __asm__("__real_calloc");
+void* encoder_real_malloc(size_t size) __asm__("__real_malloc");
+void encoder_real_heap_free(void* ptr) __asm__("__real_free");
 extern void* encoder_fault_alloc(size_t size) __asm__("__wrap_pffft_aligned_malloc");
 extern void encoder_track_free(void* ptr) __asm__("__wrap_pffft_aligned_free");
+extern void* encoder_fault_calloc(size_t count, size_t size) __asm__("__wrap_calloc");
+extern void* encoder_track_malloc(size_t size) __asm__("__wrap_malloc");
+extern void encoder_track_heap_free(void* ptr) __asm__("__wrap_free");
 static int allocation_count;
 static int fail_at;
 static int live_allocations;
+static int heap_allocation_count;
+static void* live_context;
+
+extern void*
+encoder_track_malloc(size_t size) {
+    heap_allocation_count++;
+    return encoder_real_malloc(size);
+}
+
+extern void*
+encoder_fault_calloc(size_t count, size_t size) {
+    allocation_count++;
+    if (allocation_count == fail_at) {
+        return NULL;
+    }
+    live_context = encoder_real_calloc(count, size);
+    return live_context;
+}
+
+extern void
+encoder_track_heap_free(void* ptr) {
+    if (ptr == live_context) {
+        live_context = NULL;
+    }
+    encoder_real_heap_free(ptr);
+}
 
 extern void*
 encoder_fault_alloc(size_t size) {
@@ -46,73 +74,53 @@ encoder_track_free(void* ptr) {
 }
 
 static int
-encode_fresh_frame(const float pcm[160], char bits[49]) {
-    int channel[2];
-    if (pipe(channel) != 0) {
-        perror("fresh encoder pipe");
-        return 1;
+check_no_encode_allocations(mbe_ambe2400_encoder* enc) {
+    mbe_parms cur, prev, enhanced;
+    float pcm[160];
+    char bits[49];
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    int before = allocation_count;
+    int heap_before = heap_allocation_count;
+    fail_at = before + 1;
+    for (int frame = 0; frame < 12; frame++) {
+        for (int i = 0; i < 160; i++) {
+            pcm[i] = frame < 6 ? 0.01f * sinf(0.1f * (float)i) : 0.0f;
+        }
+        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) < 0 || allocation_count != before
+            || heap_allocation_count != heap_before) {
+            return 1;
+        }
+        mbe_moveMbeParms(&cur, &prev);
     }
-    /* Fork before either process encodes, so the child starts with fresh TLS. */
-    pid_t child = fork();
-    if (child < 0) {
-        perror("fresh encoder fork");
-        (void)close(channel[0]);
-        (void)close(channel[1]);
-        return 1;
-    }
-    if (child == 0) {
-        mbe_parms cur, prev, enhanced;
-        char fresh_bits[49];
-        (void)close(channel[0]);
-        mbe_initMbeParms(&cur, &prev, &enhanced);
-        int status = mbe_encodeAmbe2400Parms(pcm, fresh_bits, &cur, &prev);
-        int failed = status != 0 || write(channel[1], fresh_bits, sizeof(fresh_bits)) != sizeof(fresh_bits);
-        (void)close(channel[1]);
-        _exit(failed);
-    }
-    (void)close(channel[1]);
-    ssize_t count = read(channel[0], bits, 49);
-    (void)close(channel[0]);
-    int status = 0;
-    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0 || count != 49) {
-        (void)fprintf(stderr, "fresh encoder reference failed\n");
-        return 1;
-    }
-    return 0;
+    mbe_ambe2400EncoderReset(enc);
+    short shorts[160] = {0};
+    return mbe_encodeAmbe2400ParmsShort(enc, shorts, bits, &cur, &prev) < 0 || allocation_count != before
+           || heap_allocation_count != heap_before;
 }
 
 int
 main(int argc, char** argv) {
-    if (argc != 2 || strlen(argv[1]) != 1 || argv[1][0] < '1' || argv[1][0] > '5') {
-        return 1;
-    }
-    mbe_parms cur, prev, enhanced;
-    float pcm[160];
-    char bits[49], fresh_bits[49];
-    mbe_initMbeParms(&cur, &prev, &enhanced);
-    /* A quiet tone makes an extra AGC update change the quantized frame. */
-    for (int i = 0; i < 160; i++) {
-        pcm[i] = 0.01f * sinf(0.1f * (float)i);
-    }
-    if (encode_fresh_frame(pcm, fresh_bits) != 0) {
+    if (argc != 2 || strlen(argv[1]) != 1 || argv[1][0] < '1' || argv[1][0] > '6') {
         return 1;
     }
     fail_at = argv[1][0] - '0';
-    int status = mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev);
-    if (status >= 0 || live_allocations != 0) {
-        (void)fprintf(stderr, "failed allocation %d: status=%d live=%d\n", fail_at, status, live_allocations);
+    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+    if (enc != NULL || live_allocations != 0 || live_context != NULL) {
+        (void)fprintf(stderr, "failed allocation %d: live=%d context=%p\n", fail_at, live_allocations, live_context);
+        mbe_ambe2400EncoderFree(enc);
         return 1;
     }
     fail_at = 0;
-    if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
-        (void)fprintf(stderr, "encode retry after allocation failure failed\n");
+    enc = mbe_ambe2400EncoderAlloc();
+    if (enc == NULL) {
         return 1;
     }
-    if (memcmp(bits, fresh_bits, sizeof(bits)) != 0) {
-        (void)fprintf(stderr, "encode retry after allocation failure differs from fresh frame\n");
+    int failed = check_no_encode_allocations(enc);
+    mbe_ambe2400EncoderFree(enc);
+    if (failed || live_allocations != 0 || live_context != NULL) {
         return 1;
     }
-    (void)puts("allocation failure: propagated, cleaned up, retry matches all 49 fresh-frame bits");
+    (void)puts("allocation failure: NULL, no leaks; retry, reset and encoding: no allocations");
     return 0;
 }
 #else
@@ -315,7 +323,9 @@ gen_signal(short* pcm, int n) {
 }
 
 static int
-test_state_parity(void) {
+test_state_parity(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400EncoderReset(enc);
+
     enum { FRAMES = 600 };
 
     static short pcm[FRAMES * 160];
@@ -334,7 +344,7 @@ test_state_parity(void) {
         char d[49];
         unsigned char saved_prev[sizeof(e_prev)];
         memcpy(saved_prev, &e_prev, sizeof(e_prev));
-        int r = mbe_encodeAmbe2400ParmsShort(pcm + (size_t)f * 160, d, &e_cur, &e_prev);
+        int r = mbe_encodeAmbe2400ParmsShort(enc, pcm + (size_t)f * 160, d, &e_cur, &e_prev);
         unsigned char after_prev[sizeof(e_prev)];
         memcpy(after_prev, &e_prev, sizeof(e_prev));
         if (memcmp(saved_prev, after_prev, sizeof(e_prev)) != 0) {
@@ -445,7 +455,8 @@ test_c1_parity(void) {
 }
 
 static int
-test_invalid_arguments(void) {
+test_invalid_arguments(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400EncoderReset(enc);
     float pcm[160] = {0};
     short shorts[160] = {0};
     char d[49] = {0}, fr[4][24] = {{0}};
@@ -458,14 +469,16 @@ test_invalid_arguments(void) {
         const char* name;
         int status;
     } cases[] = {
-        {"float PCM: null samples", mbe_encodeAmbe2400Parms(NULL, d, &c, &p)},
-        {"float PCM: null bits", mbe_encodeAmbe2400Parms(pcm, NULL, &c, &p)},
-        {"float PCM: null current parameters", mbe_encodeAmbe2400Parms(pcm, d, NULL, &p)},
-        {"float PCM: null previous parameters", mbe_encodeAmbe2400Parms(pcm, d, &c, NULL)},
-        {"short PCM: null samples", mbe_encodeAmbe2400ParmsShort(NULL, d, &c, &p)},
-        {"short PCM: null bits", mbe_encodeAmbe2400ParmsShort(shorts, NULL, &c, &p)},
-        {"short PCM: null current parameters", mbe_encodeAmbe2400ParmsShort(shorts, d, NULL, &p)},
-        {"short PCM: null previous parameters", mbe_encodeAmbe2400ParmsShort(shorts, d, &c, NULL)},
+        {"float PCM: null context", mbe_encodeAmbe2400Parms(NULL, pcm, d, &c, &p)},
+        {"short PCM: null context", mbe_encodeAmbe2400ParmsShort(NULL, shorts, d, &c, &p)},
+        {"float PCM: null samples", mbe_encodeAmbe2400Parms(enc, NULL, d, &c, &p)},
+        {"float PCM: null bits", mbe_encodeAmbe2400Parms(enc, pcm, NULL, &c, &p)},
+        {"float PCM: null current parameters", mbe_encodeAmbe2400Parms(enc, pcm, d, NULL, &p)},
+        {"float PCM: null previous parameters", mbe_encodeAmbe2400Parms(enc, pcm, d, &c, NULL)},
+        {"short PCM: null samples", mbe_encodeAmbe2400ParmsShort(enc, NULL, d, &c, &p)},
+        {"short PCM: null bits", mbe_encodeAmbe2400ParmsShort(enc, shorts, NULL, &c, &p)},
+        {"short PCM: null current parameters", mbe_encodeAmbe2400ParmsShort(enc, shorts, d, NULL, &p)},
+        {"short PCM: null previous parameters", mbe_encodeAmbe2400ParmsShort(enc, shorts, d, &c, NULL)},
         {"frame encode: null bits", mbe_encodeAmbe3600x2400Frame(NULL, fr)},
         {"frame encode: null frame", mbe_encodeAmbe3600x2400Frame(d, NULL)},
         {"DV encode: null frame", mbe_encodeDStarDVData(NULL, bytes)},
@@ -492,7 +505,8 @@ test_invalid_arguments(void) {
 }
 
 static int
-test_prediction_boundaries(void) {
+test_prediction_boundaries(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400EncoderReset(enc);
     const int counts[] = {-7, 1, 10, 56, 99};
     for (size_t test = 0; test < sizeof(counts) / sizeof(counts[0]); test++) {
         mbe_parms cur, prev, enhanced, decoded, decode_prev;
@@ -511,7 +525,7 @@ test_prediction_boundaries(void) {
         for (int i = 0; i < 160; i++) {
             pcm[i] = (short)(3000.0f * sinf(0.08f * (float)i));
         }
-        if (mbe_encodeAmbe2400ParmsShort(pcm, bits, &cur, &prev) != 0
+        if (mbe_encodeAmbe2400ParmsShort(enc, pcm, bits, &cur, &prev) != 0
             || mbe_decodeAmbe2400Parms(bits, &decoded, &decode_prev) != 0) {
             return 1;
         }
@@ -532,7 +546,8 @@ test_prediction_boundaries(void) {
 }
 
 static int
-test_vuv_hysteresis(void) {
+test_vuv_hysteresis(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400EncoderReset(enc);
     int retained = 0;
     for (int fixture = 0; fixture < 64; fixture++) {
         mbe_parms cur, prev, enhanced;
@@ -548,14 +563,14 @@ test_vuv_hysteresis(void) {
         }
         /* Repetition makes the analysis window, pitch and AGC settle. */
         for (int frame = 0; frame < 200; frame++) {
-            if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+            if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) != 0) {
                 return 1;
             }
         }
         for (int l = 1; l <= 56; l++) {
             prev.Vl[l] = 0;
         }
-        if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) != 0) {
             return 1;
         }
         int without_history = cur.K;
@@ -563,7 +578,7 @@ test_vuv_hysteresis(void) {
         for (int l = 1; l <= 56; l++) {
             prev.Vl[l] = 1;
         }
-        if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) != 0) {
             return 1;
         }
         if (cur.L != harmonics || cur.K < without_history) {
@@ -577,9 +592,9 @@ test_vuv_hysteresis(void) {
     return retained == 0;
 }
 
-/* Each analysis case runs in its own process because analysis state is TLS. */
 static int
-test_pitch_endpoint(int period, int expected_b0) {
+test_pitch_endpoint(mbe_ambe2400_encoder* enc, int period, int expected_b0) {
+    mbe_ambe2400EncoderReset(enc);
     mbe_parms c, p, h;
     char d[49];
     float pcm[160];
@@ -590,7 +605,7 @@ test_pitch_endpoint(int period, int expected_b0) {
             int phase = (frame * 160 + i) % period;
             pcm[i] = 0.1f * sinf((float)(2.0 * M_PI * phase / period));
         }
-        if (mbe_encodeAmbe2400Parms(pcm, d, &c, &p) != 0) {
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &c, &p) != 0) {
             return 1;
         }
         mbe_moveMbeParms(&c, &p);
@@ -604,7 +619,8 @@ test_pitch_endpoint(int period, int expected_b0) {
 }
 
 static int
-test_dc_noise(void) {
+test_dc_noise(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400EncoderReset(enc);
     mbe_parms c, p, h;
     char d[49];
     float pcm[160];
@@ -614,7 +630,7 @@ test_dc_noise(void) {
         for (int i = 0; i < 160; i++) {
             pcm[i] = 0.1f + 0.01f * ((float)(rnd() & 65535u) / 32768.0f - 1.0f);
         }
-        if (mbe_encodeAmbe2400Parms(pcm, d, &c, &p) != 0) {
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &c, &p) != 0) {
             return 1;
         }
         if (frame >= 10) {
@@ -629,30 +645,82 @@ test_dc_noise(void) {
     return voiced > total / 2;
 }
 
+/* Compare interleaved streams with standalone replays, then replay after reset.
+ * The sequence exercises pitch, voicing, AGC, PCM history and the silence gate. */
+static int
+test_context_stream(mbe_ambe2400_encoder* stream, mbe_ambe2400_encoder* neighbor) {
+    mbe_parms cur, prev, enhanced, other_cur, other_prev, other_enhanced;
+    char expected[24][49];
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    mbe_initMbeParms(&other_cur, &other_prev, &other_enhanced);
+    mbe_ambe2400EncoderReset(stream);
+    mbe_ambe2400EncoderReset(neighbor);
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            mbe_ambe2400EncoderReset(stream);
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+        }
+        for (int frame = 0; frame < 24; frame++) {
+            float pcm[160], noise[160];
+            char bits[49], other_bits[49];
+            for (int i = 0; i < 160; i++) {
+                pcm[i] = frame % 12 < 6 ? 0.01f * sinf(0.1f * (float)(frame * 160 + i)) : 0.0f;
+                noise[i] = 0.2f * cosf(0.23f * (float)(frame * 160 + i));
+            }
+            if (mbe_encodeAmbe2400Parms(stream, pcm, bits, &cur, &prev) < 0) {
+                return 1;
+            }
+            if (pass == 0) {
+                memcpy(expected[frame], bits, sizeof(bits));
+                if (mbe_encodeAmbe2400Parms(neighbor, noise, other_bits, &other_cur, &other_prev) < 0) {
+                    return 1;
+                }
+                mbe_moveMbeParms(&other_cur, &other_prev);
+            } else if (memcmp(expected[frame], bits, sizeof(bits)) != 0) {
+                return 1;
+            }
+            mbe_moveMbeParms(&cur, &prev);
+        }
+    }
+    return 0;
+}
+
+static int
+test_contexts(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400_encoder* other = mbe_ambe2400EncoderAlloc();
+    if (other == NULL) {
+        return 1;
+    }
+    int fails = test_context_stream(enc, other);
+    fails += test_context_stream(other, enc);
+    mbe_ambe2400EncoderFree(other);
+    mbe_ambe2400EncoderFree(NULL);
+    mbe_ambe2400EncoderReset(NULL);
+    printf("independent contexts and reset replay: %s\n", fails ? "FAIL" : "ok");
+    return fails;
+}
+
 int
-main(int argc, char** argv) {
-    if (argc == 2 && strcmp(argv[1], "pitch20") == 0) {
-        return test_pitch_endpoint(20, 0);
-    }
-    if (argc == 2 && strcmp(argv[1], "pitch127") == 0) {
-        /* Upper-endpoint smoke test; this fixture also passes with the old pitch search. */
-        return test_pitch_endpoint(127, 125);
-    }
-    if (argc == 2 && strcmp(argv[1], "hysteresis") == 0) {
-        return test_vuv_hysteresis();
-    }
-    if (argc == 2 && strcmp(argv[1], "dc_noise") == 0) {
-        return test_dc_noise();
+main(void) {
+    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+    if (enc == NULL) {
+        return 1;
     }
     int fails = 0;
-    fails += test_invalid_arguments();
+    fails += test_invalid_arguments(enc);
     fails += test_c1_parity();
     fails += test_golay();
     fails += test_frame_roundtrip();
     fails += test_frame_single_bit_errors();
     fails += test_dv_bytes();
-    fails += test_state_parity();
-    fails += test_prediction_boundaries();
+    fails += test_state_parity(enc);
+    fails += test_prediction_boundaries(enc);
+    fails += test_pitch_endpoint(enc, 20, 0);
+    fails += test_pitch_endpoint(enc, 127, 125);
+    fails += test_dc_noise(enc);
+    fails += test_vuv_hysteresis(enc);
+    fails += test_contexts(enc);
+    mbe_ambe2400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;
 }

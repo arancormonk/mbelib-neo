@@ -344,24 +344,54 @@ MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result,
 /* === AMBE 3600x2400 (D-STAR) encoding === */
 
 /**
+ * @brief Caller-owned AMBE 2400 analysis state.
+ *
+ * Use one context per stream. A context is not thread-safe for concurrent use;
+ * any number of independent contexts may be used in one thread.
+ */
+typedef struct mbe_ambe2400_encoder mbe_ambe2400_encoder;
+
+/**
+ * @brief Allocate a fresh encoder context, including its FFT plan.
+ * @return Owned context, or NULL on allocation failure. Encoding never allocates.
+ * @see mbe_ambe2400EncoderFree
+ */
+MBE_API mbe_ambe2400_encoder* mbe_ambe2400EncoderAlloc(void);
+
+/**
+ * @brief Restore freshly allocated analysis state, retaining the FFT plan.
+ * @param enc Context to reset; NULL is accepted.
+ * @see mbe_encodeAmbe2400Parms for resetting the caller's prediction state.
+ */
+MBE_API void mbe_ambe2400EncoderReset(mbe_ambe2400_encoder* enc);
+
+/**
+ * @brief Free an encoder context and its FFT plan; NULL is accepted.
+ */
+MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
+
+/**
  * @brief Encode 160 samples (20 ms, 8 kHz) of float PCM into AMBE 2400
  *        parameter bits.
  *
- * Parameters are quantized against the same tables the decoder uses, so
- * the output is bit-compatible with mbe_decodeAmbe2400Parms() and (best
- * effort) DVSI AMBE-3000 based receivers. Silent input produces the
- * standard AMBE silence frame.
+ * Bit-compatible with this library's mbe_decodeAmbe2400Parms()/
+ * mbe_processAmbe3600x2400*() path and following the D-STAR AMBE bit layout
+ * (interleave, scrambler and Golay parity cross-checked against the MMDVM
+ * tables). Interoperability with DVSI hardware has not been verified.
+ * Silent input produces the standard AMBE silence frame.
  *
- * Initialize with mbe_initMbeParms(), then advance the encoder state with
- * mbe_moveMbeParms(cur_mp, prev_mp) between frames. prev_mp is read-only.
+ * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
+ * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
+ * frames. prev_mp is read-only. To restart a stream, call
+ * mbe_ambe2400EncoderReset() and mbe_initMbeParms().
  * State equivalence applies to the mbe_processAmbe* path, which resets on a
  * silence frame; a bare mbe_decodeAmbe2400Parms() chain must reset explicitly.
  *
  * The analysis window is centred on the frame start: parameters lag audio by
  * about 10 ms, and the final 32 samples are analysed with the next call. Feed
  * a final frame of zeros to flush the tail.
- * Analysis state is currently per-thread: one stream per thread, no reset API.
  *
+ * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
  * @param samples Input PCM floats (160), nominal range [-1, 1].
  * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
@@ -369,14 +399,15 @@ MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result,
  * @return 0 for a voice frame, 1 for a silence frame, or a negative
  *         `MBE_STATUS_*` code.
  */
-MBE_API int mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp);
+MBE_API int mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
+                                    const mbe_parms* prev_mp);
 /**
  * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into AMBE 2400
  *        parameter bits.
  * @see mbe_encodeAmbe2400Parms for details.
  */
-MBE_API int mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp,
-                                         const mbe_parms* prev_mp);
+MBE_API int mbe_encodeAmbe2400ParmsShort(mbe_ambe2400_encoder* enc, const short* samples, char ambe_d[49],
+                                         mbe_parms* cur_mp, const mbe_parms* prev_mp);
 /**
  * @brief Encode 49 AMBE 2400 parameter bits into a 72-bit D-STAR DV data
  *        frame (FEC + interleave), in the decoder's plane layout.

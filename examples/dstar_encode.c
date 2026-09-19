@@ -158,10 +158,10 @@ read_samples(FILE* fp, short pcm[FRAME_SAMPLES], uint32_t* remaining) {
 }
 
 static int
-write_frame(FILE* fp, const short pcm[FRAME_SAMPLES], mbe_parms* cur, mbe_parms* prev) {
+write_frame(mbe_ambe2400_encoder* enc, FILE* fp, const short pcm[FRAME_SAMPLES], mbe_parms* cur, mbe_parms* prev) {
     char bits[49], frame[4][24];
     unsigned char dv[DV_FRAME_BYTES] = {0x55, 0x2D, 0x16};
-    if (mbe_encodeAmbe2400ParmsShort(pcm, bits, cur, prev) < 0 || mbe_encodeAmbe3600x2400Frame(bits, frame) < 0
+    if (mbe_encodeAmbe2400ParmsShort(enc, pcm, bits, cur, prev) < 0 || mbe_encodeAmbe3600x2400Frame(bits, frame) < 0
         || mbe_encodeDStarDVData((const char (*)[24])frame, dv + 3) < 0) {
         (void)fprintf(stderr, "encode error\n");
         return -1;
@@ -178,6 +178,11 @@ static int
 encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
     mbe_parms cur, prev, enhanced;
     mbe_initMbeParms(&cur, &prev, &enhanced);
+    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+    if (enc == NULL) {
+        (void)fprintf(stderr, "cannot allocate encoder context\n");
+        return 1;
+    }
     int ret = 0;
     /* Emit exactly one zero frame after the last full input frame. */
     int flushed = 0;
@@ -197,11 +202,12 @@ encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
         } else {
             flushed = 1;
         }
-        if (write_frame(fout, pcm, &cur, &prev) < 0) {
+        if (write_frame(enc, fout, pcm, &cur, &prev) < 0) {
             ret = 1;
             break;
         }
     }
+    mbe_ambe2400EncoderFree(enc);
     return ret;
 }
 

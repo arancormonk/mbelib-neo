@@ -780,13 +780,6 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
-    foreach(case pitch20 pitch127 dc_noise hysteresis)
-        add_test(
-            NAME test_ambe2400_encoder_${case}
-            COMMAND test_ambe2400_encoder ${case}
-        )
-    endforeach()
-
     # Exercise every partial plan allocation and retry with GNU link wrapping.
     # LTO can resolve allocator calls before the linker can wrap them.
     if(
@@ -817,6 +810,9 @@ if(MBELIB_BUILD_TESTS)
             PRIVATE
                 "-Wl,--wrap=pffft_aligned_malloc"
                 "-Wl,--wrap=pffft_aligned_free"
+                "-Wl,--wrap=calloc"
+                "-Wl,--wrap=malloc"
+                "-Wl,--wrap=free"
         )
         _mbelib_apply_hardening(test_ambe2400_encoder_oom)
         if(_SAN_CFLAGS)
@@ -832,7 +828,7 @@ if(MBELIB_BUILD_TESTS)
                 PRIVATE ${_SAN_LDFLAGS}
             )
         endif()
-        foreach(allocation RANGE 1 5)
+        foreach(allocation RANGE 1 6)
             add_test(
                 NAME test_ambe2400_encoder_oom_${allocation}
                 COMMAND test_ambe2400_encoder_oom ${allocation}

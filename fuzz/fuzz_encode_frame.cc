@@ -29,7 +29,10 @@ fuzz_wire_frame(const std::uint8_t* data) {
 
 static void
 fuzz_pcm(const std::uint8_t* data, std::size_t size) {
-    // Analysis TLS persists across inputs without a reset API; reproducers may depend on earlier inputs.
+    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+    if (enc == nullptr) {
+        return;
+    }
     mbe_parms cur = {}, prev = {}, enhanced = {};
     mbe_initMbeParms(&cur, &prev, &enhanced);
     // Bound the work per input while exercising state transitions and partial PCM.
@@ -42,11 +45,12 @@ fuzz_pcm(const std::uint8_t* data, std::size_t size) {
         }
         char bits[49], frame[4][24];
         unsigned char bytes[9];
-        check_status(mbe_encodeAmbe2400ParmsShort(pcm, bits, &cur, &prev));
+        check_status(mbe_encodeAmbe2400ParmsShort(enc, pcm, bits, &cur, &prev));
         check_status(mbe_encodeAmbe3600x2400Frame(bits, frame));
         check_status(mbe_encodeDStarDVData(frame, bytes));
         mbe_moveMbeParms(&cur, &prev);
     }
+    mbe_ambe2400EncoderFree(enc);
 }
 
 extern "C" int
