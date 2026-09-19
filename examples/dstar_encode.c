@@ -215,17 +215,23 @@ encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
     struct denoiser nr = init_denoiser();
 #endif
     int ret = 0;
-    while (data_size > 0) {
-        short pcm[FRAME_SAMPLES];
-        int n = read_samples(fin, pcm, &data_size);
-        if (n < 0) {
-            (void)fprintf(stderr, "truncated WAV data or read error\n");
-            ret = 1;
-            break;
-        }
-        if (n < FRAME_SAMPLES) {
-            (void)fprintf(stderr, "warning: %d trailing samples ignored (not a full frame)\n", n);
-            break;
+    uint32_t frames_read = 0, frames_emitted = 0;
+    /* Emit one flush frame beyond the full input frames, feeding extra zeros
+     * through the same path until any denoiser latency has been drained. */
+    while (data_size > 0 || frames_emitted < frames_read + 1) {
+        short pcm[FRAME_SAMPLES] = {0};
+        if (data_size > 0) {
+            int n = read_samples(fin, pcm, &data_size);
+            if (n < 0) {
+                (void)fprintf(stderr, "truncated WAV data or read error\n");
+                ret = 1;
+                break;
+            }
+            if (n < FRAME_SAMPLES) {
+                (void)fprintf(stderr, "warning: %d trailing samples ignored (not a full frame)\n", n);
+                continue;
+            }
+            frames_read++;
         }
 #ifdef HAVE_SPECBLEACH
         if (!denoise_frame(&nr, pcm)) {
@@ -236,6 +242,7 @@ encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
             ret = 1;
             break;
         }
+        frames_emitted++;
     }
 #ifdef HAVE_SPECBLEACH
     if (nr.handle != NULL) {
