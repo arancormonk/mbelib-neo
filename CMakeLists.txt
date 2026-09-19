@@ -770,6 +770,27 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_ecc COMMAND test_ecc)
 
+    add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
+    # The private Golay encoder is hidden in the shared library.
+    target_link_libraries(test_ambe2400_encoder PRIVATE ${MBELIB_EXEC_LINK_TGT} mbe-static)
+    target_include_directories(
+        test_ambe2400_encoder
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_ambe2400_encoder PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_ambe2400_encoder BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
+    foreach(case pitch20 pitch127 dc_noise)
+        add_test(NAME test_ambe2400_encoder_${case} COMMAND test_ambe2400_encoder ${case})
+    endforeach()
+
+
     add_executable(test_noise_determinism tests/test_noise_determinism.c)
     target_link_libraries(
         test_noise_determinism
@@ -990,6 +1011,7 @@ if(MBELIB_BUILD_TESTS)
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
+        test_ambe2400_encoder
         test_noise_determinism
         test_params
         test_frame_paths

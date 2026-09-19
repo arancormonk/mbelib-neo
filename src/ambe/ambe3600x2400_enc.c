@@ -45,13 +45,13 @@
 #include "mbelib-neo/mbelib.h"
 #include "pffft.h"
 
-#define AMBE2400_ENC_FFT_SIZE 256
-#define AMBE2400_ENC_SAMPLES  160
+#define AMBE2400_ENC_FFT_SIZE    256
+#define AMBE2400_ENC_SAMPLES     160
 #define AMBE2400_ENC_SILENCE_RMS 0.0015f
 
 /* f0 = exp2(-4.311767578125 - 2.1336e-2 * (b0 + 0.5)) */
-#define AMBE2400_ENC_F0_OFFSET (-4.311767578125f)
-#define AMBE2400_ENC_F0_STEP   (-0.021336f)
+#define AMBE2400_ENC_F0_OFFSET   (-4.311767578125f)
+#define AMBE2400_ENC_F0_STEP     (-0.021336f)
 
 /*
  * Calibration: the AMBE 2400 gain field (AmbePlusDg) is non-negative and
@@ -79,7 +79,7 @@ static MBE_THREAD_LOCAL float ambe2400_enc_history[AMBE2400_ENC_SAMPLES];
 static MBE_THREAD_LOCAL float ambe2400_enc_agc_gain = 1.0f;
 static MBE_THREAD_LOCAL float ambe2400_enc_agc_rms = AMBE2400_ENC_AGC_TARGET;
 static MBE_THREAD_LOCAL float ambe2400_enc_hist_gain = 1.0f;
-static MBE_THREAD_LOCAL int   ambe2400_enc_silence_run = 0;
+static MBE_THREAD_LOCAL int ambe2400_enc_silence_run = 0;
 static MBE_THREAD_LOCAL float ambe2400_enc_prev_lag = 0.0f;
 static MBE_THREAD_LOCAL float ambe2400_enc_max_energy = 1e-6f;
 
@@ -87,7 +87,7 @@ static MBE_THREAD_LOCAL PFFFT_Setup* ambe2400_enc_fft;
 static MBE_THREAD_LOCAL float* ambe2400_enc_work;
 
 struct ambe2400_dct_cache {
-    int   inited;
+    int inited;
     float blk_cos[18][18][18]; /* [ji][j][k], ji=1..17, j,k=1..ji */
     float prba_cos[9][9];      /* [m][i] 8-point DCT basis */
 };
@@ -105,8 +105,7 @@ ambe2400_enc_get_dct_cache(void) {
     for (int ji = 1; ji <= 17; ji++) {
         for (int j = 1; j <= ji; j++) {
             for (int k = 1; k <= ji; k++) {
-                cache->blk_cos[ji][j][k] =
-                    cosf((M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
+                cache->blk_cos[ji][j][k] = cosf((M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
             }
         }
     }
@@ -146,16 +145,17 @@ ambe2400_enc_fft_init(void) {
 static void
 ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], int vl_ana[57]) {
     /* pffft requires 16-byte aligned buffers; stack arrays may not be. */
-    static MBE_THREAD_LOCAL float *fft_in;
-    static MBE_THREAD_LOCAL float *fft_out;
+    static MBE_THREAD_LOCAL float* fft_in;
+    static MBE_THREAD_LOCAL float* fft_out;
     const float f0_bin = f0q * (float)AMBE2400_ENC_FFT_SIZE;
     float max_band_energy = 0.0f;
 
     if (fft_in == NULL) {
         fft_in = (float*)pffft_aligned_malloc((size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
         fft_out = (float*)pffft_aligned_malloc((size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
-        if (fft_in == NULL || fft_out == NULL)
+        if (fft_in == NULL || fft_out == NULL) {
             return;
+        }
     }
 
     memcpy(fft_in, windowed, (size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
@@ -165,11 +165,11 @@ ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], in
     for (int l = 1; l <= L; l++) {
         float lo = ((float)l - 0.5f) * f0_bin;
         float hi = ((float)l + 0.5f) * f0_bin;
-        int   lo_bin = (int)lo;
-        int   hi_bin = (int)hi + 1;
+        int lo_bin = (int)lo;
+        int hi_bin = (int)hi + 1;
         float band_energy = 0.0f;
         float band_peak = 0.0f;
-        int   n_bins = 0;
+        int n_bins = 0;
 
         if (lo_bin < 1) {
             lo_bin = 1;
@@ -219,11 +219,11 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
     const int max_lag = 127;
     float amdf[128];
     float global_min = 1e30f;
-    int   global_min_lag = 0;
+    int global_min_lag = 0;
 
     for (int lag = min_lag; lag <= max_lag; lag++) {
         float acc = 0.0f;
-        int   cnt = 0;
+        int cnt = 0;
         for (int i = 0; i + lag < n; i++) {
             float d = buf[i] - buf[i + lag];
             acc += fabsf(d);
@@ -237,13 +237,13 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
     }
 
     const float tol = global_min * 1.4f;
-    int   have_prev = (ambe2400_enc_prev_lag >= (float)min_lag);
+    int have_prev = (ambe2400_enc_prev_lag >= (float)min_lag);
 
     float best_lag_f = (float)global_min_lag;
     float best_score = 1e30f;
 
-    for (int lag = min_lag + 1; lag < max_lag; lag++) {
-        if (!(amdf[lag] < amdf[lag - 1] && amdf[lag] <= amdf[lag + 1])) {
+    for (int lag = min_lag; lag <= max_lag; lag++) {
+        if ((lag > min_lag && amdf[lag] >= amdf[lag - 1]) || (lag < max_lag && amdf[lag] > amdf[lag + 1])) {
             continue;
         }
         if (amdf[lag] > tol) {
@@ -251,7 +251,10 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
         }
 
         /* Parabolic refinement */
-        float denom = amdf[lag - 1] + amdf[lag + 1] - (2.0f * amdf[lag]);
+        float denom = 0.0f;
+        if (lag > min_lag && lag < max_lag) {
+            denom = amdf[lag - 1] + amdf[lag + 1] - (2.0f * amdf[lag]);
+        }
         float lag_f = (float)lag;
         if (fabsf(denom) > 1e-12f) {
             float shift = 0.5f * (amdf[lag - 1] - amdf[lag + 1]) / denom;
@@ -263,13 +266,11 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
         float score;
         if (have_prev) {
             /* AMDF quality + continuity (octave-aware). */
-            score = (amdf[lag] / (global_min + 1e-12f))
-                    + (0.8f * fabsf(log2f(lag_f / ambe2400_enc_prev_lag)));
+            score = (amdf[lag] / (global_min + 1e-12f)) + (0.8f * fabsf(log2f(lag_f / ambe2400_enc_prev_lag)));
         } else {
             /* Cold start: among the tied minima, the shortest period is
              * the true fundamental (kills the octave-down error). */
-            score = (amdf[lag] / (global_min + 1e-12f))
-                    + (0.25f * (lag_f / 64.0f));
+            score = (amdf[lag] / (global_min + 1e-12f)) + (0.25f * (lag_f / 64.0f));
         }
 
         if (score < best_score) {
@@ -293,8 +294,12 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
         /* Voicing strength: normalized autocorrelation at the chosen lag.
          * ~1.0 for clean periodic speech, ~0.0 for noise. */
         int lag = (int)(best_lag_f + 0.5f);
-        if (lag < min_lag) lag = min_lag;
-        if (lag > max_lag) lag = max_lag;
+        if (lag < min_lag) {
+            lag = min_lag;
+        }
+        if (lag > max_lag) {
+            lag = max_lag;
+        }
         float num = 0.0f;
         float den_a = 0.0f;
         float den_b = 0.0f;
@@ -321,7 +326,7 @@ ambe2400_enc_pitch(const float* buf, int n, float* strength) {
  * prediction state. Returns 0 for a voice frame, 1 for a silence frame.
  */
 static int
-ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp) {
+ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     const struct ambe2400_dct_cache* cache = ambe2400_enc_get_dct_cache();
     float buf[AMBE2400_ENC_FFT_SIZE];
     float windowed[AMBE2400_ENC_FFT_SIZE];
@@ -336,21 +341,21 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
     float Ri_q[9];
     float Gm[9];
     float log2Ml_q[57] = {0.0f};
-    int   Vl_ana[57] = {0};
-    int   Ji[5];
-    int   L;
-    int   b0;
-    int   b1;
-    int   b2;
-    int   b3;
-    int   b4;
-    int   b5;
-    int   b6;
-    int   b7;
-    int   b8;
+    int Vl_ana[57] = {0};
+    int Ji[5];
+    int L;
+    int b0;
+    int b1;
+    int b2;
+    int b3;
+    int b4;
+    int b5;
+    int b6;
+    int b7;
+    int b8;
     float f0q;
     float gamma_q;
-    int   prev_L;
+    int prev_L;
 
     memset(Cik, 0, sizeof(Cik));
     memset(Cik_q, 0, sizeof(Cik_q));
@@ -380,7 +385,8 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
 
     for (int i = 0; i < AMBE2400_ENC_FFT_SIZE; i++) {
         float w = (float)(0.54 - (0.46 * cos((2.0 * M_PI * (double)i) / (double)(AMBE2400_ENC_FFT_SIZE - 1))));
-        windowed[i] = (buf[i] - dc) * w;
+        buf[i] -= dc;
+        windowed[i] = buf[i] * w;
     }
     /* Pitch */
     float strength = 0.0f;
@@ -395,7 +401,7 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
         b0 = 125;
     }
 
-    L = (int)AmbePlusLtable[b0];
+    L = mbe_clamp_harmonic_count((int)AmbePlusLtable[b0]);
     f0q = exp2f(AMBE2400_ENC_F0_OFFSET + (AMBE2400_ENC_F0_STEP * ((float)b0 + 0.5f)));
 
     /* Spectral analysis */
@@ -430,8 +436,11 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
             }
         } else {
             int max_jl = -1;
-            if (strength > 0.60f)      max_jl = 7;   /* ~3.5 kHz: fully voiced */
-            else if (strength > 0.40f) max_jl = 5;   /* ~2.5 kHz */
+            if (strength > 0.60f) {
+                max_jl = 7; /* ~3.5 kHz: fully voiced */
+            } else if (strength > 0.40f) {
+                max_jl = 5; /* ~2.5 kHz */
+            }
             if (max_jl >= 0) {
                 for (int l = 1; l <= L; l++) {
                     int jl = (int)((float)l * 16.0f * f0q);
@@ -453,21 +462,22 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
     /* V/UV quantization */
     {
         int best_row = 0;
-        int best_dist = 0x7fffffff;
+        float best_dist = 1e30f;
 
         for (int row = 0; row < 16; row++) {
-            int dist = 0;
+            float dist = 0.0f;
             for (int l = 1; l <= L; l++) {
                 int jl = (int)((float)l * 16.0f * f0q);
                 if (jl > 7) {
                     jl = 7;
                 }
-                int d = Vl_ana[l] - AmbePlusVuv[row][jl];
+                float d = (float)(Vl_ana[l] - AmbePlusVuv[row][jl]);
                 /* hysteresis: a band voiced last frame that is borderline now
-                 * stays voiced (weight the mismatch twice) */
-                if (Vl_ana[l] == 0 && prev_mp->Vl[l] == 1)
-                    d *= 2;
-                dist += (d < 0) ? -d : d;
+                 * stays voiced (halve the cost of retaining voicing) */
+                if (Vl_ana[l] == 0 && prev_mp->Vl[l] == 1) {
+                    d *= 0.5f;
+                }
+                dist += fabsf(d);
             }
             if (dist < best_dist) {
                 best_dist = dist;
@@ -481,7 +491,7 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
     {
         float gamma_raw = mean_a + (0.5f * log2f((float)L));
         float target = gamma_raw - (0.5f * prev_mp->gamma);
-        int   best = 0;
+        int best = 0;
         float best_err = 1e30f;
 
         for (int c = 0; c < 64; c++) {
@@ -496,17 +506,20 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
     }
 
     /* Spectral prediction and residual */
-    prev_L = prev_mp->L;
-    if (prev_L < 1) {
-        prev_L = 1;
+    prev_L = mbe_clamp_harmonic_count(prev_mp->L);
+    float prev_log2Ml[57];
+    memcpy(prev_log2Ml, prev_mp->log2Ml, sizeof(prev_log2Ml));
+    for (int l = prev_L + 1; l <= L; l++) {
+        prev_log2Ml[l] = prev_log2Ml[prev_L];
     }
+    prev_log2Ml[0] = prev_log2Ml[1];
 
     float mean_p = 0.0f;
     for (int l = 1; l <= L; l++) {
         float flokl = ((float)prev_L / (float)L) * (float)l;
-        int   intkl = (int)flokl;
+        int intkl = (int)flokl;
         float deltal = flokl - (float)intkl;
-        int   upper = intkl + 1;
+        int upper = intkl + 1;
         float v_lo;
         float v_hi;
 
@@ -517,8 +530,8 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
             upper = MBE_MAX_HARMONIC_BANDS;
         }
 
-        v_lo = prev_mp->log2Ml[intkl];
-        v_hi = prev_mp->log2Ml[upper];
+        v_lo = prev_log2Ml[intkl];
+        v_hi = prev_log2Ml[upper];
 
         p[l] = ((1.0f - deltal) * v_lo) + (deltal * v_hi);
         mean_p += p[l];
@@ -574,7 +587,7 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
 
     /* PRBA24 (b3): Gm[2..4] */
     {
-        int   best = 0;
+        int best = 0;
         float best_err = 1e30f;
         for (int c = 0; c < 512; c++) {
             float err = 0.0f;
@@ -592,7 +605,7 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
 
     /* PRBA58 (b4): Gm[5..8] */
     {
-        int   best = 0;
+        int best = 0;
         float best_err = 1e30f;
         for (int c = 0; c < 128; c++) {
             float err = 0.0f;
@@ -611,15 +624,16 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
     /* HOC blocks (b5..b8): Cik[blk][3..min(Ji,6)] */
     {
         int codes[4];
-        const float(*tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
+        const float (*tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
 
         for (int blk = 0; blk < 4; blk++) {
-            int   ji = Ji[blk + 1];
-            int   kmax = (ji < 6) ? ji : 6;
-            int   best = 0;
+            int ji = Ji[blk + 1];
+            int kmax = (ji < 6) ? ji : 6;
+            int best = 0;
             float best_err = 1e30f;
 
-            for (int c = 0; c < 16; c++) {
+            /* Block 4 carries only bits 3..1, so only even rows are reachable. */
+            for (int c = 0; c < 16; c += (blk == 3) ? 2 : 1) {
                 float err = 0.0f;
                 for (int k = 3; k <= kmax; k++) {
                     float d = Cik[blk + 1][k] - tables[blk][c][k - 3];
@@ -673,7 +687,7 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
         Cik_q[4][2] = rconst * (Ri_q[7] - Ri_q[8]);
 
         {
-            const float(*tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
+            const float (*tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
             int codes[4] = {b5, b6, b7, b8};
             for (int blk = 0; blk < 4; blk++) {
                 int ji = Ji[blk + 1];
@@ -765,9 +779,9 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
     ambe_d[33] = (char)((b7 >> 1) & 1);
     ambe_d[34] = (char)(b7 & 1);
 
-    ambe_d[35] = (char)((b8 >> 2) & 1);
-    ambe_d[36] = (char)((b8 >> 1) & 1);
-    ambe_d[37] = (char)(b8 & 1);
+    ambe_d[35] = (char)((b8 >> 3) & 1);
+    ambe_d[36] = (char)((b8 >> 2) & 1);
+    ambe_d[37] = (char)((b8 >> 1) & 1);
 
     /* ambe_d[24] is the spare bit; filled by the FEC layer below. */
 
@@ -787,6 +801,9 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
         }
         cur_mp->log2Ml[l] = log2Ml_q[l];
         cur_mp->Ml[l] = exp2f(log2Ml_q[l]);
+        if (cur_mp->Vl[l] == 0) {
+            cur_mp->Ml[l] *= 0.2046f / sqrtf(cur_mp->w0);
+        }
     }
     cur_mp->gamma = gamma_q;
 
@@ -799,7 +816,7 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, mbe_
  * encoder resets its prediction state as well.
  */
 static void
-ambe2400_encode_silence(char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp) {
+ambe2400_encode_silence(char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     (void)prev_mp;
     memset(ambe_d, 0, 49);
     for (int i = 0; i < 6; i++) {
@@ -840,10 +857,10 @@ ambe2400_encode_silence(char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp) 
  * @return 0 for a voice frame, 1 for a silence frame, negative on error.
  */
 int
-mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp) {
+mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     float agc_buf[AMBE2400_ENC_SAMPLES];
     float rms = 0.0f;
-    int   ret;
+    int ret;
 
     if (samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
@@ -864,8 +881,9 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
      * libspecbleach front-end in the caller, not here. */
     bool is_silence = false;
     if (rms < AMBE2400_ENC_SILENCE_RMS) {
-        if (ambe2400_enc_silence_run < 5)
+        if (ambe2400_enc_silence_run < 5) {
             ambe2400_enc_silence_run++;
+        }
         is_silence = (ambe2400_enc_silence_run >= 5);
     } else {
         ambe2400_enc_silence_run = 0;
@@ -875,7 +893,8 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
      * nominal target. Noise frames would drag the level estimate down and
      * over-drive the speech. */
     if (!is_silence && rms > 1e-6f) {
-        ambe2400_enc_agc_rms = (AMBE2400_ENC_AGC_ALPHA * ambe2400_enc_agc_rms) + ((1.0f - AMBE2400_ENC_AGC_ALPHA) * rms);
+        ambe2400_enc_agc_rms =
+            (AMBE2400_ENC_AGC_ALPHA * ambe2400_enc_agc_rms) + ((1.0f - AMBE2400_ENC_AGC_ALPHA) * rms);
     }
     ambe2400_enc_agc_gain = AMBE2400_ENC_AGC_TARGET / (ambe2400_enc_agc_rms + 1e-9f);
     if (ambe2400_enc_agc_gain < AMBE2400_ENC_AGC_MIN) {
@@ -910,7 +929,7 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
  * @see mbe_encodeAmbe2400Parms for details.
  */
 int
-mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp) {
+mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     float float_buf[AMBE2400_ENC_SAMPLES];
 
     if (samples == NULL) {
@@ -928,16 +947,14 @@ mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* c
  * carries ambe_fr[dW[i]][dX[i]].
  */
 static const int ambe2400_enc_dW[72] = {
-    0, 0, 3, 2, 1, 1, 0, 0, 1, 1, 0, 0, 3, 2, 1, 1, 3, 2, 1, 1, 0, 0, 3, 2,
-    0, 0, 3, 2, 1, 1, 0, 0, 1, 1, 0, 0, 3, 2, 1, 1, 3, 2, 1, 1, 0, 0, 3, 2,
-    0, 0, 3, 2, 1, 1, 0, 0, 1, 1, 0, 0, 3, 2, 1, 1, 3, 3, 2, 1, 0, 0, 3, 3,
+    0, 0, 3, 2, 1, 1, 0, 0, 1, 1, 0, 0, 3, 2, 1, 1, 3, 2, 1, 1, 0, 0, 3, 2, 0, 0, 3, 2, 1, 1, 0, 0, 1, 1, 0, 0,
+    3, 2, 1, 1, 3, 2, 1, 1, 0, 0, 3, 2, 0, 0, 3, 2, 1, 1, 0, 0, 1, 1, 0, 0, 3, 2, 1, 1, 3, 3, 2, 1, 0, 0, 3, 3,
 };
 
 static const int ambe2400_enc_dX[72] = {
-    10, 22, 11, 9,  10, 22, 11, 23, 8,  20, 9,  21, 10, 8,  9,  21, 8,  6,
-    7,  19, 8,  20, 9,  7,  6,  18, 7,  5,  6,  18, 7,  19, 4,  16, 5,  17,
-    6,  4,  5,  17, 4,  2,  3,  15, 4,  16, 5,  3,  2,  14, 3,  1,  2,  14,
-    3,  15, 0,  12, 1,  13, 2,  0,  1,  13, 0,  12, 10, 11, 0,  12, 1,  13,
+    10, 22, 11, 9, 10, 22, 11, 23, 8, 20, 9, 21, 10, 8, 9, 21, 8, 6,  7,  19, 8, 20, 9, 7,
+    6,  18, 7,  5, 6,  18, 7,  19, 4, 16, 5, 17, 6,  4, 5, 17, 4, 2,  3,  15, 4, 16, 5, 3,
+    2,  14, 3,  1, 2,  14, 3,  15, 0, 12, 1, 13, 2,  0, 1, 13, 0, 12, 10, 11, 0, 12, 1, 13,
 };
 
 /**
@@ -1007,13 +1024,6 @@ mbe_encodeAmbe3600x2400Frame(const char ambe_d[49], char ambe_fr[4][24]) {
         ambe_fr[1][j] = (char)((cw[j] & 1) ^ prbit);
     }
 
-    /* Spare bit (ambe_d[24] = fr[2][10] on air): b word bit 0 = parity ^ p bit 0 */
-    ones = 0;
-    for (int j = 0; j < 23; j++) {
-        ones += (cw[j] & 1);
-    }
-    ambe_fr[2][10] = (char)(((ones & 1) ^ (pr[24] / 32768)) & 1);
-
     /* C2/C3: raw bits (decoder reads them MSB-first) */
     for (int j = 0; j < 11; j++) {
         ambe_fr[2][j] = ambe_d[24 + (10 - j)];
@@ -1021,6 +1031,13 @@ mbe_encodeAmbe3600x2400Frame(const char ambe_d[49], char ambe_fr[4][24]) {
     for (int j = 0; j < 14; j++) {
         ambe_fr[3][j] = ambe_d[35 + (13 - j)];
     }
+
+    /* Spare bit (ambe_d[24] = fr[2][10] on air): b word bit 0 = parity ^ p bit 0 */
+    ones = 0;
+    for (int j = 0; j < 23; j++) {
+        ones += (cw[j] & 1);
+    }
+    ambe_fr[2][10] = (char)(((ones & 1) ^ (pr[24] / 32768)) & 1);
 
     return 0;
 }
@@ -1070,8 +1087,7 @@ mbe_decodeDStarDVData(const unsigned char bytes9[9], char ambe_fr[4][24]) {
 
     memset(ambe_fr, 0, 4 * 24 * sizeof(char));
     for (int i = 0; i < 72; i++) {
-        ambe_fr[ambe2400_enc_dW[i]][ambe2400_enc_dX[i]] =
-            (char)((bytes9[i >> 3] >> (i & 7)) & 1u);
+        ambe_fr[ambe2400_enc_dW[i]][ambe2400_enc_dX[i]] = (char)((bytes9[i >> 3] >> (i & 7)) & 1u);
     }
     return 0;
 }

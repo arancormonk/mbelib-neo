@@ -355,17 +355,28 @@ MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result,
  * @param samples Input PCM floats (160), nominal range [-1, 1].
  * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
- * @param prev_mp Input: previous frame state (see mbe_initMbeParms()).
+ * Initialize with mbe_initMbeParms(), then advance the encoder state with
+ * mbe_moveMbeParms(cur_mp, prev_mp) between frames. prev_mp is read-only.
+ * State equivalence applies to the mbe_processAmbe* path, which resets on a
+ * silence frame; a bare mbe_decodeAmbe2400Parms() chain must reset explicitly.
+ *
+ * The analysis window is centred on the frame start: parameters lag audio by
+ * about 10 ms, and the final 32 samples are analysed with the next call. Feed
+ * a final frame of zeros to flush the tail.
+ * Analysis state is currently per-thread: one stream per thread, no reset API.
+ *
+ * @param prev_mp Input: previous quantized frame state; never modified.
  * @return 0 for a voice frame, 1 for a silence frame, or a negative
  *         `MBE_STATUS_*` code.
  */
-MBE_API int mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp);
+MBE_API int mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp);
 /**
  * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into AMBE 2400
  *        parameter bits.
  * @see mbe_encodeAmbe2400Parms for details.
  */
-MBE_API int mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp);
+MBE_API int mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp,
+                                         const mbe_parms* prev_mp);
 /**
  * @brief Encode 49 AMBE 2400 parameter bits into a 72-bit D-STAR DV data
  *        frame (FEC + interleave), in the decoder's plane layout.
@@ -407,15 +418,16 @@ MBE_API int mbe_decodeDStarDVData(const unsigned char bytes9[9], char ambe_fr[4]
 
 /** State for the compact additive synthesizer. */
 typedef struct mbe_synth_state {
-    float phase[57];        /* per-harmonic phase accumulator (rad) */
+    float phase[57]; /* per-harmonic phase accumulator (rad) */
     float prev_Ml[57];
     float prev_Vl[57];
     float smooth_Ml[57];
-    int   prev_L;
-    int   inited;
+    int prev_L;
+    int inited;
     uint32_t rng;
     float gain;
 } mbe_synth_state;
+
 /**
  * @brief Reset synthesizer state (call before the first frame).
  * @param st State to reset.
