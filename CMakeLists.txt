@@ -736,6 +736,17 @@ if(MBELIB_BUILD_EXAMPLES)
     if(_SAN_LDFLAGS)
         target_link_options(example_dstar_decode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
+    if(MSVC)
+        # The examples use portable C file and error-reporting functions.
+        target_compile_definitions(
+            example_dstar_encode
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+        target_compile_definitions(
+            example_dstar_decode
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
 endif()
 
 # Tests
@@ -782,10 +793,7 @@ if(MBELIB_BUILD_TESTS)
 
     add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
     # The private Golay encoder is hidden in the shared library.
-    target_link_libraries(
-        test_ambe2400_encoder
-        PRIVATE ${MBELIB_EXEC_LINK_TGT} mbe-static
-    )
+    target_link_libraries(test_ambe2400_encoder PRIVATE mbe-static)
     target_include_directories(
         test_ambe2400_encoder
         PRIVATE
@@ -811,9 +819,17 @@ if(MBELIB_BUILD_TESTS)
     endforeach()
 
     # Exercise every partial plan allocation and retry with GNU link wrapping.
+    # LTO can resolve allocator calls before the linker can wrap them.
     if(
         CMAKE_SYSTEM_NAME STREQUAL "Linux"
         AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+        AND NOT (
+            MBELIB_ENABLE_LTO
+            AND (
+                CMAKE_CONFIGURATION_TYPES
+                OR CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo"
+            )
+        )
     )
         add_executable(test_ambe2400_encoder_oom tests/test_ambe2400_encoder.c)
         target_link_libraries(test_ambe2400_encoder_oom PRIVATE mbe-static)

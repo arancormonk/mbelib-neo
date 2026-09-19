@@ -2,6 +2,9 @@
 /* Round-trip harness for PR #84: frame FEC, DV byte packing, Golay, and
  * encoder->decoder parameter-state parity. */
 #include <math.h>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <stdio.h>
 #include <string.h>
 #include "mbelib-neo/mbelib.h"
