@@ -27,13 +27,6 @@
 #include <io.h>
 #endif
 
-/* Optional in-speech noise reduction; DSTAR_DENOISE=0 disables it. */
-#ifdef HAVE_SPECBLEACH
-#include <stdlib.h>
-
-#include <specbleach_denoiser.h>
-#endif
-
 #define FRAME_SAMPLES  160
 #define DV_FRAME_BYTES 12
 
@@ -164,87 +157,6 @@ read_samples(FILE* fp, short pcm[FRAME_SAMPLES], uint32_t* remaining) {
     return (int)(count / 2);
 }
 
-#ifdef HAVE_SPECBLEACH
-struct denoiser {
-    void* handle;
-    uint32_t latency_remaining;
-    size_t pending_samples;
-    short pending_pcm[FRAME_SAMPLES];
-};
-
-static int
-denoiser_disabled(void) {
-#ifdef _MSC_VER
-    char env[2];
-    size_t length;
-    if (getenv_s(&length, NULL, 0, "DSTAR_DENOISE") != 0 || length != sizeof(env)) {
-        return 0;
-    }
-    return getenv_s(&length, env, sizeof(env), "DSTAR_DENOISE") == 0 && strcmp(env, "0") == 0;
-#else
-    const char* env = getenv("DSTAR_DENOISE");
-    return env != NULL && strcmp(env, "0") == 0;
-#endif
-}
-
-static struct denoiser
-init_denoiser(void) {
-    struct denoiser nr = {0};
-    if (denoiser_disabled()) {
-        return nr;
-    }
-    nr.handle = specbleach_initialize(8000, 20.0f);
-    if (nr.handle != NULL) {
-        SpectralBleachDenoiserParameters p = {0};
-        p.reduction_amount = 12.0f;
-        p.smoothing_factor = 30.0f;
-        p.whitening_factor = 15.0f;
-        p.adaptive_noise = 1;
-        p.noise_estimation_method = 2; /* Martin Minimum Statistics */
-        p.masking_depth = 0.5f;
-        p.suppression_strength = 0.6f;
-        specbleach_load_parameters(nr.handle, p);
-        nr.latency_remaining = specbleach_get_latency(nr.handle);
-    }
-    return nr;
-}
-
-static bool
-denoise_frame(struct denoiser* nr, short pcm[FRAME_SAMPLES]) {
-    if (nr->handle == NULL) {
-        return true;
-    }
-    float input[FRAME_SAMPLES], output[FRAME_SAMPLES];
-    for (int i = 0; i < FRAME_SAMPLES; i++) {
-        input[i] = (float)pcm[i] / 32768.0f;
-    }
-    specbleach_process(nr->handle, FRAME_SAMPLES, input, output);
-    bool ready = false;
-    for (int i = 0; i < FRAME_SAMPLES; i++) {
-        /* Drop the exact delay, retaining partial output until a full frame
-         * is ready. Latency need not be a multiple of FRAME_SAMPLES. */
-        if (nr->latency_remaining > 0) {
-            nr->latency_remaining--;
-            continue;
-        }
-        float sample = output[i];
-        if (sample > 1.0f) {
-            sample = 1.0f;
-        }
-        if (sample < -1.0f) {
-            sample = -1.0f;
-        }
-        nr->pending_pcm[nr->pending_samples++] = (short)(sample * 32767.0f);
-        if (nr->pending_samples == FRAME_SAMPLES) {
-            memcpy(pcm, nr->pending_pcm, sizeof(nr->pending_pcm));
-            nr->pending_samples = 0;
-            ready = true;
-        }
-    }
-    return ready;
-}
-#endif
-
 static int
 write_frame(FILE* fp, const short pcm[FRAME_SAMPLES], mbe_parms* cur, mbe_parms* prev) {
     char bits[49], frame[4][24];
@@ -266,14 +178,10 @@ static int
 encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
     mbe_parms cur, prev, enhanced;
     mbe_initMbeParms(&cur, &prev, &enhanced);
-#ifdef HAVE_SPECBLEACH
-    struct denoiser nr = init_denoiser();
-#endif
     int ret = 0;
-    uint32_t frames_read = 0, frames_emitted = 0;
-    /* Emit one flush frame beyond the full input frames, feeding extra zeros
-     * through the same path until any denoiser latency has been drained. */
-    while (data_size > 0 || frames_emitted < frames_read + 1) {
+    /* Emit exactly one zero frame after the last full input frame. */
+    int flushed = 0;
+    while (!flushed) {
         short pcm[FRAME_SAMPLES] = {0};
         if (data_size > 0) {
             int n = read_samples(fin, pcm, &data_size);
@@ -286,24 +194,14 @@ encode_wav(FILE* fin, FILE* fout, uint32_t data_size) {
                 (void)fprintf(stderr, "warning: %d trailing samples ignored (not a full frame)\n", n);
                 continue;
             }
-            frames_read++;
+        } else {
+            flushed = 1;
         }
-#ifdef HAVE_SPECBLEACH
-        if (!denoise_frame(&nr, pcm)) {
-            continue;
-        }
-#endif
         if (write_frame(fout, pcm, &cur, &prev) < 0) {
             ret = 1;
             break;
         }
-        frames_emitted++;
     }
-#ifdef HAVE_SPECBLEACH
-    if (nr.handle != NULL) {
-        specbleach_free(nr.handle);
-    }
-#endif
     return ret;
 }
 

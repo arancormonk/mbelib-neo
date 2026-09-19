@@ -20,10 +20,8 @@ The project may add warning, sanitizer, SIMD, LTO, hardening, or platform flags
 based on explicit CMake options, but should not discard user-supplied compiler
 or linker settings.
 
-`MBELIB_EXAMPLE_SPECBLEACH=ON` enables the optional `dstar_encode` denoiser (default OFF).
-It requires libspecbleach headers and a library with the supported parameter fields; incompatible versions fail configuration.
 
-The examples accept no path arguments and support pipes: `dstar_encode < input.wav > output.dstar`
+The example binaries are built locally and are not installed. They accept no path arguments and support pipes: `dstar_encode < input.wav > output.dstar`
 and `dstar_decode < output.dstar > output.wav`. Diagnostics go to stderr. The decoder buffers
 PCM in memory before writing the WAV header and data to stdout.
 

@@ -341,7 +341,7 @@ tools/bench_compare.sh
 - Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
 - Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_golden_pcm` (golden hash regression checks).
 - Example: `examples/print_version.c` shows linking and header usage.
-- WAV round trip: `./build/dev-debug/dstar_encode < input.wav > output.dstar`, then `./build/dev-debug/dstar_decode < output.dstar > output.wav`. These examples use binary stdin/stdout, accept no path arguments, and send diagnostics to stderr. The private `.dstar` container is not a D-STAR air-interface stream.
+- WAV round trip: `./build/dev-debug/dstar_encode < input.wav > output.dstar`, then `./build/dev-debug/dstar_decode < output.dstar > output.wav`. These example binaries are not installed. They use binary stdin/stdout, accept no path arguments, and send diagnostics to stderr. The private `.dstar` container is not a D-STAR air-interface stream.
 - When Python 3.7 or newer is available, CTest also checks the D-STAR examples through stdin/stdout pipes, including malformed WAVs, exact silence, and the final flush frame.
 - Golden hash helper: `gen_golden` (available when `MBELIB_BUILD_TESTS=ON`, default) prints current FNV-1a reference values for synthesis/conversion regression workflows (`cmake --build build/dev-debug --target gen_golden && ./build/dev-debug/gen_golden`).
 

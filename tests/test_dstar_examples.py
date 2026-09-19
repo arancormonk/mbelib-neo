@@ -3,7 +3,6 @@
 """Exercise the examples through nonseekable binary stdin/stdout pipes."""
 
 import io
-import os
 import struct
 import subprocess
 import sys
@@ -26,7 +25,7 @@ def pcm_format(channels=1):
 def invoke(command, data, *args):
     result = subprocess.run(
         [*command, *args], input=data, capture_output=True,
-        env=dict(os.environ, DSTAR_DENOISE="0"), timeout=60,
+        timeout=60,
     )
     return result
 
