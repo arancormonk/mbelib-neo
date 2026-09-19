@@ -13,10 +13,10 @@
  * slow-data/sync framing every 21 voice frames.
  */
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <mbelib-neo/mbelib.h>
@@ -25,6 +25,8 @@
 
 /* Optional in-speech noise reduction; DSTAR_DENOISE=0 disables it. */
 #ifdef HAVE_SPECBLEACH
+#include <stdlib.h>
+
 #include <specbleach_denoiser.h>
 #endif
 

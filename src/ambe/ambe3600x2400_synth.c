@@ -19,7 +19,6 @@
  */
 
 #include <math.h>
-#include <stdint.h>
 #include <string.h>
 
 #include "mbelib-neo/mbelib.h"

@@ -34,11 +34,9 @@
 
 #include <math.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 
 #include "ambe3600x2400_const.h"
-#include "ecc_const.h"
 #include "mbe_compiler.h"
 #include "mbe_ecc.h"
 #include "mbe_unvoiced_fft.h"
@@ -638,7 +636,7 @@ ambe2400_enc_quantize_hoc(struct ambe2400_enc_frame* q) {
     /* HOC blocks (b5..b8): Cik[blk][3..min(Ji,6)] */
     {
         int codes[4];
-        const float (*tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
+        static const float (*const tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
 
         for (int blk = 0; blk < 4; blk++) {
             int ji = q->Ji[blk + 1];
@@ -700,7 +698,7 @@ ambe2400_enc_reconstruct_coefficients(struct ambe2400_enc_frame* q) {
     q->Cik_q[4][2] = rconst * (Ri_q[7] - Ri_q[8]);
 
     {
-        const float (*tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
+        static const float (*const tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
         const int codes[4] = {q->b[5], q->b[6], q->b[7], q->b[8]};
         for (int blk = 0; blk < 4; blk++) {
             int ji = q->Ji[blk + 1];

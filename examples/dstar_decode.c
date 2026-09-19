@@ -13,6 +13,7 @@
  * slow-data/sync framing every 21 voice frames.
  */
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

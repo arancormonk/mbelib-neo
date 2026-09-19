@@ -2,11 +2,8 @@
 /* Round-trip harness for PR #84: frame FEC, DV byte packing, Golay, and
  * encoder->decoder parameter-state parity. */
 #include <math.h>
-#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include "mbe_ecc.h"
 #include "mbelib-neo/mbelib.h"
 
 #ifdef MBE_ENCODER_TEST_OOM
@@ -63,10 +60,14 @@ main(int argc, char** argv) {
     if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
         return 1;
     }
-    printf("allocation failure %s: propagated, cleaned up, retry succeeded\n", argv[1]);
+    (void)puts("allocation failure: propagated, cleaned up, retry succeeded");
     return 0;
 }
 #else
+
+#include <stdint.h>
+
+#include "mbe_ecc.h"
 
 static uint32_t rng = 0xC0FFEE;
 
