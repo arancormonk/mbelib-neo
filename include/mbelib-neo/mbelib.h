@@ -340,6 +340,96 @@ MBE_API int mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result
  */
 MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
+
+/* === AMBE 3600x2400 (D-STAR) encoding === */
+
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of float PCM into AMBE 2400
+ *        parameter bits.
+ *
+ * Parameters are quantized against the same tables the decoder uses, so
+ * the output is bit-compatible with mbe_decodeAmbe2400Parms() and (best
+ * effort) DVSI AMBE-3000 based receivers. Silent input produces the
+ * standard AMBE silence frame.
+ *
+ * @param samples Input PCM floats (160), nominal range [-1, 1].
+ * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
+ * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
+ * @param prev_mp Input: previous frame state (see mbe_initMbeParms()).
+ * @return 0 for a voice frame, 1 for a silence frame, or a negative
+ *         `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp);
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into AMBE 2400
+ *        parameter bits.
+ * @see mbe_encodeAmbe2400Parms for details.
+ */
+MBE_API int mbe_encodeAmbe2400ParmsShort(const short* samples, char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp);
+/**
+ * @brief Encode 49 AMBE 2400 parameter bits into a 72-bit D-STAR DV data
+ *        frame (FEC + interleave), in the decoder's plane layout.
+ *
+ * ambe_d[24] is the spare bit; on output it carries the scrambled even
+ * parity of the second Golay codeword. All other input bits round-trip
+ * exactly through
+ * mbe_decodeAmbe3600x2400Frame().
+ *
+ * @param ambe_d  Input parameter bits (49).
+ * @param ambe_fr Output frame as 4x24 bitplanes.
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeAmbe3600x2400Frame(const char ambe_d[49], char ambe_fr[4][24]);
+/**
+ * @brief Serialize a 72-bit AMBE 3600x2400 frame into the 9 data bytes
+ *        of a D-STAR DV frame (sync word not included).
+ *
+ * Bytes are packed in air order (LSB first within each byte, matching
+ * the GMSK modulator). Inverse of mbe_decodeDStarDVData().
+ *
+ * @param ambe_fr Input frame as 4x24 bitplanes.
+ * @param bytes9  Output 9 bytes (72 bits).
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeDStarDVData(const char ambe_fr[4][24], unsigned char bytes9[9]);
+/**
+ * @brief Extract a 72-bit AMBE 3600x2400 frame from the 9 data bytes of
+ *        a D-STAR DV frame (sync word not included).
+ * @see mbe_encodeDStarDVData for the byte/bit convention.
+ *
+ * @param bytes9  Input 9 bytes (72 bits).
+ * @param ambe_fr Output frame as 4x24 bitplanes.
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_decodeDStarDVData(const unsigned char bytes9[9], char ambe_fr[4][24]);
+
+/* === Simple additive AMBE 2400 synthesizer === */
+
+/** State for the compact additive synthesizer. */
+typedef struct mbe_synth_state {
+    float phase[57];        /* per-harmonic phase accumulator (rad) */
+    float prev_Ml[57];
+    float prev_Vl[57];
+    float smooth_Ml[57];
+    int   prev_L;
+    int   inited;
+    uint32_t rng;
+    float gain;
+} mbe_synth_state;
+/**
+ * @brief Reset synthesizer state (call before the first frame).
+ * @param st State to reset.
+ */
+MBE_API void mbe_synthInit(mbe_synth_state* st);
+/**
+ * @brief Synthesize one 20 ms frame of AMBE 2400 speech from decoded
+ *        parameters into 160 float samples (nominal range roughly [-1, 1]
+ *        after the internal output AGC).
+ * @param st     In/out synthesizer state.
+ * @param cur    Decoded parameters (see mbe_decodeAmbe2400Parms()).
+ * @param out160 Output buffer of 160 float samples.
+ */
+MBE_API void mbe_synthFrame(mbe_synth_state* st, const mbe_parms* cur, float* out160);
 /**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz float PCM.
  * @param aout_buf Output buffer of 160 float samples.

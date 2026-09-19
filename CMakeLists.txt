@@ -256,6 +256,8 @@ endif()
 # Explicit source lists (avoids FILE(GLOB ...))
 set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2400.c
+    src/ambe/ambe3600x2400_enc.c
+    src/ambe/ambe3600x2400_synth.c
     src/ambe/ambe3600x2450.c
     src/ambe/ambe_common.c
     src/ecc/ecc.c
@@ -674,6 +676,52 @@ if(MBELIB_BUILD_EXAMPLES)
     if(_SAN_LDFLAGS)
         target_link_options(
             example_print_version
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
+    endif()
+
+    add_executable(example_dstar_encode examples/dstar_encode.c)
+    target_link_libraries(example_dstar_encode PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(example_dstar_encode)
+    target_include_directories(
+        example_dstar_encode
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    # Optional in-speech noise reduction front-end (libspecbleach).
+    find_library(SPECBLEACH_LIBRARY specbleach)
+    if(SPECBLEACH_LIBRARY)
+        target_compile_definitions(example_dstar_encode PRIVATE HAVE_SPECBLEACH=1)
+        target_link_libraries(example_dstar_encode PRIVATE ${SPECBLEACH_LIBRARY})
+    endif()
+    set_target_properties(example_dstar_encode PROPERTIES OUTPUT_NAME dstar_encode)
+    install(TARGETS example_dstar_encode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(_SAN_CFLAGS)
+        target_compile_options(example_dstar_encode PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(
+            example_dstar_encode
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
+    endif()
+
+    add_executable(example_dstar_decode examples/dstar_decode.c)
+    target_link_libraries(example_dstar_decode PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(example_dstar_decode)
+    target_include_directories(
+        example_dstar_decode
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    set_target_properties(example_dstar_decode PROPERTIES OUTPUT_NAME dstar_decode)
+    install(TARGETS example_dstar_decode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(_SAN_CFLAGS)
+        target_compile_options(example_dstar_decode PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(
+            example_dstar_decode
             BEFORE
             PRIVATE ${_SAN_LDFLAGS}
         )

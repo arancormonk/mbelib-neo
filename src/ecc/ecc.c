@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "ecc_const.h"
+#include "mbe_ecc.h"
 #include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -80,6 +81,16 @@ golay_encode_data_word(uint32_t data, char candidate[23]) {
     for (int j = 10; j >= 0; --j) {
         candidate[j] = (char)((ecc >> j) & 1u);
     }
+}
+
+void
+mbe_golay2312_encode(const char in12[12], char out23[23]) {
+    uint32_t data = 0u;
+
+    for (int i = 0; i < 12; ++i) {
+        data = (data << 1) | (uint32_t)(in12[i] & 1);
+    }
+    golay_encode_data_word(data, out23);
 }
 
 static int
