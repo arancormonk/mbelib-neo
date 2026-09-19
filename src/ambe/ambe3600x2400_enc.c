@@ -164,7 +164,7 @@ ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], in
         }
 
         for (int b = lo_bin; b <= hi_bin && b <= (AMBE2400_ENC_FFT_SIZE / 2) - 1; b++) {
-            float re = fft_out[2 * b];
+            float re = fft_out[2 * (size_t)b];
             float im = fft_out[(2 * b) + 1];
             float e = (re * re) + (im * im);
             band_energy += e;
@@ -501,6 +501,7 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
     int prev_L;
     /* Spectral prediction and residual */
     prev_L = mbe_clamp_harmonic_count(prev_mp->L);
+    q->L = mbe_clamp_harmonic_count(q->L);
     float prev_log2Ml[57];
     memcpy(prev_log2Ml, prev_mp->log2Ml, sizeof(prev_log2Ml));
     for (int l = prev_L + 1; l <= q->L; l++) {
@@ -517,6 +518,12 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
         float v_lo;
         float v_hi;
 
+        if (intkl < 0) {
+            intkl = 0;
+        }
+        if (upper < 1) {
+            upper = 1;
+        }
         if (intkl > MBE_MAX_HARMONIC_BANDS) {
             intkl = MBE_MAX_HARMONIC_BANDS;
         }
@@ -969,7 +976,7 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
     memcpy(ambe2400_enc_state.history, agc_buf, (size_t)AMBE2400_ENC_SAMPLES * sizeof(float));
     ambe2400_enc_state.hist_gain = ambe2400_enc_state.agc_gain;
 
-    return is_silence ? 1 : 0;
+    return (int)is_silence;
 }
 
 /**
@@ -1098,7 +1105,7 @@ mbe_encodeAmbe3600x2400Frame(const char ambe_d[49], char ambe_fr[4][24]) {
         }
     }
 
-    memset(ambe_fr, 0, 4 * 24 * sizeof(char));
+    memset(ambe_fr, 0, 4 * sizeof(ambe_fr[0]));
 
     ambe2400_enc_c0(ambe_d, ambe_fr);
     ambe2400_enc_pr((const char (*)[24])ambe_fr, pr);
@@ -1151,7 +1158,7 @@ mbe_decodeDStarDVData(const unsigned char bytes9[9], char ambe_fr[4][24]) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
 
-    memset(ambe_fr, 0, 4 * 24 * sizeof(char));
+    memset(ambe_fr, 0, 4 * sizeof(ambe_fr[0]));
     for (int i = 0; i < 72; i++) {
         ambe_fr[ambe2400_enc_dW[i]][ambe2400_enc_dX[i]] = (char)((bytes9[i >> 3] >> (i & 7)) & 1u);
     }
