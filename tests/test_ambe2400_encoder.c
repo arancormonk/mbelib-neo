@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Round-trip harness for PR #84: frame FEC, DV byte packing, Golay, and
+/* AMBE 3600x2400 encoder tests: frame FEC, DV byte packing, Golay, and
  * encoder->decoder parameter-state parity. */
 #include <math.h>
 #ifndef M_PI

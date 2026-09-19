@@ -384,7 +384,9 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * mbe_processAmbe3600x2400*() path and following the D-STAR AMBE bit layout
  * (interleave, scrambler and Golay parity cross-checked against the MMDVM
  * tables). Interoperability with DVSI hardware has not been verified.
- * Silent input produces the standard AMBE silence frame.
+ * Quiet input (frame RMS below the silence threshold) is encoded as voice
+ * until the fifth consecutive quiet frame; from then on the standard AMBE
+ * silence frame is produced until a louder frame arrives.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
