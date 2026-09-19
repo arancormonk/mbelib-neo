@@ -155,7 +155,7 @@ ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], in
             hi_bin = (AMBE2400_ENC_FFT_SIZE / 2) - 1;
         }
 
-        for (int b = lo_bin; b <= hi_bin && b <= (AMBE2400_ENC_FFT_SIZE / 2) - 1; b++) {
+        for (int b = lo_bin; b <= hi_bin; b++) {
             float re = fft_out[2 * (size_t)b];
             float im = fft_out[(2 * b) + 1];
             float e = (re * re) + (im * im);
