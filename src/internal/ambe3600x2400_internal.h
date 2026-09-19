@@ -23,6 +23,7 @@ struct ambe_dct_cache {
 
 /* Not exported from the shared library; present as ordinary globals in the
  * static archive, hence the mbe_ prefix.
+ *
  * Arrays use one-based harmonic/block indices. L and prev_L must be clamped
  * to 1..56; Ji comes from AmbePlusLmprbl and codes contains b5..b8. */
 const struct ambe_dct_cache* mbe_ambe2400_get_dct_cache(void);

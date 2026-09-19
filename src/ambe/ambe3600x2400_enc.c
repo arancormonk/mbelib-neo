@@ -42,7 +42,6 @@
 
 #include "ambe3600x2400_const.h"
 #include "ambe3600x2400_internal.h"
-#include "mbe_compiler.h"
 #include "mbe_ecc.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"

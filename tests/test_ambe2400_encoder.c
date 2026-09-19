@@ -350,7 +350,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     int bad_frames = 0, silence = 0, voice = 0, first_bad = -1;
     float worst = 0;
     int worst_frame = -1, worst_l = -1;
-    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0;
+    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0;
     for (int f = 0; f < FRAMES; f++) {
         char d[49];
         unsigned char saved_prev[sizeof(e_prev)];
@@ -412,6 +412,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
                     frame_bad = 1;
                 }
                 if (!float_bits_equal(d_cur.Ml[l], e_cur.Ml[l])) {
+                    Ml_mism++;
                     frame_bad = 1;
                 }
             }
@@ -429,7 +430,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     printf("  frames with any mismatch: %d (first at %d)\n", bad_frames, first_bad);
     printf("  L mismatches: %d, gamma mismatches: %d, Vl mismatches: %d\n", L_mism, gamma_mism, Vl_mism);
     printf("  bitwise w0 mismatches: %d\n", w0_mism);
-    printf("  bitwise log2Ml mismatches: %d\n", log2_mism);
+    printf("  bitwise log2Ml mismatches: %d, bitwise Ml mismatches: %d\n", log2_mism, Ml_mism);
     printf("  worst |log2Ml| diff: %g (frame %d, l=%d)\n", worst, worst_frame, worst_l);
     return bad_frames ? 1 : 0;
 }
