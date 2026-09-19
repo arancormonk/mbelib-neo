@@ -37,6 +37,36 @@ mbe_synthInit(mbe_synth_state* st) {
     st->gain = 0.1f;
 }
 
+static void
+mbe_synth_normalize(mbe_synth_state* st, float* out160) {
+    /* Slow peak-based normalization to a comfortable level (robust to the
+     * frame's harmonic count and crest factor). */
+    {
+        float pk = 0.0f;
+        for (int n = 0; n < MBE_SYNTH_SAMPLES; n++) {
+            float a = fabsf(out160[n]);
+            if (a > pk) {
+                pk = a;
+            }
+        }
+        if (pk > 1e-4f) {
+            float want = 0.75f / pk;
+            st->gain = (0.5f * st->gain) + (0.5f * want);
+            if (st->gain > 100.0f) {
+                st->gain = 100.0f;
+            }
+            for (int n = 0; n < MBE_SYNTH_SAMPLES; n++) {
+                out160[n] *= st->gain;
+                if (out160[n] > 0.85f) {
+                    out160[n] = 0.85f;
+                } else if (out160[n] < -0.85f) {
+                    out160[n] = -0.85f;
+                }
+            }
+        }
+    }
+}
+
 /**
  * @brief Synthesize one 20 ms frame of AMBE 2400 speech from decoded
  *        parameters into 160 float samples.
@@ -44,10 +74,9 @@ mbe_synthInit(mbe_synth_state* st) {
 void
 mbe_synthFrame(mbe_synth_state* st, const mbe_parms* cur, float* out160) {
     float w0 = cur->w0;
-    int   L = cur->L;
+    int L = cur->L;
     float Ml[57];
     float Vl[57];
-    float s;
 
     if (L < 1) {
         L = 1;
@@ -63,7 +92,7 @@ mbe_synthFrame(mbe_synth_state* st, const mbe_parms* cur, float* out160) {
     }
 
     for (int n = 0; n < MBE_SYNTH_SAMPLES; n++) {
-        s = 0.0f;
+        float s = 0.0f;
         for (int l = 1; l <= L; l++) {
             if (Vl[l] > 0.5f) {
                 s += Ml[l] * sinf(st->phase[l] + (float)l * w0 * (float)n);
@@ -85,27 +114,5 @@ mbe_synthFrame(mbe_synth_state* st, const mbe_parms* cur, float* out160) {
     st->prev_L = L;
     st->inited = 1;
 
-    /* Slow peak-based normalization to a comfortable level (robust to the
-     * frame's harmonic count and crest factor). */
-    {
-        float pk = 0.0f;
-        for (int n = 0; n < MBE_SYNTH_SAMPLES; n++) {
-            float a = fabsf(out160[n]);
-            if (a > pk) {
-                pk = a;
-            }
-        }
-        if (pk > 1e-4f) {
-            float want = 0.75f / pk;
-            st->gain = (0.5f * st->gain) + (0.5f * want);
-            if (st->gain > 100.0f) {
-                st->gain = 100.0f;
-            }
-            for (int n = 0; n < MBE_SYNTH_SAMPLES; n++) {
-                out160[n] *= st->gain;
-                if (out160[n] > 0.85f) out160[n] = 0.85f;
-                else if (out160[n] < -0.85f) out160[n] = -0.85f;
-            }
-        }
-    }
+    mbe_synth_normalize(st, out160);
 }
