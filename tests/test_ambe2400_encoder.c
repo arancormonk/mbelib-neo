@@ -9,6 +9,65 @@
 #include "mbe_ecc.h"
 #include "mbelib-neo/mbelib.h"
 
+#ifdef MBE_ENCODER_TEST_OOM
+/* GNU link wrapping injects failure at each project-owned aligned allocation.
+ * PFFFT's own internal calls are defined in its object, so are not wrapped. */
+void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
+void encoder_real_free(void* ptr) __asm__("__real_pffft_aligned_free");
+void* encoder_fault_alloc(size_t size) __asm__("__wrap_pffft_aligned_malloc");
+void encoder_track_free(void* ptr) __asm__("__wrap_pffft_aligned_free");
+static int allocation_count;
+static int fail_at;
+static int live_allocations;
+
+void*
+encoder_fault_alloc(size_t size) {
+    allocation_count++;
+    if (allocation_count == fail_at) {
+        return NULL;
+    }
+    void* ptr = encoder_real_alloc(size);
+    if (ptr != NULL) {
+        live_allocations++;
+    }
+    return ptr;
+}
+
+void
+encoder_track_free(void* ptr) {
+    if (ptr != NULL) {
+        live_allocations--;
+    }
+    encoder_real_free(ptr);
+}
+
+int
+main(int argc, char** argv) {
+    if (argc != 2 || strlen(argv[1]) != 1 || argv[1][0] < '1' || argv[1][0] > '5') {
+        return 1;
+    }
+    fail_at = argv[1][0] - '0';
+    mbe_parms cur, prev, enhanced;
+    float pcm[160];
+    char bits[49];
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int i = 0; i < 160; i++) {
+        pcm[i] = 0.1f * sinf(0.1f * (float)i);
+    }
+    int status = mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev);
+    if (status >= 0 || live_allocations != 0) {
+        (void)fprintf(stderr, "failed allocation %d: status=%d live=%d\n", fail_at, status, live_allocations);
+        return 1;
+    }
+    fail_at = 0;
+    if (mbe_encodeAmbe2400Parms(pcm, bits, &cur, &prev) != 0) {
+        return 1;
+    }
+    printf("allocation failure %s: propagated, cleaned up, retry succeeded\n", argv[1]);
+    return 0;
+}
+#else
+
 static uint32_t rng = 0xC0FFEE;
 
 static uint32_t
@@ -91,7 +150,7 @@ test_dv_bytes(void) {
         mbe_encodeDStarDVData((const char (*)[24])fr, b);
         mbe_decodeDStarDVData(b, back);
         mbe_encodeDStarDVData((const char (*)[24])back, b2);
-        if (memcmp(b, b2, 9)) {
+        if (memcmp(b, b2, 9) != 0) {
             fails++;
         }
         const int carried[4] = {24, 23, 11, 14};
@@ -169,7 +228,7 @@ test_golay(void) {
                 mism++;
             }
         }
-        if (errs != 0 || mism || memcmp(cw, out, 23)) {
+        if (errs != 0 || mism || memcmp(cw, out, 23) != 0) {
             fails++;
         }
     }
@@ -233,9 +292,12 @@ test_state_parity(void) {
     int L_mism = 0, Vl_mism = 0, gamma_mism = 0;
     for (int f = 0; f < FRAMES; f++) {
         char d[49];
-        mbe_parms saved_prev = e_prev;
-        int r = mbe_encodeAmbe2400ParmsShort(pcm + f * 160, d, &e_cur, &e_prev);
-        if (memcmp(&saved_prev, &e_prev, sizeof(e_prev)) != 0) {
+        unsigned char saved_prev[sizeof(e_prev)];
+        memcpy(saved_prev, &e_prev, sizeof(e_prev));
+        int r = mbe_encodeAmbe2400ParmsShort(pcm + (size_t)f * 160, d, &e_cur, &e_prev);
+        unsigned char after_prev[sizeof(e_prev)];
+        memcpy(after_prev, &e_prev, sizeof(e_prev));
+        if (memcmp(saved_prev, after_prev, sizeof(e_prev)) != 0) {
             return 1;
         }
         if (r < 0) {
@@ -385,7 +447,7 @@ test_pitch_endpoint(int period, int expected_b0) {
         }
         mbe_moveMbeParms(&c, &p);
     }
-    int b0 = d[48];
+    int b0 = (unsigned char)d[48];
     for (int i = 0; i < 6; i++) {
         b0 |= (int)d[i] << (6 - i);
     }
@@ -441,3 +503,5 @@ main(int argc, char** argv) {
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;
 }
+
+#endif

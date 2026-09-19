@@ -691,20 +691,28 @@ if(MBELIB_BUILD_EXAMPLES)
     # Optional in-speech noise reduction front-end (libspecbleach).
     find_library(SPECBLEACH_LIBRARY specbleach)
     if(SPECBLEACH_LIBRARY)
-        target_compile_definitions(example_dstar_encode PRIVATE HAVE_SPECBLEACH=1)
-        target_link_libraries(example_dstar_encode PRIVATE ${SPECBLEACH_LIBRARY})
+        target_compile_definitions(
+            example_dstar_encode
+            PRIVATE HAVE_SPECBLEACH=1
+        )
+        target_link_libraries(
+            example_dstar_encode
+            PRIVATE ${SPECBLEACH_LIBRARY}
+        )
     endif()
-    set_target_properties(example_dstar_encode PROPERTIES OUTPUT_NAME dstar_encode)
-    install(TARGETS example_dstar_encode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set_target_properties(
+        example_dstar_encode
+        PROPERTIES OUTPUT_NAME dstar_encode
+    )
+    install(
+        TARGETS example_dstar_encode
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
     if(_SAN_CFLAGS)
         target_compile_options(example_dstar_encode PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
-        target_link_options(
-            example_dstar_encode
-            BEFORE
-            PRIVATE ${_SAN_LDFLAGS}
-        )
+        target_link_options(example_dstar_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
 
     add_executable(example_dstar_decode examples/dstar_decode.c)
@@ -714,17 +722,19 @@ if(MBELIB_BUILD_EXAMPLES)
         example_dstar_decode
         PRIVATE "${PROJECT_SOURCE_DIR}/include"
     )
-    set_target_properties(example_dstar_decode PROPERTIES OUTPUT_NAME dstar_decode)
-    install(TARGETS example_dstar_decode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set_target_properties(
+        example_dstar_decode
+        PROPERTIES OUTPUT_NAME dstar_decode
+    )
+    install(
+        TARGETS example_dstar_decode
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
     if(_SAN_CFLAGS)
         target_compile_options(example_dstar_decode PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
-        target_link_options(
-            example_dstar_decode
-            BEFORE
-            PRIVATE ${_SAN_LDFLAGS}
-        )
+        target_link_options(example_dstar_decode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
 endif()
 
@@ -772,7 +782,10 @@ if(MBELIB_BUILD_TESTS)
 
     add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
     # The private Golay encoder is hidden in the shared library.
-    target_link_libraries(test_ambe2400_encoder PRIVATE ${MBELIB_EXEC_LINK_TGT} mbe-static)
+    target_link_libraries(
+        test_ambe2400_encoder
+        PRIVATE ${MBELIB_EXEC_LINK_TGT} mbe-static
+    )
     target_include_directories(
         test_ambe2400_encoder
         PRIVATE
@@ -783,13 +796,64 @@ if(MBELIB_BUILD_TESTS)
         target_compile_options(test_ambe2400_encoder PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
-        target_link_options(test_ambe2400_encoder BEFORE PRIVATE ${_SAN_LDFLAGS})
+        target_link_options(
+            test_ambe2400_encoder
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
     endif()
     add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
     foreach(case pitch20 pitch127 dc_noise)
-        add_test(NAME test_ambe2400_encoder_${case} COMMAND test_ambe2400_encoder ${case})
+        add_test(
+            NAME test_ambe2400_encoder_${case}
+            COMMAND test_ambe2400_encoder ${case}
+        )
     endforeach()
 
+    # Exercise every partial plan allocation and retry with GNU link wrapping.
+    if(
+        CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+    )
+        add_executable(test_ambe2400_encoder_oom tests/test_ambe2400_encoder.c)
+        target_link_libraries(test_ambe2400_encoder_oom PRIVATE mbe-static)
+        target_include_directories(
+            test_ambe2400_encoder_oom
+            PRIVATE
+                "${PROJECT_SOURCE_DIR}/include"
+                "${PROJECT_SOURCE_DIR}/src/internal"
+        )
+        target_compile_definitions(
+            test_ambe2400_encoder_oom
+            PRIVATE MBE_ENCODER_TEST_OOM=1
+        )
+        target_link_options(
+            test_ambe2400_encoder_oom
+            PRIVATE
+                "-Wl,--wrap=pffft_aligned_malloc"
+                "-Wl,--wrap=pffft_aligned_free"
+        )
+        _mbelib_apply_hardening(test_ambe2400_encoder_oom)
+        if(_SAN_CFLAGS)
+            target_compile_options(
+                test_ambe2400_encoder_oom
+                PRIVATE ${_SAN_CFLAGS}
+            )
+        endif()
+        if(_SAN_LDFLAGS)
+            target_link_options(
+                test_ambe2400_encoder_oom
+                BEFORE
+                PRIVATE ${_SAN_LDFLAGS}
+            )
+        endif()
+        foreach(allocation RANGE 1 5)
+            add_test(
+                NAME test_ambe2400_encoder_oom_${allocation}
+                COMMAND test_ambe2400_encoder_oom ${allocation}
+            )
+        endforeach()
+    endif()
 
     add_executable(test_noise_determinism tests/test_noise_determinism.c)
     target_link_libraries(
