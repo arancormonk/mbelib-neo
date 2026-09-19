@@ -631,12 +631,13 @@ ambe2400_enc_quantize_prba(struct ambe2400_enc_frame* q) {
     }
 }
 
+static const float (*const ambe2400_hoc_tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
+
 static void
 ambe2400_enc_quantize_hoc(struct ambe2400_enc_frame* q) {
     /* HOC blocks (b5..b8): Cik[blk][3..min(Ji,6)] */
     {
         int codes[4];
-        static const float (*const tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
 
         for (int blk = 0; blk < 4; blk++) {
             int ji = q->Ji[blk + 1];
@@ -648,7 +649,7 @@ ambe2400_enc_quantize_hoc(struct ambe2400_enc_frame* q) {
             for (int c = 0; c < 16; c += (blk == 3) ? 2 : 1) {
                 float err = 0.0f;
                 for (int k = 3; k <= kmax; k++) {
-                    float d = q->Cik[blk + 1][k] - tables[blk][c][k - 3];
+                    float d = q->Cik[blk + 1][k] - ambe2400_hoc_tables[blk][c][k - 3];
                     err += d * d;
                 }
                 if (err < best_err) {
@@ -698,13 +699,12 @@ ambe2400_enc_reconstruct_coefficients(struct ambe2400_enc_frame* q) {
     q->Cik_q[4][2] = rconst * (Ri_q[7] - Ri_q[8]);
 
     {
-        static const float (*const tables[4])[4] = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8};
         const int codes[4] = {q->b[5], q->b[6], q->b[7], q->b[8]};
         for (int blk = 0; blk < 4; blk++) {
             int ji = q->Ji[blk + 1];
             int kmax = (ji < 6) ? ji : 6;
             for (int k = 3; k <= kmax; k++) {
-                q->Cik_q[blk + 1][k] = tables[blk][codes[blk]][k - 3];
+                q->Cik_q[blk + 1][k] = ambe2400_hoc_tables[blk][codes[blk]][k - 3];
             }
         }
     }
