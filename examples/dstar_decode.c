@@ -59,7 +59,7 @@ write_samples(FILE* fp, short pcm[FRAME_SAMPLES], const char bits[49]) {
         }
         uint16_t sample = (uint16_t)value;
         bytes[2 * (size_t)i] = (unsigned char)sample;
-        bytes[2 * i + 1] = (unsigned char)(sample >> 8);
+        bytes[2 * (size_t)i + 1] = (unsigned char)(sample >> 8);
     }
     return fwrite(bytes, 1, sizeof(bytes), fp) == sizeof(bytes) ? 0 : -1;
 }

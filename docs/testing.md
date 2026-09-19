@@ -9,6 +9,7 @@ The CTest suite includes:
 
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
+- AMBE 2400 encoder round trips, parameter parity, pitch endpoints, and allocation-failure recovery (`test_ambe2400_encoder`)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks
 - float-to-int16 conversion parity checks

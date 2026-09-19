@@ -186,6 +186,12 @@ Use `mbe_process*Data*` when you already have unpacked parameter bits.
 
 IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs.
 
+- `mbe_encodeAmbe2400Parms()` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits.
+- `mbe_encodeAmbe2400ParmsShort()` encodes 160 signed 16-bit PCM samples into 49 AMBE 2400 parameter bits.
+- `mbe_encodeAmbe3600x2400Frame()` adds FEC and interleaving to 49 parameter bits, producing `char ambe_fr[4][24]`.
+- `mbe_encodeDStarDVData()` packs a frame into nine D-STAR DV data bytes in air order, LSB first, without the sync word.
+- `mbe_decodeDStarDVData()` unpacks nine D-STAR DV data bytes into `char ambe_fr[4][24]`.
+
 ### Stateful Decode Workflow
 
 - Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
