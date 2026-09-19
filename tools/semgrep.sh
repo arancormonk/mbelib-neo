@@ -87,11 +87,11 @@ ARGS=(
   --disable-version-check
   --no-git-ignore
   --exclude .deps-arch-toolchain
-  --exclude .deps-arch-toolchain/**
+  --exclude ".deps-arch-toolchain/**"
   --exclude src/external
-  --exclude src/external/**
+  --exclude "src/external/**"
   --exclude build
-  --exclude build/**
+  --exclude "build/**"
 )
 if [[ $STRICT -eq 1 ]]; then
   ARGS+=(--error)
