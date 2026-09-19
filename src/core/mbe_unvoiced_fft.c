@@ -162,6 +162,17 @@ mbe_fft_plan_free(mbe_fft_plan* plan) {
     }
 }
 
+int
+mbe_fft_forward_real(mbe_fft_plan* plan, const float input[MBE_FFT_SIZE], float output[MBE_FFT_SIZE]) {
+    if (plan == NULL || input == NULL || output == NULL) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    memcpy(plan->Uw, input, MBE_FFT_SIZE * sizeof(float));
+    pffft_transform_ordered(plan->setup, plan->Uw, plan->Uw_fft, plan->work, PFFFT_FORWARD);
+    memcpy(output, plan->Uw_fft, MBE_FFT_SIZE * sizeof(float));
+    return 0;
+}
+
 float
 mbe_synthesisWindow(int n) {
     return (n < -105 || n > 105) ? 0.0f : Ws[n + 160];

@@ -56,6 +56,16 @@ mbe_fft_plan* mbe_fft_plan_alloc(void);
 void mbe_fft_plan_free(mbe_fft_plan* plan);
 
 /**
+ * @brief Forward 256-point real FFT using the plan's aligned scratch buffers.
+ *
+ * Input and output may be unaligned. Output contains DC at [0], Nyquist at
+ * [1], and interleaved real/imaginary bins 1..127 at [2..255]. The plan must
+ * not be used concurrently. No allocations occur during the transform.
+ * @return 0 on success, MBE_STATUS_INVALID_ARGUMENT for NULL arguments.
+ */
+int mbe_fft_forward_real(mbe_fft_plan* plan, const float input[MBE_FFT_SIZE], float output[MBE_FFT_SIZE]);
+
+/**
  * @brief Generate LCG noise samples for unvoiced synthesis.
  *
  * Implements JMBE-compatible Linear Congruential Generator.

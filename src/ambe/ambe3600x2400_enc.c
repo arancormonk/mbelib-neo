@@ -41,9 +41,9 @@
 #include "ecc_const.h"
 #include "mbe_compiler.h"
 #include "mbe_ecc.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
-#include "pffft.h"
 
 #define AMBE2400_ENC_FFT_SIZE    256
 #define AMBE2400_ENC_SAMPLES     160
@@ -83,8 +83,7 @@ static MBE_THREAD_LOCAL int ambe2400_enc_silence_run = 0;
 static MBE_THREAD_LOCAL float ambe2400_enc_prev_lag = 0.0f;
 static MBE_THREAD_LOCAL float ambe2400_enc_max_energy = 1e-6f;
 
-static MBE_THREAD_LOCAL PFFFT_Setup* ambe2400_enc_fft;
-static MBE_THREAD_LOCAL float* ambe2400_enc_work;
+static MBE_THREAD_LOCAL mbe_fft_plan* ambe2400_enc_fft;
 
 struct ambe2400_dct_cache {
     int inited;
@@ -121,47 +120,28 @@ ambe2400_enc_get_dct_cache(void) {
     return cache;
 }
 
-static int
-ambe2400_enc_fft_init(void) {
-    if (ambe2400_enc_fft == NULL) {
-        ambe2400_enc_fft = pffft_new_setup(AMBE2400_ENC_FFT_SIZE, PFFFT_REAL);
-        if (ambe2400_enc_fft == NULL) {
-            return -1;
-        }
-        ambe2400_enc_work = (float*)pffft_aligned_malloc((size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
-        if (ambe2400_enc_work == NULL) {
-            pffft_destroy_setup(ambe2400_enc_fft);
-            ambe2400_enc_fft = NULL;
-            return -1;
-        }
-    }
-    return 0;
-}
-
 /*
  * Compute log2 spectral magnitudes and raw per-harmonic voicing from a
  * pitch estimate over the windowed analysis buffer.
  */
-static void
+static int
 ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], int vl_ana[57]) {
-    /* pffft requires 16-byte aligned buffers; stack arrays may not be. */
-    static MBE_THREAD_LOCAL float* fft_in;
-    static MBE_THREAD_LOCAL float* fft_out;
+    float fft_out[AMBE2400_ENC_FFT_SIZE];
     const float f0_bin = f0q * (float)AMBE2400_ENC_FFT_SIZE;
     float max_band_energy = 0.0f;
 
-    if (fft_in == NULL) {
-        fft_in = (float*)pffft_aligned_malloc((size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
-        fft_out = (float*)pffft_aligned_malloc((size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
-        if (fft_in == NULL || fft_out == NULL) {
-            return;
+    if (ambe2400_enc_fft == NULL) {
+        ambe2400_enc_fft = mbe_fft_plan_alloc();
+        if (ambe2400_enc_fft == NULL) {
+            return MBE_STATUS_INVALID_ARGUMENT;
         }
     }
+    int status = mbe_fft_forward_real(ambe2400_enc_fft, windowed, fft_out);
+    if (status < 0) {
+        return status;
+    }
 
-    memcpy(fft_in, windowed, (size_t)AMBE2400_ENC_FFT_SIZE * sizeof(float));
-    pffft_transform_ordered(ambe2400_enc_fft, fft_in, fft_out, ambe2400_enc_work, PFFFT_FORWARD);
-
-    /* Ordered real FFT layout: [DC, re1, im1, re2, im2, ..., reN/2] */
+    /* Ordered real FFT: [DC, Nyquist, re1, im1, ..., re127, im127]. */
     for (int l = 1; l <= L; l++) {
         float lo = ((float)l - 0.5f) * f0_bin;
         float hi = ((float)l + 0.5f) * f0_bin;
@@ -203,6 +183,7 @@ ambe2400_enc_spectrum(const float* windowed, float f0q, int L, float mag[57], in
             vl_ana[l] = (band_peak > (1.35f * background)) && (band_energy > (0.0008f * max_band_energy + 1e-12f));
         }
     }
+    return 0;
 }
 
 /*
@@ -405,7 +386,10 @@ ambe2400_encode_voice(const float* pcm, char ambe_d[49], mbe_parms* cur_mp, cons
     f0q = exp2f(AMBE2400_ENC_F0_OFFSET + (AMBE2400_ENC_F0_STEP * ((float)b0 + 0.5f)));
 
     /* Spectral analysis */
-    ambe2400_enc_spectrum(windowed, f0q, L, mag, Vl_ana);
+    int status = ambe2400_enc_spectrum(windowed, f0q, L, mag, Vl_ana);
+    if (status < 0) {
+        return status;
+    }
 
     /* Voicing: energy-aware. Track the frame's energy against a
      * running max and bias weak, non-periodic frames toward unvoiced. A weak
@@ -863,9 +847,6 @@ mbe_encodeAmbe2400Parms(const float* samples, char ambe_d[49], mbe_parms* cur_mp
     int ret;
 
     if (samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
-        return MBE_STATUS_INVALID_ARGUMENT;
-    }
-    if (ambe2400_enc_fft_init() < 0) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
 
