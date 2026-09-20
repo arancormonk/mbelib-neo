@@ -186,6 +186,17 @@ Use `mbe_process*Data*` when you already have unpacked parameter bits.
 
 IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs.
 
+- `mbe_ambe2400EncoderAlloc()` creates a caller-owned encoder context and FFT plan; `mbe_ambe2400EncoderReset(enc)` restarts its analysis state, and `mbe_ambe2400EncoderFree(enc)` releases it.
+- `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables); interoperability with DVSI hardware has not been verified.
+- `mbe_encodeAmbe2400ParmsShort(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 signed 16-bit PCM samples into 49 AMBE 2400 parameter bits.
+- `mbe_encodeAmbe3600x2400Frame()` adds FEC and interleaving to 49 parameter bits, producing `char ambe_fr[4][24]`.
+- `mbe_encodeDStarDVData()` packs a frame into nine D-STAR DV data bytes in air order, LSB first, without the sync word.
+- `mbe_decodeDStarDVData()` unpacks nine D-STAR DV data bytes into `char ambe_fr[4][24]`.
+
+### Encoder Workflow
+
+- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail.
+
 ### Stateful Decode Workflow
 
 - Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
@@ -335,6 +346,8 @@ tools/bench_compare.sh
 - Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
 - Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_golden_pcm` (golden hash regression checks).
 - Example: `examples/print_version.c` shows linking and header usage.
+- WAV round trip: `./build/dev-debug/dstar_encode < input.wav > output.dstar`, then `./build/dev-debug/dstar_decode < output.dstar > output.wav`. These example binaries are not installed. They use binary stdin/stdout, accept no path arguments, and send diagnostics to stderr. The private `.dstar` container is not a D-STAR air-interface stream.
+- When Python 3.7 or newer is available, CTest also checks the D-STAR examples through stdin/stdout pipes, including malformed WAVs, exact silence, and the final flush frame.
 - Golden hash helper: `gen_golden` (available when `MBELIB_BUILD_TESTS=ON`, default) prints current FNV-1a reference values for synthesis/conversion regression workflows (`cmake --build build/dev-debug --target gen_golden && ./build/dev-debug/gen_golden`).
 
 ## Documentation

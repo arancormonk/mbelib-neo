@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "ambe3600x2400_const.h"
+#include "ambe3600x2400_internal.h"
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
@@ -35,12 +36,6 @@
  * Ri DCT: cosf(M_PI * (m-1) * (i-0.5) / 8) for m=1..8, i=1..8
  * Per-block IDCT: cosf(M_PI * (k-1) * (j-0.5) / ji) for ji=1..17, j=1..ji, k=1..ji
  */
-struct ambe_dct_cache {
-    int inited;
-    float ri_cos[9][9];         /* [m][i] for m=1..8, i=1..8 (index 0 unused) */
-    float idct_cos[18][18][18]; /* [ji][j][k] for ji=1..17, j=1..ji, k=1..ji */
-};
-
 static MBE_THREAD_LOCAL struct ambe_dct_cache ambe_cache = {0};
 
 /**
@@ -51,8 +46,8 @@ static MBE_THREAD_LOCAL struct ambe_dct_cache ambe_cache = {0};
  *
  * @return Pointer to the initialized cache.
  */
-static struct ambe_dct_cache*
-ambe_get_dct_cache(void) {
+const struct ambe_dct_cache*
+mbe_ambe2400_get_dct_cache(void) {
     if (ambe_cache.inited) {
         return &ambe_cache;
     }
@@ -282,9 +277,6 @@ ambe2400_decode_gain(const char* ambe_d, mbe_parms* cur_mp, const mbe_parms* pre
 
 static void
 ambe2400_decode_ri(const char* ambe_d, float Ri[9]) {
-    float Gm[9];
-    Gm[1] = 0;
-
     int b3 = 0;
     b3 |= ambe_d[10] << 8;
     b3 |= ambe_d[11] << 7;
@@ -295,9 +287,6 @@ ambe2400_decode_ri(const char* ambe_d, float Ri[9]) {
     b3 |= ambe_d[16] << 2;
     b3 |= ambe_d[44] << 1;
     b3 |= ambe_d[45];
-    Gm[2] = AmbePlusPRBA24[b3][0];
-    Gm[3] = AmbePlusPRBA24[b3][1];
-    Gm[4] = AmbePlusPRBA24[b3][2];
 
     int b4 = 0;
     b4 |= ambe_d[17] << 6;
@@ -307,17 +296,32 @@ ambe2400_decode_ri(const char* ambe_d, float Ri[9]) {
     b4 |= ambe_d[21] << 2;
     b4 |= ambe_d[46] << 1;
     b4 |= ambe_d[47];
+
+    mbe_ambe2400_reconstruct_prba(b3, b4, Ri);
+}
+
+void
+mbe_ambe2400_reconstruct_prba(int b3, int b4, float Ri[9]) {
+    float Gm[9];
+    Gm[1] = 0;
+    Gm[2] = AmbePlusPRBA24[b3][0];
+    Gm[3] = AmbePlusPRBA24[b3][1];
+    Gm[4] = AmbePlusPRBA24[b3][2];
     Gm[5] = AmbePlusPRBA58[b4][0];
     Gm[6] = AmbePlusPRBA58[b4][1];
     Gm[7] = AmbePlusPRBA58[b4][2];
     Gm[8] = AmbePlusPRBA58[b4][3];
-
 #ifdef AMBE_DEBUG
     fprintf(stderr, "b3: %i Gm[2]: %f Gm[3]: %f Gm[4]: %f b4: %i Gm[5]: %f Gm[6]: %f Gm[7]: %f Gm[8]: %f\n", b3, Gm[2],
             Gm[3], Gm[4], b4, Gm[5], Gm[6], Gm[7], Gm[8]);
 #endif
 
-    const struct ambe_dct_cache* cache = ambe_get_dct_cache();
+    mbe_ambe2400_reconstruct_ri(Gm, Ri);
+}
+
+void
+mbe_ambe2400_reconstruct_ri(const float Gm[9], float Ri[9]) {
+    const struct ambe_dct_cache* cache = mbe_ambe2400_get_dct_cache();
     for (int i = 1; i <= 8; i++) {
         float sum = 0;
         for (int m = 1; m <= 8; m++) {
@@ -350,16 +354,6 @@ ambe2400_load_hoc_block(float Cik[5][18], int block, int ji, int code, const flo
 
 static void
 ambe2400_decode_cik(const char* ambe_d, int L, const float Ri[9], float Cik[5][18], int Ji[5]) {
-    const float rconst = ((float)1 / ((float)2 * M_SQRT2));
-    Cik[1][1] = (float)0.5 * (Ri[1] + Ri[2]);
-    Cik[1][2] = rconst * (Ri[1] - Ri[2]);
-    Cik[2][1] = (float)0.5 * (Ri[3] + Ri[4]);
-    Cik[2][2] = rconst * (Ri[3] - Ri[4]);
-    Cik[3][1] = (float)0.5 * (Ri[5] + Ri[6]);
-    Cik[3][2] = rconst * (Ri[5] - Ri[6]);
-    Cik[4][1] = (float)0.5 * (Ri[7] + Ri[8]);
-    Cik[4][2] = rconst * (Ri[7] - Ri[8]);
-
     int b5 = 0;
     b5 |= ambe_d[22] << 3;
     b5 |= ambe_d[23] << 2;
@@ -392,18 +386,34 @@ ambe2400_decode_cik(const char* ambe_d, int L, const float Ri[9], float Cik[5][1
     fprintf(stderr, "b5: %i b6: %i b7: %i b8: %i\n", b5, b6, b7, b8);
 #endif
 
-    ambe2400_load_hoc_block(Cik, 1, Ji[1], b5, AmbePlusHOCb5);
-    ambe2400_load_hoc_block(Cik, 2, Ji[2], b6, AmbePlusHOCb6);
-    ambe2400_load_hoc_block(Cik, 3, Ji[3], b7, AmbePlusHOCb7);
-    ambe2400_load_hoc_block(Cik, 4, Ji[4], b8, AmbePlusHOCb8);
+    const int codes[4] = {b5, b6, b7, b8};
+    mbe_ambe2400_reconstruct_cik(Ri, codes, Ji, Cik);
+}
+
+void
+mbe_ambe2400_reconstruct_cik(const float Ri[9], const int codes[4], const int Ji[5], float Cik[5][18]) {
+    const float rconst = ((float)1 / ((float)2 * M_SQRT2));
+    Cik[1][1] = (float)0.5 * (Ri[1] + Ri[2]);
+    Cik[1][2] = rconst * (Ri[1] - Ri[2]);
+    Cik[2][1] = (float)0.5 * (Ri[3] + Ri[4]);
+    Cik[2][2] = rconst * (Ri[3] - Ri[4]);
+    Cik[3][1] = (float)0.5 * (Ri[5] + Ri[6]);
+    Cik[3][2] = rconst * (Ri[5] - Ri[6]);
+    Cik[4][1] = (float)0.5 * (Ri[7] + Ri[8]);
+    Cik[4][2] = rconst * (Ri[7] - Ri[8]);
+
+    ambe2400_load_hoc_block(Cik, 1, Ji[1], codes[0], AmbePlusHOCb5);
+    ambe2400_load_hoc_block(Cik, 2, Ji[2], codes[1], AmbePlusHOCb6);
+    ambe2400_load_hoc_block(Cik, 3, Ji[3], codes[2], AmbePlusHOCb7);
+    ambe2400_load_hoc_block(Cik, 4, Ji[4], codes[3], AmbePlusHOCb8);
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\n");
 #endif
 }
 
-static void
-ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]) {
-    const struct ambe_dct_cache* cache = ambe_get_dct_cache();
+void
+mbe_ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]) {
+    const struct ambe_dct_cache* cache = mbe_ambe2400_get_dct_cache();
     int l = 1;
     for (int i = 1; i <= 4; i++) {
         int ji = Ji[i];
@@ -425,8 +435,8 @@ ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]) {
     }
 }
 
-static void
-ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc) {
+void
+mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc) {
     int intkl[57] = {0};
     float flokl[57] = {0.0f};
     float deltal[57] = {0.0f};
@@ -444,7 +454,7 @@ ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
 
     float Sum43 = 0;
     for (int l = 1; l <= cur_mp->L; l++) {
-        flokl[l] = ((float)prev_L / (float)cur_mp->L) * (float)l;
+        flokl[l] = ambe2400_prediction_position(prev_L, cur_mp->L, l);
         intkl[l] = (int)(flokl[l]);
 #ifdef AMBE_DEBUG
         fprintf(stderr, "flok%i: %f, intk%i: %i ", l, flokl[l], l, intkl[l]);
@@ -458,7 +468,7 @@ ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
         if (upper > MBE_MAX_HARMONIC_BANDS) {
             upper = MBE_MAX_HARMONIC_BANDS;
         }
-        Sum43 = Sum43 + ((((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[upper]));
+        Sum43 = Sum43 + ambe2400_interpolate_prediction(deltal[l], prev_mp->log2Ml[intkl[l]], prev_mp->log2Ml[upper]);
     }
     Sum43 = (((float)0.65 / (float)cur_mp->L) * Sum43);
 #ifdef AMBE_DEBUG
@@ -480,7 +490,7 @@ ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
         }
         float c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
         float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[upper]);
-        cur_mp->log2Ml[l] = Tl[l] + c1 + c2 - Sum43 + BigGamma;
+        cur_mp->log2Ml[l] = ambe2400_reconstruct_log2Ml(Tl[l], c1, c2, Sum43, BigGamma);
         if (cur_mp->Vl[l] == 1) {
             cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);
         } else {
@@ -539,8 +549,8 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     ambe2400_decode_gain(ambe_d, cur_mp, prev_mp);
     ambe2400_decode_ri(ambe_d, Ri);
     ambe2400_decode_cik(ambe_d, L, Ri, Cik, Ji);
-    ambe2400_inverse_dct_tl(Cik, Ji, Tl);
-    ambe2400_update_spectral_amplitudes(cur_mp, prev_mp, Tl, unvc);
+    mbe_ambe2400_inverse_dct_tl(Cik, Ji, Tl);
+    mbe_ambe2400_update_spectral_amplitudes(cur_mp, prev_mp, Tl, unvc);
 
     return 0;
 }

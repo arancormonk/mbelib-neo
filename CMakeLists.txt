@@ -256,6 +256,8 @@ endif()
 # Explicit source lists (avoids FILE(GLOB ...))
 set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2400.c
+    src/ambe/ambe3600x2400_enc.c
+    src/ambe/dstar_frame.c
     src/ambe/ambe3600x2450.c
     src/ambe/ambe_common.c
     src/ecc/ecc.c
@@ -678,6 +680,42 @@ if(MBELIB_BUILD_EXAMPLES)
             PRIVATE ${_SAN_LDFLAGS}
         )
     endif()
+
+    add_executable(example_dstar_encode examples/dstar_encode.c)
+    target_link_libraries(example_dstar_encode PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(example_dstar_encode)
+    target_include_directories(
+        example_dstar_encode
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    set_target_properties(
+        example_dstar_encode
+        PROPERTIES OUTPUT_NAME dstar_encode
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(example_dstar_encode PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(example_dstar_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+
+    add_executable(example_dstar_decode examples/dstar_decode.c)
+    target_link_libraries(example_dstar_decode PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(example_dstar_decode)
+    target_include_directories(
+        example_dstar_decode
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    set_target_properties(
+        example_dstar_decode
+        PROPERTIES OUTPUT_NAME dstar_decode
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(example_dstar_decode PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(example_dstar_decode BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
 endif()
 
 # Tests
@@ -721,6 +759,82 @@ if(MBELIB_BUILD_TESTS)
         target_link_options(test_ecc BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_test(NAME test_ecc COMMAND test_ecc)
+
+    add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
+    # The private Golay encoder is hidden in the shared library.
+    target_link_libraries(test_ambe2400_encoder PRIVATE mbe-static)
+    target_include_directories(
+        test_ambe2400_encoder
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_ambe2400_encoder PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(
+            test_ambe2400_encoder
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
+    endif()
+    add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
+    # Exercise every partial plan allocation and retry with GNU link wrapping.
+    # LTO can resolve allocator calls before the linker can wrap them.
+    if(
+        CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+        AND NOT (
+            MBELIB_ENABLE_LTO
+            AND (
+                CMAKE_CONFIGURATION_TYPES
+                OR CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo"
+            )
+        )
+    )
+        add_executable(test_ambe2400_encoder_oom tests/test_ambe2400_encoder.c)
+        target_link_libraries(test_ambe2400_encoder_oom PRIVATE mbe-static)
+        target_include_directories(
+            test_ambe2400_encoder_oom
+            PRIVATE
+                "${PROJECT_SOURCE_DIR}/include"
+                "${PROJECT_SOURCE_DIR}/src/internal"
+        )
+        target_compile_definitions(
+            test_ambe2400_encoder_oom
+            PRIVATE MBE_ENCODER_TEST_OOM=1
+        )
+        target_link_options(
+            test_ambe2400_encoder_oom
+            PRIVATE
+                "-Wl,--wrap=pffft_aligned_malloc"
+                "-Wl,--wrap=pffft_aligned_free"
+                "-Wl,--wrap=calloc"
+                "-Wl,--wrap=malloc"
+                "-Wl,--wrap=free"
+        )
+        _mbelib_apply_hardening(test_ambe2400_encoder_oom)
+        if(_SAN_CFLAGS)
+            target_compile_options(
+                test_ambe2400_encoder_oom
+                PRIVATE ${_SAN_CFLAGS}
+            )
+        endif()
+        if(_SAN_LDFLAGS)
+            target_link_options(
+                test_ambe2400_encoder_oom
+                BEFORE
+                PRIVATE ${_SAN_LDFLAGS}
+            )
+        endif()
+        foreach(allocation RANGE 1 6)
+            add_test(
+                NAME test_ambe2400_encoder_oom_${allocation}
+                COMMAND test_ambe2400_encoder_oom ${allocation}
+            )
+        endforeach()
+    endif()
 
     add_executable(test_noise_determinism tests/test_noise_determinism.c)
     target_link_libraries(
@@ -939,9 +1053,24 @@ if(MBELIB_BUILD_TESTS)
         COMMAND test_simd_arch_detection_x86_32_msvc_sse2
     )
 
+    if(MBELIB_BUILD_EXAMPLES AND NOT CMAKE_CROSSCOMPILING)
+        find_package(Python3 3.7 QUIET COMPONENTS Interpreter)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME test_dstar_examples
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_dstar_examples.py
+                    $<TARGET_FILE:example_dstar_encode>
+                    $<TARGET_FILE:example_dstar_decode>
+            )
+        endif()
+    endif()
+
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
+        test_ambe2400_encoder
         test_noise_determinism
         test_params
         test_frame_paths
