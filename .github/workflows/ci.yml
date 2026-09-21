@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure (${{ matrix.preset }})
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DMBELIB_BUILD_TOOLS=ON
       - name: Build (${{ matrix.preset }})
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       - name: Test (${{ matrix.preset }})
@@ -136,7 +136,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure (asan-ubsan-debug)
-        run: cmake --preset asan-ubsan-debug
+        run: cmake --preset asan-ubsan-debug -DMBELIB_BUILD_TOOLS=ON
       - name: Build (asan-ubsan-debug)
         run: cmake --build --preset asan-ubsan-debug --parallel
       - name: Test (asan-ubsan-debug)
@@ -204,7 +204,7 @@ jobs:
             export CC="ccache gcc"
             export CXX="ccache g++"
             rm -rf build/dev-debug
-            cmake --preset dev-debug
+            cmake --preset dev-debug -DMBELIB_BUILD_TOOLS=ON
             tools/clang_tidy.sh
             tools/iwyu.sh --strict
             tools/gcc_fanalyzer.sh --strict
@@ -246,7 +246,7 @@ jobs:
           bash tools/ci_arch_toolchain.sh bash -lc '
             set -euxo pipefail
             rm -rf build/dev-debug
-            cmake --preset dev-debug
+            cmake --preset dev-debug -DMBELIB_BUILD_TOOLS=ON
             tools/cppcheck.sh --strict
           '
       - name: Upload cppcheck output

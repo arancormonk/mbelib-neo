@@ -26,7 +26,8 @@ Options:
 
 Arguments:
   files...    Optional list of translation units to analyze (e.g., src/foo.c).
-              When omitted, analyzes the src/, include/, and fuzz/ trees.
+              When omitted, analyzes the src/, include/, and fuzz/ trees plus
+              the C quality tools under tools/quality/.
 
 Environment:
   CPPCHECK_BUILD_DIR   Build/cache directory used by cppcheck
@@ -163,12 +164,19 @@ if [[ ${#REQUESTED_FILES[@]} -gt 0 ]]; then
   mapfile -t FILES < <(printf '%s\n' "${FILES[@]}" | sort -u)
   echo "Analyzing ${#FILES[@]} file(s) with cppcheck..."
 else
-  echo "Analyzing src/, include/, and fuzz/ directories..."
+  echo "Analyzing src/, include/, fuzz/ directories and the C quality tools..."
 fi
 echo ""
 
 # Select analysis targets.
 CPPCHECK_TARGETS=(src/ include/ fuzz/)
+# The C quality tools are first-party; the OP25 encoder driver (.cc) builds
+# against an external checkout and is compiled by build_op25_encoder.sh.
+for quality_source in tools/quality/mbe_quality_*.c; do
+  if [ -f "$quality_source" ]; then
+    CPPCHECK_TARGETS+=("$quality_source")
+  fi
+done
 if [[ ${#FILES[@]} -gt 0 ]]; then
   CPPCHECK_TARGETS=("${FILES[@]}")
 fi

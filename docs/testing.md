@@ -16,6 +16,7 @@ The CTest suite includes:
 - float-to-int16 conversion parity checks
 - golden PCM hash regression checks
 - SIMD architecture detection checks
+- quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -84,8 +85,9 @@ parameter synthesis paths.
 
 ## Speech Quality Evaluation
 
-Developer-only tooling; no new library runtime or default-CI dependency. The C99
-`mbe_quality_eval` uses the installed public API and an independent 256-point FFT.
+Developer-only tooling; no new library runtime dependency. CI builds the two
+quality tools and tests their filesystem helper; full quality runs remain opt-in.
+The C99 `mbe_quality_eval` uses the installed public API and an independent 256-point FFT.
 `mbe_quality_reframe` is a statically linked private fixture generator. A/B runs
 additionally require Bash, Python 3, git, gcc/g++ (C++17), `patch`, and
 coreutils. Fetching held-out speech requires network access and `ffmpeg`.
@@ -94,32 +96,17 @@ local virtual environment rather than making them library dependencies.
 
 ### Windows
 
-`run_quality_ab.py` runs on Windows as well as Linux, and reproduces Linux
-results to floating-point rounding: on the legacy corpus the per-mode means
-agree within 1e-6 dB LSD, against acceptance thresholds of 0.3 dB and 0.5 dB.
-Three differences are structural rather than incidental, and one of them is
-weaker evidence:
+With `MBELIB_BUILD_TOOLS=ON`, `mbe_quality_eval` and `mbe_quality_reframe`
+build with MSVC or MinGW for local single measurements and fixture generation.
+The evaluator always links the shared library; static linking would embed one
+implementation and prevent measuring a different library at runtime.
 
-- There is no `LD_LIBRARY_PATH`. The runner instead stages a directory per
-  library holding the tools and exactly one `mbe-neo.dll`, and runs the copy
-  there, because the loader searches the executable's own directory first.
-  `mbe_quality_eval` therefore always links the shared library, even though
-  `MBELIB_EXEC_LINK_TGT` is static on Windows for every other executable;
-  linking it statically would bake the library in and silently measure the same
-  code on both sides of a comparison.
-- There is no `LD_TRACE_LOADED_OBJECTS`, so selection is established by
-  construction and checked by content hash rather than by tracing the live
-  process. Each `identity/<role>-loader.txt` records which method produced it.
-  **This is weaker evidence than the Linux loader trace**; a comparison whose
-  provenance must be airtight should be run on Linux.
-- `run_correctness_tests` in `quality_support.py` and
-  `analyze_quality.py benchmark` still require Linux, so `correctness` stays
-  `not_established` on Windows.
-
-Building `op25_encode` needs a POSIX shell: MSYS2 works, with Git for Windows on
-`PATH` for `git`. mingw has no `random()`, which the bundled decoder references
-but this encoder never calls; the build defines it away and the encoded frames
-are bit-identical to a glibc build.
+The A/B runner, calibration, and OP25 encoder build remain Linux-only. The
+comparison workflow uses `LD_TRACE_LOADED_OBJECTS` to verify which shared
+library was actually loaded; Windows DLL placement does not reproduce that
+provenance check. Windows evaluator paths must be ordinary ASCII drive paths;
+non-ASCII names, UNC, `\\?\` and `\\.\` namespaces, alternate data streams and
+leaves ending in a dot or space are rejected.
 
 ### Reproducible comparison workflow
 
