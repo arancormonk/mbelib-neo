@@ -22,10 +22,18 @@ mkdir -p "$objdir"
 # This is a mbelib-neo quality bridge, not an interoperable D-STAR transmitter.
 cp "$lib/ambe_encoder.cc" "$lib/p25p2_vf.cc" "$objdir/"
 patch --batch --fuzz=0 -d "$objdir" -p0 < tools/quality/op25_mbelib_gain.patch
+# mingw has no POSIX random(). It is referenced only by the bundled decoder
+# synthesis, which this encoder driver never calls; the run verifies that by
+# comparing encoded-frame hashes against a glibc build.
+portability=()
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) portability+=(-Drandom=rand -Dsrandom=srand) ;;
+esac
+
 objects=()
 for unit in ambe mbelib; do
   object="$objdir/$unit.o"
-  gcc -O2 -I"$lib" -c "$lib/$unit.c" -o "$object"
+  gcc -O2 "${portability[@]}" -I"$lib" -c "$lib/$unit.c" -o "$object"
   objects+=("$object")
 done
 
@@ -44,7 +52,7 @@ sources+=("$objdir/ambe_encoder.cc" "$objdir/p25p2_vf.cc" "$lib/rs.cc"
 for source in "${sources[@]}"; do
   unit=${source##*/}
   object="$objdir/${unit%.cc}.o"
-  g++ -std=c++17 -O2 -I"$lib" -I"$lib/imbe_vocoder" -c "$source" -o "$object"
+  g++ -std=c++17 -O2 "${portability[@]}" -I"$lib" -I"$lib/imbe_vocoder" -c "$source" -o "$object"
   objects+=("$object")
 done
 

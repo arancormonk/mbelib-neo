@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
-"""Run immutable, content-bound four-frame-mode synthesis comparisons on Linux."""
+"""Run immutable, content-bound four-frame-mode synthesis comparisons."""
 
 import argparse
-import fcntl
 import hashlib
 import json
 import math
@@ -18,6 +17,32 @@ import tempfile
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
+
+WINDOWS = platform.system() == "Windows"
+if WINDOWS:
+    import msvcrt
+else:
+    import fcntl
+
+# The name the loader resolves differs per platform; everything else is shared.
+LIBRARY_NAME = "mbe-neo.dll" if WINDOWS else "libmbe-neo.so.2"
+
+
+def lock_exclusive(handle):
+    """Take an exclusive advisory lock so concurrent runs share the frame cache."""
+    if WINDOWS:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+
+
+def executable_path(value):
+    """Accept a tool path with or without the Windows .exe suffix."""
+    path = Path(value)
+    if WINDOWS and not path.is_file() and path.with_suffix(".exe").is_file():
+        return path.with_suffix(".exe")
+    return path
 
 from quality_support import (
     digest,
@@ -147,7 +172,12 @@ class Runner:
         environment.pop("LD_TRACE_LOADED_OBJECTS", None)
         environment.pop("LD_LIBRARY_PATH", None)
         if libdir is not None:
-            environment["LD_LIBRARY_PATH"] = str(libdir)
+            if WINDOWS:
+                # The loader takes the DLL beside the executable, so run the
+                # staged copy that owns this operand.
+                argv[0] = str(self.stage(libdir) / Path(argv[0]).name)
+            else:
+                environment["LD_LIBRARY_PATH"] = str(libdir)
         prefix = self.output / "logs" / f"{len(self.commands):05d}-{label}"
         prefix.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -171,7 +201,47 @@ class Runner:
             raise RuntimeError(f"{label} exited {returncode}; see {self.relative(err_path)}")
         return stdout.decode("utf-8", errors="replace")
 
+    def stage(self, libdir):
+        """Windows has no LD_LIBRARY_PATH. The loader searches the executable's
+        own directory first, so give each library its own directory holding the
+        tools and exactly one mbe-neo.dll. Naming the directory after the
+        library hash keeps distinct operands apart and lets an identity run
+        legitimately share one."""
+        libdir = Path(libdir)
+        target = self.output / "stage" / digest(libdir / LIBRARY_NAME)[:16]
+        if not target.is_dir():
+            target.mkdir(parents=True)
+            shutil.copy2(libdir / LIBRARY_NAME, target / LIBRARY_NAME)
+            for tool in (self.tools["evaluator"], self.tools["reframer"]):
+                shutil.copy2(tool, target / Path(tool).name)
+        return target
+
     def loader_check(self, libdir, role):
+        if WINDOWS:
+            # Windows offers no loader tracing equivalent to LD_TRACE_LOADED_OBJECTS,
+            # so selection is established by construction and checked by content:
+            # the staged directory beside the executable holds exactly one
+            # mbe-neo.dll and it is byte-identical to this operand's. That is
+            # weaker evidence than tracing the live process, and is recorded as
+            # such in the identity log.
+            staged = self.stage(libdir)
+            present = sorted(path.name for path in staged.glob("*.dll"))
+            expected, actual = digest(libdir / LIBRARY_NAME), digest(staged / LIBRARY_NAME)
+            log = self.output / "identity" / f"{role}-loader.txt"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(
+                "method: staged-adjacent-dll (no loader tracing on Windows)\n"
+                f"staged directory: {staged}\n"
+                f"dlls present: {present}\n"
+                f"{LIBRARY_NAME} sha256 in library directory: {expected}\n"
+                f"{LIBRARY_NAME} sha256 staged beside tools:  {actual}\n",
+                encoding="utf-8",
+            )
+            if present != [LIBRARY_NAME]:
+                raise ValueError(f"{role} staging must hold exactly {LIBRARY_NAME}, found {present}")
+            if expected != actual:
+                raise ValueError(f"{role} staged {LIBRARY_NAME} does not match {libdir}")
+            return
         environment = dict(os.environ, LD_LIBRARY_PATH=str(libdir), LD_TRACE_LOADED_OBJECTS="1")
         result = subprocess.run([self.tools["evaluator"]], env=environment, capture_output=True, text=True, check=False)
         log = self.output / "identity" / f"{role}-loader.txt"
@@ -181,14 +251,14 @@ class Runner:
             raise ValueError(f"{role} loader tracing failed; see {self.relative(log)}")
         row = re.compile(r"^\s*(?:(\S+)\s+=>\s+)?(.+?)\s+\(0x[0-9a-fA-F]+\)\s*$")
         loaded = [match.groups() for line in result.stdout.splitlines() if (match := row.fullmatch(line))]
-        selected = [path for name, path in loaded if name == "libmbe-neo.so.2"]
-        expected = libdir / "libmbe-neo.so.2"
+        selected = [path for name, path in loaded if name == LIBRARY_NAME]
+        expected = libdir / LIBRARY_NAME
         if len(selected) != 1 or not os.path.samefile(selected[0], expected):
             raise ValueError(f"{role} loader must select exactly {expected}, got {selected}")
         extras = [
             path
             for name, path in loaded
-            if name != "libmbe-neo.so.2"
+            if name != LIBRARY_NAME
             and (Path(name or path).name.startswith("libmbe") or Path(path).name.startswith("libmbe"))
         ]
         if extras:
@@ -226,7 +296,7 @@ class Runner:
 
     def identities(self):
         paths = {
-            "encoder": "build/quality/op25_encode",
+            "encoder": executable_path("build/quality/op25_encode"),
             "evaluator": self.args.evaluator,
             "reframer": self.args.reframer,
             "calibrator": "tools/quality/calibrate_encoder.py",
@@ -250,7 +320,7 @@ class Runner:
         ):
             directory = Path(requested).resolve(strict=True)
             self.libdirs[role] = directory
-            record = file_identity(directory / "libmbe-neo.so.2")
+            record = file_identity(directory / LIBRARY_NAME)
             record["requested"] = requested
             record["source"] = {"revision": None, "status": "unknown"}
             for point in captured.values():
@@ -382,7 +452,7 @@ class Runner:
         width = {"imbe7200": 88, "ambe2450": 49, "ambe2400": 96}[mode]
         expected_count = (reference["samples"] + 159) // 160 + FLUSH
         with (cache / ".lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            lock_exclusive(lock)
             cached = None
             try:
                 cached = read_json(calibration)
@@ -410,7 +480,7 @@ class Runner:
                                 self.tools["calibrator"],
                                 self.tools["encoder"],
                                 self.tools["evaluator"],
-                                self.libdirs["calibration"],
+                                self.stage(self.libdirs["calibration"]) if WINDOWS else self.libdirs["calibration"],
                                 raw,
                                 mode,
                                 bits,
@@ -827,8 +897,8 @@ class Runner:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("baseline", help="baseline directory containing libmbe-neo.so.2")
-    parser.add_argument("candidate", help="candidate directory containing libmbe-neo.so.2")
+    parser.add_argument("baseline", help=f"baseline directory containing {LIBRARY_NAME}")
+    parser.add_argument("candidate", help=f"candidate directory containing {LIBRARY_NAME}")
     parser.add_argument("corpus", nargs="?", default="build/quality/corpus")
     parser.add_argument("--out-dir")
     parser.add_argument("--evaluator", default="build/dev-debug/mbe_quality_eval")
@@ -836,17 +906,18 @@ def main():
     parser.add_argument("--calibration-libdir")
     parser.add_argument("--gain-profile")
     args = parser.parse_args()
-    if platform.system() != "Linux":
-        parser.error("this runner requires Linux (LD_LIBRARY_PATH)")
-    if os.environ.get("LD_PRELOAD"):
+    if platform.system() not in ("Linux", "Windows"):
+        parser.error("this runner requires Linux or Windows")
+    if not WINDOWS and os.environ.get("LD_PRELOAD"):
         parser.error("LD_PRELOAD must be unset for controlled library selection")
     for directory in (args.baseline, args.candidate, args.calibration_libdir or args.baseline):
         path = Path(directory).resolve()
-        if ":" in str(path):
+        if not WINDOWS and ":" in str(path):
             parser.error("library directories must not contain ':' (LD_LIBRARY_PATH separator)")
-        if not (path / "libmbe-neo.so.2").is_file() or not os.access(path / "libmbe-neo.so.2", os.R_OK):
-            parser.error(f"expected readable libmbe-neo.so.2 in {directory}")
-    for executable in ("build/quality/op25_encode", args.evaluator, args.reframer):
+        if not (path / LIBRARY_NAME).is_file() or not os.access(path / LIBRARY_NAME, os.R_OK):
+            parser.error(f"expected readable {LIBRARY_NAME} in {directory}")
+    args.evaluator, args.reframer = executable_path(args.evaluator), executable_path(args.reframer)
+    for executable in (executable_path("build/quality/op25_encode"), args.evaluator, args.reframer):
         if not Path(executable).is_file() or not os.access(executable, os.X_OK):
             parser.error(f"missing executable prerequisite: {executable}")
     if not Path(args.corpus).is_dir():

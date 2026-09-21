@@ -20,6 +20,9 @@
 #include <fstream>
 #include <optional>
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 // OP25's ambe_encoder.h requires the preceding declarations.
 // clang-format off
@@ -28,6 +31,36 @@
 #include "p25p2_vf.h"
 #include "ambe_encoder.h"
 // clang-format on
+
+/* mingw's stat() reports st_dev and st_ino as zero for every file, so the
+ * POSIX identity comparison would call any two files the same. Use the volume
+ * serial and file index, which is the documented Win32 equivalent. */
+static bool
+same_open_file(const char* a, const char* b) {
+#if defined(_WIN32)
+    HANDLE ha = CreateFileA(a, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (ha == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    HANDLE hb = CreateFileA(b, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (hb == INVALID_HANDLE_VALUE) {
+        CloseHandle(ha);
+        return false;
+    }
+    BY_HANDLE_FILE_INFORMATION ia, ib;
+    const bool same = GetFileInformationByHandle(ha, &ia) && GetFileInformationByHandle(hb, &ib)
+                      && ia.dwVolumeSerialNumber == ib.dwVolumeSerialNumber && ia.nFileIndexHigh == ib.nFileIndexHigh
+                      && ia.nFileIndexLow == ib.nFileIndexLow;
+    CloseHandle(ha);
+    CloseHandle(hb);
+    return same;
+#else
+    struct stat sa, sb;
+    return stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+}
 
 static void
 usage(const char* program) {
@@ -144,10 +177,9 @@ main(int argc, char** argv) {
         flush_frames = static_cast<int>(parsed);
     }
 
-    struct stat input_stat, output_stat;
+    struct stat input_stat;
     const bool have_input_stat = stat(input_path, &input_stat) == 0;
-    if (have_input_stat && stat(output_path, &output_stat) == 0 && input_stat.st_dev == output_stat.st_dev
-        && input_stat.st_ino == output_stat.st_ino) {
+    if (have_input_stat && same_open_file(input_path, output_path)) {
         std::fprintf(stderr, "Input and output must be different files.\n");
         return 2;
     }

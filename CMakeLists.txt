@@ -1212,7 +1212,13 @@ if(MBELIB_BUILD_TOOLS)
     if(NOT WIN32)
         target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
     endif()
-    target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    # The evaluator exists to measure a library that the runner swaps underneath
+    # it, so it always links the shared one. On Windows MBELIB_EXEC_LINK_TGT is
+    # static to avoid DLL path issues; that would bake the library in and make
+    # an A/B comparison silently measure the same code twice. The runner instead
+    # stages the DLL beside a copy of this executable, which is where the Windows
+    # loader looks first.
+    target_link_libraries(mbe_quality_eval PRIVATE mbe-shared)
     _mbelib_apply_hardening(mbe_quality_eval)
     if(MSVC)
         target_compile_definitions(

@@ -13,10 +13,14 @@ import hashlib
 import json
 import math
 import os
+import platform
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+WINDOWS = platform.system() == "Windows"
+LIBRARY_NAME = "mbe-neo.dll" if WINDOWS else "libmbe-neo.so.2"
 
 
 def digest(path):
@@ -98,7 +102,7 @@ def main():
         "raw_sha256": digest(raw),
         "encoder_sha256": digest(encoder),
         "evaluator_sha256": digest(evaluator),
-        "baseline_sha256": digest(Path(baseline) / "libmbe-neo.so.2"),
+        "baseline_sha256": digest(Path(baseline) / LIBRARY_NAME),
         "calibrator_sha256": digest(__file__),
         "mode": mode,
         "flush_frames": flush_frames,
@@ -118,7 +122,15 @@ def main():
             and cached.get("frames_sha256") == digest(frames)
         ):
             return
-    env = dict(os.environ, LD_LIBRARY_PATH=str(Path(baseline).resolve()))
+    if WINDOWS:
+        # No LD_LIBRARY_PATH on Windows: the loader takes the DLL beside the
+        # executable, so the runner hands us a staged directory holding both.
+        env = dict(os.environ)
+        staged = Path(baseline) / Path(evaluator).name
+        if staged.is_file():
+            evaluator = str(staged)
+    else:
+        env = dict(os.environ, LD_LIBRARY_PATH=str(Path(baseline).resolve()))
     frames.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".calibrate-", dir=frames.parent) as temp:
         tmp = Path(temp)
