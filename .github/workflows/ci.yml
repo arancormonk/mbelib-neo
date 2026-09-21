@@ -58,6 +58,28 @@ jobs:
           ./tools/check_release_hardening.ps1 $dll.FullName
           ./tools/check_release_hardening.ps1 $exe.FullName
 
+  clang-release-linux:
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    name: linux • Clang • Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Clang and LLD
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+          clang --version
+      - name: Configure (dev-release)
+        run: >-
+          cmake --preset dev-release
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld
+          -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld
+      - name: Build (dev-release)
+        run: cmake --build --preset dev-release --parallel
+      - name: Test (dev-release)
+        run: ctest --preset dev-release -V
+
   sanitize-linux:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: linux • Debug • sanitizers
@@ -717,7 +739,7 @@ jobs:
 
   package-release:
     name: package release (${{ matrix.os }})
-    needs: [validate-release-tag, build-test, sanitize-linux, install-and-consume, install-and-consume-win]
+    needs: [validate-release-tag, build-test, clang-release-linux, sanitize-linux, install-and-consume, install-and-consume-win]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     permissions:

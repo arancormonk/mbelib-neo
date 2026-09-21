@@ -131,6 +131,7 @@ git push origin vX.Y.Z
 - `-DMBE_ENABLE_DEBUG_LOGS=ON` — Verbose debug logging in codec sources.
 - `-DMBELIB_BUILD_DOCS=ON` — Add `docs` target (requires Doxygen).
 - `-DMBELIB_ENABLE_FAST_MATH=ON` — Enable fast-math (`-ffast-math`/`/fp:fast`) on library targets.
+  PCM conversion is always compiled with IEEE semantics so NaN/Inf handling is preserved.
 - `-DMBELIB_ENABLE_LTO=ON` — Enable IPO/LTO in Release builds when supported.
 - `-DMBELIB_ENABLE_HARDENING=ON` — Enable supported Release-like compiler/linker hardening (default ON).
 - `-DMBELIB_ENABLE_SIMD=ON` — Enable SIMD-accelerated routines in hot paths (SSE2 on x86_64, NEON on ARM64, and SSE2-targeted builds on 32-bit x86). On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability.

@@ -17,6 +17,8 @@ The CTest suite includes:
 - golden PCM hash regression checks
 - SIMD architecture detection checks
 
+PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
+
 Run the default test suite with:
 
 ```sh
