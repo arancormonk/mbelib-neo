@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
+#include "mbe_quality_fs.h"
 
 #include "mbelib-neo/mbelib.h"
 
@@ -64,45 +64,24 @@ open_file(const char* path, const char* mode) {
     return f;
 }
 
-/* Resolve symlinks in existing paths/parents as well as lexical "."/"..".
- * Comparing inode identities additionally catches hard-linked inputs. */
 static char*
 normalized_path(const char* path) {
-    char* resolved = realpath(path, NULL);
-    if (resolved) {
-        return resolved;
-    }
-    if (errno != ENOENT) {
+    char* resolved = mbe_quality_normalized_path(path);
+    if (!resolved) {
+        if (errno == ENOMEM) {
+            fail("out of memory");
+        }
+        if (errno == EOVERFLOW) {
+            fail("input/output path is too long");
+        }
+        if (errno == ELOOP) {
+            fail("cannot safely resolve a dangling input/output symlink");
+        }
+        if (errno == EINVAL) {
+            fail("unsupported input/output path (namespace, stream, empty filename, or trailing dot/space)");
+        }
         fail("cannot resolve input/output path");
     }
-    struct stat unresolved;
-    if (lstat(path, &unresolved) == 0) {
-        fail("cannot safely resolve a dangling input/output symlink");
-    }
-    char* copy = strdup(path);
-    if (!copy) {
-        fail("out of memory");
-    }
-    char* slash = strrchr(copy, '/');
-    const char* leaf = slash ? slash + 1 : copy;
-    if (!*leaf) {
-        fail("output path has an empty filename");
-    }
-    if (slash) {
-        *slash = '\0';
-    }
-    char* parent = realpath(slash ? (*copy ? copy : "/") : ".", NULL);
-    if (!parent) {
-        fail("cannot resolve output parent directory");
-    }
-    size_t size = strlen(parent) + strlen(leaf) + 2;
-    resolved = malloc(size);
-    if (!resolved) {
-        fail("out of memory");
-    }
-    snprintf(resolved, size, "%s/%s", parent, leaf);
-    free(parent);
-    free(copy);
     return resolved;
 }
 
@@ -111,13 +90,12 @@ reject_alias(const char* a, const char* b) {
     if (!a || !b) {
         return;
     }
-    struct stat sa, sb;
-    if (stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino) {
+    if (mbe_quality_same_file(a, b)) {
         fail("outputs must be different files from inputs and each other");
     }
     char* na = normalized_path(a);
     char* nb = normalized_path(b);
-    int same = !strcmp(na, nb);
+    int same = mbe_quality_paths_equal(na, nb);
     free(na);
     free(nb);
     if (same) {

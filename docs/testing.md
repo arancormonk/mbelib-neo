@@ -16,6 +16,7 @@ The CTest suite includes:
 - float-to-int16 conversion parity checks
 - golden PCM hash regression checks
 - SIMD architecture detection checks
+- quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -84,13 +85,28 @@ parameter synthesis paths.
 
 ## Speech Quality Evaluation
 
-Developer-only tooling; no new library runtime or default-CI dependency. The C99
-`mbe_quality_eval` uses the installed public API and an independent 256-point FFT.
-`mbe_quality_reframe` is a statically linked private fixture generator. Linux A/B
-runs additionally require Bash, Python 3, git, gcc/g++ (C++17), `patch`, and
+Developer-only tooling; no new library runtime dependency. CI builds the two
+quality tools and tests their filesystem helper; full quality runs remain opt-in.
+The C99 `mbe_quality_eval` uses the installed public API and an independent 256-point FFT.
+`mbe_quality_reframe` is a statically linked private fixture generator. A/B runs
+additionally require Bash, Python 3, git, gcc/g++ (C++17), `patch`, and
 coreutils. Fetching held-out speech requires network access and `ffmpeg`.
 Offline reports require NumPy, SciPy, matplotlib, and pystoi; install these in a
 local virtual environment rather than making them library dependencies.
+
+### Windows
+
+With `MBELIB_BUILD_TOOLS=ON`, `mbe_quality_eval` and `mbe_quality_reframe`
+build with MSVC or MinGW for local single measurements and fixture generation.
+The evaluator always links the shared library; static linking would embed one
+implementation and prevent measuring a different library at runtime.
+
+The A/B runner, calibration, and OP25 encoder build remain Linux-only. The
+comparison workflow uses `LD_TRACE_LOADED_OBJECTS` to verify which shared
+library was actually loaded; Windows DLL placement does not reproduce that
+provenance check. Windows evaluator paths must be ordinary ASCII drive paths;
+non-ASCII names, UNC, `\\?\` and `\\.\` namespaces, alternate data streams and
+leaves ending in a dot or space are rejected.
 
 ### Reproducible comparison workflow
 

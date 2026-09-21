@@ -53,7 +53,7 @@ jobs:
 
       - name: Configure C/C++ database build
         if: matrix.language == 'c-cpp'
-        run: cmake --preset dev-debug
+        run: cmake --preset dev-debug -DMBELIB_BUILD_TOOLS=ON
 
       - name: Build first-party C/C++ database
         if: matrix.language == 'c-cpp'

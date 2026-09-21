@@ -72,11 +72,7 @@ option(
     OFF
 )
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
-option(
-    MBELIB_BUILD_TOOLS
-    "Build developer quality-analysis tools (not run in CI)"
-    OFF
-)
+option(MBELIB_BUILD_TOOLS "Build developer quality-analysis tools" OFF)
 # Warnings
 if(MBELIB_ENABLE_WARNINGS)
     if(MSVC)
@@ -1132,6 +1128,45 @@ if(MBELIB_BUILD_TESTS)
         endif()
     endif()
 
+    if(MBELIB_BUILD_TOOLS)
+        add_executable(
+            test_quality_fs
+            tests/test_quality_fs.c
+            tools/quality/mbe_quality_fs.c
+        )
+        target_include_directories(
+            test_quality_fs
+            PRIVATE "${PROJECT_SOURCE_DIR}/tools/quality"
+        )
+        if(WIN32)
+            if(MSVC)
+                target_compile_definitions(
+                    test_quality_fs
+                    PRIVATE _CRT_SECURE_NO_WARNINGS
+                )
+            endif()
+        else()
+            target_compile_definitions(
+                test_quality_fs
+                PRIVATE _XOPEN_SOURCE=700
+            )
+            # Darwin hides mkdtemp() behind its full C level under strict X/Open.
+            if(APPLE)
+                target_compile_definitions(
+                    test_quality_fs
+                    PRIVATE _DARWIN_C_SOURCE
+                )
+            endif()
+        endif()
+        if(_SAN_CFLAGS)
+            target_compile_options(test_quality_fs PRIVATE ${_SAN_CFLAGS})
+        endif()
+        if(_SAN_LDFLAGS)
+            target_link_options(test_quality_fs BEFORE PRIVATE ${_SAN_LDFLAGS})
+        endif()
+        add_test(NAME test_quality_fs COMMAND test_quality_fs)
+    endif()
+
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
@@ -1146,6 +1181,9 @@ if(MBELIB_BUILD_TESTS)
         test_simd_arch_detection_arm64ec
         test_simd_arch_detection_x86_32_msvc_sse2
     )
+    if(MBELIB_BUILD_TOOLS)
+        list(APPEND _MBELIB_TEST_TARGETS test_quality_fs)
+    endif()
     foreach(_mbelib_test_target IN LISTS _MBELIB_TEST_TARGETS)
         _mbelib_apply_hardening(${_mbelib_test_target})
         if(MSVC)
@@ -1206,10 +1244,21 @@ endif()
 
 # Quality analysis and private frame fixtures (opt-in)
 if(MBELIB_BUILD_TOOLS)
-    add_executable(mbe_quality_eval tools/quality/mbe_quality_eval.c)
+    add_executable(
+        mbe_quality_eval
+        tools/quality/mbe_quality_eval.c
+        tools/quality/mbe_quality_fs.c
+    )
     # Enable the POSIX realpath/lstat interfaces used for output alias checks.
-    target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
-    target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    # Win32 uses GetFinalPathNameByHandle/GetFileInformationByHandle instead.
+    if(NOT WIN32)
+        target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
+    endif()
+    # Always measure the shared library selected at runtime. The usual Windows
+    # executable target is static, which would bake in one implementation and
+    # prevent measuring a different DLL. Linux A/B runs verify the selected
+    # library via loader tracing; Windows supports local single measurements.
+    target_link_libraries(mbe_quality_eval PRIVATE mbe-shared)
     _mbelib_apply_hardening(mbe_quality_eval)
     if(MSVC)
         target_compile_definitions(
@@ -1224,8 +1273,15 @@ if(MBELIB_BUILD_TOOLS)
     add_executable(
         mbe_quality_reframe
         tools/quality/mbe_quality_reframe.c
+        tools/quality/mbe_quality_fs.c
         tools/quality/mbe_quality_frames.c
     )
+    if(NOT WIN32)
+        target_compile_definitions(
+            mbe_quality_reframe
+            PRIVATE _XOPEN_SOURCE=700
+        )
+    endif()
     target_link_libraries(mbe_quality_reframe PRIVATE mbe-static)
     _mbelib_apply_hardening(mbe_quality_reframe)
     target_include_directories(
@@ -1249,6 +1305,25 @@ if(MBELIB_BUILD_TOOLS)
     if(_SAN_LDFLAGS)
         target_link_options(mbe_quality_eval BEFORE PRIVATE ${_SAN_LDFLAGS})
         target_link_options(mbe_quality_reframe BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    # Let the CodeQL extraction target compile the quality tools too.
+    target_sources(
+        mbe-codeql-first-party
+        PRIVATE
+            tools/quality/mbe_quality_eval.c
+            tools/quality/mbe_quality_reframe.c
+            tools/quality/mbe_quality_frames.c
+            tools/quality/mbe_quality_fs.c
+    )
+    target_include_directories(
+        mbe-codeql-first-party
+        PRIVATE "${PROJECT_SOURCE_DIR}/tools/quality"
+    )
+    if(NOT WIN32)
+        target_compile_definitions(
+            mbe-codeql-first-party
+            PRIVATE _XOPEN_SOURCE=700
+        )
     endif()
 endif()
 
