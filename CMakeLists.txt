@@ -403,43 +403,27 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4)
     unset(_mbelib_compiler_targets_x86_32)
 endif()
 
-# Detect 32-bit ARM targets so the SIMD option can ensure NEON codegen when
-# needed instead of relying on the host processor string. ARMv7 toolchains
-# commonly default to a VFP-only target, which silently drops both the NEON
-# intrinsic paths and the bundled PFFFT NEON kernels.
-set(MBELIB_TARGET_ARM_32 OFF)
-set(_mbelib_arm_32_probe_source
-    [=[
-    #if !defined(__arm__) && !defined(_M_ARM)
-    #error Not a 32-bit ARM target
-    #endif
-    int mbelib_target_arm_32;
-  ]=]
-)
-set(_mbelib_arm_32_neon_probe_source
-    [=[
-    #if !defined(__arm__) && !defined(_M_ARM)
-    #error Not a 32-bit ARM target
-    #endif
-    #if !defined(__ARM_NEON) && !defined(__ARM_NEON__)
-    #error 32-bit ARM target is not compiling for NEON
-    #endif
-    int mbelib_target_arm_32_neon;
-  ]=]
-)
-if(CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT MBELIB_TARGET_X86_32)
-    _mbelib_check_c_source_compiles_static("${_mbelib_arm_32_probe_source}" _mbelib_compiler_targets_arm_32)
-    if(_mbelib_compiler_targets_arm_32)
-        set(MBELIB_TARGET_ARM_32 ON)
-    endif()
-    unset(_mbelib_compiler_targets_arm_32 CACHE)
-    unset(_mbelib_compiler_targets_arm_32)
-endif()
-
 # Optional SIMD toggles
 if(MBELIB_ENABLE_SIMD)
     target_compile_definitions(mbe-shared PRIVATE MBELIB_ENABLE_SIMD=1)
     target_compile_definitions(mbe-static PRIVATE MBELIB_ENABLE_SIMD=1)
+    # Mirror the backend selection in src/external/pffft/pffft.c, including
+    # PFFFT-only backends (AltiVec and SSE1).
+    set(_mbelib_pffft_simd_probe_source
+        [=[
+        #if (defined(__ppc__) || defined(__ppc64__) || defined(__powerpc__) || defined(__powerpc64__)) && (defined(__VEC__) || defined(__ALTIVEC__))
+        /* AltiVec */
+        #elif defined(__ARM_NEON) || defined(__aarch64__) || defined(__arm64) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__wasm_simd128__)
+        /* NEON (PFFFT also takes this branch for WebAssembly SIMD builds) */
+        #elif defined(__x86_64__) || defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+        /* SSE */
+        #else
+        #error No supported PFFFT SIMD backend
+        #endif
+        int mbelib_target_pffft_simd;
+      ]=]
+    )
+    _mbelib_check_c_source_compiles_static("${_mbelib_pffft_simd_probe_source}" _mbelib_pffft_simd_available)
     if(MBELIB_TARGET_X86_32)
         set(_mbelib_x86_sse2_flag "")
         _mbelib_check_c_source_compiles_static("${_mbelib_x86_32_sse2_probe_source}" _mbelib_x86_targets_sse2_by_default)
@@ -508,83 +492,30 @@ if(MBELIB_ENABLE_SIMD)
         unset(_mbelib_candidate_flag)
         unset(_mbelib_candidate_flag_supported)
         unset(_mbelib_saved_required_flags)
-    elseif(MBELIB_TARGET_ARM_32)
-        set(_mbelib_arm_neon_flag "")
-        _mbelib_check_c_source_compiles_static("${_mbelib_arm_32_neon_probe_source}" _mbelib_arm_targets_neon_by_default)
-        if(_mbelib_arm_targets_neon_by_default)
-            message(
-                STATUS
-                "MBELIB_ENABLE_SIMD on 32-bit ARM: active compiler target already includes NEON"
-            )
-        else()
-            # Only -mfpu is offered: the float ABI belongs to the toolchain, and
-            # switching it here would silently break linkage with the C library.
-            set(_mbelib_arm_neon_candidate_flags -mfpu=neon)
-
-            foreach(
-                _mbelib_candidate_flag
-                IN
-                LISTS _mbelib_arm_neon_candidate_flags
-            )
-                set(_mbelib_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
-                if(CMAKE_REQUIRED_FLAGS)
-                    set(CMAKE_REQUIRED_FLAGS
-                        "${CMAKE_REQUIRED_FLAGS} ${_mbelib_candidate_flag}"
-                    )
-                else()
-                    set(CMAKE_REQUIRED_FLAGS "${_mbelib_candidate_flag}")
-                endif()
-
-                _mbelib_check_c_source_compiles_static(
-                  "${_mbelib_arm_32_neon_probe_source}"
-                  _mbelib_arm_neon_candidate_supported
-                )
-
-                set(CMAKE_REQUIRED_FLAGS "${_mbelib_saved_required_flags}")
-                set(_mbelib_candidate_flag_supported
-                    "${_mbelib_arm_neon_candidate_supported}"
-                )
-                unset(_mbelib_arm_neon_candidate_supported CACHE)
-                unset(_mbelib_arm_neon_candidate_supported)
-
-                if(_mbelib_candidate_flag_supported)
-                    set(_mbelib_arm_neon_flag "${_mbelib_candidate_flag}")
-                    break()
-                endif()
-            endforeach()
-
-            if(NOT _mbelib_arm_neon_flag)
-                message(
-                    FATAL_ERROR
-                    "MBELIB_ENABLE_SIMD on 32-bit ARM requires the active compiler target to enable NEON "
-                    "(for example -mfpu=neon on an ARMv7-A hard-float toolchain). Without it the NEON "
-                    "intrinsic paths and the bundled PFFFT NEON kernels are silently compiled out."
-                )
-            endif()
-
-            message(
-                STATUS
-                "MBELIB_ENABLE_SIMD on 32-bit ARM: compiling library targets for NEON via ${_mbelib_arm_neon_flag}"
-            )
-            message(
-                WARNING
-                "MBELIB_ENABLE_SIMD on 32-bit ARM is measurably SLOWER on Cortex-A9. Decoding one 20 ms "
-                "AMBE frame on a Zynq-7020 (quiet board, five runs): 260.5 us scalar, 281.7 us with "
-                "-mfpu=neon alone, 315.0 us with the NEON intrinsic paths as well - a 21% regression. "
-                "NEON helps on x86-64 (about 6%) but not here. Prefer MBELIB_ENABLE_SIMD=OFF on ARMv7 "
-                "unless you have measured your own core."
-            )
-            target_compile_options(mbe-shared PRIVATE ${_mbelib_arm_neon_flag})
-            target_compile_options(mbe-static PRIVATE ${_mbelib_arm_neon_flag})
-        endif()
-        unset(_mbelib_arm_neon_candidate_flags)
-        unset(_mbelib_arm_targets_neon_by_default CACHE)
-        unset(_mbelib_arm_targets_neon_by_default)
-        unset(_mbelib_arm_neon_flag)
-        unset(_mbelib_candidate_flag)
-        unset(_mbelib_candidate_flag_supported)
-        unset(_mbelib_saved_required_flags)
     endif()
+    # The x86-32 handling above guarantees SSE2, even if the default target
+    # probed without the library's additional SSE2 flag did not provide SSE.
+    if(NOT _mbelib_pffft_simd_available AND NOT MBELIB_TARGET_X86_32)
+        target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)
+        target_compile_definitions(mbe-static PRIVATE PFFFT_SIMD_DISABLE=1)
+        set(_mbelib_pffft_fallback_hint "")
+        if(
+            CMAKE_SIZEOF_VOID_P EQUAL 4
+            AND CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]"
+        )
+            set(_mbelib_pffft_fallback_hint
+                " On 32-bit ARM, pass -mfpu=neon in CMAKE_C_FLAGS to enable NEON."
+            )
+        endif()
+        message(
+            STATUS
+            "MBELIB_ENABLE_SIMD: FFT falls back to scalar for this target.${_mbelib_pffft_fallback_hint}"
+        )
+        unset(_mbelib_pffft_fallback_hint)
+    endif()
+    unset(_mbelib_pffft_simd_available CACHE)
+    unset(_mbelib_pffft_simd_available)
+    unset(_mbelib_pffft_simd_probe_source)
 else()
     # Keep bundled PFFFT scalar when SIMD is disabled for the project.
     target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)
@@ -1200,64 +1131,6 @@ if(MBELIB_BUILD_TESTS)
             )
         endif()
     endif()
-    add_executable(
-        test_simd_arch_detection_arm32_neon
-        tests/test_simd_arch_detection.c
-    )
-    target_include_directories(
-        test_simd_arch_detection_arm32_neon
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/internal"
-    )
-    target_compile_definitions(
-        test_simd_arch_detection_arm32_neon
-        PRIVATE MBE_TEST_SCENARIO_ARM32_NEON=1 __ARM_NEON=1
-    )
-    if(_SAN_CFLAGS)
-        target_compile_options(
-            test_simd_arch_detection_arm32_neon
-            PRIVATE ${_SAN_CFLAGS}
-        )
-    endif()
-    if(_SAN_LDFLAGS)
-        target_link_options(
-            test_simd_arch_detection_arm32_neon
-            BEFORE
-            PRIVATE ${_SAN_LDFLAGS}
-        )
-    endif()
-    add_test(
-        NAME test_simd_arch_detection_arm32_neon
-        COMMAND test_simd_arch_detection_arm32_neon
-    )
-    add_executable(
-        test_simd_arch_detection_arm32_no_neon
-        tests/test_simd_arch_detection.c
-    )
-    target_include_directories(
-        test_simd_arch_detection_arm32_no_neon
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/internal"
-    )
-    target_compile_definitions(
-        test_simd_arch_detection_arm32_no_neon
-        PRIVATE MBE_TEST_SCENARIO_ARM32_NO_NEON=1
-    )
-    if(_SAN_CFLAGS)
-        target_compile_options(
-            test_simd_arch_detection_arm32_no_neon
-            PRIVATE ${_SAN_CFLAGS}
-        )
-    endif()
-    if(_SAN_LDFLAGS)
-        target_link_options(
-            test_simd_arch_detection_arm32_no_neon
-            BEFORE
-            PRIVATE ${_SAN_LDFLAGS}
-        )
-    endif()
-    add_test(
-        NAME test_simd_arch_detection_arm32_no_neon
-        COMMAND test_simd_arch_detection_arm32_no_neon
-    )
 
     set(_MBELIB_TEST_TARGETS
         test_api
@@ -1272,8 +1145,6 @@ if(MBELIB_BUILD_TESTS)
         test_simd_arch_detection_x64
         test_simd_arch_detection_arm64ec
         test_simd_arch_detection_x86_32_msvc_sse2
-        test_simd_arch_detection_arm32_neon
-        test_simd_arch_detection_arm32_no_neon
     )
     foreach(_mbelib_test_target IN LISTS _MBELIB_TEST_TARGETS)
         _mbelib_apply_hardening(${_mbelib_test_target})

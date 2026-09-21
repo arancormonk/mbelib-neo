@@ -181,31 +181,21 @@ mbe_synthesisWindow(int n) {
 static void
 mbe_apply_synthesis_window(float* restrict dst, const float* restrict src, const mbe_fft_plan* restrict plan) {
     const float* window = plan->synthesis_window;
-    int i = 0;
 
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
-    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
+    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
         __m128 vsrc = _mm_loadu_ps(src + i);
         __m128 vwin = _mm_loadu_ps(window + i);
         _mm_storeu_ps(dst + i, _mm_mul_ps(vsrc, vwin));
     }
-#elif defined(MBE_SIMD_TARGET_NEON)
-    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
+    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
         float32x4_t vsrc = vld1q_f32(src + i);
         float32x4_t vwin = vld1q_f32(window + i);
         vst1q_f32(dst + i, vmulq_f32(vsrc, vwin));
     }
-#endif
-#endif
-
-    /* MBE_FFT_SIZE is a multiple of the 4-wide vector step, so the loops above
-     * already cover the buffer and this tail is dead in SSE2/NEON builds.
-     * Compiling it only for scalar builds also keeps GCC 13 from mis-deriving
-     * the induction variable once the NEON path is inlined (-ffast-math -O2),
-     * which it reports as a bogus -Waggressive-loop-optimizations error. */
-#if !defined(MBELIB_ENABLE_SIMD) || (!defined(MBE_SIMD_TARGET_SSE2) && !defined(MBE_SIMD_TARGET_NEON))
-    for (; i < MBE_FFT_SIZE; i++) {
+#else
+    for (int i = 0; i < MBE_FFT_SIZE; i++) {
         dst[i] = src[i] * window[i];
     }
 #endif
@@ -666,31 +656,22 @@ mbe_apply_unvoiced_band_scaling(float* restrict dftBinScalor, const float* restr
 static void
 mbe_normalize_ifft_output(float* restrict Uw_out) {
     const float scale = 1.0f / (float)MBE_FFT_SIZE;
-    int i = 0;
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
     __m128 vscale = _mm_set1_ps(scale);
-    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
         __m128 v = _mm_loadu_ps(&Uw_out[i]);
         v = _mm_mul_ps(v, vscale);
         _mm_storeu_ps(&Uw_out[i], v);
     }
-#elif defined(MBE_SIMD_TARGET_NEON)
+#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
     float32x4_t vscale = vdupq_n_f32(scale);
-    for (; i + 4 <= MBE_FFT_SIZE; i += 4) {
+    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
         float32x4_t v = vld1q_f32(&Uw_out[i]);
         v = vmulq_f32(v, vscale);
         vst1q_f32(&Uw_out[i], v);
     }
-#endif
-#endif
-    /* MBE_FFT_SIZE is a multiple of the 4-wide vector step, so the loops above
-     * already cover the buffer and this tail is dead in SSE2/NEON builds.
-     * Compiling it only for scalar builds also keeps GCC 13 from mis-deriving
-     * the induction variable once the NEON path is inlined (-ffast-math -O2),
-     * which it reports as a bogus -Waggressive-loop-optimizations error. */
-#if !defined(MBELIB_ENABLE_SIMD) || (!defined(MBE_SIMD_TARGET_SSE2) && !defined(MBE_SIMD_TARGET_NEON))
-    for (; i < MBE_FFT_SIZE; i++) {
+#else
+    for (int i = 0; i < MBE_FFT_SIZE; i++) {
         Uw_out[i] *= scale;
     }
 #endif
