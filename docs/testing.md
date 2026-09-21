@@ -17,6 +17,8 @@ The CTest suite includes:
 - golden PCM hash regression checks
 - SIMD architecture detection checks
 - quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
+- quality-tool CLI alignment, accepted/rejected frame widths, and private output
+  permissions (`test_quality_tools`, with tools enabled and Python 3 available)
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -93,6 +95,11 @@ additionally require Bash, Python 3, git, gcc/g++ (C++17), `patch`, and
 coreutils. Fetching held-out speech requires network access and `ffmpeg`.
 Offline reports require NumPy, SciPy, matplotlib, and pystoi; install these in a
 local virtual environment rather than making them library dependencies.
+
+Quality-tool outputs are created with owner read/write permissions on POSIX
+(`0600`, further restricted by the caller's umask). Reopening an output truncates
+its contents while retaining its existing permissions. Windows uses CRT
+read/write permissions together with the directory's inherited ACL.
 
 ### Windows
 
@@ -233,7 +240,8 @@ Schema-2 metrics preserve the original supported formulas:
   −160…800. Automatic alignment always runs independently: `auto_lag_samples`,
   nullable `alignment_corr`, and `alignment_at_limit` describe its estimate.
   It correlates log-RMS envelopes from centered 160-sample windows at 8-sample
-  hops. Positive lag means decoded speech is delayed. The runner measures the
+  hops. Correlations within `1e-12` are tied, favoring the smallest absolute lag.
+  Positive lag means decoded speech is delayed. The runner measures the
   candidate at the baseline lag, preserving common reference support/activity
   and the synthesis-join grid; differing automatic lags generate a separately
   labelled auto-alignment sensitivity report, not a claimed decoder-delay change.

@@ -1165,6 +1165,19 @@ if(MBELIB_BUILD_TESTS)
             target_link_options(test_quality_fs BEFORE PRIVATE ${_SAN_LDFLAGS})
         endif()
         add_test(NAME test_quality_fs COMMAND test_quality_fs)
+        if(NOT CMAKE_CROSSCOMPILING)
+            find_package(Python3 3.7 QUIET COMPONENTS Interpreter)
+            if(Python3_Interpreter_FOUND)
+                add_test(
+                    NAME test_quality_tools
+                    COMMAND
+                        ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/tests/test_quality_tools.py
+                        $<TARGET_FILE:mbe_quality_eval>
+                        $<TARGET_FILE:mbe_quality_reframe>
+                )
+            endif()
+        endif()
     endif()
 
     set(_MBELIB_TEST_TARGETS

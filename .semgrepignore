@@ -1,0 +1,7 @@
+# Keep tests in directory scans: Semgrep's built-in defaults exclude them.
+.git/
+build/
+.deps-arch-toolchain/
+src/external/
+# Intentional violations are exercised separately with semgrep --test.
+semgrep/*.c

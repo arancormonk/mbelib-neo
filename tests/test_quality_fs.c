@@ -9,6 +9,7 @@
 #include <windows.h>
 #else
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -24,7 +25,7 @@ check(int condition, const char* message) {
 
 static void
 make_file(const char* path) {
-    FILE* file = fopen(path, "wb");
+    FILE* file = mbe_quality_open_output(path);
     check(file != NULL, "cannot create test file");
     check(fputs("quality filesystem test\n", file) >= 0, "cannot write test file");
     check(fclose(file) == 0, "cannot close test file");
@@ -81,6 +82,28 @@ main(void) {
 #endif
     make_file("first");
     make_file("second");
+    /* An unrestricted caller umask must not expose newly created outputs. */
+#if !defined(_WIN32)
+    mode_t saved_mask = umask(0);
+#endif
+    make_file("private-output");
+#if !defined(_WIN32)
+    umask(saved_mask);
+    struct stat output_stat;
+    check(stat("private-output", &output_stat) == 0, "cannot stat output");
+    assert((output_stat.st_mode & 0777) == 0600);
+#endif
+    FILE* output = mbe_quality_open_output("private-output");
+    check(output != NULL, "cannot reopen output");
+    check(fclose(output) == 0, "cannot close truncated output");
+    FILE* input = fopen("private-output", "rb");
+    check(input != NULL, "cannot read output");
+    assert(fgetc(input) == EOF && !ferror(input));
+    check(fclose(input) == 0, "cannot close input");
+    check(remove("private-output") == 0, "cannot remove output");
+    errno = 0;
+    assert(mbe_quality_open_output("missing-parent/output") == NULL);
+    assert(errno != 0);
     assert(mbe_quality_same_file("first", "first"));
     assert(mbe_quality_paths_equal("first", "first"));
     assert(!mbe_quality_same_file("first", "second"));

@@ -56,7 +56,7 @@ fail(const char* message) {
 
 static FILE*
 open_file(const char* path, const char* mode) {
-    FILE* f = fopen(path, mode);
+    FILE* f = strcmp(mode, "rb") == 0 ? fopen(path, "rb") : mbe_quality_open_output(path);
     if (!f) {
         fprintf(stderr, "%s: %s\n", path, strerror(errno));
         exit(2);
@@ -281,6 +281,8 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
     FILE* f = open_file(path, "rb");
     Signal s = {0};
     mbe_parms cur, prev, enhanced;
+    /* Keep predictor and enhanced synthesis histories separate for the entire
+     * stream, and seed once so repeated evaluations produce the same PCM. */
     mbe_initMbeParms(&cur, &prev, &enhanced);
     mbe_setThreadRngSeed(seed);
     const int imbe7200 = !strcmp(codec, "imbe7200"), imbe7100 = !strcmp(codec, "imbe7100");
@@ -299,8 +301,17 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
         while (n && (line[n - 1] == '\r' || line[n - 1] == '\n')) {
             --n;
         }
-        if (!((imbe7200 && (n == 88 || n == 184)) || (imbe7100 && n == 168)
-              || ((ambe2450 || ambe2400) && (n == 49 || n == 96)))) {
+        /* Width identifies parameter bits versus a rectangular protected frame.
+         * Reject incompatible rows before casting the buffer for a Frame API. */
+        int valid_width;
+        if (imbe7200) {
+            valid_width = n == 88 || n == 184;
+        } else if (imbe7100) {
+            valid_width = n == 168;
+        } else {
+            valid_width = (ambe2450 || ambe2400) && (n == 49 || n == 96);
+        }
+        if (!valid_width) {
             fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
             exit(2);
         }
@@ -363,6 +374,8 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
         stats->c0 += (size_t)result.c0_errors;
         stats->protected_errors += (size_t)result.protected_errors;
         stats->c4 += (size_t)result.c4_errors;
+        /* total_errors already includes C4; retain the breakdown for reporting
+         * without adding those errors a second time. */
         stats->total += (size_t)result.total_errors;
         /* Inspect object bits, not isfinite(): Release may assume finite math.
          * These are post-library-limiter, pre-int16 observations. */
@@ -466,8 +479,14 @@ align(const Signal* ref, const Signal* dec) {
             continue;
         }
         double c;
-        if (correlation(a.samples + ra, b.samples + rb, n, &c)
-            && (!best.valid || c > best.corr || (c == best.corr && abs(lag * 8) < abs(best.lag)))) {
+        if (!correlation(a.samples + ra, b.samples + rb, n, &c)) {
+            continue;
+        }
+        /* Correlations are bounded by [-1, 1]. Treat roundoff-sized differences
+         * as ties and prefer the smallest absolute delay in either direction. */
+        const double tolerance = 1e-12;
+        int tied = fabs(c - best.corr) <= tolerance;
+        if (!best.valid || c > best.corr + tolerance || (tied && abs(lag * 8) < abs(best.lag))) {
             best = (Alignment){lag * 8, c, 1};
         }
     }
@@ -578,6 +597,7 @@ crest(const double* x) {
 
 static void
 measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag) {
+    /* Record clipping on the original PCM before alignment or level matching. */
     double pcm_peak = 0;
     size_t rails = 0, run = 0, max_run = 0;
     for (size_t i = 0; i < dec->count; ++i) {
@@ -598,6 +618,8 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
     metric("pcm_max_rail_run", (double)max_run);
     metric_valid("boundary_index_db", boundary_index(dec), dec->count > 243 && pcm_peak > 0);
     Alignment automatic = reference ? align(reference, dec) : (Alignment){0};
+    /* A forced lag changes the measurement overlap, but the automatic estimate
+     * remains in the report so alignment failures are still visible. */
     int lag = have_lag ? forced_lag : automatic.lag;
     metric("auto_lag_samples", automatic.lag);
     metric("lag_samples", lag);
@@ -629,6 +651,8 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
         fail("out of memory");
     }
     double maximum = 0;
+    /* Use reference energy to select active 20 ms frames; without a reference,
+     * decoded energy supports only the absolute, non-comparative metrics. */
     for (size_t f = 0; f < nf; ++f) {
         maximum = fmax(maximum, energy(r + f * 160, 160));
     }
@@ -651,6 +675,8 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
                                  : "speech";
     metric("active_frames", (double)count);
     double gain = speech ? sqrt(er / ed) : 1;
+    /* Match active-speech energy once for every subsequent comparative metric.
+     * Keep the original decoded buffer intact for output and peak reporting. */
     metric_valid("level_offset_db", -20 * log10(gain), speech);
     double* normalized = NULL;
     if (speech && gain != 1) {
@@ -664,6 +690,7 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
         d = normalized;
     }
     size_t joins;
+    /* Compare synthesis joins and short-term envelopes only over active frames. */
     double join_dec = join_contrast(d, n, d0, active, nf, &joins);
     metric("join_count", (double)joins);
     metric_valid("join_dec_db", join_dec, supported && joins > 0);
@@ -702,6 +729,8 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
     free(envd.samples);
 
     double max_power = 0, pr[129], pd[129];
+    /* Derive one spectral floor from the reference before accumulating windowed
+     * log-spectral distance and band powers on the same active-frame support. */
     for (size_t i = 0; i + FFT_N <= n; i += 80) {
         spectrum(r + i, pr);
         for (size_t k = 0; k <= 128; ++k) {

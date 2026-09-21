@@ -3,6 +3,13 @@
 #ifndef MBE_QUALITY_FS_H
 #define MBE_QUALITY_FS_H
 
+#include <stdio.h>
+
+/* Open a binary output, truncating an existing file. New files are created with
+ * owner read/write permissions (0600 on POSIX; Windows also applies its ACL).
+ * Existing permissions are retained. NULL indicates failure and sets errno. */
+FILE* mbe_quality_open_output(const char* path);
+
 /* Return 1 only if both paths open/stat successfully and identify the same file.
  * Missing or inaccessible paths return 0; this is not a path-validation check. */
 int mbe_quality_same_file(const char* a, const char* b);
