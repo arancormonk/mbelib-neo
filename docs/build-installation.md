@@ -24,6 +24,29 @@ The example binaries are built locally and are not installed. They accept no pat
 and `dstar_decode < output.dstar > output.wav`. Diagnostics go to stderr. The decoder buffers
 PCM in memory before writing the WAV header and data to stdout.
 
+## SIMD Target Selection
+
+`MBELIB_ENABLE_SIMD=ON` uses SSE2 or NEON routines when the compiler target
+provides those instructions, with scalar routines otherwise. The bundled PFFFT
+library uses its own supported backends (including SSE and AltiVec); CMake
+explicitly selects scalar FFT code when none is available, even with SIMD ON.
+Warnings-as-errors remains enabled by default in either case.
+
+On 32-bit ARM, the option preserves the toolchain's FPU selection. A VFP-only
+target builds with scalar FFT code and a configure status message explaining
+the fallback. To enable NEON on a compatible CPU, pass
+`-DCMAKE_C_FLAGS=-mfpu=neon` along with `-DMBELIB_ENABLE_SIMD=ON`, preserving
+any other compiler flags your toolchain needs. Targets that already enable NEON,
+including AArch64, use it without additional flags. CMake does not change the
+ARM floating-point ABI.
+
+The existing 32-bit x86 behavior is different: enabling the option requests
+SSE2 code generation and requires an SSE2-capable CPU. Leave the option OFF for
+baseline i386 portability. SIMD selection is based on the compiler target,
+not runtime CPU detection; deploy to CPUs that support the chosen instructions.
+Measure scalar and SIMD performance on your own core with a representative
+workload before choosing a configuration.
+
 ## Debug Information
 
 The install rules do not strip binaries. If users request debug information

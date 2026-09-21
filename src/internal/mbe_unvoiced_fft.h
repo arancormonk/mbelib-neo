@@ -14,7 +14,12 @@
 #include "mbelib-neo/mbelib.h"
 
 /* FFT size for unvoiced synthesis */
-#define MBE_FFT_SIZE             256
+#define MBE_FFT_SIZE 256
+/* The SSE2/NEON synthesis loops process four floats per step without a
+ * scalar tail, so the size must stay a multiple of four. */
+#if (MBE_FFT_SIZE % 4) != 0
+#error "MBE_FFT_SIZE must be a multiple of four for SIMD synthesis"
+#endif
 
 /* Scaling coefficient for unvoiced synthesis (Algorithm #120) */
 #define MBE_UNVOICED_SCALE_COEFF 146.17696f

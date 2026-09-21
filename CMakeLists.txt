@@ -407,6 +407,23 @@ endif()
 if(MBELIB_ENABLE_SIMD)
     target_compile_definitions(mbe-shared PRIVATE MBELIB_ENABLE_SIMD=1)
     target_compile_definitions(mbe-static PRIVATE MBELIB_ENABLE_SIMD=1)
+    # Mirror the backend selection in src/external/pffft/pffft.c, including
+    # PFFFT-only backends (AltiVec and SSE1).
+    set(_mbelib_pffft_simd_probe_source
+        [=[
+        #if (defined(__ppc__) || defined(__ppc64__) || defined(__powerpc__) || defined(__powerpc64__)) && (defined(__VEC__) || defined(__ALTIVEC__))
+        /* AltiVec */
+        #elif defined(__ARM_NEON) || defined(__aarch64__) || defined(__arm64) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__wasm_simd128__)
+        /* NEON (PFFFT also takes this branch for WebAssembly SIMD builds) */
+        #elif defined(__x86_64__) || defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+        /* SSE */
+        #else
+        #error No supported PFFFT SIMD backend
+        #endif
+        int mbelib_target_pffft_simd;
+      ]=]
+    )
+    _mbelib_check_c_source_compiles_static("${_mbelib_pffft_simd_probe_source}" _mbelib_pffft_simd_available)
     if(MBELIB_TARGET_X86_32)
         set(_mbelib_x86_sse2_flag "")
         _mbelib_check_c_source_compiles_static("${_mbelib_x86_32_sse2_probe_source}" _mbelib_x86_targets_sse2_by_default)
@@ -476,6 +493,29 @@ if(MBELIB_ENABLE_SIMD)
         unset(_mbelib_candidate_flag_supported)
         unset(_mbelib_saved_required_flags)
     endif()
+    # The x86-32 handling above guarantees SSE2, even if the default target
+    # probed without the library's additional SSE2 flag did not provide SSE.
+    if(NOT _mbelib_pffft_simd_available AND NOT MBELIB_TARGET_X86_32)
+        target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)
+        target_compile_definitions(mbe-static PRIVATE PFFFT_SIMD_DISABLE=1)
+        set(_mbelib_pffft_fallback_hint "")
+        if(
+            CMAKE_SIZEOF_VOID_P EQUAL 4
+            AND CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]"
+        )
+            set(_mbelib_pffft_fallback_hint
+                " On 32-bit ARM, pass -mfpu=neon in CMAKE_C_FLAGS to enable NEON."
+            )
+        endif()
+        message(
+            STATUS
+            "MBELIB_ENABLE_SIMD: FFT falls back to scalar for this target.${_mbelib_pffft_fallback_hint}"
+        )
+        unset(_mbelib_pffft_fallback_hint)
+    endif()
+    unset(_mbelib_pffft_simd_available CACHE)
+    unset(_mbelib_pffft_simd_available)
+    unset(_mbelib_pffft_simd_probe_source)
 else()
     # Keep bundled PFFFT scalar when SIMD is disabled for the project.
     target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)

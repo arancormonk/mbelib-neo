@@ -134,7 +134,7 @@ git push origin vX.Y.Z
   PCM conversion is always compiled with IEEE semantics so NaN/Inf handling is preserved.
 - `-DMBELIB_ENABLE_LTO=ON` — Enable IPO/LTO in Release builds when supported.
 - `-DMBELIB_ENABLE_HARDENING=ON` — Enable supported Release-like compiler/linker hardening (default ON).
-- `-DMBELIB_ENABLE_SIMD=ON` — Enable SIMD-accelerated routines in hot paths (SSE2 on x86_64, NEON on ARM64, and SSE2-targeted builds on 32-bit x86). On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability.
+- `-DMBELIB_ENABLE_SIMD=ON` — Enable SSE2/NEON routines when the compiler target provides them, otherwise use scalar routines. The bundled FFT also falls back to scalar when its compiler target has no supported SIMD backend. On 32-bit ARM, pass `-DCMAKE_C_FLAGS=-mfpu=neon` to enable NEON; the option itself preserves the toolchain's FPU selection. Measure performance on your own core. On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability. See [SIMD target selection](docs/build-installation.md#simd-target-selection).
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
 - `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, and `bench_convert`.
 - `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation).
@@ -315,7 +315,8 @@ The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evalu
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
 - Runtime synthesis helpers (RNG state and FFT plan) are thread-local; do not share mutable decode state (`mbe_parms`) across threads unless you synchronize externally.
 - AMBE/IMBE frame handling intentionally differs for JMBE parity: IMBE uses error-rate muting and repeat-headroom reset behavior, while AMBE tone/erasure/repeat transitions follow AMBE-specific JMBE gating rules.
-- Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math on supported CPUs. This can change
+- Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math when the compiler target supports it, with
+  scalar fallback otherwise. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
   sanity bounds elsewhere.
 
