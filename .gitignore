@@ -35,3 +35,4 @@ Thumbs.db
 /.zizmor-pedantic.sarif
 /.scan-build.local/
 /.cppcheck-build/
+__pycache__/
