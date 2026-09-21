@@ -87,7 +87,10 @@
  */
 #if (defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC))                                \
     || (defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_X86_32))                              \
-    || (defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC) && defined(MBE_TEST_OVERRIDE_ARCH_X86_32))
+    || (defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC) && defined(MBE_TEST_OVERRIDE_ARCH_X86_32))                             \
+    || (defined(MBE_TEST_OVERRIDE_ARCH_X86_64) && defined(MBE_TEST_OVERRIDE_ARCH_ARM_32))                              \
+    || (defined(MBE_TEST_OVERRIDE_ARCH_ARM64EC) && defined(MBE_TEST_OVERRIDE_ARCH_ARM_32))                             \
+    || (defined(MBE_TEST_OVERRIDE_ARCH_X86_32) && defined(MBE_TEST_OVERRIDE_ARCH_ARM_32))
 #error "MBE test arch overrides are mutually exclusive"
 #endif
 
@@ -102,6 +105,8 @@
 #define MBE_ARCH_AARCH64 1
 #elif defined(MBE_TEST_OVERRIDE_ARCH_X86_32)
 #define MBE_ARCH_X86_32 1
+#elif defined(MBE_TEST_OVERRIDE_ARCH_ARM_32)
+#define MBE_ARCH_ARM_32 1
 #else
 #if defined(_M_ARM64EC)
 #define MBE_ARCH_ARM64EC 1
@@ -117,6 +122,10 @@
 
 #if defined(__i386__) || defined(_M_IX86)
 #define MBE_ARCH_X86_32 1
+#endif
+
+#if (defined(__arm__) || defined(_M_ARM)) && !defined(MBE_ARCH_AARCH64)
+#define MBE_ARCH_ARM_32 1
 #endif
 #endif
 
