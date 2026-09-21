@@ -6,15 +6,45 @@
 #include "mbe_quality_fs.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #if defined(_WIN32)
+#include <io.h>
 #include <windows.h>
 #else
-#include <sys/stat.h>
+#include <unistd.h>
 #endif
+
+FILE*
+mbe_quality_open_output(const char* path) {
+#if defined(_WIN32)
+    int fd = _open(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+#endif
+    if (fd < 0) {
+        return NULL;
+    }
+#if defined(_WIN32)
+    FILE* stream = _fdopen(fd, "wb");
+#else
+    FILE* stream = fdopen(fd, "wb");
+#endif
+    if (!stream) {
+        int saved_errno = errno;
+#if defined(_WIN32)
+        _close(fd);
+#else
+        close(fd);
+#endif
+        errno = saved_errno;
+    }
+    return stream;
+}
 
 int
 mbe_quality_same_file(const char* a, const char* b) {

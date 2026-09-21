@@ -148,7 +148,7 @@ main(int argc, char** argv) {
         fclose(staged);
         return 2;
     }
-    FILE* output = fopen(output_path, "wb");
+    FILE* output = mbe_quality_open_output(output_path);
     if (!output) {
         fprintf(stderr, "Cannot open output: %s\n", output_path);
         fclose(staged);

@@ -51,3 +51,11 @@ The repository intentionally blocks or flags patterns that are easy to reintrodu
 - Keep CI fallback container images pinned by digest and covered by `tools/check_workflow_download_pins.sh`.
 - Keep workflow scripts defensive: pass untrusted context through environment variables or action inputs, not direct expression interpolation in `run:` blocks.
 - Keep analyzer and linter output actionable. Prefer fixing root causes over widening suppressions.
+- Compare computed floating-point values with a domain-appropriate tolerance. Exact
+  reproducibility checks should compare object bytes; literal sentinel checks and
+  IEEE NaN self-comparisons remain allowed. The Semgrep rule covers same-function
+  float/double declarations, parameters, arrays, and pointer parameters, including
+  quality tools and tests. CodeQL supplies type-aware coverage across headers.
+- Strict default Semgrep runs exercise `semgrep/mbelib-neo.c` regression fixtures
+  before scanning. `.semgrepignore` keeps tests in directory scans while excluding
+  vendored code, build outputs, and intentional rule fixtures.

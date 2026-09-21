@@ -1,4 +1,65 @@
 rules:
+  - id: mbelib-neo.no-floating-point-equality
+    languages: [c, cpp]
+    severity: ERROR
+    message: Use a tolerance for computed floating-point comparisons; use object-byte comparisons for exact reproducibility checks.
+    # Like dsd-neo's guardrail, match declarations available in this function.
+    # Include uninitialized locals: CodeQL alert #88 compared an output argument
+    # with a struct member. Cross-header member types still require CodeQL.
+    # Literal sentinel checks remain allowed (for example, zeroed output).
+    paths:
+      include:
+        - /src/**
+        - /include/**
+        - /examples/**
+        - /bench/**
+        - /fuzz/**
+        - /tests/**
+        - /tools/**
+      exclude:
+        - /src/external/**
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $RET $FUNC(...) { ... $TYPE $VALUE = ...; ... }
+                  - pattern-inside: |
+                      $RET $FUNC(...) { ... $TYPE $VALUE; ... }
+                  - pattern-inside: |
+                      $RET $FUNC(..., $TYPE $VALUE, ...) { ... }
+              - pattern-either:
+                  - pattern: $VALUE == $OTHER
+                  - pattern: $VALUE != $OTHER
+                  - pattern: $OTHER == $VALUE
+                  - pattern: $OTHER != $VALUE
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $RET $FUNC(...) { ... $TYPE $ARRAY[...] = ...; ... }
+                  - pattern-inside: |
+                      $RET $FUNC(...) { ... $TYPE $ARRAY[...]; ... }
+                  - pattern-inside: |
+                      $RET $FUNC(...) { ... $TYPE $ARRAY[] = ...; ... }
+                  - pattern-inside: |
+                      $RET $FUNC(..., $TYPE *$ARRAY, ...) { ... }
+                  - pattern-inside: |
+                      $RET $FUNC(..., $TYPE $ARRAY[...], ...) { ... }
+              - pattern-either:
+                  - pattern: $ARRAY[$INDEX] == $OTHER
+                  - pattern: $ARRAY[$INDEX] != $OTHER
+                  - pattern: $OTHER == $ARRAY[$INDEX]
+                  - pattern: $OTHER != $ARRAY[$INDEX]
+      - metavariable-regex:
+          metavariable: $TYPE
+          regex: '^(const\s+)?(float|double)$'
+      - metavariable-regex:
+          metavariable: $OTHER
+          regex: '^[A-Za-z_]'
+      # IEEE self-comparisons test for NaN rather than numerical equality.
+      - pattern-not: $SELF == $SELF
+      - pattern-not: $SELF != $SELF
+
   - id: mbelib-neo.no-shell-exec
     languages: [c]
     severity: ERROR

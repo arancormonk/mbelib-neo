@@ -57,8 +57,13 @@ fill_float_buffer(float* out, float value) {
 
 static void
 assert_float_buffer_unchanged(const float* out, float value) {
+    uint32_t expected_bits;
+    memcpy(&expected_bits, &value, sizeof(expected_bits));
     for (int i = 0; i < 160; ++i) {
-        assert(out[i] == value);
+        /* Rejected input must leave the sentinel's object representation intact. */
+        uint32_t actual_bits;
+        memcpy(&actual_bits, &out[i], sizeof(actual_bits));
+        assert(actual_bits == expected_bits);
     }
 }
 

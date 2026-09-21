@@ -80,6 +80,11 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
   TARGETS=(src include examples bench tests fuzz tools .github/workflows)
 fi
 
+# Prove the local guardrail still detects its regressions before scanning code.
+if [[ $STRICT -eq 1 && $CUSTOM_CONFIGS -eq 0 ]]; then
+  semgrep --test --metrics=off --disable-version-check --config semgrep/mbelib-neo.yml semgrep/mbelib-neo.c
+fi
+
 LOG_FILE=".semgrep.local.out"
 
 ARGS=(
