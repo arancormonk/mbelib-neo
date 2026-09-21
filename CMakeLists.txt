@@ -566,6 +566,14 @@ if(MBELIB_ENABLE_SIMD)
                 STATUS
                 "MBELIB_ENABLE_SIMD on 32-bit ARM: compiling library targets for NEON via ${_mbelib_arm_neon_flag}"
             )
+            message(
+                WARNING
+                "MBELIB_ENABLE_SIMD on 32-bit ARM is measurably SLOWER on Cortex-A9. Decoding one 20 ms "
+                "AMBE frame on a Zynq-7020 (quiet board, five runs): 260.5 us scalar, 281.7 us with "
+                "-mfpu=neon alone, 315.0 us with the NEON intrinsic paths as well - a 21% regression. "
+                "NEON helps on x86-64 (about 6%) but not here. Prefer MBELIB_ENABLE_SIMD=OFF on ARMv7 "
+                "unless you have measured your own core."
+            )
             target_compile_options(mbe-shared PRIVATE ${_mbelib_arm_neon_flag})
             target_compile_options(mbe-static PRIVATE ${_mbelib_arm_neon_flag})
         endif()
