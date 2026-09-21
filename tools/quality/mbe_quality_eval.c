@@ -10,7 +10,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "mbelib-neo/mbelib.h"
 
@@ -65,7 +70,117 @@ open_file(const char* path, const char* mode) {
 }
 
 /* Resolve symlinks in existing paths/parents as well as lexical "."/"..".
- * Comparing inode identities additionally catches hard-linked inputs. */
+ * Comparing file identities additionally catches hard-linked inputs. */
+#if defined(_WIN32)
+/* Win32 stands in for realpath()/lstat() and for the st_dev/st_ino pair:
+ * GetFinalPathNameByHandle resolves symlinks and junctions, and the volume
+ * serial plus file index is the documented identity that catches hard links. */
+static HANDLE
+open_for_identity(const char* path) {
+    return CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                       FILE_FLAG_BACKUP_SEMANTICS, NULL);
+}
+
+static char*
+final_path_of(HANDLE handle) {
+    DWORD needed = GetFinalPathNameByHandleA(handle, NULL, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (needed == 0) {
+        return NULL;
+    }
+    char* buffer = malloc((size_t)needed + 1u);
+    if (!buffer) {
+        fail("out of memory");
+    }
+    DWORD written = GetFinalPathNameByHandleA(handle, buffer, needed + 1u, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (written == 0 || written > needed) {
+        free(buffer);
+        return NULL;
+    }
+    buffer[written] = '\0';
+    /* Drop the \?\ prefix so resolved paths print and compare like POSIX ones. */
+    if (!strncmp(buffer, "\\\\?\\", 4)) {
+        memmove(buffer, buffer + 4, strlen(buffer + 4) + 1);
+    }
+    return buffer;
+}
+
+static char*
+normalized_path(const char* path) {
+    HANDLE handle = open_for_identity(path);
+    if (handle != INVALID_HANDLE_VALUE) {
+        char* resolved = final_path_of(handle);
+        CloseHandle(handle);
+        if (!resolved) {
+            fail("cannot resolve input/output path");
+        }
+        return resolved;
+    }
+    DWORD error = GetLastError();
+    if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+        fail("cannot resolve input/output path");
+    }
+    /* A reparse point that exists but cannot be opened is the dangling-symlink case. */
+    DWORD attributes = GetFileAttributesA(path);
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) {
+        fail("cannot safely resolve a dangling input/output symlink");
+    }
+    char* copy = _strdup(path);
+    if (!copy) {
+        fail("out of memory");
+    }
+    char* slash = strrchr(copy, '\\');
+    char* forward = strrchr(copy, '/');
+    if (!slash || (forward && forward > slash)) {
+        slash = forward;
+    }
+    const char* leaf = slash ? slash + 1 : copy;
+    if (!*leaf) {
+        fail("output path has an empty filename");
+    }
+    if (slash) {
+        *slash = '\0';
+    }
+    const char* parent_path = slash ? (*copy ? copy : "\\") : ".";
+    HANDLE parent_handle = open_for_identity(parent_path);
+    if (parent_handle == INVALID_HANDLE_VALUE) {
+        fail("cannot resolve output parent directory");
+    }
+    char* parent = final_path_of(parent_handle);
+    CloseHandle(parent_handle);
+    if (!parent) {
+        fail("cannot resolve output parent directory");
+    }
+    size_t size = strlen(parent) + strlen(leaf) + 2;
+    char* resolved = malloc(size);
+    if (!resolved) {
+        fail("out of memory");
+    }
+    snprintf(resolved, size, "%s\\%s", parent, leaf);
+    free(parent);
+    free(copy);
+    return resolved;
+}
+
+static int
+same_file(const char* a, const char* b) {
+    HANDLE ha = open_for_identity(a);
+    if (ha == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    HANDLE hb = open_for_identity(b);
+    if (hb == INVALID_HANDLE_VALUE) {
+        CloseHandle(ha);
+        return 0;
+    }
+    BY_HANDLE_FILE_INFORMATION ia, ib;
+    int same = GetFileInformationByHandle(ha, &ia) && GetFileInformationByHandle(hb, &ib)
+               && ia.dwVolumeSerialNumber == ib.dwVolumeSerialNumber && ia.nFileIndexHigh == ib.nFileIndexHigh
+               && ia.nFileIndexLow == ib.nFileIndexLow;
+    CloseHandle(ha);
+    CloseHandle(hb);
+    return same;
+}
+#else
 static char*
 normalized_path(const char* path) {
     char* resolved = realpath(path, NULL);
@@ -106,13 +221,19 @@ normalized_path(const char* path) {
     return resolved;
 }
 
+static int
+same_file(const char* a, const char* b) {
+    struct stat sa, sb;
+    return stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+#endif
+
 static void
 reject_alias(const char* a, const char* b) {
     if (!a || !b) {
         return;
     }
-    struct stat sa, sb;
-    if (stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino) {
+    if (same_file(a, b)) {
         fail("outputs must be different files from inputs and each other");
     }
     char* na = normalized_path(a);

@@ -5,7 +5,11 @@
  */
 #include <stdio.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <sys/stat.h>
+#endif
 
 #include "mbe_quality_frames.h"
 
@@ -14,12 +18,37 @@ usage(const char* program) {
     fprintf(stderr, "Usage: %s --codec imbe7200|imbe7100|ambe2450|ambe2400 --in DATA_FILE --out FRAME_FILE\n", program);
 }
 
+/* On Win32 the volume serial plus file index is the documented stand-in for
+ * the st_dev/st_ino pair, and catches hard links the same way. */
 static int
 same_file(const char* input, const char* output) {
+    if (strcmp(input, output) == 0) {
+        return 1;
+    }
+#if defined(_WIN32)
+    HANDLE hi = CreateFileA(input, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (hi == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    HANDLE ho = CreateFileA(output, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (ho == INVALID_HANDLE_VALUE) {
+        CloseHandle(hi);
+        return 0;
+    }
+    BY_HANDLE_FILE_INFORMATION ii, io;
+    int same = GetFileInformationByHandle(hi, &ii) && GetFileInformationByHandle(ho, &io)
+               && ii.dwVolumeSerialNumber == io.dwVolumeSerialNumber && ii.nFileIndexHigh == io.nFileIndexHigh
+               && ii.nFileIndexLow == io.nFileIndexLow;
+    CloseHandle(hi);
+    CloseHandle(ho);
+    return same;
+#else
     struct stat input_stat, output_stat;
-    return strcmp(input, output) == 0
-           || (stat(input, &input_stat) == 0 && stat(output, &output_stat) == 0
-               && input_stat.st_dev == output_stat.st_dev && input_stat.st_ino == output_stat.st_ino);
+    return stat(input, &input_stat) == 0 && stat(output, &output_stat) == 0 && input_stat.st_dev == output_stat.st_dev
+           && input_stat.st_ino == output_stat.st_ino;
+#endif
 }
 
 static int

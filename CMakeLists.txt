@@ -1208,7 +1208,10 @@ endif()
 if(MBELIB_BUILD_TOOLS)
     add_executable(mbe_quality_eval tools/quality/mbe_quality_eval.c)
     # Enable the POSIX realpath/lstat interfaces used for output alias checks.
-    target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
+    # Win32 uses GetFinalPathNameByHandle/GetFileInformationByHandle instead.
+    if(NOT WIN32)
+        target_compile_definitions(mbe_quality_eval PRIVATE _XOPEN_SOURCE=700)
+    endif()
     target_link_libraries(mbe_quality_eval PRIVATE ${MBELIB_EXEC_LINK_TGT})
     _mbelib_apply_hardening(mbe_quality_eval)
     if(MSVC)
