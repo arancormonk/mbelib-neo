@@ -265,6 +265,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/imbe/imbe7100x4400.c
     src/imbe/imbe7200x4400.c
     src/core/mbelib.c
+    src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
     src/core/mbe_unvoiced_fft.c
 )
@@ -481,16 +482,40 @@ else()
     target_compile_definitions(mbe-static PRIVATE PFFFT_SIMD_DISABLE=1)
 endif()
 
-# Fast-math (optional)
-if(MBELIB_ENABLE_FAST_MATH)
-    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
-        target_compile_options(mbe-shared PRIVATE -ffast-math -fno-math-errno)
-        target_compile_options(mbe-static PRIVATE -ffast-math -fno-math-errno)
-    elseif(MSVC)
-        target_compile_options(mbe-shared PRIVATE /fp:fast)
-        target_compile_options(mbe-static PRIVATE /fp:fast)
-    endif()
+# Fast-math (optional). clang-cl only accepts GNU-style options behind /clang:.
+set(_mbelib_fast_math_options "")
+set(_mbelib_ieee_math_options "")
+if(
+    CMAKE_C_COMPILER_ID STREQUAL "Clang"
+    AND CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+)
+    set(_mbelib_fast_math_options /clang:-ffast-math /clang:-fno-math-errno)
+    set(_mbelib_ieee_math_options /clang:-fno-fast-math /clang:-fno-math-errno)
+elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    set(_mbelib_fast_math_options -ffast-math -fno-math-errno)
+    set(_mbelib_ieee_math_options -fno-fast-math -fno-math-errno)
+elseif(MSVC)
+    set(_mbelib_fast_math_options /fp:fast)
+    set(_mbelib_ieee_math_options /fp:precise)
 endif()
+if(MBELIB_ENABLE_FAST_MATH AND _mbelib_fast_math_options)
+    target_compile_options(mbe-shared PRIVATE ${_mbelib_fast_math_options})
+    target_compile_options(mbe-static PRIVATE ${_mbelib_fast_math_options})
+endif()
+
+# PCM conversion requires IEEE NaN/Inf handling regardless of the fast-math
+# option or externally supplied C flags. Per-source COMPILE_OPTIONS follow the
+# target options on Makefile/Ninja command lines; the Visual Studio generator
+# maps /fp:precise to the per-file floating-point model instead. The unit also
+# refuses to compile under fast-math (see src/core/mbe_pcm_convert.c).
+if(_mbelib_ieee_math_options)
+    set_source_files_properties(
+        src/core/mbe_pcm_convert.c
+        PROPERTIES COMPILE_OPTIONS "${_mbelib_ieee_math_options}"
+    )
+endif()
+unset(_mbelib_fast_math_options)
+unset(_mbelib_ieee_math_options)
 
 # Sanitizers (Debug builds only)
 if(CMAKE_BUILD_TYPE MATCHES "Debug")

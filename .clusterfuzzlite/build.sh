@@ -41,6 +41,7 @@ sources=(
   src/imbe/imbe7100x4400.c
   src/imbe/imbe7200x4400.c
   src/core/mbelib.c
+  src/core/mbe_pcm_convert.c
   src/core/mbe_adaptive.c
   src/core/mbe_unvoiced_fft.c
   src/external/pffft/pffft.c
@@ -50,7 +51,11 @@ sources=(
 objects=()
 for source in "${sources[@]}"; do
   object="$OBJ_DIR/${source//\//_}.o"
-  "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" -c "$PROJECT_DIR/$source" -o "$object"
+  source_cflags=()
+  if [[ "$source" == src/core/mbe_pcm_convert.c ]]; then
+    source_cflags+=(-fno-fast-math)
+  fi
+  "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" "${source_cflags[@]}" -c "$PROJECT_DIR/$source" -o "$object"
   objects+=("$object")
 done
 
