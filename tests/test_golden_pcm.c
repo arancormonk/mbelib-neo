@@ -12,8 +12,38 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "golden_sequences.h"
 #include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
+
+/*
+ * Error-free voice-only AMBE sequences (tests/golden_sequences.h). Exact hashes
+ * are enforced only for x86-64 Debug builds outside MSVC: rounding differences
+ * accumulate over 24 frames, so other targets check determinism and energy.
+ * Regenerate with gen_golden (scalar: dev-debug; SIMD: Debug with
+ * -DMBELIB_ENABLE_SIMD=ON).
+ */
+#if defined(MBE_ARCH_X86_64) && defined(MBELIB_TEST_STRICT_FLOAT) && defined(MBELIB_TEST_STRICT_INT16)                 \
+    && !defined(_MSC_VER)
+#define GOLDEN_AMBE_STRICT 1
+#ifdef MBELIB_TEST_BUILD_SIMD
+#define GOLDEN_AMBE2450_F32 0xDE00FD3Eu
+#define GOLDEN_AMBE2450_S16 0x0071B56Au
+#define GOLDEN_AMBE2400_F32 0x626FFDB4u
+#define GOLDEN_AMBE2400_S16 0xBA169326u
+#else
+#define GOLDEN_AMBE2450_F32 0x5EB9478Fu
+#define GOLDEN_AMBE2450_S16 0x2ACBDA91u
+#define GOLDEN_AMBE2400_F32 0xE98C0167u
+#define GOLDEN_AMBE2400_S16 0x17F2D23Du
+#endif
+#else
+#define GOLDEN_AMBE_STRICT  0
+#define GOLDEN_AMBE2450_F32 0u
+#define GOLDEN_AMBE2450_S16 0u
+#define GOLDEN_AMBE2400_F32 0u
+#define GOLDEN_AMBE2400_S16 0u
+#endif
 
 /**
  * @brief Compute 32-bit FNV-1a hash of a byte buffer.
@@ -62,10 +92,49 @@ fill_params(mbe_parms* cur, mbe_parms* prev) {
 }
 
 /**
+ * @brief Check one voice-only AMBE sequence: determinism, energy, and (strict builds) exact hashes.
+ * @return 0 on success, 1 on failure.
+ */
+static int
+check_ambe_sequence(const char* name, golden_ambe_process_fn process, uint32_t seed, uint32_t exp_f32,
+                    uint32_t exp_s16) {
+    struct golden_hashes first;
+    struct golden_hashes second;
+
+    if (golden_hash_ambe_voice_sequence(process, seed, &first) != 0
+        || golden_hash_ambe_voice_sequence(process, seed, &second) != 0) {
+        fprintf(stderr, "%s: sequence decode failed\n", name);
+        return 1;
+    }
+    if (first.f32 != second.f32 || first.s16 != second.s16) {
+        fprintf(stderr, "%s: determinism failure across runs\n", name);
+        return 1;
+    }
+    double mean_sq = first.sumsq / (double)(GOLDEN_AMBE_FRAMES * 160);
+    if (!(mean_sq > 1e-6 && mean_sq < 1e8)) {
+        fprintf(stderr, "%s: sanity: mean square out of range: %g\n", name, mean_sq);
+        return 1;
+    }
+    if (GOLDEN_AMBE_STRICT && (first.f32 != exp_f32 || first.s16 != exp_s16)) {
+        fprintf(stderr, "%s: hash mismatch: f32 got=0x%08X exp=0x%08X, s16 got=0x%08X exp=0x%08X\n", name,
+                (unsigned)first.f32, (unsigned)exp_f32, (unsigned)first.s16, (unsigned)exp_s16);
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * @brief Test entry: determinism + arch-specific exactness or sanity checks.
  */
 int
 main(void) {
+    if (check_ambe_sequence("ambe2450", mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, GOLDEN_AMBE2450_F32,
+                            GOLDEN_AMBE2450_S16)
+        || check_ambe_sequence("ambe2400", mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, GOLDEN_AMBE2400_F32,
+                               GOLDEN_AMBE2400_S16)) {
+        return 1;
+    }
+
     /*
      * On x86/x64, keep exact golden hashes in strict mode. Float-domain
      * synthesis is deterministic per build mode, but SIMD and scalar can differ

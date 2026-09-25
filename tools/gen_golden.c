@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "golden_sequences.h"
 #include "mbelib-neo/mbelib.h"
 
 /**
@@ -70,5 +71,18 @@ main(void) {
 
     printf("GOLDEN_F32_FNV1A=0x%08X\n", (unsigned)hf);
     printf("GOLDEN_S16_FNV1A=0x%08X\n", (unsigned)hs);
+
+    // Error-free voice-only AMBE sequences (see tests/golden_sequences.h)
+    struct golden_hashes ambe2450;
+    struct golden_hashes ambe2400;
+    if (golden_hash_ambe_voice_sequence(mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, &ambe2450) != 0
+        || golden_hash_ambe_voice_sequence(mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, &ambe2400) != 0) {
+        fprintf(stderr, "AMBE golden sequence decode failed\n");
+        return 1;
+    }
+    printf("GOLDEN_AMBE2450_F32_FNV1A=0x%08X\n", (unsigned)ambe2450.f32);
+    printf("GOLDEN_AMBE2450_S16_FNV1A=0x%08X\n", (unsigned)ambe2450.s16);
+    printf("GOLDEN_AMBE2400_F32_FNV1A=0x%08X\n", (unsigned)ambe2400.f32);
+    printf("GOLDEN_AMBE2400_S16_FNV1A=0x%08X\n", (unsigned)ambe2400.s16);
     return 0;
 }

@@ -789,7 +789,7 @@ if(MBELIB_BUILD_TESTS)
     _mbelib_apply_hardening(gen_golden)
     target_include_directories(
         gen_golden
-        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/tests"
     )
     add_executable(test_api tests/test_api.c)
     target_link_libraries(test_api PRIVATE ${MBELIB_EXEC_LINK_TGT})
