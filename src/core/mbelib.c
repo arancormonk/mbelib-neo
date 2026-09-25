@@ -883,6 +883,13 @@ mbe_synthesizeSilence(short* aout_buf) {
 #define MBE_PHASE_EXTRAP_SLOPE    0.72f
 #define MBE_PHASE_MIN_MAGNITUDE   1e-6f
 
+/*
+ * IMBE and D-STAR mute here with the JMBE comfort noise. The AMBE 3600x2450
+ * process path decides repeats and muting itself (TIA-102.BABA-1 5.6/5.7) and
+ * only calls synthesis with repeatCount below MBE_MAX_FRAME_REPEATS, so this
+ * check never fires for it; reaching it from that path would bypass the
+ * spec's [-5, 5] mute noise.
+ */
 static int
 mbe_should_mute_speech(const mbe_parms* cur_mp) {
     int mute_on_error_rate = (fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f);

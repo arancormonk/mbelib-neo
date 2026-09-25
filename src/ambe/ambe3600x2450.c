@@ -15,6 +15,7 @@
  */
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -79,14 +80,13 @@ ambe2450_get_dct_cache(void) {
 }
 
 static int
-ambe2450_is_valid_tone_id(const char ambe_d[49]) {
+ambe2450_read_tone_id(const char ambe_d[49]) {
     int id1 = 0;
     /* AMBE tone ID1 is U1[0..7] (bits 12..19 in ambe_d), not the full 12-bit U1 field. */
     for (int i = 12; i < 20; i++) {
         id1 = (id1 << 1) | (int)ambe_d[i];
     }
-
-    return mbe_tone_id_is_valid(id1);
+    return id1;
 }
 
 /**
@@ -504,14 +504,14 @@ ambe2450_set_silence_model(mbe_parms* cur_mp, int b0, int* L, float* f0, int* si
 }
 
 static int
-ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int total_errors, int* b0, int* L, float* f0,
-                           int* silence) {
+ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* L, float* f0, int* silence) {
     *silence = 0;
 
-    /* JMBE-compatible tone classification:
-     * - Tone if U0 tone check passes and either U3 check is zero or U1 high/low nibbles match.
-     * - If total BER is known and >= 6, do not classify as tone (JMBE AMBEFrame). */
-    if (ambe2450_tone_verified(ambe_d) && total_errors < 6) {
+    /* TIA-102.BABA-1 7.2: a tone frame has the first six bits of u0 set to 63
+     * (b0 126..127). The redundancy check rejects corrupted tone headers, which
+     * then fall through to the b0 classification below. The 5.6 repeat
+     * criteria have already been applied to every frame by the process path. */
+    if (ambe2450_tone_verified(ambe_d)) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Tone Frame\n");
 #endif
@@ -533,8 +533,8 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int total_erro
         ambe2450_set_silence_model(cur_mp, *b0, L, f0, silence);
         return 0;
     }
-    /* If the fundamental decodes as a tone but tone verification failed above,
-     * treat this as erasure to match JMBE's fallback behavior. */
+    /* A tone frame type whose redundancy check failed has no usable tone index;
+     * TIA-102.BABA-1 7.3 treats an invalid tone index as an erasure. */
     if ((*b0 == 126) || (*b0 == 127)) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Unverified tone fundamental -> erasure\n");
@@ -558,11 +558,10 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int total_erro
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
- * @param total_errors Total frame error count for JMBE tone gating, or <0 to disable.
  * @return Tone index or 0 for voice; implementation-specific non-zero for special frames.
  */
 static int
-mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp, int total_errors) {
+mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
     int b0, b2, L = 0;
     float f0, Cik[5][18], Tl[57] = {0}, Ri[9];
@@ -584,7 +583,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     fprintf(stderr, "\n");
 #endif
 
-    int special_frame = ambe2450_setup_frame_model(ambe_d, cur_mp, total_errors, &b0, &L, &f0, &silence);
+    int special_frame = ambe2450_setup_frame_model(ambe_d, cur_mp, &b0, &L, &f0, &silence);
     if (special_frame != 0) {
         return special_frame;
     }
@@ -629,7 +628,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
  */
 int
 mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    return mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, -1);
+    return mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp);
 }
 
 /**
@@ -749,7 +748,7 @@ ambe2450_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
 static int
 ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
     if (c0_errors_valid) {
-        /* JMBE AMBE repeat criteria when C0 errors are known. */
+        /* TIA-102.BABA-1 5.6 repeat criteria when C0 errors are known. */
         return ((c0_errors >= 4) || ((c0_errors >= 2) && (total_errors >= 6)));
     }
 
@@ -757,101 +756,188 @@ ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
     return (total_errors > 3);
 }
 
-static void
-ambe2450_update_decode_state(int bad, int total_errors, int c0_errors, int c0_errors_valid, mbe_process_result* result,
-                             mbe_parms* cur_mp, const mbe_parms* prev_mp) {
-    if (bad == 2) {
-        mbe_result_set_flag(result, MBE_PROCESS_FLAG_ERASURE);
-        cur_mp->repeatCount = 0;
-        /* JMBE erasure model: W120 defaults carried as previous frame state. */
-        mbe_setAmbeErasureParms_common(cur_mp, prev_mp);
-        return;
-    }
-    if (bad == 3 || bad == 7) {
-        mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
-        cur_mp->repeatCount = 0;
-        return;
-    }
-    if (ambe2450_repeat_required(total_errors, c0_errors, c0_errors_valid)) {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeatCount++;
-        mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
-        return;
-    }
+/*
+ * AMBE 3600x2450 frame handling follows TIA-102.BABA-1 (Half-Rate Vocoder
+ * Addendum). The caller-owned triplet carries the spec's two notions of
+ * "previous frame":
+ *  - prev_mp is the last valid voice frame: the prediction history (L, gamma,
+ *    log2Ml; 4.3, eq 26, eqs 43-44) plus the per-frame decoder values below,
+ *    which advance on every frame.
+ *  - prev_mp_enhanced is the last synthesized frame and the frame-repeat
+ *    source (5.6 eqs 59-64: w0, L, K, v, enhanced M).
+ * Invalid frames never commit history. At frame start, cur_mp's noise state
+ * equals prev_mp_enhanced's; every path below preserves that.
+ */
 
-    cur_mp->repeatCount = 0;
+#define AMBE2450_MUTE_NOISE_AMPLITUDE   5.0f /* 5.7: uniform in [-5, 5] on s(n) */
+#define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255  /* Table 9 / 7.3 */
+
+/** Per-frame decoder values and tone oscillator phases that survive a repeat. */
+struct ambe2450_frame_scalars {
+    float errorRate;
+    int errorCountTotal;
+    int errorCount4;
+    int repeatCount;
+    float mutingThreshold;
+    int swn;
+    uint32_t tonePhase;
+};
+
+static void
+ambe2450_save_scalars(struct ambe2450_frame_scalars* s, const mbe_parms* mp) {
+    s->errorRate = mp->errorRate;
+    s->errorCountTotal = mp->errorCountTotal;
+    s->errorCount4 = mp->errorCount4;
+    s->repeatCount = mp->repeatCount;
+    s->mutingThreshold = mp->mutingThreshold;
+    s->swn = mp->swn;
+    s->tonePhase = mp->tonePhase;
 }
 
 static void
-ambe2450_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                          mbe_parms* prev_mp_enhanced) {
-    if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
-        mbe_moveMbeParms(cur_mp, prev_mp);
-        float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
-        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-        return;
-    }
+ambe2450_apply_scalars(mbe_parms* mp, const struct ambe2450_frame_scalars* s) {
+    mp->errorRate = s->errorRate;
+    mp->errorCountTotal = s->errorCountTotal;
+    mp->errorCount4 = s->errorCount4;
+    mp->repeatCount = s->repeatCount;
+    mp->mutingThreshold = s->mutingThreshold;
+    mp->swn = s->swn;
+    mp->tonePhase = s->tonePhase;
+}
 
+/** Advance prev_mp's per-frame decoder values without touching its prediction history. */
+static void
+ambe2450_commit_scalars(mbe_parms* prev_mp, const mbe_parms* cur_mp) {
+    prev_mp->errorRate = cur_mp->errorRate;
+    prev_mp->errorCountTotal = cur_mp->errorCountTotal;
+    prev_mp->errorCount4 = cur_mp->errorCount4;
+    prev_mp->repeatCount = cur_mp->repeatCount;
+    prev_mp->mutingThreshold = cur_mp->mutingThreshold;
+}
+
+/** Consecutive invalid-frame count, clamped so caller-owned state cannot overflow. */
+static int
+ambe2450_next_invalid_count(int prev_count) {
+    if (prev_count < 0) {
+        return 1;
+    }
+    return (prev_count >= MBE_MAX_FRAME_REPEATS) ? MBE_MAX_FRAME_REPEATS : prev_count + 1;
+}
+
+/**
+ * Load the 5.6 repeat model: the previously synthesized frame, enhanced
+ * amplitudes included, so synthesis continues its noise, WOLA and phase state.
+ * This frame's decoder values and tone phases are kept.
+ */
+static void
+ambe2450_load_repeat_model(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
+    struct ambe2450_frame_scalars s;
+    ambe2450_save_scalars(&s, cur_mp);
+    mbe_moveMbeParms(prev_mp_enhanced, cur_mp);
+    ambe2450_apply_scalars(cur_mp, &s);
+}
+
+/** 5.7: apply the repeat update, bypass synthesis and output the mute noise. */
+static void
+ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
+    ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-    mbe_synthesizeComfortNoisef(aout_buf);
-    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+    mbe_synthesizeUniformNoisef(aout_buf, AMBE2450_MUTE_NOISE_AMPLITUDE);
 }
 
+/** 5.6 steps 2-3: synthesize the repeated model without re-enhancing it, or mute (5.7). */
 static void
-ambe2450_synthesize_tone(float* aout_buf, const char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                         mbe_parms* prev_mp_enhanced) {
-    if (ambe2450_is_valid_tone_id(ambe_d)) {
-        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
+    if (mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp)) {
+        ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
         return;
     }
-    if (!mbe_isMaxFrameRepeat(prev_mp)) {
-        mbe_parms synth_mp;
-
-        /* JMBE invalid-tone behavior reuses the prior VOICE model while still advancing synth state. */
-        mbe_moveMbeParms(prev_mp_enhanced, &synth_mp);
-        mbe_synthesizeSpeechf(aout_buf, &synth_mp, prev_mp_enhanced);
-        mbe_moveMbeParms(&synth_mp, prev_mp_enhanced);
-        return;
-    }
-
-    mbe_synthesizeComfortNoisef(aout_buf);
-    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
-}
-
-static void
-ambe2450_synthesize_erasure(float* aout_buf, const mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    /* JMBE erasure behavior: synthesize white noise and keep ERASURE
-     * parameters as the previous-frame context for recovery. */
-    mbe_synthesizeComfortNoisef(aout_buf);
-    mbe_moveMbeParms(cur_mp, prev_mp);
+    ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
+    mbe_synthesizeSpeechf(aout_buf, cur_mp, prev_mp_enhanced);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
 static void
-ambe2450_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad,
-                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    if (bad == 0) {
-        ambe2450_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
-        return;
-    }
-    if (bad == 7) {
-        ambe2450_synthesize_tone(aout_buf, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
-        return;
-    }
-    if (bad == 2) {
-        ambe2450_synthesize_erasure(aout_buf, cur_mp, prev_mp, prev_mp_enhanced);
-        return;
-    }
+ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
+    float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
+    mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+}
 
-    mbe_synthesizeComfortNoisef(aout_buf);
-    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+/**
+ * Invalid frame: repeat criteria (5.6), erasure (4.1, 5.6) or invalid tone
+ * index (7.3). The frame is ignored for prediction; the 4th consecutive
+ * invalid frame mutes instead of repeating (5.7).
+ */
+static void
+ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned extra_flags, mbe_parms* cur_mp,
+                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    mbe_result_set_flag(result, extra_flags | MBE_PROCESS_FLAG_REPEAT);
+    cur_mp->repeatCount = ambe2450_next_invalid_count(prev_mp->repeatCount);
+    ambe2450_commit_scalars(prev_mp, cur_mp);
+    ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced);
+}
+
+/**
+ * Valid voice frame: commit it as the prediction history, then synthesize,
+ * or mute when the error rate exceeds the 5.7 threshold. The encoder updated
+ * its predictor on this frame, so a muted voice frame still commits.
+ */
+static void
+ambe2450_process_valid(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                       mbe_parms* prev_mp_enhanced) {
+    cur_mp->repeatCount = 0;
+    mbe_moveMbeParms(cur_mp, prev_mp);
+    if (mbe_requiresMuting(cur_mp)) {
+        ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
+        return;
+    }
+    ambe2450_synthesize_decoded(aout_buf, cur_mp, prev_mp_enhanced);
+}
+
+/**
+ * Tone frame (7.3). Valid tones and the zero-amplitude ID 255 are output
+ * without touching the prediction history or the synthesis state; an invalid
+ * tone index is an erasure.
+ */
+static void
+ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
+                      mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    const int tone_id = ambe2450_read_tone_id(ambe_d);
+    const int zero_amplitude = (tone_id == AMBE2450_TONE_ID_ZERO_AMPLITUDE);
+
+    if (!zero_amplitude && !mbe_tone_id_is_valid(tone_id)) {
+        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_TONE, cur_mp, prev_mp, prev_mp_enhanced);
+        return;
+    }
+    mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
+    cur_mp->repeatCount = 0;
+    ambe2450_commit_scalars(prev_mp, cur_mp);
+    if (mbe_requiresMuting(cur_mp)) {
+        ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
+    } else if (zero_amplitude) {
+        mbe_synthesizeSilencef(aout_buf);
+    } else {
+        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+    }
+}
+
+static void
+ambe2450_process_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int kind, mbe_parms* cur_mp,
+                       mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    if (kind == 7) {
+        ambe2450_process_tone(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
+    } else if (kind == 2) {
+        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_ERASURE, cur_mp, prev_mp, prev_mp_enhanced);
+    } else {
+        ambe2450_process_valid(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
+    }
 }
 
 static int
 mbe_processAmbe2450Dataf_internal(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
                                   mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    int bad;
+    int kind;
     int c0_errors;
     int c0_errors_valid;
     int total_errors;
@@ -866,13 +952,17 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, mbe_process_result* result, c
         return ret;
     }
 
-    bad = mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp, total_errors);
-    if (bad < 0) {
-        return bad;
+    /* 5.6: the repeat criteria apply to every frame type, before classification. */
+    if (ambe2450_repeat_required(total_errors, c0_errors, c0_errors_valid)) {
+        ambe2450_process_invalid(aout_buf, result, 0u, cur_mp, prev_mp, prev_mp_enhanced);
+        return result ? result->total_errors : total_errors;
     }
 
-    ambe2450_update_decode_state(bad, total_errors, c0_errors, c0_errors_valid, result, cur_mp, prev_mp);
-    ambe2450_synthesize_frame(aout_buf, result, ambe_d, bad, cur_mp, prev_mp, prev_mp_enhanced);
+    kind = mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp);
+    if (kind < 0) {
+        return kind;
+    }
+    ambe2450_process_frame(aout_buf, result, ambe_d, kind, cur_mp, prev_mp, prev_mp_enhanced);
     return result ? result->total_errors : total_errors;
 }
 

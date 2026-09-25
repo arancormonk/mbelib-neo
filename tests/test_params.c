@@ -433,7 +433,9 @@ main(void) {
         assert(memcmp(hard_d, soft_d, sizeof(hard_d)) == 0);
     }
 
-    // AMBE tone BER gate + ERASURE model fallback semantics
+    // AMBE 2450 tone and erasure frames (TIA-102.BABA-1 5.6, 7.3): the repeat
+    // criteria apply before tone classification, and an erasure is a frame
+    // repeat of the last synthesized frame (not JMBE's W120 model).
     {
         char ambe_d[49];
         float out[160];
@@ -442,22 +444,35 @@ main(void) {
 
         set_bits_zero(ambe_d, 49);
         set_ambe2450_tone_signature(ambe_d);
-        set_ambe2450_b0(ambe_d, 120); /* erasure fundamental if not classified as tone */
+        set_ambe2450_tone_id1_and_u1_low_nibble(ambe_d, 7, 0x0);
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
-        init_result_total(&result, 5);
+        init_result_total(&result, 3);
         assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(result_has_marker(&result, 'T'));
+        assert(!result_has_marker(&result, 'R'));
 
+        /* Without C0 context the Dataf fallback treats total > 3 as a repeat. */
         mbe_initMbeParms(&cur, &prev, &prev_enh);
-        init_result_total(&result, 6);
+        init_result_total(&result, 4);
         assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(!result_has_marker(&result, 'T'));
+        assert(result_has_marker(&result, 'R'));
+
+        set_bits_zero(ambe_d, 49);
+        set_ambe2450_b0(ambe_d, 120);
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        init_result_total(&result, 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(result_has_marker(&result, 'E'));
-        assert(approx_equal(cur.w0, 0.0f, 1e-6f));
-        assert(cur.L == 9);
-        assert(approx_equal(prev.w0, 0.0f, 1e-6f));
-        assert(prev.L == 9);
+        assert(result_has_marker(&result, 'R'));
+        assert(!result_has_marker(&result, 'M'));
+        assert(cur.repeatCount == 1);
+        assert(prev.repeatCount == 1);
+        /* History stays at the spec initial state (L = 15, gamma = 0). */
+        assert(prev.L == 15);
+        assert(float_bits_equal(prev.gamma, 0.0f));
+        assert(cur.L == 15);
     }
 
     // AMBE tone ID validity must depend on ID1 only, not U1 low nibble bits
@@ -512,7 +527,9 @@ main(void) {
         assert(cur_b.L == custom_L);
     }
 
-    // Muting behavior parity: AMBE ignores error-rate muting, IMBE applies it
+    // Shared synthesizer: the AMBE threshold does not error-rate mute (D-STAR
+    // relies on this; the AMBE 2450 process path mutes before synthesis per
+    // TIA-102.BABA-1 5.7), while the IMBE threshold does.
     {
         float out[160];
         mbe_parms cur = {0}, prev = {0};
@@ -597,7 +614,8 @@ main(void) {
         assert(magnitude_sum <= 40.0f);
         assert(smoothed.amplitudeThreshold == -2999);
 
-        // AMBE does not error-rate mute: the previous voiced frame must fade
+        // The shared synthesizer does not error-rate mute at the AMBE
+        // threshold: the previous voiced frame must fade
         // toward zero, bounded by its linearly decreasing amplitude envelope.
         float out[160];
         mbe_synthesizeSpeechf(out, &cur, &prev);
