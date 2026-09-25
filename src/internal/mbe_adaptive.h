@@ -81,6 +81,19 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0);
 
 /**
+ * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].
+ *
+ * Draws from the same thread-local Java Random-compatible generator as
+ * mbe_synthesizeComfortNoisef(), which delegates here with the JMBE gain.
+ * The float domain is the synthesized-speech scale s(n) of TIA-102.BABA
+ * (int16 output is 7x this), so amplitude 5 is the spec's [-5, 5] mute noise.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param amplitude Peak amplitude in the library float domain.
+ */
+void mbe_synthesizeUniformNoisef(float* aout_buf, float amplitude);
+
+/**
  * @brief Seed the comfort-noise RNG used by mbe_synthesizeComfortNoisef().
  *
  * Uses Java Random-compatible 48-bit state initialization.
