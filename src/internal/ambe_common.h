@@ -55,6 +55,11 @@ void mbe_demodulateAmbe3600DataSoft_common(mbe_soft_bit fr[4][24]);
 int mbe_eccAmbe3600Data_common(char fr[4][24], char* out49);
 int mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49);
 
+/** AMBE+2 silence-frame fundamental 2*pi/32, TIA-102.BABA-1 4.1 eq 1 (radians/sample). */
+#define MBE_AMBE_SILENCE_W0 ((float)0.19634954084936207)
+/** AMBE+2 silence-frame harmonic count, TIA-102.BABA-1 4.1 eq 2. */
+#define MBE_AMBE_SILENCE_L  14
+
 /**
  * @brief Initialize AMBE parameter state to JMBE-compatible defaults.
  *

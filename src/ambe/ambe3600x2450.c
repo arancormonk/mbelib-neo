@@ -490,13 +490,17 @@ ambe2450_tone_verified(const char* ambe_d) {
     return (u0_tone_check == 63) && ((u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify));
 }
 
+/* TIA-102.BABA-1 4.1 eqs 1-3: w0 = 2*pi/32, L = 14, all bands unvoiced, for
+ * both silence b0 values (the encoder sends 124). The spectral amplitudes are
+ * decoded like a voice frame's (4.4). JMBE's W124/W125 stored pi/32 where its
+ * other entries hold f0 in cycles/sample, then scaled by 2*pi again, putting
+ * harmonics 6..15 above Nyquist. */
 static void
-ambe2450_set_silence_model(mbe_parms* cur_mp, int b0, int* L, float* f0, int* silence) {
+ambe2450_set_silence_model(mbe_parms* cur_mp, int* L, float* f0, int* silence) {
     *silence = 1;
-    /* JMBE AMBEFundamentalFrequency.W124/W125: constructor uses (frequency * 2*PI), where frequency is PI/32. */
-    *f0 = (float)M_PI / 32.0f;
-    cur_mp->w0 = *f0 * (float)(2.0 * M_PI);
-    *L = (b0 == 124) ? 15 : 14; /* JMBE maps W124->L15, W125->L14 */
+    *f0 = 1.0f / 32.0f;
+    cur_mp->w0 = MBE_AMBE_SILENCE_W0;
+    *L = MBE_AMBE_SILENCE_L;
     cur_mp->L = *L;
     for (int l = 1; l <= *L; l++) {
         cur_mp->Vl[l] = 0;
@@ -515,7 +519,7 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Tone Frame\n");
 #endif
-        return 7;
+        return MBE_AMBE2450_FRAME_TONE;
     }
 
     *b0 = ambe2450_decode_b0(ambe_d);
@@ -524,13 +528,13 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Erasure Frame b0 = %d\n", *b0);
 #endif
-        return 2;
+        return MBE_AMBE2450_FRAME_ERASURE;
     }
     if ((*b0 == 124) || (*b0 == 125)) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Silence Frame\n");
 #endif
-        ambe2450_set_silence_model(cur_mp, *b0, L, f0, silence);
+        ambe2450_set_silence_model(cur_mp, L, f0, silence);
         return 0;
     }
     /* A tone frame type whose redundancy check failed has no usable tone index;
@@ -539,10 +543,10 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Unverified tone fundamental -> erasure\n");
 #endif
-        return 2;
+        return MBE_AMBE2450_FRAME_ERASURE;
     }
     if ((*b0 < 0) || (*b0 >= 120)) {
-        return 2;
+        return MBE_AMBE2450_FRAME_ERASURE;
     }
 
     *f0 = AmbeW0table[*b0];
@@ -558,7 +562,7 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
- * @return Tone index or 0 for voice; implementation-specific non-zero for special frames.
+ * @return An MBE_AMBE2450_FRAME_* value, or a negative MBE_STATUS_* code.
  */
 static int
 mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
@@ -616,15 +620,15 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     // determine log2Ml by applying ci,j to previous log2Ml
     ambe2450_update_spectral_amplitudes(cur_mp, prev_mp, Tl, unvc);
 
-    return 0;
+    return silence ? MBE_AMBE2450_FRAME_SILENCE : MBE_AMBE2450_FRAME_VOICE;
 }
 
 /**
  * @brief Decode AMBE 2450 parameters from demodulated bitstream.
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
- * @param prev_mp Input: previous frame parameters (for prediction).
- * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
+ * @param prev_mp In/out: last valid voice frame (prediction history).
+ * @return An MBE_AMBE2450_FRAME_* value, or a negative MBE_STATUS_* code.
  */
 int
 mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
@@ -879,15 +883,22 @@ ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned e
 }
 
 /**
- * Valid voice frame: commit it as the prediction history, then synthesize,
- * or mute when the error rate exceeds the 5.7 threshold. The encoder updated
- * its predictor on this frame, so a muted voice frame still commits.
+ * Valid voice or silence frame. A voice frame becomes the prediction history;
+ * the encoder updated its predictor on it, so it commits even when the error
+ * rate then mutes the output (5.7). A silence frame is synthesized but never
+ * used for prediction (4.3, eq 26, eqs 43-44): only the per-frame decoder
+ * values advance.
  */
 static void
-ambe2450_process_valid(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
+ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence, mbe_parms* cur_mp, mbe_parms* prev_mp,
                        mbe_parms* prev_mp_enhanced) {
     cur_mp->repeatCount = 0;
-    mbe_moveMbeParms(cur_mp, prev_mp);
+    if (silence) {
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_SILENCE);
+        ambe2450_commit_scalars(prev_mp, cur_mp);
+    } else {
+        mbe_moveMbeParms(cur_mp, prev_mp);
+    }
     if (mbe_requiresMuting(cur_mp)) {
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
         return;
@@ -925,12 +936,12 @@ ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char am
 static void
 ambe2450_process_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int kind, mbe_parms* cur_mp,
                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    if (kind == 7) {
+    if (kind == MBE_AMBE2450_FRAME_TONE) {
         ambe2450_process_tone(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
-    } else if (kind == 2) {
+    } else if (kind == MBE_AMBE2450_FRAME_ERASURE) {
         ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_ERASURE, cur_mp, prev_mp, prev_mp_enhanced);
     } else {
-        ambe2450_process_valid(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
+        ambe2450_process_valid(aout_buf, result, kind == MBE_AMBE2450_FRAME_SILENCE, cur_mp, prev_mp, prev_mp_enhanced);
     }
 }
 

@@ -7,8 +7,9 @@
  * @file
  * @brief AMBE 3600x2450 frame-type handling per TIA-102.BABA-1.
  *
- * Covers the Half-Rate Vocoder Addendum rules for frame repeats (5.6),
- * muting (5.7), erasures (4.1) and tone frames (7.3), and the triplet
+ * Covers the Half-Rate Vocoder Addendum rules for silence frames (4.1, 4.3),
+ * frame repeats (5.6), muting (5.7), erasures (4.1) and tone frames (7.3),
+ * and the triplet
  * semantics they rely on: prev_mp is the last valid voice frame (prediction
  * history), prev_mp_enhanced is the last synthesized frame (repeat source).
  */
@@ -60,6 +61,18 @@ pack_b(char d[49], const int b[9]) {
 static const int k_voice_loud[9] = {40, 3, 31, 100, 40, 9, 5, 7, 2};
 static const int k_voice_next[9] = {60, 5, 20, 200, 90, 17, 11, 3, 6};
 static const int k_erasure[9] = {121, 0, 0, 0, 0, 0, 0, 0, 0};
+
+/* Standard DVSI AMBE+2 silence vector 0xF801A99F8CE080 and its quantizer values. */
+static const unsigned char k_dvsi_silence_bytes[7] = {0xF8, 0x01, 0xA9, 0x9F, 0x8C, 0xE0, 0x80};
+static const int k_dvsi_silence[9] = {124, 16, 1, 53, 78, 18, 14, 12, 1};
+static const float k_dg_b2_1 = -0.67f; /* Annex D gain level for b2 = 1 */
+
+static void
+unpack_bytes(char d[49], const unsigned char bytes[7]) {
+    for (int i = 0; i < 49; ++i) {
+        d[i] = (char)((bytes[i / 8] >> (7 - (i % 8))) & 1);
+    }
+}
 
 /**
  * Tone frame: u0 top six bits 63 (7.2), amplitude AD from the u0 low six bits
@@ -406,8 +419,142 @@ test_null_result(void) {
     assert(s.cur.repeatCount == 1);
 }
 
+/* 4.1 eqs 1-3 on the standard DVSI silence vector: w0 = 2*pi/32, L = 14, unvoiced. */
+static void
+test_dvsi_silence_vector(void) {
+    char d[49];
+    char packed[49];
+    mbe_parms cur;
+    mbe_parms prev;
+    mbe_parms enh;
+
+    unpack_bytes(d, k_dvsi_silence_bytes);
+    pack_b(packed, k_dvsi_silence);
+    assert(memcmp(d, packed, sizeof(d)) == 0);
+
+    mbe_initMbeParms(&cur, &prev, &enh);
+    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_SILENCE);
+    assert(cur.L == 14);
+    assert(fabsf(cur.w0 - (float)(2.0 * M_PI / 32.0)) < 1e-6f);
+    const float unvc = 0.2046f / sqrtf(cur.w0);
+    for (int l = 1; l <= cur.L; ++l) {
+        assert(cur.Vl[l] == 0);
+        const float expected = unvc * exp2f(cur.log2Ml[l]);
+        assert(fabsf(cur.Ml[l] - expected) <= 1e-5f * expected);
+        (void)expected;
+    }
+    (void)unvc;
+}
+
+/*
+ * 4.3, eq 26, eqs 43-44: silence frames are decoded against the last voice
+ * frame's history and never replace it. A voice frame after a silence run
+ * decodes exactly as if the silence frames were absent.
+ */
+static void
+test_silence_freezes_history(void) {
+    struct stream s;
+    char silence[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+
+    stream_init(&s);
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    const mbe_parms history = s.prev;
+    const float silence_gamma = k_dg_b2_1 + (0.5f * history.gamma);
+
+    for (int i = 0; i < 3; ++i) {
+        stream_frame(&s, silence, 0, 0);
+        assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_SILENCE));
+        assert(fabsf(s.cur.gamma - silence_gamma) < 1e-5f);
+        assert(history_equal(&s.prev, &history));
+        assert(s.prev_enh.L == 14);
+        assert(peak_abs(s.out) > 0.0f);
+    }
+    stream_frame_b(&s, k_voice_next, 0, 0);
+    assert(s.result.flags == MBE_PROCESS_FLAG_C0_VALID);
+
+    struct stream ref;
+    stream_init(&ref);
+    stream_frame_b(&ref, k_voice_loud, 0, 0);
+    stream_frame_b(&ref, k_voice_next, 0, 0);
+    assert(history_equal(&s.prev, &ref.prev));
+    (void)silence_gamma;
+}
+
+/* A silence frame right after init leaves the spec initial history (L = 15, gamma = 0). */
+static void
+test_silence_first_after_init(void) {
+    struct stream s;
+    char silence[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+
+    stream_init(&s);
+    stream_frame(&s, silence, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+    assert(s.prev.L == 15);
+    assert(float_bits_equal(s.prev.gamma, 0.0f));
+    for (int l = 1; l <= s.prev.L; ++l) {
+        assert(float_bits_equal(s.prev.log2Ml[l], 0.0f));
+    }
+    assert(fabsf(s.cur.gamma - k_dg_b2_1) < 1e-6f);
+}
+
+/* 5.6: a repeat or erasure after silence repeats the silence model, not the last voice frame. */
+static void
+test_repeat_after_silence_repeats_silence(void) {
+    struct stream s;
+    char silence[49];
+    char erasure[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+    pack_b(erasure, k_erasure);
+
+    stream_init(&s);
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    const mbe_parms history = s.prev;
+    stream_frame(&s, silence, 0, 0);
+
+    stream_frame_b(&s, k_voice_next, 4, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
+    assert(!has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+    assert(s.cur.L == 14);
+    assert(fabsf(s.cur.w0 - (float)(2.0 * M_PI / 32.0)) < 1e-6f);
+    assert(history_equal(&s.prev, &history));
+
+    stream_frame(&s, erasure, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE));
+    assert(s.cur.L == 14);
+    assert(history_equal(&s.prev, &history));
+}
+
+/* A result carrying the new SILENCE flag is accepted when passed back in. */
+static void
+test_silence_flag_round_trip(void) {
+    struct stream s;
+    char silence[49];
+    char with_flag[64];
+    char without_flag[64];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+
+    stream_init(&s);
+    stream_frame(&s, silence, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+    mbe_formatProcessResult(with_flag, sizeof(with_flag), &s.result);
+    mbe_process_result plain = s.result;
+    plain.flags &= ~MBE_PROCESS_FLAG_SILENCE;
+    mbe_formatProcessResult(without_flag, sizeof(without_flag), &plain);
+    assert(strcmp(with_flag, without_flag) == 0);
+
+    assert(mbe_processAmbe2450Dataf(s.out, &s.result, silence, &s.cur, &s.prev, &s.prev_enh) >= 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+}
+
 int
 main(void) {
+    test_dvsi_silence_vector();
+    test_silence_freezes_history();
+    test_silence_first_after_init();
+    test_repeat_after_silence_repeats_silence();
+    test_silence_flag_round_trip();
     test_erasure_run_repeats_then_mutes();
     test_repeat_advances_error_rate();
     test_error_rate_mute_boundary();

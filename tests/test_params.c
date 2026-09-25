@@ -320,25 +320,27 @@ main(void) {
         }
     }
 
-    // AMBE 2450 silence mapping: JMBE maps W124->L15 and W125->L14
+    // AMBE 2450 silence frames (TIA-102.BABA-1 4.1 eqs 1-3): both b0 124 and
+    // 125 use w0 = 2*pi/32, L = 14, all bands unvoiced.
     {
         char ambe_d[49];
         mbe_parms cur = {0}, prev = {0};
         mbe_parms dummy;
-        mbe_initMbeParms(&cur, &prev, &dummy);
+        const float w0_silence = (float)(2.0 * M_PI / 32.0);
 
-        set_bits_zero(ambe_d, 49);
-        set_ambe2450_b0(ambe_d, 124);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
-        assert(cur.L == 15);
-        float w0_silence = (float)((M_PI / 32.0) * (2.0 * M_PI));
-        assert(approx_equal(cur.w0, w0_silence, 1e-6f));
-
-        set_bits_zero(ambe_d, 49);
-        set_ambe2450_b0(ambe_d, 125);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
-        assert(cur.L == 14);
-        assert(approx_equal(cur.w0, w0_silence, 1e-6f));
+        for (int b0 = 124; b0 <= 125; ++b0) {
+            mbe_initMbeParms(&cur, &prev, &dummy);
+            set_bits_zero(ambe_d, 49);
+            set_ambe2450_b0(ambe_d, b0);
+            assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_SILENCE);
+            assert(cur.L == 14);
+            assert(approx_equal(cur.w0, w0_silence, 1e-6f));
+            assert((float)cur.L * cur.w0 < (float)M_PI);
+            for (int l = 1; l <= cur.L; ++l) {
+                assert(cur.Vl[l] == 0);
+            }
+        }
+        (void)w0_silence;
     }
 
     // AMBE 2450 Dataf: absent C0-valid context, repeat decision must depend only on total errors
