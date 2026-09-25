@@ -737,7 +737,7 @@ ambe2450_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
     *c0_errors = *c0_errors_valid ? result->c0_errors : 0;
     mbe_result_prepare_synthesis(result, *total_errors);
 
-    /* JMBE AMBE starts from W124 defaults; normalize if caller used generic init. */
+    /* Normalize generic (IMBE) init state to the initial AMBE model. */
     mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
 
     /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%). */

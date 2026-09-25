@@ -42,6 +42,7 @@
 
 #include "ambe3600x2400_const.h"
 #include "ambe3600x2400_internal.h"
+#include "ambe_common.h"
 #include "mbe_ecc.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
@@ -789,16 +790,8 @@ ambe2400_encode_silence(char ambe_d[49], mbe_parms* cur_mp) {
     ambe_d[10] = 0;
     ambe_d[11] = 0;
 
-    cur_mp->w0 = (float)((M_PI / 32.0) * (2.0 * M_PI));
-    cur_mp->L = 15;
-    cur_mp->K = 0;
-    cur_mp->gamma = 0.0f;
+    mbe_setAmbeDefaultModel_common(cur_mp);
     cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-    for (int l = 0; l <= 56; l++) {
-        cur_mp->Ml[l] = 1.0f;
-        cur_mp->Vl[l] = 0;
-        cur_mp->log2Ml[l] = 0.0f;
-    }
 }
 
 static bool

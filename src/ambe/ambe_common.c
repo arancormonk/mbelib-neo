@@ -189,6 +189,23 @@ mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49) {
 }
 
 void
+mbe_setAmbeDefaultModel_common(mbe_parms* mp) {
+    if (!mp) {
+        return;
+    }
+
+    mp->w0 = MBE_AMBE_INIT_W0;
+    mp->L = MBE_AMBE_INIT_L;
+    mp->K = 0;
+    mp->gamma = 0.0f;
+    for (int l = 0; l <= 56; l++) {
+        mp->Ml[l] = 1.0f;
+        mp->Vl[l] = 0;
+        mp->log2Ml[l] = 0.0f; /* log2(1.0) */
+    }
+}
+
+void
 mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     if (!cur_mp || !prev_mp || !prev_mp_enhanced) {
         return;
@@ -196,18 +213,9 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
 
     prev_mp->swn = 0;
     prev_mp->tonePhase = 0;
-    /* JMBE AMBEFundamentalFrequency.W124: constructor uses (frequency * 2*PI), where frequency is PI/32. */
-    prev_mp->w0 = (float)((M_PI / 32.0) * (2.0 * M_PI));
-    prev_mp->L = 15;
-    prev_mp->K = 0;
-    prev_mp->gamma = 0.0f;
-
+    mbe_setAmbeDefaultModel_common(prev_mp);
     for (int l = 0; l <= 56; l++) {
-        prev_mp->Ml[l] = 1.0f;
-        prev_mp->Vl[l] = 0;
-        prev_mp->log2Ml[l] = 0.0f; /* log2(1.0) */
         prev_mp->PHIl[l] = 0.0f;
-        /* JMBE previous-phase arrays start at 0.0f. */
         prev_mp->PSIl[l] = 0.0f;
     }
 

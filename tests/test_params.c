@@ -127,6 +127,12 @@ set_ambe2450_tone_id1_and_u1_low_nibble(char ambe_d[49], int id1, int low_nibble
     }
 }
 
+/** Every harmonic 1..L of the model lies below Nyquist (L * w0 < pi). */
+static int
+harmonics_below_nyquist(const mbe_parms* mp) {
+    return (mp->w0 > 0.0f) && (mp->L >= 1) && ((float)mp->L * mp->w0 < (float)M_PI);
+}
+
 /**
  * @brief Seed synthetic voiced/unvoiced parameters for synthesis behavior tests.
  *
@@ -341,6 +347,67 @@ main(void) {
             }
         }
         (void)w0_silence;
+    }
+
+    // Nyquist: every model the decoders can emit keeps all L harmonics below
+    // pi. JMBE's AMBE silence/initial model (w0 = pi^2/16, L = 15) did not.
+    {
+        char ambe_d[49];
+        char imbe_d[88];
+        float out[160];
+        mbe_parms cur, prev, enh;
+
+        for (int b0 = 0; b0 < 128; ++b0) {
+            mbe_initMbeParms(&cur, &prev, &enh);
+            set_bits_zero(ambe_d, 49);
+            set_ambe2450_b0(ambe_d, b0);
+            int rc = mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev);
+            if (rc == MBE_AMBE2450_FRAME_VOICE || rc == MBE_AMBE2450_FRAME_SILENCE) {
+                assert(harmonics_below_nyquist(&cur));
+            }
+        }
+        /* Initial AMBE model, reached as the repeat model of an erasure at stream start. */
+        mbe_initMbeParms(&cur, &prev, &enh);
+        set_bits_zero(ambe_d, 49);
+        set_ambe2450_b0(ambe_d, 120);
+        assert(mbe_processAmbe2450Dataf(out, NULL, ambe_d, &cur, &prev, &enh) >= 0);
+        assert(harmonics_below_nyquist(&cur));
+        assert(harmonics_below_nyquist(&prev));
+
+        /* D-STAR: every b0 bit pattern (bits 0..5 and 48) that decodes as voice. */
+        for (int pattern = 0; pattern < 128; ++pattern) {
+            mbe_initMbeParms(&cur, &prev, &enh);
+            set_bits_zero(ambe_d, 49);
+            for (int i = 0; i < 6; ++i) {
+                ambe_d[i] = (char)((pattern >> (6 - i)) & 1);
+            }
+            ambe_d[48] = (char)(pattern & 1);
+            if (mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev) == 0) {
+                assert(harmonics_below_nyquist(&cur));
+            }
+        }
+        /* D-STAR state after the standard silence frame (b0 127, tone index 128). */
+        mbe_initMbeParms(&cur, &prev, &enh);
+        set_bits_zero(ambe_d, 49);
+        for (int i = 0; i < 6; ++i) {
+            ambe_d[i] = 1;
+        }
+        ambe_d[48] = 1;
+        assert(mbe_processAmbe2400Dataf(out, NULL, ambe_d, &cur, &prev, &enh) >= 0);
+        assert(harmonics_below_nyquist(&prev));
+        assert(harmonics_below_nyquist(&enh));
+
+        /* IMBE: every voice b0 and the generic initial state. */
+        for (int b0 = 0; b0 <= 207; ++b0) {
+            mbe_initMbeParms(&cur, &prev, &enh);
+            set_bits_zero(imbe_d, 88);
+            set_imbe7200_b0(imbe_d, b0);
+            if (mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) == 0) {
+                assert(harmonics_below_nyquist(&cur));
+            }
+        }
+        mbe_initMbeParms(&cur, &prev, &enh);
+        assert(harmonics_below_nyquist(&prev));
     }
 
     // AMBE 2450 Dataf: absent C0-valid context, repeat decision must depend only on total errors

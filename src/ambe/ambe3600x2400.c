@@ -197,9 +197,9 @@ ambe2400_decode_tone_index(const char* ambe_d) {
 
 static void
 ambe2400_set_silence_model(mbe_parms* cur_mp, int* L) {
-    cur_mp->w0 = ((float)2 * M_PI) / (float)32;
-    *L = 14;
-    cur_mp->L = 14;
+    cur_mp->w0 = MBE_AMBE_SILENCE_W0;
+    *L = MBE_AMBE_SILENCE_L;
+    cur_mp->L = MBE_AMBE_SILENCE_L;
     for (int l = 1; l <= *L; l++) {
         cur_mp->Vl[l] = 0;
     }
@@ -656,7 +656,7 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
     *c0_errors = ((result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u) ? result->c0_errors : 0;
     mbe_result_prepare_synthesis(result, *total_errors);
 
-    /* AMBE family uses W124 defaults in JMBE; normalize generic init state. */
+    /* Normalize generic (IMBE) init state to the initial AMBE model. */
     mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
 
     /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%). */
