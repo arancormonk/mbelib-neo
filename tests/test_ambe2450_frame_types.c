@@ -548,8 +548,84 @@ test_silence_flag_round_trip(void) {
     assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
 }
 
+/*
+ * Not in TIA-102.BABA-1: the first frame after a mute fades in instead of
+ * overlapping the last frame synthesized before the mute. It starts from
+ * exact silence and its head carries far less energy than a steady frame's,
+ * whose head is dominated by the previous frame at full amplitude.
+ */
+static double
+head_rms(const float* x) {
+    double acc = 0.0;
+    for (int i = 0; i < 32; ++i) {
+        acc += (double)x[i] * (double)x[i];
+    }
+    return sqrt(acc / 32.0);
+}
+
+/**
+ * Head RMS of a steady frame of k_voice_next (unclipped). The gain predictor
+ * (eq 26) needs a few frames to settle from gamma = 0, so use the 8th frame.
+ */
+static double
+steady_head_rms(void) {
+    struct stream ref;
+    stream_init(&ref);
+    for (int i = 0; i < 8; ++i) {
+        stream_frame_b(&ref, k_voice_next, 0, 0);
+    }
+    return head_rms(ref.out);
+}
+
+static void
+test_fade_in_after_repeat_mute(void) {
+    struct stream s;
+    char erasure[49];
+    pack_b(erasure, k_erasure);
+    const double steady = steady_head_rms();
+
+    stream_init(&s);
+    for (int i = 0; i < 8; ++i) {
+        stream_frame_b(&s, k_voice_next, 0, 0);
+    }
+    for (int i = 0; i < 4; ++i) {
+        stream_frame(&s, erasure, 0, 0);
+    }
+    assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+
+    stream_frame_b(&s, k_voice_next, 0, 0);
+    assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+    assert(float_bits_equal(s.out[0], 0.0f));
+    assert(head_rms(s.out) < 0.5 * steady);
+    assert(peak_abs(s.out) > 5.0f);
+    (void)steady;
+}
+
+static void
+test_fade_in_after_error_rate_mute(void) {
+    struct stream s;
+    char voice[49];
+    pack_b(voice, k_voice_next);
+    const double steady = steady_head_rms();
+
+    stream_init(&s);
+    for (int n = 1; n <= 21; ++n) {
+        stream_frame(&s, voice, 1, 6);
+    }
+    assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+
+    /* The error rate decays below 0.096 on the next clean frame. */
+    stream_frame(&s, voice, 0, 0);
+    assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+    assert(float_bits_equal(s.out[0], 0.0f));
+    assert(head_rms(s.out) < 0.5 * steady);
+    (void)steady;
+}
+
 int
 main(void) {
+    test_fade_in_after_repeat_mute();
+    test_fade_in_after_error_rate_mute();
     test_dvsi_silence_vector();
     test_silence_freezes_history();
     test_silence_first_after_init();
