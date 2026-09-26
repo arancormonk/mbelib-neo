@@ -11,72 +11,51 @@
 #ifndef MBELIB_NEO_INTERNAL_MBE_REPEAT_H
 #define MBELIB_NEO_INTERNAL_MBE_REPEAT_H
 
-#include <stdint.h>
 #include <string.h>
 
 #include "mbelib-neo/mbelib.h"
 
 /**
- * State a repeated frame keeps from the current frame instead of the model it
- * repeats: this frame's error accounting (the error-rate recursion and mute
- * tests advance on every frame), the tone oscillator phases, and the
- * unvoiced-noise generator state, which must continue rather than replay the
- * previous frame's noise.
+ * Per-frame error accounting. It advances on every frame, whatever the frame
+ * type, so the error-rate recursion and the mute tests see each frame.
  */
-struct mbe_repeat_carry {
-    float errorRate;
-    int errorCountTotal;
-    int errorCount4;
-    int repeatCount;
-    float mutingThreshold;
-    int swn;
-    uint32_t tonePhase;
-    float noiseSeed;
-    float noiseOverlap[96];
-};
-
 static inline void
-mbe_repeat_save_carry(struct mbe_repeat_carry* c, const mbe_parms* mp) {
-    c->errorRate = mp->errorRate;
-    c->errorCountTotal = mp->errorCountTotal;
-    c->errorCount4 = mp->errorCount4;
-    c->repeatCount = mp->repeatCount;
-    c->mutingThreshold = mp->mutingThreshold;
-    c->swn = mp->swn;
-    c->tonePhase = mp->tonePhase;
-    c->noiseSeed = mp->noiseSeed;
-    memcpy(c->noiseOverlap, mp->noiseOverlap, sizeof(c->noiseOverlap));
+mbe_copy_error_state(mbe_parms* dst, const mbe_parms* src) {
+    dst->errorRate = src->errorRate;
+    dst->errorCountTotal = src->errorCountTotal;
+    dst->errorCount4 = src->errorCount4;
+    dst->repeatCount = src->repeatCount;
+    dst->mutingThreshold = src->mutingThreshold;
 }
 
+/**
+ * Tone oscillator phases and unvoiced-noise generator state, which must
+ * continue rather than replay the previous frame's.
+ */
 static inline void
-mbe_repeat_apply_carry(mbe_parms* mp, const struct mbe_repeat_carry* c) {
-    mp->errorRate = c->errorRate;
-    mp->errorCountTotal = c->errorCountTotal;
-    mp->errorCount4 = c->errorCount4;
-    mp->repeatCount = c->repeatCount;
-    mp->mutingThreshold = c->mutingThreshold;
-    mp->swn = c->swn;
-    mp->tonePhase = c->tonePhase;
-    mp->noiseSeed = c->noiseSeed;
-    memcpy(mp->noiseOverlap, c->noiseOverlap, sizeof(mp->noiseOverlap));
+mbe_copy_generator_state(mbe_parms* dst, const mbe_parms* src) {
+    dst->swn = src->swn;
+    dst->tonePhase = src->tonePhase;
+    dst->noiseSeed = src->noiseSeed;
+    memcpy(dst->noiseOverlap, src->noiseOverlap, sizeof(dst->noiseOverlap));
 }
 
 /**
  * @brief Replace cur_mp's model with model_src for a frame repeat.
  *
- * Everything in struct mbe_repeat_carry stays with cur_mp. Copying the
- * previous parameter set wholesale would freeze the error-rate recursion
- * across a repeat run and replay the previous frame's noise buffer.
+ * cur_mp keeps its error state and generator state. Copying the previous
+ * parameter set wholesale would freeze the error-rate recursion across a
+ * repeat run and replay the previous frame's noise buffer.
  *
  * @param cur_mp    Current frame parameters, rewritten in place.
- * @param model_src Parameter set whose model is repeated (distinct from cur_mp).
+ * @param model_src Parameter set whose model is repeated.
  */
 static inline void
 mbe_repeat_load_model(mbe_parms* cur_mp, const mbe_parms* model_src) {
-    struct mbe_repeat_carry c;
-    mbe_repeat_save_carry(&c, cur_mp);
-    *cur_mp = *model_src;
-    mbe_repeat_apply_carry(cur_mp, &c);
+    mbe_parms model = *model_src;
+    mbe_copy_error_state(&model, cur_mp);
+    mbe_copy_generator_state(&model, cur_mp);
+    *cur_mp = model;
 }
 
 /** Next consecutive-repeat count, clamped so caller-owned state cannot overflow. */
