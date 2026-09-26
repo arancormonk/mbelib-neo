@@ -287,7 +287,7 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **Regenerated voiced phase**: The odd log-magnitude kernel from [US 5,701,390, Eqs. 7–9](https://patents.google.com/patent/US5701390A/en) derives harmonic phase from the enhanced, smoothed spectral envelope. The shared synthesizer applies it to all four codecs without changing the public API or parameter layout. Existing phase/amplitude interpolation remains in place; fully voiced output no longer depends on the unvoiced-noise RNG seed.
 
-- **Codec-specific frame repeat/muting**: IMBE and D-STAR follow JMBE. IMBE mutes on max repeats or the error-rate threshold, D-STAR muting is repeat-driven, and IMBE prolonged repeat headroom resets to a default model state.
+- **Codec-specific frame repeat/muting**: IMBE and D-STAR follow JMBE's repeat rules. IMBE mutes on max repeats or the error-rate threshold, D-STAR muting is repeat-driven, and IMBE prolonged repeat headroom resets to a default model state. In every codec, a repeated frame keeps its own error accounting and continues the unvoiced-noise sequence; only the model is repeated.
 
 - **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum), replacing earlier JMBE parity:
   - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, eqs. 26 and 43–44). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
@@ -298,7 +298,9 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
-- **Comfort-noise model**: IMBE and D-STAR muted-frame noise follows JMBE's low-level uniform white-noise model (`0.003` gain semantics). AMBE 3600x2450 uses the spec's [−5, 5] (about ±35 in int16 output). Both draw from a Java `Random`-compatible per-thread RNG.
+- **Mute noise**: IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] on the synthesized-speech scale (about ±35 in int16 output; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR keeps JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
+
+- **Nyquist guard**: the shared synthesizer skips voiced harmonics at or above Nyquist (`l * w0 >= pi`) instead of rendering them as aliases. Decoded models never contain such harmonics; the guard protects caller-supplied models.
 
 The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evaluation) compares a frozen baseline and candidate using identical encoded frames. It reports spectral, crest-factor, envelope, and reference-matched frame-join measurements; these are diagnostics, not a substitute for listening or a standardized perceptual score.
 
@@ -320,7 +322,7 @@ The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evalu
 - `mbe_setThreadRngSeed(0)` is accepted and remapped internally to a non-zero seed. Use an explicit non-zero seed when exact reproducibility matters across builds.
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
 - Runtime synthesis helpers (RNG state and FFT plan) are thread-local; do not share mutable decode state (`mbe_parms`) across threads unless you synchronize externally.
-- Frame handling differs per codec: IMBE uses JMBE's error-rate muting and repeat-headroom reset behavior, D-STAR uses JMBE's repeat-driven muting, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
+- Frame handling differs per codec: IMBE uses JMBE's error-rate muting and repeat-headroom reset behavior with the TIA-102.BABA mute-noise level, D-STAR uses JMBE's repeat-driven muting, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math when the compiler target supports it, with
   scalar fallback otherwise. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
