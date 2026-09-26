@@ -170,6 +170,13 @@ typedef struct mbe_soft_bit {
  * history (TIA-102.BABA-1 4.3). Not rendered by mbe_formatProcessResult().
  */
 #define MBE_PROCESS_FLAG_SILENCE    0x0100u
+/**
+ * Processing/result flag (context): the parameter bits come from an IMBE
+ * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
+ * data API, as for the C0/C4 context, and a muted frame gets JMBE's comfort
+ * noise instead of the TIA-102.BABA 7.8 level, as in the ProVoice frame APIs.
+ */
+#define MBE_PROCESS_FLAG_PROVOICE   0x0200u
 
 /** Status code: invalid pointer, invalid status counters, or otherwise unusable arguments. */
 #define MBE_STATUS_INVALID_ARGUMENT (-1)
@@ -640,6 +647,9 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
+ *
+ * A muted frame outputs the TIA-102.BABA 7.8 noise (P25), or JMBE's comfort
+ * noise when `result` carries `MBE_PROCESS_FLAG_PROVOICE` from a 7100x4400 decode.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -692,7 +702,8 @@ MBE_API int mbe_convertImbe7100to7200(char* imbe_d);
  * @brief Decode a hard IMBE 7100x4400 frame to converted IMBE 4400 parameter bits without synthesis.
  * @param imbe_fr Input frame as 7x24 bitplanes; not modified.
  * @param imbe_d  Output parameter bits (88), converted to the 7200x4400/IMBE 4400 layout.
- * @param result  Optional output status; receives C0/protected/C4/total errors and valid-context flags.
+ * @param result  Optional output status; receives C0/protected/C4/total errors, valid-context flags and
+ *                `MBE_PROCESS_FLAG_PROVOICE`.
  * @return Corrected error total (`c0_errors + protected_errors`).
  */
 MBE_API int mbe_decodeImbe7100x4400Frame(const char imbe_fr[7][24], char imbe_d[88], mbe_process_result* result);

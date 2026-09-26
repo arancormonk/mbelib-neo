@@ -818,7 +818,7 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mb
 static void
 ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 

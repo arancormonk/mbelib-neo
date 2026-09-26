@@ -10,7 +10,8 @@
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
-#define MBE_RESULT_CONTEXT_FLAGS (MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID)
+#define MBE_RESULT_CONTEXT_FLAGS                                                                                       \
+    (MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID | MBE_PROCESS_FLAG_PROVOICE)
 #define MBE_RESULT_STATUS_FLAGS                                                                                        \
     (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE                \
      | MBE_PROCESS_FLAG_SILENCE)

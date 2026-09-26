@@ -185,7 +185,7 @@ Use `mbe_decode*Frame()` / `mbe_decode*SoftFrame()` when you need staged decode.
 
 Use `mbe_process*Data*` when you already have unpacked parameter bits.
 
-IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs.
+IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs, passing along the decode's `mbe_process_result` so its C0/C4 context and `MBE_PROCESS_FLAG_PROVOICE` (ProVoice mute noise) apply.
 
 - `mbe_ambe2400EncoderAlloc()` creates a caller-owned encoder context and FFT plan; `mbe_ambe2400EncoderReset(enc)` restarts its analysis state, and `mbe_ambe2400EncoderFree(enc)` releases it.
 - `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables); interoperability with DVSI hardware has not been verified.
@@ -206,7 +206,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 - Prefer `mbe_process*Frame*` APIs when you have raw hard-decision vocoder frames and do not need staged parameter handling.
 - For soft-decision input, fill `mbe_soft_bit.bit` with the hard decision and `mbe_soft_bit.reliability` with confidence (`0` is erasure-like, `255` is highly reliable), then call `mbe_decode*SoftFrame()` or `mbe_process*SoftFrame*()`.
 - Helper constructors are available for common inputs: `mbe_softBitsFromHard()` assigns a fixed reliability and validates hard bits, while `mbe_softBitsFromLlr()` maps positive signed LLRs to bit 1 with magnitude clamped to `0..255`.
-- Processing APIs report frame state through `mbe_process_result`: `c0_errors`, `protected_errors`, IMBE-specific `c4_errors`, `total_errors`, and flags such as `MBE_PROCESS_FLAG_SOFT_INPUT`, `MBE_PROCESS_FLAG_C0_VALID`, `MBE_PROCESS_FLAG_C4_VALID`, `MBE_PROCESS_FLAG_TONE`, `MBE_PROCESS_FLAG_ERASURE`, `MBE_PROCESS_FLAG_REPEAT`, `MBE_PROCESS_FLAG_MUTE`, and `MBE_PROCESS_FLAG_SILENCE` (AMBE 3600x2450 silence frames).
+- Processing APIs report frame state through `mbe_process_result`: `c0_errors`, `protected_errors`, IMBE-specific `c4_errors`, `total_errors`, and flags such as `MBE_PROCESS_FLAG_SOFT_INPUT`, `MBE_PROCESS_FLAG_C0_VALID`, `MBE_PROCESS_FLAG_C4_VALID`, `MBE_PROCESS_FLAG_TONE`, `MBE_PROCESS_FLAG_ERASURE`, `MBE_PROCESS_FLAG_REPEAT`, `MBE_PROCESS_FLAG_MUTE`, `MBE_PROCESS_FLAG_SILENCE` (AMBE 3600x2450 silence frames), and `MBE_PROCESS_FLAG_PROVOICE` (context set by the IMBE 7100x4400 decoders).
 - Use `mbe_formatProcessResult()` when you need a compact status string from a result. It writes `'='` repeated `total_errors` times, then any `E`, `T`, `R`, and `M` flags in that order, truncated to the supplied buffer size. The silence flag is not rendered.
 - Hard input bits must be exactly `0` or `1`; soft `mbe_soft_bit.bit` values must also be exactly `0` or `1`. Invalid pointers/counters return `MBE_STATUS_INVALID_ARGUMENT`; invalid bit values return `MBE_STATUS_INVALID_BITS`.
 - For parameter-only processing, seed `mbe_process_result.total_errors` and any valid C0/C4 context before calling `mbe_process*Data*`.
@@ -298,7 +298,7 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
-- **Mute noise**: IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] on the synthesized-speech scale (about ±35 in int16 output; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR keeps JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
+- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] on the synthesized-speech scale (about ±35 in int16 output; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
 
 - **Nyquist guard**: the shared synthesizer skips voiced harmonics at or above Nyquist (`l * w0 >= pi`) instead of rendering them as aliases. Decoded models never contain such harmonics; the guard protects caller-supplied models.
 
@@ -322,7 +322,7 @@ The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evalu
 - `mbe_setThreadRngSeed(0)` is accepted and remapped internally to a non-zero seed. Use an explicit non-zero seed when exact reproducibility matters across builds.
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
 - Runtime synthesis helpers (RNG state and FFT plan) are thread-local; do not share mutable decode state (`mbe_parms`) across threads unless you synchronize externally.
-- Frame handling differs per codec: IMBE uses JMBE's error-rate muting and repeat-headroom reset behavior with the TIA-102.BABA mute-noise level, D-STAR uses JMBE's repeat-driven muting, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
+- Frame handling differs per codec: IMBE uses JMBE's error-rate muting and repeat-headroom reset behavior (with the TIA-102.BABA mute-noise level for P25, JMBE's comfort noise for ProVoice), D-STAR uses JMBE's repeat-driven muting, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math when the compiler target supports it, with
   scalar fallback otherwise. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and

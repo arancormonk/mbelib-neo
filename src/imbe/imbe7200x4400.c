@@ -830,14 +830,21 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
 }
 
+/* P25 mutes with the TIA-102.BABA 7.8 noise; ProVoice, not a TIA-102 codec, keeps JMBE's comfort noise. */
+static enum mbe_mute_noise
+imbe4400_mute_noise(const mbe_process_result* result) {
+    const int provoice = result && ((result->flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+    return provoice ? MBE_MUTE_NOISE_COMFORT : MBE_MUTE_NOISE_SPEC;
+}
+
 static void
-imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                          mbe_parms* prev_mp_enhanced) {
+imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_mute_noise mute_noise,
+                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     int frame_muted = mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp);
 
     mbe_moveMbeParms(cur_mp, prev_mp);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise);
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
@@ -874,7 +881,7 @@ mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* result, c
     repeat_required = imbe4400_repeat_required(bad, total_errors, c0_errors, c0_errors_valid, repeat_threshold);
 
     imbe4400_apply_repeat_decision(repeat_required, result, cur_mp, prev_mp);
-    imbe4400_synthesize_frame(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
+    imbe4400_synthesize_frame(aout_buf, result, imbe4400_mute_noise(result), cur_mp, prev_mp, prev_mp_enhanced);
     return result ? result->total_errors : total_errors;
 }
 

@@ -678,10 +678,44 @@ main(void) {
         cur.errorRate = 1.0f;
         cur.repeatCount = 0;
         float imbe_seed_before = cur.noiseSeed;
+        float jmbe_noise[160];
+        mbe_setThreadRngSeed(0x1234u);
         mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_equal(cur.noiseSeed, imbe_seed_before));
 
-        /* TIA-102.BABA 7.8: IMBE mute noise is uniform in [-5, 5] on s(n). */
+        /* The public synthesizer cannot tell the codec, so it keeps JMBE's
+         * comfort noise at either threshold (D-STAR: a max-repeat mute). */
+        mbe_setThreadRngSeed(0x1234u);
+        mbe_synthesizeComfortNoisef(jmbe_noise);
+        for (int i = 0; i < 160; ++i) {
+            assert(float_bits_equal(out[i], jmbe_noise[i]));
+        }
+        seed_speech_params(&cur, &prev);
+        cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+        cur.repeatCount = MBE_MAX_FRAME_REPEATS;
+        mbe_setThreadRngSeed(0x1234u);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        for (int i = 0; i < 160; ++i) {
+            assert(float_bits_equal(out[i], jmbe_noise[i]));
+        }
+    }
+
+    // Error-rate mutes on the IMBE process paths: P25 (7200x4400 data path)
+    // uses the TIA-102.BABA 7.8 noise, uniform in [-5, 5] on s(n); ProVoice
+    // (7100x4400, not a TIA-102 codec) keeps JMBE's comfort noise.
+    {
+        float out[160];
+        char imbe_d[88];
+        static const char provoice_fr[7][24] = {{0}};
+        mbe_parms cur, prev, enh;
+        mbe_process_result result;
+
+        set_bits_zero(imbe_d, 88);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        prev.errorRate = 1.0f;
+        mbe_initProcessResult(&result);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
         double sumsq = 0.0;
         for (int i = 0; i < 160; ++i) {
             assert(fabsf(out[i]) <= 5.0f);
@@ -691,17 +725,48 @@ main(void) {
         assert(rms > 1.5 && rms < 4.0);
         (void)rms;
 
-        /* D-STAR (AMBE threshold) keeps JMBE's comfort-noise level on a max-repeat mute. */
-        float jmbe_noise[160];
-        seed_speech_params(&cur, &prev);
-        cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-        cur.repeatCount = MBE_MAX_FRAME_REPEATS;
-        mbe_setThreadRngSeed(0x1234u);
-        mbe_synthesizeSpeechf(out, &cur, &prev);
-        mbe_setThreadRngSeed(0x1234u);
-        mbe_synthesizeComfortNoisef(jmbe_noise);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        prev.errorRate = 1.0f;
+        mbe_initProcessResult(&result);
+        assert(mbe_processImbe7100x4400Framef(out, &result, provoice_fr, imbe_d, &cur, &prev, &enh) >= 0);
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+        float peak = 0.0f;
         for (int i = 0; i < 160; ++i) {
-            assert(float_bits_equal(out[i], jmbe_noise[i]));
+            peak = fmaxf(peak, fabsf(out[i]));
+        }
+        /* Comfort noise is uniform in about [-14, 14]. */
+        assert(peak > 5.0f && peak < 15.0f);
+        (void)peak;
+
+        /* Staged ProVoice decoding (hard and soft) carries the ProVoice
+         * context into the IMBE 4400 data API and mutes bit-identically. */
+        mbe_soft_bit provoice_soft[7][24];
+        assert(mbe_softBitsFromHard(&provoice_fr[0][0], &provoice_soft[0][0], sizeof(provoice_fr), 255u) == 0);
+        for (int soft = 0; soft < 2; ++soft) {
+            float direct[160];
+            mbe_process_result direct_result;
+            mbe_initMbeParms(&cur, &prev, &enh);
+            prev.errorRate = 1.0f;
+            mbe_setThreadRngSeed(0x1234u);
+            assert(
+                (soft ? mbe_processImbe7100x4400SoftFramef(
+                            direct, &direct_result, (const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &cur, &prev, &enh)
+                      : mbe_processImbe7100x4400Framef(direct, &direct_result, provoice_fr, imbe_d, &cur, &prev, &enh))
+                >= 0);
+
+            mbe_initMbeParms(&cur, &prev, &enh);
+            prev.errorRate = 1.0f;
+            mbe_setThreadRngSeed(0x1234u);
+            assert((soft ? mbe_decodeImbe7100x4400SoftFrame((const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &result)
+                         : mbe_decodeImbe7100x4400Frame(provoice_fr, imbe_d, &result))
+                   >= 0);
+            assert((result.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+            assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+            assert(result.flags == direct_result.flags);
+            assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+            for (int i = 0; i < 160; ++i) {
+                assert(float_bits_equal(out[i], direct[i]));
+            }
         }
     }
 

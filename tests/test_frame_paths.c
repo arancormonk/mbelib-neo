@@ -368,7 +368,9 @@ assert_decoded_fixture(enum fixture_mode mode, const char* frame, const char* ex
     assert(hard.c0_errors == c0);
     assert(hard.protected_errors == protected);
     assert(hard.c4_errors == c4);
-    assert(hard.flags == (MBE_PROCESS_FLAG_C0_VALID | (mode <= IMBE7100 ? MBE_PROCESS_FLAG_C4_VALID : 0u)));
+    assert(hard.flags
+           == (MBE_PROCESS_FLAG_C0_VALID | (mode <= IMBE7100 ? MBE_PROCESS_FLAG_C4_VALID : 0u)
+               | (mode == IMBE7100 ? MBE_PROCESS_FLAG_PROVOICE : 0u)));
     assert(memcmp(data, expected, fixture_modes[mode].data_count) == 0);
     ret = decode_fixture(mode, frame, data, &soft, 1);
     assert_result_total(&soft, ret);
@@ -626,6 +628,9 @@ test_imbe_fundamental_roundtrip(void) {
                                                   &prev, &enh)
                    == 0);
             assert(memcmp(decoded, data, sizeof(data)) == 0);
+            /* Only the ProVoice context flag tells the two results apart. */
+            assert((result7100.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+            result7100.flags &= ~MBE_PROCESS_FLAG_PROVOICE;
             assert_same_result(&result7200, &result7100, 0);
             assert_float_pcm_sane(pcm7200);
             assert_float_pcm_sane(pcm7100);

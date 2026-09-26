@@ -71,14 +71,22 @@ void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_
  */
 float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
 
+/** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
+enum mbe_mute_noise {
+    MBE_MUTE_NOISE_COMFORT, /**< JMBE comfort noise: D-STAR, ProVoice and the public synthesis API. */
+    MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE and AMBE 3600x2450 paths. */
+};
+
 /**
  * @brief Synthesize speech using a captured pre-enhancement RM0 value.
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp Current frame parameters.
  * @param prev_mp Previous enhanced frame parameters.
  * @param rm0 Sum of squared pre-enhancement amplitudes.
+ * @param mute_noise Noise output if the frame is muted.
  */
-void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0);
+void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                        enum mbe_mute_noise mute_noise);
 
 /**
  * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.
