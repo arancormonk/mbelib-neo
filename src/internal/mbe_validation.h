@@ -31,4 +31,11 @@ mbe_error_count_is_valid(int count) {
     return count >= 0 && count <= MBE_MAX_FRAME_BITS;
 }
 
+/** Nonzero when the caller-owned cur/prev/prev_enhanced parameter sets are non-null, distinct objects. */
+static inline int
+mbe_parms_triplet_is_valid(const void* cur_mp, const void* prev_mp, const void* prev_mp_enhanced) {
+    return cur_mp && prev_mp && prev_mp_enhanced && (cur_mp != prev_mp) && (cur_mp != prev_mp_enhanced)
+           && (prev_mp != prev_mp_enhanced);
+}
+
 #endif /* MBELIB_NEO_INTERNAL_MBE_VALIDATION_H */

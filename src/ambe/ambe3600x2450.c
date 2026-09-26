@@ -471,23 +471,78 @@ ambe2450_decode_b0(const char* ambe_d) {
     return b0;
 }
 
+/** TIA-102.BABA-1 7: the frame is a tone frame when the first six bits of u0 equal 63. */
 static int
-ambe2450_tone_verified(const char* ambe_d) {
+ambe2450_is_tone_frame(const char* ambe_d) {
+    for (int i = 0; i < 6; i++) {
+        if (ambe_d[i] != 1) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Consistency check on a tone frame's redundant fields (JMBE's; the spec
+ * repeats the tone index but leaves checking it to the decoder, 7.2 Table 10):
+ * the last four bits of u3 are 0, or u1's trailing copy of ID(7..4) matches.
+ */
+static int
+ambe2450_tone_fields_consistent(const char* ambe_d) {
     int u0, u1, u2, u3;
     ambe2450_read_u_fields(ambe_d, &u0, &u1, &u2, &u3);
+    (void)u0;
     (void)u2;
 
-    int u0_tone_check = (u0 >> 6) & 0x3f;
     int u3_tone_check = (u3 & 0xf);
     int u1_high_tone_verify = (u1 >> 8) & 0xf;
     int u1_low_tone_verify = u1 & 0xf;
 
 #ifdef AMBE_DEBUG
-    fprintf(stderr, "TONECHK u0=%d u3=%d u1h=%d u1l=%d ", u0_tone_check, u3_tone_check, u1_high_tone_verify,
-            u1_low_tone_verify);
+    fprintf(stderr, "TONECHK u3=%d u1h=%d u1l=%d ", u3_tone_check, u1_high_tone_verify, u1_low_tone_verify);
 #endif
 
-    return (u0_tone_check == 63) && ((u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify));
+    return (u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify);
+}
+
+/** A verified tone frame: the tone identifier (7) plus consistent redundant fields. */
+static int
+ambe2450_tone_verified(const char* ambe_d) {
+    return ambe2450_is_tone_frame(ambe_d) && ambe2450_tone_fields_consistent(ambe_d);
+}
+
+#define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255 /* Table 9 / 7.3 */
+
+/** 7.3: a tone index the decoder can output, including the zero-amplitude ID 255. */
+static int
+ambe2450_tone_id_usable(const char* ambe_d) {
+    const int tone_id = ambe2450_read_tone_id(ambe_d);
+    return (tone_id == AMBE2450_TONE_ID_ZERO_AMPLITUDE) || mbe_tone_id_is_valid(tone_id);
+}
+
+/**
+ * Frame type from the parameter bits alone. A tone frame (7) is recognised
+ * before b0: its other bits follow Table 10, not Tables 5-8, so its b0 reads
+ * 120-127 (a single tone can read as silence). A tone frame whose index is
+ * invalid (Table 9), or whose redundant fields disagree, is an erasure (7.3).
+ * Otherwise b0 gives the type (4.1 Table 4); b0 126/127 without the tone
+ * identifier cannot be decoded as a tone and is an erasure too.
+ */
+static int
+ambe2450_classify_frame(const char* ambe_d) {
+    if (ambe2450_is_tone_frame(ambe_d)) {
+        return (ambe2450_tone_fields_consistent(ambe_d) && ambe2450_tone_id_usable(ambe_d))
+                   ? MBE_AMBE2450_FRAME_TONE
+                   : MBE_AMBE2450_FRAME_ERASURE;
+    }
+    const int b0 = ambe2450_decode_b0(ambe_d);
+    if (b0 < 120) {
+        return MBE_AMBE2450_FRAME_VOICE;
+    }
+    if ((b0 == 124) || (b0 == 125)) {
+        return MBE_AMBE2450_FRAME_SILENCE;
+    }
+    return MBE_AMBE2450_FRAME_ERASURE;
 }
 
 /* TIA-102.BABA-1 4.1 eqs 1-3: w0 = 2*pi/32, L = 14, all bands unvoiced, for
@@ -509,55 +564,28 @@ ambe2450_set_silence_model(mbe_parms* cur_mp, int* L, float* f0, int* silence) {
 
 static int
 ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* L, float* f0, int* silence) {
+    const int kind = ambe2450_classify_frame(ambe_d);
     *silence = 0;
-
-    /* TIA-102.BABA-1 7.2: a tone frame has the first six bits of u0 set to 63.
-     * The redundancy check rejects corrupted tone headers, which then fall
-     * through to the b0 classification below. The 5.6 repeat criteria have
-     * already been applied to every frame by the process path. */
-    if (ambe2450_tone_verified(ambe_d)) {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Tone Frame\n");
-#endif
-        return MBE_AMBE2450_FRAME_TONE;
-    }
-
     *b0 = ambe2450_decode_b0(ambe_d);
+#ifdef AMBE_DEBUG
+    fprintf(stderr, "Frame type %d b0 = %d\n", kind, *b0);
+#endif
 
-    if ((*b0 >= 120) && (*b0 <= 123)) {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Erasure Frame b0 = %d\n", *b0);
-#endif
-        return MBE_AMBE2450_FRAME_ERASURE;
-    }
-    if ((*b0 == 124) || (*b0 == 125)) {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Silence Frame\n");
-#endif
+    if (kind == MBE_AMBE2450_FRAME_SILENCE) {
         ambe2450_set_silence_model(cur_mp, L, f0, silence);
-        return 0;
+    } else if (kind == MBE_AMBE2450_FRAME_VOICE) {
+        *f0 = AmbeW0table[*b0];
+        cur_mp->w0 = *f0 * (float)2 * M_PI;
+        *L = AmbeLtable[*b0];
+        cur_mp->L = *L;
     }
-    /* A tone frame type whose redundancy check failed has no usable tone index;
-     * TIA-102.BABA-1 7.3 treats an invalid tone index as an erasure. */
-    if ((*b0 == 126) || (*b0 == 127)) {
-#ifdef AMBE_DEBUG
-        fprintf(stderr, "Unverified tone fundamental -> erasure\n");
-#endif
-        return MBE_AMBE2450_FRAME_ERASURE;
-    }
-    if ((*b0 < 0) || (*b0 >= 120)) {
-        return MBE_AMBE2450_FRAME_ERASURE;
-    }
-
-    *f0 = AmbeW0table[*b0];
-    cur_mp->w0 = *f0 * (float)2 * M_PI;
-    *L = AmbeLtable[*b0];
-    cur_mp->L = *L;
-    return 0;
+    return kind;
 }
 
 /**
  * @brief Internal AMBE 2450 frame classification and parameter decode.
+ *
+ * Unlike the public wrapper, tells silence frames apart from voice frames.
  *
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters (voice and silence frames).
@@ -587,9 +615,9 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     fprintf(stderr, "\n");
 #endif
 
-    int special_frame = ambe2450_setup_frame_model(ambe_d, cur_mp, &b0, &L, &f0, &silence);
-    if (special_frame != 0) {
-        return special_frame;
+    const int kind = ambe2450_setup_frame_model(ambe_d, cur_mp, &b0, &L, &f0, &silence);
+    if ((kind != MBE_AMBE2450_FRAME_VOICE) && (kind != MBE_AMBE2450_FRAME_SILENCE)) {
+        return kind;
     }
 
     unvc = (float)0.2046 / sqrtf(cur_mp->w0);
@@ -620,7 +648,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     // determine log2Ml by applying ci,j to previous log2Ml
     ambe2450_update_spectral_amplitudes(cur_mp, prev_mp, Tl, unvc);
 
-    return silence ? MBE_AMBE2450_FRAME_SILENCE : MBE_AMBE2450_FRAME_VOICE;
+    return kind;
 }
 
 /**
@@ -628,11 +656,28 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp In/out: last valid voice frame (prediction history).
- * @return An MBE_AMBE2450_FRAME_* value, or a negative MBE_STATUS_* code.
+ * @return MBE_AMBE2450_FRAME_VOICE for a decoded model (voice or silence, as
+ *         in 2.1), MBE_AMBE2450_FRAME_ERASURE, MBE_AMBE2450_FRAME_TONE, or a
+ *         negative MBE_STATUS_* code.
  */
 int
 mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    return mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp);
+    const int kind = mbe_decodeAmbe2450ParmsInternal(ambe_d, cur_mp, prev_mp);
+    return (kind == MBE_AMBE2450_FRAME_SILENCE) ? MBE_AMBE2450_FRAME_VOICE : kind;
+}
+
+/**
+ * @brief Classify AMBE 2450 parameter bits without decoding them.
+ * @param ambe_d Demodulated AMBE parameter bits (49).
+ * @return An MBE_AMBE2450_FRAME_* value, or a negative MBE_STATUS_* code.
+ */
+int
+mbe_classifyAmbe2450Frame(const char ambe_d[49]) {
+    const int ret = mbe_validate_bits(ambe_d, 49u);
+    if (ret < 0) {
+        return ret;
+    }
+    return ambe2450_classify_frame(ambe_d);
 }
 
 /**
@@ -750,13 +795,17 @@ ambe2450_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
 }
 
 static int
-ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
+ambe2450_repeat_required(const char ambe_d[49], int total_errors, int c0_errors, int c0_errors_valid) {
     if (c0_errors_valid) {
         /* TIA-102.BABA-1 5.6 repeat criteria when C0 errors are known. */
         return ((c0_errors >= 4) || ((c0_errors >= 2) && (total_errors >= 6)));
     }
 
-    /* Dataf callers pass parameter bits only (no C0 context); keep historical total-error fallback. */
+    /* Dataf callers pass parameter bits only (no C0 context); keep the 2.1
+     * heuristic, which also outputs a verified tone with fewer than 6 errors. */
+    if (ambe2450_tone_verified(ambe_d) && (total_errors < 6)) {
+        return 0;
+    }
     return (total_errors > 3);
 }
 
@@ -765,53 +814,40 @@ ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
  * Addendum). The caller-owned triplet carries the spec's two notions of
  * "previous frame":
  *  - prev_mp is the last valid voice frame: the prediction history (L, gamma,
- *    log2Ml; 4.3, eq 26, eqs 43-44) plus the per-frame decoder values below,
- *    which advance on every frame.
+ *    log2Ml; 4.3; 4.4.1 eq 26; 4.4.3 eqs 43-45) plus the per-frame decoder
+ *    values below, which advance on every frame.
  *  - prev_mp_enhanced is the last synthesized frame and the frame-repeat
  *    source (5.6 eqs 59-64: w0, L, K, v, enhanced M).
  * Invalid frames never commit history. At frame start, cur_mp's noise state
  * equals prev_mp_enhanced's; every path below preserves that.
  */
 
-#define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255 /* Table 9 / 7.3 */
-
-/** Advance prev_mp's per-frame decoder values without touching its prediction history. */
-static void
-ambe2450_commit_scalars(mbe_parms* prev_mp, const mbe_parms* cur_mp) {
-    prev_mp->errorRate = cur_mp->errorRate;
-    prev_mp->errorCountTotal = cur_mp->errorCountTotal;
-    prev_mp->errorCount4 = cur_mp->errorCount4;
-    prev_mp->repeatCount = cur_mp->repeatCount;
-    prev_mp->mutingThreshold = cur_mp->mutingThreshold;
-}
-
 /**
- * Load the 5.6 repeat model: the previously synthesized frame, enhanced
- * amplitudes included, so synthesis continues its WOLA and phase state.
- * This frame's decoder values, tone phases and noise state are kept.
+ * Not in TIA-102.BABA-1: silence the last synthesized frame (zero its
+ * amplitudes and unvoiced overlap; keep its phase and noise state) after a
+ * frame whose output was not synthesized speech: a mute or a tone. Whatever
+ * is synthesized next then fades in from silence instead of overlapping
+ * speech from before that frame, and a repeat right after it replays silence.
+ * The spec does not define the synthesis state across tone frames; JMBE
+ * resets to init defaults after a mute.
  */
 static void
-ambe2450_load_repeat_model(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
-    mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
+ambe2450_silence_last_synthesized(mbe_parms* prev_mp_enhanced) {
+    memset(prev_mp_enhanced->Ml, 0, sizeof(prev_mp_enhanced->Ml));
+    memset(prev_mp_enhanced->previousUw, 0, sizeof(prev_mp_enhanced->previousUw));
 }
 
 /**
- * 5.7: apply the repeat update, bypass synthesis and output the mute noise.
- *
- * Not in TIA-102.BABA-1: the last synthesized frame is then silenced (its
- * amplitudes and unvoiced overlap zeroed; phase and noise state kept). The
- * output was noise, so whatever is synthesized next, after any number of
- * tone frames, fades in from silence instead of overlapping speech from
- * before the mute, and a repeat after a mute replays silence. JMBE resets to
- * init defaults instead.
+ * 5.7: compute the 5.6 step (2) update (the repeat model, which keeps this
+ * frame's error, tone and noise state), bypass synthesis and output uniform
+ * noise in [-5, 5]; then silence the last synthesized frame.
  */
 static void
 ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
-    ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
+    mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
     mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
-    memset(prev_mp_enhanced->Ml, 0, sizeof(prev_mp_enhanced->Ml));
-    memset(prev_mp_enhanced->previousUw, 0, sizeof(prev_mp_enhanced->previousUw));
+    ambe2450_silence_last_synthesized(prev_mp_enhanced);
 }
 
 /** Enhance and synthesize a decoded frame, then make it the last synthesized frame. */
@@ -825,7 +861,7 @@ ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_
 /**
  * 5.6 steps 2-3: synthesize the repeated model as-is (no re-enhancement and
  * no adaptive smoothing, which could change its voicing and amplitudes), or
- * mute (5.7).
+ * mute (5.7) instead of the 4th consecutive repeat.
  */
 static void
 ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
@@ -833,31 +869,33 @@ ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, 
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
         return;
     }
-    ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
+    /* Step 2 repeats the previous frame's model, enhanced amplitudes included
+     * (eqs 59-64), so synthesis continues its WOLA and phase state. */
+    mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     mbe_synthesizeRepeatedSpeechf(aout_buf, cur_mp, prev_mp_enhanced);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
 /**
- * Invalid frame: repeat criteria (5.6), erasure (4.1, 5.6) or invalid tone
- * index (7.3). The frame is ignored for prediction; the 4th consecutive
- * invalid frame mutes instead of repeating (5.7).
+ * Invalid frame: repeat criteria or erasure (5.6), or a tone frame with an
+ * unusable tone index (7.3). The frame is ignored in later processing (5.6
+ * step 1); the 4th consecutive invalid frame mutes instead of repeating (5.7).
  */
 static void
 ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned extra_flags, mbe_parms* cur_mp,
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_result_set_flag(result, extra_flags | MBE_PROCESS_FLAG_REPEAT);
     cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
-    ambe2450_commit_scalars(prev_mp, cur_mp);
+    mbe_copy_error_state(prev_mp, cur_mp);
     ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced);
 }
 
 /**
  * Valid voice or silence frame. A voice frame becomes the prediction history;
  * the encoder updated its predictor on it, so it commits even when the error
- * rate then mutes the output (5.7). A silence frame is synthesized but never
- * used for prediction (4.3, eq 26, eqs 43-44): only the per-frame decoder
- * values advance.
+ * rate then mutes the output (5.7 does not say either way). A silence frame is
+ * synthesized but never used for prediction (4.3; 4.4.1 eq 26; 4.4.3 eq 43):
+ * only the per-frame decoder values advance.
  */
 static void
 ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence, mbe_parms* cur_mp, mbe_parms* prev_mp,
@@ -865,7 +903,7 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
     cur_mp->repeatCount = 0;
     if (silence) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_SILENCE);
-        ambe2450_commit_scalars(prev_mp, cur_mp);
+        mbe_copy_error_state(prev_mp, cur_mp);
     } else {
         mbe_moveMbeParms(cur_mp, prev_mp);
     }
@@ -877,31 +915,27 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
 }
 
 /**
- * Tone frame (7.3). Valid tones and the zero-amplitude ID 255 are output
- * without touching the prediction history or the synthesis state; an invalid
- * tone index is an erasure.
+ * Tone frame with a usable index (7.3): output the tone, or silence for the
+ * zero-amplitude ID 255, instead of synthesized speech. The prediction history
+ * is not touched (4.3); the last synthesized frame is silenced (not in the
+ * spec, see ambe2450_silence_last_synthesized).
  */
 static void
 ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
                       mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    const int tone_id = ambe2450_read_tone_id(ambe_d);
-    const int zero_amplitude = (tone_id == AMBE2450_TONE_ID_ZERO_AMPLITUDE);
-
-    if (!zero_amplitude && !mbe_tone_id_is_valid(tone_id)) {
-        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE, cur_mp, prev_mp,
-                                 prev_mp_enhanced);
-        return;
-    }
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
     cur_mp->repeatCount = 0;
-    ambe2450_commit_scalars(prev_mp, cur_mp);
+    mbe_copy_error_state(prev_mp, cur_mp);
     if (mbe_requiresMuting(cur_mp)) {
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
-    } else if (zero_amplitude) {
+        return;
+    }
+    if (ambe2450_read_tone_id(ambe_d) == AMBE2450_TONE_ID_ZERO_AMPLITUDE) {
         mbe_synthesizeSilencef(aout_buf);
     } else {
         mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
     }
+    ambe2450_silence_last_synthesized(prev_mp_enhanced);
 }
 
 static void
@@ -910,7 +944,9 @@ ambe2450_process_frame(float* aout_buf, mbe_process_result* result, const char a
     if (kind == MBE_AMBE2450_FRAME_TONE) {
         ambe2450_process_tone(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
     } else if (kind == MBE_AMBE2450_FRAME_ERASURE) {
-        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_ERASURE, cur_mp, prev_mp, prev_mp_enhanced);
+        /* A tone frame with an unusable index is flagged as both. */
+        const unsigned tone = ambe2450_is_tone_frame(ambe_d) ? MBE_PROCESS_FLAG_TONE : 0u;
+        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_ERASURE | tone, cur_mp, prev_mp, prev_mp_enhanced);
     } else {
         ambe2450_process_valid(aout_buf, result, kind == MBE_AMBE2450_FRAME_SILENCE, cur_mp, prev_mp, prev_mp_enhanced);
     }
@@ -925,7 +961,8 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, mbe_process_result* result, c
     int total_errors;
     int ret;
 
-    if (!aout_buf || !cur_mp || !prev_mp || !prev_mp_enhanced) {
+    /* Aliased sets would let a mute's silencing of prev_mp_enhanced erase the history. */
+    if (!aout_buf || !mbe_parms_triplet_is_valid(cur_mp, prev_mp, prev_mp_enhanced)) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
     ret = ambe2450_prepare_process(result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, &total_errors, &c0_errors,
@@ -935,7 +972,7 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, mbe_process_result* result, c
     }
 
     /* 5.6: the repeat criteria apply to every frame type, before classification. */
-    if (ambe2450_repeat_required(total_errors, c0_errors, c0_errors_valid)) {
+    if (ambe2450_repeat_required(ambe_d, total_errors, c0_errors, c0_errors_valid)) {
         ambe2450_process_invalid(aout_buf, result, 0u, cur_mp, prev_mp, prev_mp_enhanced);
         return result ? result->total_errors : total_errors;
     }

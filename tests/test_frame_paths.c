@@ -457,9 +457,9 @@ test_fixture_ecc(void) {
 /*
  * Route the AMBE 2450 sequence through TIA-102.BABA-1 frame types so every API
  * path is compared across them: frames 2-3 are the standard DVSI silence
- * vector (synthesized, history frozen), frame 6 is an erasure (b0 = 121,
- * u0 tone bits clear, repeated), and frame 7 is voice decoded against the
- * history frozen since frame 1.
+ * vector (synthesized, history frozen), so frame 4 is voice decoded against
+ * frame 1's history; frame 6 is an erasure (b0 = 121, u0 tone bits clear,
+ * repeated), so frame 7 is voice decoded against frame 5's history.
  */
 static void
 override_parameters(enum fixture_mode mode, int n, char* parameters) {

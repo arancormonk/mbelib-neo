@@ -512,28 +512,44 @@ MBE_API void mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]);
 MBE_API int mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]);
 /** @brief ECC and parameter packing for AMBE 3600x2450. */
 MBE_API int mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d);
-/** mbe_decodeAmbe2450Parms() result: voice frame; the only type that may be committed as prediction history. */
+/** AMBE 2450 frame type: voice frame; the only type that may be committed as prediction history. */
 #define MBE_AMBE2450_FRAME_VOICE   0
-/** mbe_decodeAmbe2450Parms() result: silence frame (b0 124/125); decoded but never committed to prev_mp. */
+/** AMBE 2450 frame type: silence frame (b0 124/125); decoded but never committed to prev_mp. */
 #define MBE_AMBE2450_FRAME_SILENCE 1
-/** mbe_decodeAmbe2450Parms() result: erasure frame (b0 120-123 or unverified tone); cur_mp is not decoded. */
+/**
+ * AMBE 2450 frame type: erasure (b0 120-123, or a tone frame whose tone index is
+ * invalid or whose redundant fields disagree, TIA-102.BABA-1 7.3); a frame repeat.
+ */
 #define MBE_AMBE2450_FRAME_ERASURE 2
-/** mbe_decodeAmbe2450Parms() result: tone frame; cur_mp is not decoded. */
+/** AMBE 2450 frame type: tone frame with a usable tone index (TIA-102.BABA-1 7, 7.3). */
 #define MBE_AMBE2450_FRAME_TONE    7
+/**
+ * @brief Classify AMBE 2450 parameter bits without decoding them.
+ *
+ * A tone frame is recognised by the first six bits of u0 equal to 63
+ * (TIA-102.BABA-1 7), before b0 is read; otherwise b0 gives the type (4.1).
+ *
+ * @param ambe_d Demodulated parameter bits (49).
+ * @return An `MBE_AMBE2450_FRAME_*` value, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
 /**
  * @brief Decode AMBE 2450 model parameters (no repeat, mute or synthesis handling).
  *
  * Predicts spectral amplitudes from `prev_mp`, which must hold the last valid
- * voice frame (TIA-102.BABA-1 eq 26, eqs 43-44). A caller managing its own
- * state should copy `cur_mp` into `prev_mp` only for
- * `MBE_AMBE2450_FRAME_VOICE`; silence, erasure, tone and repeated frames must
- * not replace the prediction history. The decode writes the eq 44 extension
- * above `prev_mp->L` into `prev_mp`, which does not change its history.
+ * voice frame (TIA-102.BABA-1 4.4.1 eq 26, 4.4.3 eq 43). Voice and silence
+ * frames both decode into `cur_mp` and return `MBE_AMBE2450_FRAME_VOICE`, as
+ * in 2.1. A caller managing its own state should copy `cur_mp` into `prev_mp`
+ * only when `mbe_classifyAmbe2450Frame()` reports `MBE_AMBE2450_FRAME_VOICE`;
+ * silence, erasure, tone and repeated frames must not replace the prediction
+ * history. The decode writes the eq 44-45 edge values (index 0 and above
+ * `prev_mp->L`) into `prev_mp`, which does not change its history.
  *
  * @param ambe_d  Demodulated parameter bits (49).
  * @param cur_mp  Output: current frame parameters (voice and silence frames).
  * @param prev_mp In/out: last valid voice frame (prediction history).
- * @return An `MBE_AMBE2450_FRAME_*` value, or a negative `MBE_STATUS_*` code.
+ * @return `MBE_AMBE2450_FRAME_VOICE` (voice or silence), `MBE_AMBE2450_FRAME_ERASURE`
+ *         or `MBE_AMBE2450_FRAME_TONE`, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate AMBE 3600x2450 interleaved data. */
@@ -566,11 +582,13 @@ MBE_API int mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  *
  * Frame types follow TIA-102.BABA-1: silence frames are synthesized but do not
- * update the prediction history (`MBE_PROCESS_FLAG_SILENCE`); erasures, invalid
- * tone indices and frames meeting the 5.6 repeat criteria repeat the last
- * synthesized frame (`MBE_PROCESS_FLAG_REPEAT`); the error rate above 0.096
+ * update the prediction history (`MBE_PROCESS_FLAG_SILENCE`); erasures (a tone
+ * frame with an unusable index also sets `MBE_PROCESS_FLAG_TONE`) and frames
+ * meeting the 5.6 repeat criteria repeat the last synthesized frame
+ * (`MBE_PROCESS_FLAG_REPEAT`); the error rate above 0.096
  * or a 4th consecutive invalid frame mutes (`MBE_PROCESS_FLAG_MUTE`). The three
- * parameter sets must be distinct objects.
+ * parameter sets must be distinct objects; aliased sets return
+ * `MBE_STATUS_INVALID_ARGUMENT`.
  */
 MBE_API int mbe_processAmbe2450Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);

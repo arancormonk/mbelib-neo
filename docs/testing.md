@@ -13,7 +13,7 @@ The CTest suite includes:
 - Encoder context/FFT allocation failures clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
-- AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: silence history freeze, repeats, erasures, tones, muting and mute recovery (`test_ambe2450_frame_types`)
+- AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)
 - float-to-int16 conversion parity checks
 - golden PCM hash regression checks
 - SIMD architecture detection checks

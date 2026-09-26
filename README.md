@@ -201,7 +201,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 ### Stateful Decode Workflow
 
 - Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`. The three must be distinct objects.
-- In AMBE 3600x2450, `prev_mp` is the last valid voice frame (the prediction history) and `prev_mp_enhanced` is the last synthesized frame. When you drive `mbe_decodeAmbe2450Parms()` yourself, copy `cur_mp` into `prev_mp` only when it returns `MBE_AMBE2450_FRAME_VOICE`.
+- In AMBE 3600x2450, `prev_mp` is the last valid voice frame (the prediction history) and `prev_mp_enhanced` is the last synthesized frame. When you drive `mbe_decodeAmbe2450Parms()` yourself, copy `cur_mp` into `prev_mp` only when `mbe_classifyAmbe2450Frame()` returns `MBE_AMBE2450_FRAME_VOICE`. `mbe_decodeAmbe2450Parms()` returns `MBE_AMBE2450_FRAME_VOICE` for silence frames too, as in 2.1, since both decode a model.
 - Initialize once before decoding with `mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced)`.
 - Prefer `mbe_process*Frame*` APIs when you have raw hard-decision vocoder frames and do not need staged parameter handling.
 - For soft-decision input, fill `mbe_soft_bit.bit` with the hard decision and `mbe_soft_bit.reliability` with confidence (`0` is erasure-like, `255` is highly reliable), then call `mbe_decode*SoftFrame()` or `mbe_process*SoftFrame*()`.
@@ -290,11 +290,11 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 - **Codec-specific frame repeat/muting**: IMBE and D-STAR follow JMBE's repeat rules. IMBE mutes on max repeats or the error-rate threshold, D-STAR muting is repeat-driven, and IMBE prolonged repeat headroom resets to a default model state. In every codec, a repeated frame keeps its own error accounting and continues the unvoiced-noise sequence; only the model is repeated.
 
 - **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum), replacing earlier JMBE parity:
-  - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, eqs. 26 and 43–44). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
+  - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, §4.4.1 eq. 26, §4.4.3 eq. 43). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
   - **Repeats** (§5.6): erasure (b0 120–123), or corrected C0 errors ≥ 4, or C0 ≥ 2 with ≥ 6 total. These criteria apply to every frame, before tone classification. A repeat replays the last synthesized frame unchanged (no re-enhancement or adaptive smoothing) and leaves the history untouched.
-  - **Tones** (§7.3): an invalid tone index is an erasure (flagged `ERASURE` and `TONE`); tone ID 255 is a zero-amplitude tone.
+  - **Tones** (§7, §7.3): a frame whose first six bits of u0 equal 63 is a tone frame, whatever its b0 would read as (a single tone can read as silence). An invalid tone index is an erasure (flagged `ERASURE` and `TONE`), and so is a tone frame whose redundant tone fields disagree (JMBE's consistency check; the spec leaves this to the decoder). Tone ID 255 is a zero-amplitude tone.
   - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
-  - **Mute recovery**: a mute also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping pre-mute speech, even when tone frames come between, and a repeat right after a mute replays silence. The spec doesn't cover this.
+  - **Recovery after mutes and tones**: a mute or a tone frame also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping the speech from before it, and a repeat right after either replays silence. The spec doesn't define the synthesis state across these frames.
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 

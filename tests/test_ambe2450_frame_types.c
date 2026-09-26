@@ -77,19 +77,33 @@ unpack_bytes(char d[49], const unsigned char bytes[7]) {
     }
 }
 
+/** Write the @p n low bits of @p value MSB first at d[pos..pos+n-1]. */
+static void
+put_bits(char d[49], int pos, int value, int n) {
+    for (int i = 0; i < n; ++i) {
+        d[pos + i] = (char)((value >> (n - 1 - i)) & 1);
+    }
+}
+
 /**
- * Tone frame: u0 top six bits 63 (7.2), amplitude AD from the u0 low six bits
- * set near full scale, redundancy nibble zero, tone ID1 in bits 12..19.
+ * Tone frame in the TIA-102.BABA-1 7.2 Table 10 layout, at full amplitude
+ * (AD = 127): u0 = 63 then AD(6..1); u1 = ID(7..0), ID(7..4); u2 = ID(3..0),
+ * ID(7..1); u3 = ID(0), ID(7..0), AD(0), 0000. Parameter bits 0-11 carry u0,
+ * 12-23 u1, 24-34 u2 and 35-48 u3.
  */
 static void
 pack_tone(char d[49], int tone_id) {
-    memset(d, 0, 49);
-    for (int i = 0; i < 12; ++i) {
-        d[i] = 1;
-    }
-    for (int i = 0; i < 8; ++i) {
-        d[12 + i] = (char)((tone_id >> (7 - i)) & 1);
-    }
+    const int ad = 127;
+    put_bits(d, 0, 63, 6);
+    put_bits(d, 6, ad >> 1, 6);
+    put_bits(d, 12, tone_id, 8);
+    put_bits(d, 20, tone_id >> 4, 4);
+    put_bits(d, 24, tone_id, 4);
+    put_bits(d, 28, tone_id >> 1, 7);
+    put_bits(d, 35, tone_id, 1);
+    put_bits(d, 36, tone_id, 8);
+    put_bits(d, 44, ad, 1);
+    put_bits(d, 45, 0, 4);
 }
 
 static int
@@ -101,7 +115,7 @@ float_bits_equal(float a, float b) {
     return ab == bb;
 }
 
-/** Prediction history equality (fields, not bytes: decode writes the eq 44 extension above L). */
+/** Prediction history equality (fields, not bytes: decode writes the eq 44-45 edge values). */
 static int
 history_equal(const mbe_parms* a, const mbe_parms* b) {
     if (a->L != b->L || !float_bits_equal(a->gamma, b->gamma) || !float_bits_equal(a->w0, b->w0)) {
@@ -146,7 +160,7 @@ parms_equal(const mbe_parms* a, const mbe_parms* b) {
 
 /** After a mute, the last synthesized frame is silenced: amplitudes and overlap zeroed, the rest kept. */
 static int
-enhanced_muted_from(const mbe_parms* after, const mbe_parms* before) {
+enhanced_silenced_from(const mbe_parms* after, const mbe_parms* before) {
     mbe_parms expected = *before;
     memset(expected.Ml, 0, sizeof(expected.Ml));
     memset(expected.previousUw, 0, sizeof(expected.previousUw));
@@ -247,7 +261,7 @@ test_erasure_run_repeats_then_mutes(void) {
         assert(history_equal(&s.prev, &history));
         if (muted) {
             assert_mute_noise(s.out);
-            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
+            assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
         } else {
             /* A repeat replays the loud voice model, not comfort noise. */
             assert(peak_abs(s.out) > 5.0f);
@@ -312,12 +326,15 @@ test_error_rate_mute_boundary(void) {
         assert(history_equal(&s.prev, &dec_cur));
         if (n == 21) {
             assert_mute_noise(s.out);
-            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
+            assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
         }
     }
 }
 
-/* 7.3: valid tones leave the prediction history and synthesis state untouched. */
+/*
+ * 7.3: valid tones leave the prediction history untouched (4.3). Not in the
+ * spec: the last synthesized frame is silenced, as after a mute.
+ */
 static void
 test_valid_tone_keeps_state(void) {
     struct stream s;
@@ -329,6 +346,7 @@ test_valid_tone_keeps_state(void) {
 
     /* The linked renderer is the oracle in both ordinary and NOTONES builds. */
     pack_tone(tone, 7);
+    assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_TONE);
     mbe_parms tone_state = s.cur;
     float expected[160];
     mbe_synthesizeTonef(expected, tone, &tone_state);
@@ -337,7 +355,7 @@ test_valid_tone_keeps_state(void) {
     assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(float_array_bits_equal(s.out, expected, 160));
     assert(history_equal(&s.prev, &history));
-    assert(parms_equal(&s.prev_enh, &enh_before));
+    assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
 
     /* Table 9 / 7.3: ID 255 is a valid zero-amplitude tone. */
     pack_tone(tone, 255);
@@ -360,6 +378,10 @@ test_invalid_tone_is_erasure(void) {
     const mbe_parms history = s.prev;
 
     pack_tone(tone, 4);
+    mbe_parms dec_cur = s.cur;
+    mbe_parms dec_prev = s.prev;
+    assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_ERASURE);
+    assert(mbe_decodeAmbe2450Parms(tone, &dec_cur, &dec_prev) == MBE_AMBE2450_FRAME_ERASURE);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE));
@@ -373,6 +395,62 @@ test_invalid_tone_is_erasure(void) {
     assert(s.cur.repeatCount == MBE_MAX_FRAME_REPEATS);
     assert_mute_noise(s.out);
     assert(history_equal(&s.prev, &history));
+}
+
+/*
+ * 7: the u0 tone identifier makes a tone frame whatever b0 would read as. A
+ * single tone with ID(6..4) = 5 reads as silence b0 125 (Tables 4 and 10), so
+ * a tone frame failing the redundancy check is an erasure (7.3), not decoded
+ * as silence.
+ */
+static void
+test_unverified_tone_is_erasure(void) {
+    struct stream s;
+    char tone[49];
+    mbe_parms cur;
+    mbe_parms prev;
+    mbe_parms enh;
+
+    pack_tone(tone, 80);
+    assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_TONE);
+    tone[20] ^= 1; /* u1's copy of ID(7..4) disagrees */
+    tone[48] = 1;  /* and the last four bits of u3 are not 0 */
+    assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_ERASURE);
+    mbe_initMbeParms(&cur, &prev, &enh);
+    assert(mbe_decodeAmbe2450Parms(tone, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+
+    stream_init(&s);
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    const mbe_parms history = s.prev;
+    stream_frame(&s, tone, 0, 0);
+    assert(s.result.flags
+           == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
+    assert(history_equal(&s.prev, &history));
+}
+
+/* The frame classifier and the staged decode report the same frame types. */
+static void
+test_classify_matches_decode(void) {
+    char d[49];
+    mbe_parms cur;
+    mbe_parms prev;
+    mbe_parms enh;
+
+    pack_b(d, k_voice_next);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_VOICE);
+    unpack_bytes(d, k_dvsi_silence_bytes);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
+    pack_b(d, k_erasure);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_ERASURE);
+    mbe_initMbeParms(&cur, &prev, &enh);
+    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+    pack_tone(d, 255);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_TONE);
+    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_TONE);
+
+    d[0] = 2;
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_STATUS_INVALID_BITS);
+    assert(mbe_classifyAmbe2450Frame(NULL) == MBE_STATUS_INVALID_ARGUMENT);
 }
 
 /* 5.6 criteria apply before tone classification; 5.7 muting applies to tones too. */
@@ -432,6 +510,29 @@ test_null_result(void) {
     assert(s.cur.repeatCount == 1);
 }
 
+/* The three parameter sets must be distinct; aliasing is rejected before any state changes. */
+static void
+test_aliased_parms_rejected(void) {
+    struct stream s;
+    char d[49];
+    stream_init(&s);
+    pack_b(d, k_voice_loud);
+    stream_frame(&s, d, 0, 0);
+    const struct stream before = s;
+    mbe_parms* const aliases[3][3] = {
+        {&s.cur, &s.cur, &s.prev_enh},
+        {&s.cur, &s.prev, &s.cur},
+        {&s.cur, &s.prev, &s.prev},
+    };
+    for (int i = 0; i < 3; ++i) {
+        assert(mbe_processAmbe2450Dataf(s.out, NULL, d, aliases[i][0], aliases[i][1], aliases[i][2])
+               == MBE_STATUS_INVALID_ARGUMENT);
+    }
+    assert(parms_equal(&s.cur, &before.cur));
+    assert(parms_equal(&s.prev, &before.prev));
+    assert(parms_equal(&s.prev_enh, &before.prev_enh));
+}
+
 /* 4.1 eqs 1-3 on the standard DVSI silence vector: w0 = 2*pi/32, L = 14, unvoiced. */
 static void
 test_dvsi_silence_vector(void) {
@@ -446,7 +547,9 @@ test_dvsi_silence_vector(void) {
     assert(memcmp(d, packed, sizeof(d)) == 0);
 
     mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_SILENCE);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
+    /* As in 2.1, the staged decode reports any decoded model as voice. */
+    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
     assert(cur.L == 14);
     assert(fabsf(cur.w0 - (float)(2.0 * M_PI / 32.0)) < 1e-6f);
     const float unvc = 0.2046f / sqrtf(cur.w0);
@@ -670,12 +773,13 @@ test_repeat_preserves_model(void) {
 }
 
 /*
- * A tone between a mute and the next speech frame must not restore the
- * pre-mute speech: the mute silenced the last synthesized frame, so voice
- * after the tone still fades in, and a repeat after it replays silence.
+ * Speech after a tone must not overlap the speech from before it (not in
+ * TIA-102.BABA-1): voice after the tone fades in, and a repeat right after it
+ * replays silence. This holds with or without a mute before the tone, for the
+ * zero-amplitude ID 255 and for an audible tone.
  */
 static void
-test_fade_in_after_mute_then_tone(void) {
+test_fade_in_after_tone(void) {
     static const int tone_ids[2] = {255, 7};
     const double steady = steady_head_rms();
     char erasure[49];
@@ -684,21 +788,24 @@ test_fade_in_after_mute_then_tone(void) {
     pack_b(erasure, k_erasure);
     pack_b(voice, k_voice_next);
 
-    for (int k = 0; k < 3; ++k) {
+    for (int k = 0; k < 8; ++k) {
+        const int tone_id = tone_ids[k & 1];
+        const int repeat_after = (k >> 1) & 1;
+        const int mute_before = (k >> 2) & 1;
         struct stream s;
         stream_init(&s);
         for (int i = 0; i < 8; ++i) {
             stream_frame(&s, voice, 0, 0);
         }
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; mute_before && i < 4; ++i) {
             stream_frame(&s, erasure, 0, 0);
         }
-        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-        pack_tone(tone, tone_ids[k % 2]);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == mute_before);
+        pack_tone(tone, tone_id);
         stream_frame(&s, tone, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
         assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-        if (k < 2) {
+        if (!repeat_after) {
             stream_frame(&s, voice, 0, 0);
             assert(float_bits_equal(s.out[0], 0.0f));
             assert(head_rms(s.out) < 0.5 * steady);
@@ -715,7 +822,7 @@ test_fade_in_after_mute_then_tone(void) {
 int
 main(void) {
     test_repeat_preserves_model();
-    test_fade_in_after_mute_then_tone();
+    test_fade_in_after_tone();
     test_fade_in_after_repeat_mute();
     test_fade_in_after_error_rate_mute();
     test_dvsi_silence_vector();
@@ -728,9 +835,12 @@ main(void) {
     test_error_rate_mute_boundary();
     test_valid_tone_keeps_state();
     test_invalid_tone_is_erasure();
+    test_unverified_tone_is_erasure();
+    test_classify_matches_decode();
     test_tone_repeat_and_mute_order();
     test_repeat_count_is_clamped();
     test_null_result();
+    test_aliased_parms_rejected();
     printf("test_ambe2450_frame_types: OK\n");
     return 0;
 }

@@ -110,8 +110,9 @@ set_ambe2450_tone_signature(char ambe_d[49]) {
 /**
  * @brief Compose AMBE 2450 tone ID1 and the U1 low nibble.
  *
- * Tone ID1 is U1[0..7] (ambe_d[12..19]). U1[8..11] (ambe_d[20..23])
- * belongs to a different field and should not affect tone-ID validity.
+ * Tone ID1 is U1[0..7] (ambe_d[12..19]). U1[8..11] (ambe_d[20..23]) carries a
+ * redundant copy of ID(7..4) (TIA-102.BABA-1 Table 10) and does not change the
+ * decoded ID.
  *
  * @param ambe_d      AMBE parameter bit vector (49 entries), modified in-place.
  * @param id1         8-bit tone ID value.
@@ -338,7 +339,8 @@ main(void) {
             mbe_initMbeParms(&cur, &prev, &dummy);
             set_bits_zero(ambe_d, 49);
             set_ambe2450_b0(ambe_d, b0);
-            assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_SILENCE);
+            assert(mbe_classifyAmbe2450Frame(ambe_d) == MBE_AMBE2450_FRAME_SILENCE);
+            assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
             assert(cur.L == 14);
             assert(approx_equal(cur.w0, w0_silence, 1e-6f));
             assert((float)cur.L * cur.w0 < (float)M_PI);
@@ -583,11 +585,20 @@ main(void) {
         assert(result_has_marker(&result, 'T'));
         assert(!result_has_marker(&result, 'R'));
 
-        /* Without C0 context the Dataf fallback treats total > 3 as a repeat. */
+        /* Without C0 context the Dataf fallback keeps 2.1's rules: a verified
+         * tone with fewer than 6 errors is output, other frames repeat above 3. */
+        for (int total = 4; total <= 6; ++total) {
+            mbe_initMbeParms(&cur, &prev, &prev_enh);
+            init_result_total(&result, total);
+            assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
+            assert(result_has_marker(&result, 'T') == (total < 6));
+            assert(result_has_marker(&result, 'R') == (total >= 6));
+        }
+        set_bits_zero(ambe_d, 49);
+        set_ambe2450_b0(ambe_d, 10);
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         init_result_total(&result, 4);
         assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
-        assert(!result_has_marker(&result, 'T'));
         assert(result_has_marker(&result, 'R'));
 
         set_bits_zero(ambe_d, 49);
