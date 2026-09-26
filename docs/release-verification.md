@@ -7,17 +7,17 @@ https://github.com/arancormonk/mbelib-neo/releases
 ## Release Identifiers
 
 Release tags use the form `vX.Y.Z`. The tag must match the project version
-declared by CMake, must be an annotated tag signed by the trusted mbelib-neo
+declared by CMake, must be an annotated tag signed by a trusted mbelib-neo
 release key, and must point at a commit already contained in `origin/main`, or
 the release workflow fails before packaging.
 
 ## Release Signing
 
-Release tags are signed with the trusted mbelib-neo release key checked into the
-repository:
+Release tags are signed with one of the trusted mbelib-neo release keys checked
+into the repository:
 
 ```sh
-gpg --import release-keys/arancormonk-2026.pgp
+gpg --import release-keys/arancormonk-desktop-2026.pgp release-keys/arancormonk-laptop-2026.pgp
 ```
 
 Verify a release tag:
@@ -27,11 +27,12 @@ git fetch --tags https://github.com/arancormonk/mbelib-neo.git
 git tag -v v1.2.7
 ```
 
-The release workflow pins this exact primary key fingerprint before trusting the
-checked-in key file:
+The release workflow pins these exact primary key fingerprints before trusting
+the checked-in key files:
 
 ```text
-5FAF 0C47 C8E1 F95D 33CD 83B1 E42E 43AD D853 F280
+5FAF 0C47 C8E1 F95D 33CD 83B1 E42E 43AD D853 F280  (desktop)
+3561 9AC5 0DF5 FB9E A053 296E 5C77 FAD4 4C3E 67A7  (laptop)
 ```
 
 The repository also stores the original upstream mbelib author public key for
@@ -47,7 +48,7 @@ That attribution key is:
 9E7A 5527 9CDC EBF7 BF1B D772 4F98 E863 EA5E FE2C
 ```
 
-Do not confuse the upstream attribution key with the current release-signing key
+Do not confuse the upstream attribution key with the current release-signing keys
 unless release notes explicitly say otherwise.
 
 GitHub repository rulesets should also protect `v*.*.*` tags, restrict release
@@ -93,7 +94,7 @@ less mbelib-neo-<version>-linux-<arch>.tar.gz.spdx.json
 ## Expected Release Author
 
 The expected release author is the project maintainer, `arancormonk`, using the
-public release-signing key documented above.
+public release-signing keys documented above.
 
 ## Release Review
 
