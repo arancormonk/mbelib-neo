@@ -511,10 +511,10 @@ static int
 ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* L, float* f0, int* silence) {
     *silence = 0;
 
-    /* TIA-102.BABA-1 7.2: a tone frame has the first six bits of u0 set to 63
-     * (b0 126..127). The redundancy check rejects corrupted tone headers, which
-     * then fall through to the b0 classification below. The 5.6 repeat
-     * criteria have already been applied to every frame by the process path. */
+    /* TIA-102.BABA-1 7.2: a tone frame has the first six bits of u0 set to 63.
+     * The redundancy check rejects corrupted tone headers, which then fall
+     * through to the b0 classification below. The 5.6 repeat criteria have
+     * already been applied to every frame by the process path. */
     if (ambe2450_tone_verified(ambe_d)) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Tone Frame\n");
@@ -557,11 +557,11 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
 }
 
 /**
- * @brief Internal AMBE 2450 parameter decode with optional tone BER gate.
+ * @brief Internal AMBE 2450 frame classification and parameter decode.
  *
  * @param ambe_d  Demodulated AMBE parameter bits (49).
- * @param cur_mp  Output: current frame parameters.
- * @param prev_mp Input: previous frame parameters (for prediction).
+ * @param cur_mp  Output: current frame parameters (voice and silence frames).
+ * @param prev_mp In/out: last valid voice frame (prediction history).
  * @return An MBE_AMBE2450_FRAME_* value, or a negative MBE_STATUS_* code.
  */
 static int
