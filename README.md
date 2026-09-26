@@ -291,10 +291,10 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum), replacing earlier JMBE parity:
   - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, eqs. 26 and 43–44). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
-  - **Repeats** (§5.6): erasure (b0 120–123), or corrected C0 errors ≥ 4, or C0 ≥ 2 with ≥ 6 total. These criteria apply to every frame, before tone classification. A repeat replays the last synthesized frame without re-enhancing it and leaves the history untouched.
-  - **Tones** (§7.3): an invalid tone index is an erasure; tone ID 255 is a zero-amplitude tone.
+  - **Repeats** (§5.6): erasure (b0 120–123), or corrected C0 errors ≥ 4, or C0 ≥ 2 with ≥ 6 total. These criteria apply to every frame, before tone classification. A repeat replays the last synthesized frame unchanged (no re-enhancement or adaptive smoothing) and leaves the history untouched.
+  - **Tones** (§7.3): an invalid tone index is an erasure (flagged `ERASURE` and `TONE`); tone ID 255 is a zero-amplitude tone.
   - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
-  - **Mute recovery**: the first frame after a mute fades in instead of overlapping the pre-mute frame. The spec doesn't cover this.
+  - **Mute recovery**: a mute also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping pre-mute speech, even when tone frames come between, and a repeat right after a mute replays silence. The spec doesn't cover this.
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 

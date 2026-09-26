@@ -795,62 +795,47 @@ ambe2450_load_repeat_model(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced)
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
 }
 
-/** 5.7: apply the repeat update, bypass synthesis and output the mute noise. */
+/**
+ * 5.7: apply the repeat update, bypass synthesis and output the mute noise.
+ *
+ * Not in TIA-102.BABA-1: the last synthesized frame is then silenced (its
+ * amplitudes and unvoiced overlap zeroed; phase and noise state kept). The
+ * output was noise, so whatever is synthesized next, after any number of
+ * tone frames, fades in from silence instead of overlapping speech from
+ * before the mute, and a repeat after a mute replays silence. JMBE resets to
+ * init defaults instead.
+ */
 static void
-ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
+ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
     mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
+    memset(prev_mp_enhanced->Ml, 0, sizeof(prev_mp_enhanced->Ml));
+    memset(prev_mp_enhanced->previousUw, 0, sizeof(prev_mp_enhanced->previousUw));
 }
 
-/**
- * True when the previous frame was muted (5.7). The per-frame decoder values
- * are committed to prev_mp on every frame, so this is derivable at frame start.
- */
-static int
-ambe2450_previous_frame_muted(const mbe_parms* prev_mp) {
-    return mbe_isMaxFrameRepeat(prev_mp) || mbe_requiresMuting(prev_mp);
-}
-
-/**
- * Synthesize cur_mp against prev_mp_enhanced, then make it the last synthesized frame.
- *
- * Not in TIA-102.BABA-1: on the first frame after a mute, the spec's
- * procedure would overlap the last frame synthesized before the mute (up to
- * seconds old) into the new frame; JMBE resets to init defaults instead. Fade
- * in from silence: synthesize against a copy of that frame with its
- * amplitudes and unvoiced overlap zeroed, keeping its phase and noise state.
- */
+/** Enhance and synthesize a decoded frame, then make it the last synthesized frame. */
 static void
-ambe2450_synthesize(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, int enhance, int resumed) {
-    mbe_parms faded;
-    mbe_parms* synth_prev = prev_mp_enhanced;
-
-    if (resumed) {
-        faded = *prev_mp_enhanced;
-        memset(faded.Ml, 0, sizeof(faded.Ml));
-        memset(faded.previousUw, 0, sizeof(faded.previousUw));
-        synth_prev = &faded;
-    }
-    if (enhance) {
-        float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, synth_prev, pre_enh_rm0);
-    } else {
-        mbe_synthesizeSpeechf(aout_buf, cur_mp, synth_prev);
-    }
+ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
+    float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
-/** 5.6 steps 2-3: synthesize the repeated model without re-enhancing it, or mute (5.7). */
+/**
+ * 5.6 steps 2-3: synthesize the repeated model as-is (no re-enhancement and
+ * no adaptive smoothing, which could change its voicing and amplitudes), or
+ * mute (5.7).
+ */
 static void
-ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced,
-                int resumed) {
+ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     if (mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp)) {
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
         return;
     }
     ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
-    ambe2450_synthesize(aout_buf, cur_mp, prev_mp_enhanced, 0, resumed);
+    mbe_synthesizeRepeatedSpeechf(aout_buf, cur_mp, prev_mp_enhanced);
+    mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
 /**
@@ -861,11 +846,10 @@ ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, 
 static void
 ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned extra_flags, mbe_parms* cur_mp,
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    const int resumed = ambe2450_previous_frame_muted(prev_mp);
     mbe_result_set_flag(result, extra_flags | MBE_PROCESS_FLAG_REPEAT);
     cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
     ambe2450_commit_scalars(prev_mp, cur_mp);
-    ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced, resumed);
+    ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced);
 }
 
 /**
@@ -878,7 +862,6 @@ ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned e
 static void
 ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence, mbe_parms* cur_mp, mbe_parms* prev_mp,
                        mbe_parms* prev_mp_enhanced) {
-    const int resumed = ambe2450_previous_frame_muted(prev_mp);
     cur_mp->repeatCount = 0;
     if (silence) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_SILENCE);
@@ -890,7 +873,7 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
         return;
     }
-    ambe2450_synthesize(aout_buf, cur_mp, prev_mp_enhanced, 1, resumed);
+    ambe2450_synthesize_decoded(aout_buf, cur_mp, prev_mp_enhanced);
 }
 
 /**
@@ -905,7 +888,8 @@ ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char am
     const int zero_amplitude = (tone_id == AMBE2450_TONE_ID_ZERO_AMPLITUDE);
 
     if (!zero_amplitude && !mbe_tone_id_is_valid(tone_id)) {
-        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_TONE, cur_mp, prev_mp, prev_mp_enhanced);
+        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE, cur_mp, prev_mp,
+                                 prev_mp_enhanced);
         return;
     }
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);

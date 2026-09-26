@@ -141,6 +141,15 @@ parms_equal(const mbe_parms* a, const mbe_parms* b) {
     return ints_equal && floats_equal && arrays_equal;
 }
 
+/** After a mute, the last synthesized frame is silenced: amplitudes and overlap zeroed, the rest kept. */
+static int
+enhanced_muted_from(const mbe_parms* after, const mbe_parms* before) {
+    mbe_parms expected = *before;
+    memset(expected.Ml, 0, sizeof(expected.Ml));
+    memset(expected.previousUw, 0, sizeof(expected.previousUw));
+    return parms_equal(after, &expected);
+}
+
 struct stream {
     mbe_parms cur;
     mbe_parms prev;
@@ -235,7 +244,7 @@ test_erasure_run_repeats_then_mutes(void) {
         assert(history_equal(&s.prev, &history));
         if (muted) {
             assert_mute_noise(s.out);
-            assert(parms_equal(&s.prev_enh, &enh_before));
+            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
         } else {
             /* A repeat replays the loud voice model, not comfort noise. */
             assert(peak_abs(s.out) > 5.0f);
@@ -300,7 +309,7 @@ test_error_rate_mute_boundary(void) {
         assert(history_equal(&s.prev, &dec_cur));
         if (n == 21) {
             assert_mute_noise(s.out);
-            assert(parms_equal(&s.prev_enh, &enh_before));
+            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
         }
     }
 }
@@ -350,6 +359,7 @@ test_invalid_tone_is_erasure(void) {
     pack_tone(tone, 4);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE));
     assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
     assert(s.cur.repeatCount == 1);
@@ -622,8 +632,87 @@ test_fade_in_after_error_rate_mute(void) {
     (void)steady;
 }
 
+/*
+ * 5.6 step 3: a repeat synthesizes the copied model unchanged. Smoothing it
+ * again changed its voicing on this sequence before the fix; this frame's
+ * error accounting and noise state must still advance.
+ */
+static void
+test_repeat_preserves_model(void) {
+    static const int voice[9] = {60, 6, 20, 200, 90, 17, 11, 3, 6};
+    struct stream s;
+    stream_init(&s);
+    for (int i = 0; i < 8; ++i) {
+        stream_frame_b(&s, voice, 0, 0);
+    }
+    const mbe_parms model = s.prev_enh;
+
+    for (int r = 0; r < 2; ++r) {
+        const float seed_before = s.prev_enh.noiseSeed;
+        const float er_before = s.prev.errorRate;
+        stream_frame_b(&s, voice, 4, 3);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
+        assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        assert(s.cur.L == model.L);
+        assert(float_bits_equal(s.cur.w0, model.w0));
+        for (int l = 1; l <= model.L; ++l) {
+            assert(s.cur.Vl[l] == model.Vl[l]);
+            assert(float_bits_equal(s.cur.Ml[l], model.Ml[l]));
+        }
+        assert(fabsf(s.prev.errorRate - ((0.95f * er_before) + (0.001064f * 7.0f))) < 1e-7f);
+        assert(!float_bits_equal(s.prev_enh.noiseSeed, seed_before));
+        (void)er_before;
+        (void)seed_before;
+    }
+}
+
+/*
+ * A tone between a mute and the next speech frame must not restore the
+ * pre-mute speech: the mute silenced the last synthesized frame, so voice
+ * after the tone still fades in, and a repeat after it replays silence.
+ */
+static void
+test_fade_in_after_mute_then_tone(void) {
+    static const int tone_ids[2] = {255, 7};
+    const double steady = steady_head_rms();
+    char erasure[49];
+    char voice[49];
+    char tone[49];
+    pack_b(erasure, k_erasure);
+    pack_b(voice, k_voice_next);
+
+    for (int k = 0; k < 3; ++k) {
+        struct stream s;
+        stream_init(&s);
+        for (int i = 0; i < 8; ++i) {
+            stream_frame(&s, voice, 0, 0);
+        }
+        for (int i = 0; i < 4; ++i) {
+            stream_frame(&s, erasure, 0, 0);
+        }
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        pack_tone(tone, tone_ids[k % 2]);
+        stream_frame(&s, tone, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+        assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        if (k < 2) {
+            stream_frame(&s, voice, 0, 0);
+            assert(float_bits_equal(s.out[0], 0.0f));
+            assert(head_rms(s.out) < 0.5 * steady);
+        } else {
+            stream_frame(&s, voice, 4, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
+            assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+            assert(peak_abs(s.out) < 1.0f);
+        }
+    }
+    (void)steady;
+}
+
 int
 main(void) {
+    test_repeat_preserves_model();
+    test_fade_in_after_mute_then_tone();
     test_fade_in_after_repeat_mute();
     test_fade_in_after_error_rate_mute();
     test_dvsi_silence_vector();

@@ -81,6 +81,18 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0);
 
 /**
+ * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.
+ *
+ * TIA-102.BABA-1 5.6 synthesizes the repeated model parameters unchanged;
+ * smoothing them again could change their voicing and amplitudes.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param cur_mp Repeated (already enhanced) frame parameters.
+ * @param prev_mp Previous enhanced frame parameters.
+ */
+void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp);
+
+/**
  * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7
  * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
  */

@@ -1064,8 +1064,15 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
     }
 }
 
+/* How the synthesis core applies adaptive smoothing (Algorithms #111-116). */
+enum mbe_speech_smoothing {
+    MBE_SMOOTHING_FROM_MODEL,  /* derive the pre-enhancement energy from cur_mp */
+    MBE_SMOOTHING_PRE_ENH_RM0, /* the caller captured the pre-enhancement energy */
+    MBE_SMOOTHING_NONE,        /* frame repeat: synthesize the model unchanged */
+};
+
 static void
-mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int has_pre_enh_rm0,
+mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
                          float pre_enh_rm0) {
 
     const int N = 160;
@@ -1082,9 +1089,9 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* Apply adaptive smoothing (Algorithms #111-116) before muting checks.
      * JMBE computes/update smoothing state during parameter preparation even
      * for frames that are subsequently muted. */
-    if (has_pre_enh_rm0) {
+    if (smoothing == MBE_SMOOTHING_PRE_ENH_RM0) {
         mbe_applyAdaptiveSmoothingWithRm0(cur_mp, prev_mp, pre_enh_rm0);
-    } else {
+    } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
 
@@ -1136,12 +1143,17 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 
 void
 mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, 1, rm0);
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0);
+}
+
+void
+mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, 0, 0.0f);
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f);
 }
 
 /**
