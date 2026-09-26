@@ -23,6 +23,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_bitpack.h"
 #include "mbe_compiler.h"
+#include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
@@ -822,8 +823,9 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
         /* JMBE IMBE headroom behavior: reset to default model after prolonged repeats. */
         imbe_reset_headroom_defaults(cur_mp);
     } else {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeatCount++;
+        /* Repeat the previous model; this frame's error accounting and noise state continue. */
+        mbe_repeat_load_model(cur_mp, prev_mp);
+        cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
     }
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
 }

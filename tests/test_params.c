@@ -464,6 +464,48 @@ main(void) {
         assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
     }
 
+    // Frame repeats keep this frame's error accounting and continue the noise
+    // sequence (IMBE and D-STAR). Copying the stale previous parameter set
+    // froze the error-rate recursion and replayed the previous frame's noise.
+    {
+        char imbe_d[88];
+        char ambe_d[49];
+        float out[160];
+        mbe_process_result result;
+        mbe_parms cur, prev, enh;
+
+        set_bits_zero(imbe_d, 88);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int n = 0; n < 2; ++n) {
+            init_result_total(&result, 1);
+            assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        }
+        float er_before = prev.errorRate;
+        float seed_before = enh.noiseSeed;
+        init_result_total(&result, 7); /* Dataf fallback: total > 5 repeats */
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        assert(result_has_marker(&result, 'R'));
+        assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.000365f * 7.0f))) < 1e-7f);
+        assert(cur.errorCountTotal == 7);
+        assert(float_bits_differ(enh.noiseSeed, seed_before));
+
+        set_bits_zero(ambe_d, 49);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int n = 0; n < 2; ++n) {
+            init_result_total(&result, 1);
+            assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        }
+        er_before = prev.errorRate;
+        seed_before = enh.noiseSeed;
+        init_result_total(&result, 4); /* D-STAR: total > 3 repeats */
+        assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        assert(result_has_marker(&result, 'R'));
+        assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.001064f * 4.0f))) < 1e-7f);
+        assert(cur.errorCountTotal == 4);
+        assert(float_bits_differ(enh.noiseSeed, seed_before));
+        (void)er_before;
+    }
+
     // AMBE C0 Golay24 parity behavior: isolated parity-bit error is corrected
     {
         char ambe_fr[4][24] = {{0}};

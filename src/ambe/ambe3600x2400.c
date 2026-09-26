@@ -23,6 +23,7 @@
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
@@ -692,8 +693,9 @@ ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_proce
         return;
     }
     if (total_errors > 3) {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeatCount++;
+        /* Repeat the previous model; this frame's error accounting and noise state continue. */
+        mbe_repeat_load_model(cur_mp, prev_mp);
+        cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
         return;
     }

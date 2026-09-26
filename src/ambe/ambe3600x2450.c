@@ -15,7 +15,6 @@
  */
 
 #include <math.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -23,6 +22,7 @@
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
 #include "mbe_validation.h"
@@ -776,39 +776,6 @@ ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
 #define AMBE2450_MUTE_NOISE_AMPLITUDE   5.0f /* 5.7: uniform in [-5, 5] on s(n) */
 #define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255  /* Table 9 / 7.3 */
 
-/** Per-frame decoder values and tone oscillator phases that survive a repeat. */
-struct ambe2450_frame_scalars {
-    float errorRate;
-    int errorCountTotal;
-    int errorCount4;
-    int repeatCount;
-    float mutingThreshold;
-    int swn;
-    uint32_t tonePhase;
-};
-
-static void
-ambe2450_save_scalars(struct ambe2450_frame_scalars* s, const mbe_parms* mp) {
-    s->errorRate = mp->errorRate;
-    s->errorCountTotal = mp->errorCountTotal;
-    s->errorCount4 = mp->errorCount4;
-    s->repeatCount = mp->repeatCount;
-    s->mutingThreshold = mp->mutingThreshold;
-    s->swn = mp->swn;
-    s->tonePhase = mp->tonePhase;
-}
-
-static void
-ambe2450_apply_scalars(mbe_parms* mp, const struct ambe2450_frame_scalars* s) {
-    mp->errorRate = s->errorRate;
-    mp->errorCountTotal = s->errorCountTotal;
-    mp->errorCount4 = s->errorCount4;
-    mp->repeatCount = s->repeatCount;
-    mp->mutingThreshold = s->mutingThreshold;
-    mp->swn = s->swn;
-    mp->tonePhase = s->tonePhase;
-}
-
 /** Advance prev_mp's per-frame decoder values without touching its prediction history. */
 static void
 ambe2450_commit_scalars(mbe_parms* prev_mp, const mbe_parms* cur_mp) {
@@ -819,26 +786,14 @@ ambe2450_commit_scalars(mbe_parms* prev_mp, const mbe_parms* cur_mp) {
     prev_mp->mutingThreshold = cur_mp->mutingThreshold;
 }
 
-/** Consecutive invalid-frame count, clamped so caller-owned state cannot overflow. */
-static int
-ambe2450_next_invalid_count(int prev_count) {
-    if (prev_count < 0) {
-        return 1;
-    }
-    return (prev_count >= MBE_MAX_FRAME_REPEATS) ? MBE_MAX_FRAME_REPEATS : prev_count + 1;
-}
-
 /**
  * Load the 5.6 repeat model: the previously synthesized frame, enhanced
- * amplitudes included, so synthesis continues its noise, WOLA and phase state.
- * This frame's decoder values and tone phases are kept.
+ * amplitudes included, so synthesis continues its WOLA and phase state.
+ * This frame's decoder values, tone phases and noise state are kept.
  */
 static void
 ambe2450_load_repeat_model(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
-    struct ambe2450_frame_scalars s;
-    ambe2450_save_scalars(&s, cur_mp);
-    mbe_moveMbeParms(prev_mp_enhanced, cur_mp);
-    ambe2450_apply_scalars(cur_mp, &s);
+    mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
 }
 
 /** 5.7: apply the repeat update, bypass synthesis and output the mute noise. */
@@ -909,7 +864,7 @@ ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned e
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     const int resumed = ambe2450_previous_frame_muted(prev_mp);
     mbe_result_set_flag(result, extra_flags | MBE_PROCESS_FLAG_REPEAT);
-    cur_mp->repeatCount = ambe2450_next_invalid_count(prev_mp->repeatCount);
+    cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
     ambe2450_commit_scalars(prev_mp, cur_mp);
     ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced, resumed);
 }
