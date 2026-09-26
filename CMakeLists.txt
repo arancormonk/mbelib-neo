@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.1.0 LANGUAGES C)
+project(mbelib-neo VERSION 2.2.0 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -789,7 +789,7 @@ if(MBELIB_BUILD_TESTS)
     _mbelib_apply_hardening(gen_golden)
     target_include_directories(
         gen_golden
-        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/tests"
     )
     add_executable(test_api tests/test_api.c)
     target_link_libraries(test_api PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -996,6 +996,27 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_floattoshort_parity COMMAND test_floattoshort_parity)
 
+    add_executable(test_ambe2450_frame_types tests/test_ambe2450_frame_types.c)
+    target_link_libraries(
+        test_ambe2450_frame_types
+        PRIVATE ${MBELIB_EXEC_LINK_TGT}
+    )
+    target_include_directories(
+        test_ambe2450_frame_types
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_ambe2450_frame_types PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(
+            test_ambe2450_frame_types
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
+    endif()
+    add_test(NAME test_ambe2450_frame_types COMMAND test_ambe2450_frame_types)
+
     add_executable(test_golden_pcm tests/test_golden_pcm.c)
     target_link_libraries(test_golden_pcm PRIVATE ${MBELIB_EXEC_LINK_TGT})
     target_include_directories(
@@ -1189,6 +1210,7 @@ if(MBELIB_BUILD_TESTS)
         test_frame_paths
         test_input_validation
         test_floattoshort_parity
+        test_ambe2450_frame_types
         test_golden_pcm
         test_simd_arch_detection_x64
         test_simd_arch_detection_arm64ec

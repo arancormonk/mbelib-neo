@@ -106,6 +106,19 @@ mbe_isMaxFrameRepeat(const mbe_parms* mp) {
     return mp->repeatCount >= MBE_MAX_FRAME_REPEATS;
 }
 
+void
+mbe_synthesizeUniformNoisef(float* aout_buf, float amplitude) {
+    if (MBE_UNLIKELY(!aout_buf)) {
+        return;
+    }
+
+    for (int i = 0; i < 160; i++) {
+        /* JMBE parity: use Java Random-like 24-bit float generation. */
+        float u = ((float)mbe_java_random_next_bits(24) / 16777216.0f) * 2.0f - 1.0f;
+        aout_buf[i] = u * amplitude;
+    }
+}
+
 /**
  * @brief Generate comfort noise for muted frames (float version).
  *
@@ -115,19 +128,9 @@ mbe_isMaxFrameRepeat(const mbe_parms* mp) {
  */
 void
 mbe_synthesizeComfortNoisef(float* aout_buf) {
-    if (MBE_UNLIKELY(!aout_buf)) {
-        return;
-    }
-
     /* JMBE muted-noise model: uniform white noise in [-1, +1] with gain 0.003.
      * Translate to this library's float-domain scale (short path multiplies by 7). */
-    const float gain = (0.003f * 32767.0f) / 7.0f;
-
-    for (int i = 0; i < 160; i++) {
-        /* JMBE parity: use Java Random-like 24-bit float generation. */
-        float u = ((float)mbe_java_random_next_bits(24) / 16777216.0f) * 2.0f - 1.0f;
-        aout_buf[i] = u * gain;
-    }
+    mbe_synthesizeUniformNoisef(aout_buf, (0.003f * 32767.0f) / 7.0f);
 }
 
 /**

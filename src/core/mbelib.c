@@ -883,10 +883,22 @@ mbe_synthesizeSilence(short* aout_buf) {
 #define MBE_PHASE_EXTRAP_SLOPE    0.72f
 #define MBE_PHASE_MIN_MAGNITUDE   1e-6f
 
+/* IMBE state (any non-AMBE muting threshold) mutes on the error rate. */
+static int
+mbe_uses_imbe_muting(const mbe_parms* cur_mp) {
+    return fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f;
+}
+
+/*
+ * IMBE mutes here on max repeats or the error rate; D-STAR mutes on max
+ * repeats. The caller's codec path picks the noise. The AMBE 3600x2450 process
+ * path decides repeats and muting itself (TIA-102.BABA-1 5.6/5.7) and only
+ * calls synthesis with repeatCount below MBE_MAX_FRAME_REPEATS, so this check
+ * never fires for it.
+ */
 static int
 mbe_should_mute_speech(const mbe_parms* cur_mp) {
-    int mute_on_error_rate = (fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f);
-    return mbe_isMaxFrameRepeat(cur_mp) || (mute_on_error_rate && mbe_requiresMuting(cur_mp));
+    return mbe_isMaxFrameRepeat(cur_mp) || (mbe_uses_imbe_muting(cur_mp) && mbe_requiresMuting(cur_mp));
 }
 
 static void
@@ -1035,8 +1047,11 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
     for (int l = 1; l <= maxl; l++) {
         float cw0l = cw0 * (float)l;
         float pw0l = pw0 * (float)l;
-        int cur_voiced = (cur_mp->Vl[l] == 1);
-        int prev_voiced = (prev_mp->Vl[l] == 1);
+        /* A harmonic at or above Nyquist cannot be represented at 8 kHz and
+         * would alias back into the band, so it is not rendered. Decoded
+         * models always satisfy L * w0 < pi; this guards caller-supplied ones. */
+        int cur_voiced = (cur_mp->Vl[l] == 1) && (cw0l < (float)M_PI);
+        int prev_voiced = (prev_mp->Vl[l] == 1) && (pw0l < (float)M_PI);
 
         if (cur_voiced || prev_voiced) {
             int use_interpolation = (l < 8) && cur_voiced && prev_voiced && (fabsf(cw0 - pw0) < (0.1f * cw0));
@@ -1049,9 +1064,16 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
     }
 }
 
+/* How the synthesis core applies adaptive smoothing (Algorithms #111-116). */
+enum mbe_speech_smoothing {
+    MBE_SMOOTHING_FROM_MODEL,  /* derive the pre-enhancement energy from cur_mp */
+    MBE_SMOOTHING_PRE_ENH_RM0, /* the caller captured the pre-enhancement energy */
+    MBE_SMOOTHING_NONE,        /* frame repeat: synthesize the model unchanged */
+};
+
 static void
-mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, int has_pre_enh_rm0,
-                         float pre_enh_rm0) {
+mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
+                         float pre_enh_rm0, enum mbe_mute_noise mute_noise) {
 
     const int N = 160;
 
@@ -1067,9 +1089,9 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* Apply adaptive smoothing (Algorithms #111-116) before muting checks.
      * JMBE computes/update smoothing state during parameter preparation even
      * for frames that are subsequently muted. */
-    if (has_pre_enh_rm0) {
+    if (smoothing == MBE_SMOOTHING_PRE_ENH_RM0) {
         mbe_applyAdaptiveSmoothingWithRm0(cur_mp, prev_mp, pre_enh_rm0);
-    } else {
+    } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
 
@@ -1077,8 +1099,14 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
      * - JMBE IMBE path mutes on max repeats OR error-rate threshold.
      * - JMBE AMBE path mutes on max repeats only (error-rate muting is not applied in AMBE synth path). */
     if (mbe_should_mute_speech(cur_mp)) {
-        /* Muted frames output comfort noise while preserving model progression. */
-        mbe_synthesizeComfortNoisef(aout_buf);
+        /* Muted frames output noise while preserving model progression: P25
+         * IMBE uses the TIA-102.BABA 7.8 level ([-5, 5] on s(n)); D-STAR,
+         * ProVoice and direct callers keep JMBE's comfort-noise level. */
+        if (mute_noise == MBE_MUTE_NOISE_SPEC) {
+            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
+        } else {
+            mbe_synthesizeComfortNoisef(aout_buf);
+        }
         return;
     }
 
@@ -1114,13 +1142,20 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 }
 
 void
-mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, 1, rm0);
+mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                   enum mbe_mute_noise mute_noise) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise);
+}
+
+void
+mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    /* AMBE 3600x2450 repeat path, which never mutes inside synthesis. */
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, 0, 0.0f);
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, MBE_MUTE_NOISE_COMFORT);
 }
 
 /**

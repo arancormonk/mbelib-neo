@@ -42,7 +42,7 @@ typedef struct {
     const char* input_api;
     size_t nonfinite, clips;
     double peak;
-    size_t tone, erasure, repeat, mute;
+    size_t tone, erasure, repeat, mute, silence;
     size_t c0, protected_errors, c4, total;
 } DecodeStats;
 
@@ -371,6 +371,7 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
         stats->erasure += (result.flags & MBE_PROCESS_FLAG_ERASURE) != 0;
         stats->repeat += (result.flags & MBE_PROCESS_FLAG_REPEAT) != 0;
         stats->mute += (result.flags & MBE_PROCESS_FLAG_MUTE) != 0;
+        stats->silence += (result.flags & MBE_PROCESS_FLAG_SILENCE) != 0;
         stats->c0 += (size_t)result.c0_errors;
         stats->protected_errors += (size_t)result.protected_errors;
         stats->c4 += (size_t)result.c4_errors;
@@ -858,6 +859,7 @@ main(int argc, char** argv) {
     metric_valid("erasure_frames", (double)stats.erasure, !pcm);
     metric_valid("repeat_frames", (double)stats.repeat, !pcm);
     metric_valid("mute_frames", (double)stats.mute, !pcm);
+    metric_valid("silence_frames", (double)stats.silence, !pcm);
     metric_valid("c0_errors", (double)stats.c0, !pcm);
     metric_valid("protected_errors", (double)stats.protected_errors, !pcm);
     metric_valid("c4_errors", (double)stats.c4, !pcm);

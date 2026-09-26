@@ -368,7 +368,9 @@ assert_decoded_fixture(enum fixture_mode mode, const char* frame, const char* ex
     assert(hard.c0_errors == c0);
     assert(hard.protected_errors == protected);
     assert(hard.c4_errors == c4);
-    assert(hard.flags == (MBE_PROCESS_FLAG_C0_VALID | (mode <= IMBE7100 ? MBE_PROCESS_FLAG_C4_VALID : 0u)));
+    assert(hard.flags
+           == (MBE_PROCESS_FLAG_C0_VALID | (mode <= IMBE7100 ? MBE_PROCESS_FLAG_C4_VALID : 0u)
+               | (mode == IMBE7100 ? MBE_PROCESS_FLAG_PROVOICE : 0u)));
     assert(memcmp(data, expected, fixture_modes[mode].data_count) == 0);
     ret = decode_fixture(mode, frame, data, &soft, 1);
     assert_result_total(&soft, ret);
@@ -453,6 +455,49 @@ test_fixture_ecc(void) {
 }
 
 /*
+ * Route the AMBE 2450 sequence through TIA-102.BABA-1 frame types so every API
+ * path is compared across them: frames 2-3 are the standard DVSI silence
+ * vector (synthesized, history frozen), so frame 4 is voice decoded against
+ * frame 1's history; frame 6 is an erasure (b0 = 121, u0 tone bits clear,
+ * repeated), so frame 7 is voice decoded against frame 5's history.
+ */
+static void
+override_parameters(enum fixture_mode mode, int n, char* parameters) {
+    static const unsigned char dvsi_silence[7] = {0xF8, 0x01, 0xA9, 0x9F, 0x8C, 0xE0, 0x80};
+    if (mode != AMBE2450) {
+        return;
+    }
+    if (n == 2 || n == 3) {
+        for (int i = 0; i < 49; ++i) {
+            parameters[i] = (char)((dvsi_silence[i / 8] >> (7 - (i % 8))) & 1);
+        }
+    } else if (n == 6) {
+        memset(parameters, 0, 49);
+        parameters[0] = 1; /* b0 = 1111001b = 121 */
+        parameters[1] = 1;
+        parameters[2] = 1;
+        parameters[3] = 1;
+        parameters[39] = 1;
+    }
+}
+
+/* The overridden AMBE 2450 frames must actually take the silence and erasure paths. */
+static void
+assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* result) {
+    if (mode != AMBE2450) {
+        return;
+    }
+    if (n == 2 || n == 3) {
+        assert((result->flags & MBE_PROCESS_FLAG_SILENCE) != 0u);
+    } else if (n == 6) {
+        assert((result->flags & (MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT))
+               == (MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
+    } else {
+        assert((result->flags & (MBE_PROCESS_FLAG_SILENCE | MBE_PROCESS_FLAG_REPEAT)) == 0u);
+    }
+}
+
+/*
  * Run each API over the same sequence, not just a cold first frame. The first
  * three frames establish synthesis history; later frames exercise corrected
  * C0/protected (and IMBE C4) context without comparing noisy modes to each other.
@@ -468,6 +513,7 @@ test_fixture_ecc(void) {
         for (int n = 0; n < 8; ++n) {                                                                                  \
             tagged_data(parameters[n], fixture_modes[MODE].data_count, (unsigned)n);                                   \
             memset(parameters[n], 0, 6); /* Keep the fundamental in the ordinary speech range. */                      \
+            override_parameters(MODE, n, parameters[n]);                                                               \
             assert(mbe_quality_frame_from_data(fixture_modes[MODE].name, parameters[n],                                \
                                                fixture_modes[MODE].data_count, frames[n], sizeof(frames[n]))           \
                    == (int)fixture_modes[MODE].frame_count);                                                           \
@@ -509,6 +555,7 @@ test_fixture_ecc(void) {
                         break;                                                                                         \
                 }                                                                                                      \
                 assert_result_total(&result, ret);                                                                     \
+                assert_override_flags(MODE, n, &result);                                                               \
                 assert(memcmp(decoded, parameters[n], fixture_modes[MODE].data_count) == 0);                           \
                 if ((path & 1) == 0) {                                                                                 \
                     assert_float_pcm_sane(pcm);                                                                        \
@@ -581,6 +628,9 @@ test_imbe_fundamental_roundtrip(void) {
                                                   &prev, &enh)
                    == 0);
             assert(memcmp(decoded, data, sizeof(data)) == 0);
+            /* Only the ProVoice context flag tells the two results apart. */
+            assert((result7100.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+            result7100.flags &= ~MBE_PROCESS_FLAG_PROVOICE;
             assert_same_result(&result7200, &result7100, 0);
             assert_float_pcm_sane(pcm7200);
             assert_float_pcm_sane(pcm7100);

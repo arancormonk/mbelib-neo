@@ -71,14 +71,53 @@ void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_
  */
 float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
 
+/** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
+enum mbe_mute_noise {
+    MBE_MUTE_NOISE_COMFORT, /**< JMBE comfort noise: D-STAR, ProVoice and the public synthesis API. */
+    MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE and AMBE 3600x2450 paths. */
+};
+
 /**
  * @brief Synthesize speech using a captured pre-enhancement RM0 value.
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp Current frame parameters.
  * @param prev_mp Previous enhanced frame parameters.
  * @param rm0 Sum of squared pre-enhancement amplitudes.
+ * @param mute_noise Noise output if the frame is muted.
  */
-void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0);
+void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                        enum mbe_mute_noise mute_noise);
+
+/**
+ * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.
+ *
+ * TIA-102.BABA-1 5.6 synthesizes the repeated model parameters unchanged;
+ * smoothing them again could change their voicing and amplitudes.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param cur_mp Repeated (already enhanced) frame parameters.
+ * @param prev_mp Previous enhanced frame parameters.
+ */
+void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp);
+
+/**
+ * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7
+ * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
+ */
+#define MBE_SPEC_MUTE_NOISE_AMPLITUDE 5.0f
+
+/**
+ * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].
+ *
+ * Draws from the same thread-local Java Random-compatible generator as
+ * mbe_synthesizeComfortNoisef(), which delegates here with the JMBE gain.
+ * The float domain is the synthesized-speech scale s(n) of TIA-102.BABA
+ * (int16 output is 7x this), so amplitude 5 is the spec's [-5, 5] mute noise.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param amplitude Peak amplitude in the library float domain.
+ */
+void mbe_synthesizeUniformNoisef(float* aout_buf, float amplitude);
 
 /**
  * @brief Seed the comfort-noise RNG used by mbe_synthesizeComfortNoisef().

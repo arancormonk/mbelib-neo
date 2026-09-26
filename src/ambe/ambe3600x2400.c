@@ -23,6 +23,7 @@
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
@@ -197,9 +198,9 @@ ambe2400_decode_tone_index(const char* ambe_d) {
 
 static void
 ambe2400_set_silence_model(mbe_parms* cur_mp, int* L) {
-    cur_mp->w0 = ((float)2 * M_PI) / (float)32;
-    *L = 14;
-    cur_mp->L = 14;
+    cur_mp->w0 = MBE_AMBE_SILENCE_W0;
+    *L = MBE_AMBE_SILENCE_L;
+    cur_mp->L = MBE_AMBE_SILENCE_L;
     for (int l = 1; l <= *L; l++) {
         cur_mp->Vl[l] = 0;
     }
@@ -656,7 +657,7 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
     *c0_errors = ((result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u) ? result->c0_errors : 0;
     mbe_result_prepare_synthesis(result, *total_errors);
 
-    /* AMBE family uses W124 defaults in JMBE; normalize generic init state. */
+    /* Normalize generic (IMBE) init state to the initial AMBE model. */
     mbe_ensureAmbeDefaults_common(cur_mp, prev_mp, prev_mp_enhanced);
 
     /* Set AMBE-specific muting threshold (9.6% vs IMBE's 8.75%). */
@@ -692,8 +693,9 @@ ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_proce
         return;
     }
     if (total_errors > 3) {
-        mbe_useLastMbeParms(cur_mp, prev_mp);
-        cur_mp->repeatCount++;
+        /* Repeat the previous model; this frame's error accounting and noise state continue. */
+        mbe_repeat_load_model(cur_mp, prev_mp);
+        cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
         return;
     }
@@ -707,7 +709,7 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
     if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
         mbe_moveMbeParms(cur_mp, prev_mp);
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0);
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         return;
     }

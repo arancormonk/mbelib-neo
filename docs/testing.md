@@ -12,7 +12,8 @@ The CTest suite includes:
 - AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread (`test_ambe2400_encoder`)
 - Encoder context/FFT allocation failures clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
-- parameter and synthesis behavior checks
+- parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
+- AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)
 - float-to-int16 conversion parity checks
 - golden PCM hash regression checks
 - SIMD architecture detection checks
@@ -277,8 +278,9 @@ Schema-2 metrics preserve the original supported formulas:
   even under fast-math and the existing `(32767 * 0.95) / 7` threshold. They do
   not reveal inaccessible pre-limiter peaks. PCM-input mode reports them null.
   `pcm_peak`, `pcm_rail_samples` (`abs(sample) >= 31128`), and
-  `pcm_max_rail_run` are measured before normalization. Tone/erasure/repeat/mute
-  frame counts and C0/protected/C4/total error sums retain process-result context.
+  `pcm_max_rail_run` are measured before normalization. Tone/erasure/repeat/mute/
+  silence frame counts and C0/protected/C4/total error sums retain process-result
+  context; clips with any of them are not clean speech for the checkpoint gate.
 
 ### Held-out speech and fixed operating points
 

@@ -164,6 +164,19 @@ typedef struct mbe_soft_bit {
 #define MBE_PROCESS_FLAG_REPEAT     0x0040u
 /** Processing/result flag: output was muted/comfort-noise substituted. */
 #define MBE_PROCESS_FLAG_MUTE       0x0080u
+/**
+ * Processing/result flag: an AMBE 3600x2450 silence frame (b0 124/125) was
+ * decoded and synthesized. Silence frames do not update the prediction
+ * history (TIA-102.BABA-1 4.3). Not rendered by mbe_formatProcessResult().
+ */
+#define MBE_PROCESS_FLAG_SILENCE    0x0100u
+/**
+ * Processing/result flag (context): the parameter bits come from an IMBE
+ * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
+ * data API, as for the C0/C4 context, and a muted frame gets JMBE's comfort
+ * noise instead of the TIA-102.BABA 7.8 level, as in the ProVoice frame APIs.
+ */
+#define MBE_PROCESS_FLAG_PROVOICE   0x0200u
 
 /** Status code: invalid pointer, invalid status counters, or otherwise unusable arguments. */
 #define MBE_STATUS_INVALID_ARGUMENT (-1)
@@ -499,7 +512,45 @@ MBE_API void mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]);
 MBE_API int mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]);
 /** @brief ECC and parameter packing for AMBE 3600x2450. */
 MBE_API int mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d);
-/** @brief Decode AMBE 2450 parameters. */
+/** AMBE 2450 frame type: voice frame; the only type that may be committed as prediction history. */
+#define MBE_AMBE2450_FRAME_VOICE   0
+/** AMBE 2450 frame type: silence frame (b0 124/125); decoded but never committed to prev_mp. */
+#define MBE_AMBE2450_FRAME_SILENCE 1
+/**
+ * AMBE 2450 frame type: erasure (b0 120-123, or a tone frame whose tone index is
+ * invalid or whose redundant fields disagree, TIA-102.BABA-1 7.3); a frame repeat.
+ */
+#define MBE_AMBE2450_FRAME_ERASURE 2
+/** AMBE 2450 frame type: tone frame with a usable tone index (TIA-102.BABA-1 7, 7.3). */
+#define MBE_AMBE2450_FRAME_TONE    7
+/**
+ * @brief Classify AMBE 2450 parameter bits without decoding them.
+ *
+ * A tone frame is recognised by the first six bits of u0 equal to 63
+ * (TIA-102.BABA-1 7), before b0 is read; otherwise b0 gives the type (4.1).
+ *
+ * @param ambe_d Demodulated parameter bits (49).
+ * @return An `MBE_AMBE2450_FRAME_*` value, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
+/**
+ * @brief Decode AMBE 2450 model parameters (no repeat, mute or synthesis handling).
+ *
+ * Predicts spectral amplitudes from `prev_mp`, which must hold the last valid
+ * voice frame (TIA-102.BABA-1 4.4.1 eq 26, 4.4.3 eq 43). Voice and silence
+ * frames both decode into `cur_mp` and return `MBE_AMBE2450_FRAME_VOICE`, as
+ * in 2.1. A caller managing its own state should copy `cur_mp` into `prev_mp`
+ * only when `mbe_classifyAmbe2450Frame()` reports `MBE_AMBE2450_FRAME_VOICE`;
+ * silence, erasure, tone and repeated frames must not replace the prediction
+ * history. The decode writes the eq 44-45 edge values (index 0 and above
+ * `prev_mp->L`) into `prev_mp`, which does not change its history.
+ *
+ * @param ambe_d  Demodulated parameter bits (49).
+ * @param cur_mp  Output: current frame parameters (voice and silence frames).
+ * @param prev_mp In/out: last valid voice frame (prediction history).
+ * @return `MBE_AMBE2450_FRAME_VOICE` (voice or silence), `MBE_AMBE2450_FRAME_ERASURE`
+ *         or `MBE_AMBE2450_FRAME_TONE`, or a negative `MBE_STATUS_*` code.
+ */
 MBE_API int mbe_decodeAmbe2450Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate AMBE 3600x2450 interleaved data. */
 MBE_API int mbe_demodulateAmbe3600x2450Data(char ambe_fr[4][24]);
@@ -526,9 +577,18 @@ MBE_API int mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
  * @param result   Optional in/out status context. C0 context is used when `MBE_PROCESS_FLAG_C0_VALID` is set.
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
- * @param prev_mp  In/out: previous frame parameters.
- * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
+ * @param prev_mp  In/out: last valid voice frame (prediction history) plus per-frame error/repeat state.
+ * @param prev_mp_enhanced In/out: last synthesized frame; also the frame-repeat source.
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
+ *
+ * Frame types follow TIA-102.BABA-1: silence frames are synthesized but do not
+ * update the prediction history (`MBE_PROCESS_FLAG_SILENCE`); erasures (a tone
+ * frame with an unusable index also sets `MBE_PROCESS_FLAG_TONE`) and frames
+ * meeting the 5.6 repeat criteria repeat the last synthesized frame
+ * (`MBE_PROCESS_FLAG_REPEAT`); the error rate above 0.096
+ * or a 4th consecutive invalid frame mutes (`MBE_PROCESS_FLAG_MUTE`). The three
+ * parameter sets must be distinct objects; aliased sets return
+ * `MBE_STATUS_INVALID_ARGUMENT`.
  */
 MBE_API int mbe_processAmbe2450Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -605,6 +665,9 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * @param prev_mp  In/out: previous frame parameters.
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
+ *
+ * A muted frame outputs the TIA-102.BABA 7.8 noise (P25), or JMBE's comfort
+ * noise when `result` carries `MBE_PROCESS_FLAG_PROVOICE` from a 7100x4400 decode.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -657,7 +720,8 @@ MBE_API int mbe_convertImbe7100to7200(char* imbe_d);
  * @brief Decode a hard IMBE 7100x4400 frame to converted IMBE 4400 parameter bits without synthesis.
  * @param imbe_fr Input frame as 7x24 bitplanes; not modified.
  * @param imbe_d  Output parameter bits (88), converted to the 7200x4400/IMBE 4400 layout.
- * @param result  Optional output status; receives C0/protected/C4/total errors and valid-context flags.
+ * @param result  Optional output status; receives C0/protected/C4/total errors, valid-context flags and
+ *                `MBE_PROCESS_FLAG_PROVOICE`.
  * @return Corrected error total (`c0_errors + protected_errors`).
  */
 MBE_API int mbe_decodeImbe7100x4400Frame(const char imbe_fr[7][24], char imbe_d[88], mbe_process_result* result);

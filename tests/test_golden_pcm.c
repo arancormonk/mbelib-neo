@@ -12,25 +12,38 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "golden_sequences.h"
 #include "mbe_compiler.h"
 #include "mbelib-neo/mbelib.h"
 
-/**
- * @brief Compute 32-bit FNV-1a hash of a byte buffer.
- * @param data Pointer to input buffer.
- * @param len  Buffer length in bytes.
- * @return 32-bit FNV-1a hash.
+/*
+ * Error-free voice-only AMBE sequences (tests/golden_sequences.h). Exact hashes
+ * are enforced only for x86-64 Debug builds outside MSVC: rounding differences
+ * accumulate over 24 frames, so other targets check determinism and energy.
+ * Regenerate with gen_golden (scalar: dev-debug; SIMD: Debug with
+ * -DMBELIB_ENABLE_SIMD=ON).
  */
-static uint32_t
-fnv1a32(const void* data, size_t len) {
-    const uint8_t* p = (const uint8_t*)data;
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; ++i) {
-        h ^= p[i];
-        h *= 16777619u;
-    }
-    return h;
-}
+#if defined(MBE_ARCH_X86_64) && defined(MBELIB_TEST_STRICT_FLOAT) && defined(MBELIB_TEST_STRICT_INT16)                 \
+    && !defined(_MSC_VER)
+#define GOLDEN_AMBE_STRICT 1
+#ifdef MBELIB_TEST_BUILD_SIMD
+#define GOLDEN_AMBE2450_F32 0xB026A344u
+#define GOLDEN_AMBE2450_S16 0x9F0FB174u
+#define GOLDEN_AMBE2400_F32 0x4F175D4Au
+#define GOLDEN_AMBE2400_S16 0xC4789A1Bu
+#else
+#define GOLDEN_AMBE2450_F32 0x07279174u
+#define GOLDEN_AMBE2450_S16 0xE9B94DABu
+#define GOLDEN_AMBE2400_F32 0x45F5E353u
+#define GOLDEN_AMBE2400_S16 0xE545DCECu
+#endif
+#else
+#define GOLDEN_AMBE_STRICT  0
+#define GOLDEN_AMBE2450_F32 0u
+#define GOLDEN_AMBE2450_S16 0u
+#define GOLDEN_AMBE2400_F32 0u
+#define GOLDEN_AMBE2400_S16 0u
+#endif
 
 static int
 float_bits_equal(float a, float b) {
@@ -42,23 +55,35 @@ float_bits_equal(float a, float b) {
 }
 
 /**
- * @brief Initialize deterministic synthesis parameters for testing.
- * @param cur  Output current parameter set.
- * @param prev Output previous parameter set (copy of current).
+ * @brief Check one voice-only AMBE sequence: determinism, energy, and (strict builds) exact hashes.
+ * @return 0 on success, 1 on failure.
  */
-static void
-fill_params(mbe_parms* cur, mbe_parms* prev) {
-    mbe_parms enh;
-    mbe_initMbeParms(cur, prev, &enh);
-    cur->w0 = 0.105f;
-    cur->L = 36;
-    for (int l = 1; l <= cur->L; ++l) {
-        cur->Vl[l] = (l % 4) ? 1 : 0;
-        cur->Ml[l] = 0.035f + 0.0015f * (float)l;
-        cur->PHIl[l] = (float)l * 0.03f;
-        cur->PSIl[l] = (float)l * 0.02f;
+static int
+check_ambe_sequence(const char* name, golden_ambe_process_fn process, uint32_t seed, uint32_t exp_f32,
+                    uint32_t exp_s16) {
+    struct golden_hashes first;
+    struct golden_hashes second;
+
+    if (golden_hash_ambe_voice_sequence(process, seed, &first) != 0
+        || golden_hash_ambe_voice_sequence(process, seed, &second) != 0) {
+        fprintf(stderr, "%s: sequence decode failed\n", name);
+        return 1;
     }
-    *prev = *cur;
+    if (first.f32 != second.f32 || first.s16 != second.s16) {
+        fprintf(stderr, "%s: determinism failure across runs\n", name);
+        return 1;
+    }
+    double mean_sq = first.sumsq / (double)(GOLDEN_AMBE_FRAMES * 160);
+    if (!(mean_sq > 1e-6 && mean_sq < 1e8)) {
+        fprintf(stderr, "%s: sanity: mean square out of range: %g\n", name, mean_sq);
+        return 1;
+    }
+    if (GOLDEN_AMBE_STRICT && (first.f32 != exp_f32 || first.s16 != exp_s16)) {
+        fprintf(stderr, "%s: hash mismatch: f32 got=0x%08X exp=0x%08X, s16 got=0x%08X exp=0x%08X\n", name,
+                (unsigned)first.f32, (unsigned)exp_f32, (unsigned)first.s16, (unsigned)exp_s16);
+        return 1;
+    }
+    return 0;
 }
 
 /**
@@ -66,6 +91,13 @@ fill_params(mbe_parms* cur, mbe_parms* prev) {
  */
 int
 main(void) {
+    if (check_ambe_sequence("ambe2450", mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, GOLDEN_AMBE2450_F32,
+                            GOLDEN_AMBE2450_S16)
+        || check_ambe_sequence("ambe2400", mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, GOLDEN_AMBE2400_F32,
+                               GOLDEN_AMBE2400_S16)) {
+        return 1;
+    }
+
     /*
      * On x86/x64, keep exact golden hashes in strict mode. Float-domain
      * synthesis is deterministic per build mode, but SIMD and scalar can differ
@@ -73,15 +105,16 @@ main(void) {
      * On other arches (e.g., AArch64/NEON), rounding order can differ; we use
      * determinism and sanity checks so CI remains green.
      */
-    /* Regenerated harmonic phase and the shared spec-exact WOLA window. */
+    /* Regenerated harmonic phase, the shared spec-exact WOLA window, and an
+     * in-band fixture (golden_fill_single_frame: L * w0 < pi). */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0x8A3BA58Fu;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0x31A1D87Cu;
 #ifdef MBELIB_TEST_BUILD_SIMD
-    const uint32_t X86_F32_FNV1A_SIMD = 0xE7D54B0Bu;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x3C152227u;
 #endif
 #endif
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
-    const uint32_t X86_S16_FNV1A = 0xE3E05C68u;
+    const uint32_t X86_S16_FNV1A = 0x4E5E77DCu;
 #endif
 
     float out_f[160];
@@ -89,12 +122,12 @@ main(void) {
     mbe_parms cur, prev;
 
     mbe_setThreadRngSeed(0xC0FFEEu);
-    fill_params(&cur, &prev);
+    golden_fill_single_frame(&cur, &prev);
     /* First run */
     mbe_synthesizeSpeechf(out_f, &cur, &prev);
-    uint32_t hf1 = fnv1a32(out_f, sizeof(out_f));
+    uint32_t hf1 = golden_fnv1a32(out_f, sizeof(out_f));
     mbe_floattoshort(out_f, out_s);
-    uint32_t hs1 = fnv1a32(out_s, sizeof(out_s));
+    uint32_t hs1 = golden_fnv1a32(out_s, sizeof(out_s));
     (void)hf1; /* Hash computed for potential debug/regression use */
     (void)hs1;
 
@@ -102,7 +135,7 @@ main(void) {
     float out_f2[160];
     short out_s2[160];
     mbe_setThreadRngSeed(0xC0FFEEu);
-    fill_params(&cur, &prev);
+    golden_fill_single_frame(&cur, &prev);
     mbe_synthesizeSpeechf(out_f2, &cur, &prev);
     for (int i = 0; i < 160; ++i) {
         if (!float_bits_equal(out_f[i], out_f2[i])) {

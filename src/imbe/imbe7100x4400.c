@@ -472,7 +472,7 @@ mbe_decodeImbe7100x4400Frame(const char imbe_fr[7][24], char imbe_d[88], mbe_pro
         result->protected_errors = protected_errors;
         result->c4_errors = c4_errors;
         result->total_errors = c0_errors + protected_errors;
-        result->flags = MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID;
+        result->flags = MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID | MBE_PROCESS_FLAG_PROVOICE;
     }
     return c0_errors + protected_errors;
 }
@@ -510,7 +510,8 @@ mbe_decodeImbe7100x4400SoftFrame(const mbe_soft_bit imbe_fr[7][24], char imbe_d[
         result->protected_errors = protected_errors;
         result->c4_errors = c4_errors;
         result->total_errors = c0_errors + protected_errors;
-        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID;
+        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C4_VALID
+                        | MBE_PROCESS_FLAG_PROVOICE;
     }
     return c0_errors + protected_errors;
 }

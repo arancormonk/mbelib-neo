@@ -130,6 +130,7 @@ main(int argc, char** argv) {
 
 #include <stdint.h>
 
+#include "ambe_common.h"
 #include "mbe_ecc.h"
 
 static int
@@ -333,6 +334,22 @@ gen_signal(short* pcm, int n) {
     }
 }
 
+/** Model equality (w0, L, K, gamma, Vl, Ml, log2Ml over 0..56), compared bitwise. */
+static int
+ambe_model_equal(const mbe_parms* a, const mbe_parms* b) {
+    if (!float_bits_equal(a->w0, b->w0) || a->L != b->L || a->K != b->K || !float_bits_equal(a->gamma, b->gamma)) {
+        return 0;
+    }
+    for (int l = 0; l <= 56; l++) {
+        if (a->Vl[l] != b->Vl[l] || !float_bits_equal(a->Ml[l], b->Ml[l])
+            || !float_bits_equal(a->log2Ml[l], b->log2Ml[l])) {
+            return 0;
+        }
+    }
+    /* The initial model keeps every harmonic below Nyquist. */
+    return (float)a->L * a->w0 < 3.14159265f;
+}
+
 static int
 test_state_parity(mbe_ambe2400_encoder* enc) {
     mbe_ambe2400EncoderReset(enc);
@@ -350,7 +367,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     int bad_frames = 0, silence = 0, voice = 0, first_bad = -1;
     float worst = 0;
     int worst_frame = -1, worst_l = -1;
-    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0;
+    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0, reset_mism = 0;
     for (int f = 0; f < FRAMES; f++) {
         char d[49];
         unsigned char saved_prev[sizeof(e_prev)];
@@ -372,8 +389,14 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
                 printf("  frame %d: encoder said silence but decoder returned %d\n", f, dr);
                 bad_frames++;
             }
-            /* process path re-inits decoder state on silence */
-            mbe_initMbeParms(&d_cur, &d_prev, &d_enh);
+            /* The process path resets to the initial AMBE model on silence and
+             * the encoder mirrors that reset: the two model states must match. */
+            mbe_initAmbeParms_common(&d_cur, &d_prev, &d_enh);
+            if (!ambe_model_equal(&d_prev, &e_cur)) {
+                printf("  frame %d: decoder silence reset differs from encoder state\n", f);
+                reset_mism++;
+                bad_frames++;
+            }
         } else {
             voice++;
             if (dr != 0) {
@@ -429,7 +452,7 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     printf("encoder/decoder state parity over %d frames (%d voice, %d silence):\n", FRAMES, voice, silence);
     printf("  frames with any mismatch: %d (first at %d)\n", bad_frames, first_bad);
     printf("  L mismatches: %d, gamma mismatches: %d, Vl mismatches: %d\n", L_mism, gamma_mism, Vl_mism);
-    printf("  bitwise w0 mismatches: %d\n", w0_mism);
+    printf("  bitwise w0 mismatches: %d, silence reset mismatches: %d\n", w0_mism, reset_mism);
     printf("  bitwise log2Ml mismatches: %d, bitwise Ml mismatches: %d\n", log2_mism, Ml_mism);
     printf("  worst |log2Ml| diff: %g (frame %d, l=%d)\n", worst, worst_frame, worst_l);
     return bad_frames ? 1 : 0;

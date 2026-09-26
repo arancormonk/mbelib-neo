@@ -185,7 +185,7 @@ Use `mbe_decode*Frame()` / `mbe_decode*SoftFrame()` when you need staged decode.
 
 Use `mbe_process*Data*` when you already have unpacked parameter bits.
 
-IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs.
+IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs, passing along the decode's `mbe_process_result` so its C0/C4 context and `MBE_PROCESS_FLAG_PROVOICE` (ProVoice mute noise) apply.
 
 - `mbe_ambe2400EncoderAlloc()` creates a caller-owned encoder context and FFT plan; `mbe_ambe2400EncoderReset(enc)` restarts its analysis state, and `mbe_ambe2400EncoderFree(enc)` releases it.
 - `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables); interoperability with DVSI hardware has not been verified.
@@ -196,17 +196,18 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 
 ### Encoder Workflow
 
-- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail.
+- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail.
 
 ### Stateful Decode Workflow
 
-- Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`.
+- Keep one `mbe_parms` state triplet per audio stream/thread: `cur_mp`, `prev_mp`, and `prev_mp_enhanced`. The three must be distinct objects.
+- In AMBE 3600x2450, `prev_mp` is the last valid voice frame (the prediction history) and `prev_mp_enhanced` is the last synthesized frame. When you drive `mbe_decodeAmbe2450Parms()` yourself, copy `cur_mp` into `prev_mp` only when `mbe_classifyAmbe2450Frame()` returns `MBE_AMBE2450_FRAME_VOICE`. `mbe_decodeAmbe2450Parms()` returns `MBE_AMBE2450_FRAME_VOICE` for silence frames too, as in 2.1, since both decode a model.
 - Initialize once before decoding with `mbe_initMbeParms(&cur_mp, &prev_mp, &prev_mp_enhanced)`.
 - Prefer `mbe_process*Frame*` APIs when you have raw hard-decision vocoder frames and do not need staged parameter handling.
 - For soft-decision input, fill `mbe_soft_bit.bit` with the hard decision and `mbe_soft_bit.reliability` with confidence (`0` is erasure-like, `255` is highly reliable), then call `mbe_decode*SoftFrame()` or `mbe_process*SoftFrame*()`.
 - Helper constructors are available for common inputs: `mbe_softBitsFromHard()` assigns a fixed reliability and validates hard bits, while `mbe_softBitsFromLlr()` maps positive signed LLRs to bit 1 with magnitude clamped to `0..255`.
-- Processing APIs report frame state through `mbe_process_result`: `c0_errors`, `protected_errors`, IMBE-specific `c4_errors`, `total_errors`, and flags such as `MBE_PROCESS_FLAG_SOFT_INPUT`, `MBE_PROCESS_FLAG_C0_VALID`, `MBE_PROCESS_FLAG_C4_VALID`, `MBE_PROCESS_FLAG_TONE`, `MBE_PROCESS_FLAG_ERASURE`, `MBE_PROCESS_FLAG_REPEAT`, and `MBE_PROCESS_FLAG_MUTE`.
-- Use `mbe_formatProcessResult()` when you need a compact status string from a result. It writes `'='` repeated `total_errors` times, then any `E`, `T`, `R`, and `M` flags in that order, truncated to the supplied buffer size.
+- Processing APIs report frame state through `mbe_process_result`: `c0_errors`, `protected_errors`, IMBE-specific `c4_errors`, `total_errors`, and flags such as `MBE_PROCESS_FLAG_SOFT_INPUT`, `MBE_PROCESS_FLAG_C0_VALID`, `MBE_PROCESS_FLAG_C4_VALID`, `MBE_PROCESS_FLAG_TONE`, `MBE_PROCESS_FLAG_ERASURE`, `MBE_PROCESS_FLAG_REPEAT`, `MBE_PROCESS_FLAG_MUTE`, `MBE_PROCESS_FLAG_SILENCE` (AMBE 3600x2450 silence frames), and `MBE_PROCESS_FLAG_PROVOICE` (context set by the IMBE 7100x4400 decoders).
+- Use `mbe_formatProcessResult()` when you need a compact status string from a result. It writes `'='` repeated `total_errors` times, then any `E`, `T`, `R`, and `M` flags in that order, truncated to the supplied buffer size. The silence flag is not rendered.
 - Hard input bits must be exactly `0` or `1`; soft `mbe_soft_bit.bit` values must also be exactly `0` or `1`. Invalid pointers/counters return `MBE_STATUS_INVALID_ARGUMENT`; invalid bit values return `MBE_STATUS_INVALID_BITS`.
 - For parameter-only processing, seed `mbe_process_result.total_errors` and any valid C0/C4 context before calling `mbe_process*Data*`.
 - Use `mbe_versionString()` for the static NUL-terminated library version string.
@@ -286,13 +287,20 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **Regenerated voiced phase**: The odd log-magnitude kernel from [US 5,701,390, Eqs. 7–9](https://patents.google.com/patent/US5701390A/en) derives harmonic phase from the enhanced, smoothed spectral envelope. The shared synthesizer applies it to all four codecs without changing the public API or parameter layout. Existing phase/amplitude interpolation remains in place; fully voiced output no longer depends on the unvoiced-noise RNG seed.
 
-- **Codec-specific frame repeat/muting parity**: Matches JMBE behavior where IMBE mutes on max repeats or error-rate threshold, while AMBE muting is repeat-driven in the synth path. IMBE prolonged repeat headroom resets to a default model state.
+- **Codec-specific frame repeat/muting**: IMBE and D-STAR follow JMBE's repeat rules. IMBE mutes on max repeats or the error-rate threshold, D-STAR muting is repeat-driven, and IMBE prolonged repeat headroom resets to a default model state. In every codec, a repeated frame keeps its own error accounting and continues the unvoiced-noise sequence; only the model is repeated.
 
-- **AMBE tone/erasure fallback parity**: AMBE 3600x2450 tone classification uses JMBE-style verification plus BER gating (`errorCount < 6`). Unverified/high-BER tone candidates fall back to erasure/repeat behavior, and invalid tone IDs reuse prior voice model until repeat max is reached.
+- **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum), replacing earlier JMBE parity:
+  - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, §4.4.1 eq. 26, §4.4.3 eq. 43). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
+  - **Repeats** (§5.6): erasure (b0 120–123), or corrected C0 errors ≥ 4, or C0 ≥ 2 with ≥ 6 total. These criteria apply to every frame, before tone classification. A repeat replays the last synthesized frame unchanged (no re-enhancement or adaptive smoothing) and leaves the history untouched.
+  - **Tones** (§7, §7.3): a frame whose first six bits of u0 equal 63 is a tone frame, whatever its b0 would read as (a single tone can read as silence). An invalid tone index is an erasure (flagged `ERASURE` and `TONE`), and so is a tone frame whose redundant tone fields disagree (JMBE's consistency check; the spec leaves this to the decoder). Tone ID 255 is a zero-amplitude tone.
+  - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
+  - **Recovery after mutes and tones**: a mute or a tone frame also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping the speech from before it, and a repeat right after either replays silence. The spec doesn't define the synthesis state across these frames.
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
-- **Comfort-noise parity model**: Muted-frame noise follows JMBE’s low-level uniform white-noise model (`0.003` gain semantics) using Java `Random`-compatible per-thread RNG behavior.
+- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] on the synthesized-speech scale (about ±35 in int16 output; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
+
+- **Nyquist guard**: the shared synthesizer skips voiced harmonics at or above Nyquist (`l * w0 >= pi`) instead of rendering them as aliases. Decoded models never contain such harmonics; the guard protects caller-supplied models.
 
 The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evaluation) compares a frozen baseline and candidate using identical encoded frames. It reports spectral, crest-factor, envelope, and reference-matched frame-join measurements; these are diagnostics, not a substitute for listening or a standardized perceptual score.
 
@@ -314,7 +322,7 @@ The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evalu
 - `mbe_setThreadRngSeed(0)` is accepted and remapped internally to a non-zero seed. Use an explicit non-zero seed when exact reproducibility matters across builds.
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
 - Runtime synthesis helpers (RNG state and FFT plan) are thread-local; do not share mutable decode state (`mbe_parms`) across threads unless you synchronize externally.
-- AMBE/IMBE frame handling intentionally differs for JMBE parity: IMBE uses error-rate muting and repeat-headroom reset behavior, while AMBE tone/erasure/repeat transitions follow AMBE-specific JMBE gating rules.
+- Frame handling differs per codec: IMBE uses JMBE's error-rate muting and repeat-headroom reset behavior (with the TIA-102.BABA mute-noise level for P25, JMBE's comfort noise for ProVoice), D-STAR uses JMBE's repeat-driven muting, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math when the compiler target supports it, with
   scalar fallback otherwise. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
@@ -346,7 +354,7 @@ tools/bench_compare.sh
 ## Tests and Examples
 
 - Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
-- Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_golden_pcm` (golden hash regression checks).
+- Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_ambe2450_frame_types` (AMBE 3600x2450 silence, repeat, erasure, tone and mute handling per TIA-102.BABA-1), `test_golden_pcm` (golden hash regression checks, including voice-only AMBE 2450 and D-STAR sequences).
 - Example: `examples/print_version.c` shows linking and header usage.
 - WAV round trip: `./build/dev-debug/dstar_encode < input.wav > output.dstar`, then `./build/dev-debug/dstar_decode < output.dstar > output.wav`. These example binaries are not installed. They use binary stdin/stdout, accept no path arguments, and send diagnostics to stderr. The private `.dstar` container is not a D-STAR air-interface stream.
 - When Python 3.7 or newer is available, CTest also checks the D-STAR examples through stdin/stdout pipes, including malformed WAVs, exact silence, and the final flush frame.

@@ -110,8 +110,9 @@ set_ambe2450_tone_signature(char ambe_d[49]) {
 /**
  * @brief Compose AMBE 2450 tone ID1 and the U1 low nibble.
  *
- * Tone ID1 is U1[0..7] (ambe_d[12..19]). U1[8..11] (ambe_d[20..23])
- * belongs to a different field and should not affect tone-ID validity.
+ * Tone ID1 is U1[0..7] (ambe_d[12..19]). U1[8..11] (ambe_d[20..23]) carries a
+ * redundant copy of ID(7..4) (TIA-102.BABA-1 Table 10) and does not change the
+ * decoded ID.
  *
  * @param ambe_d      AMBE parameter bit vector (49 entries), modified in-place.
  * @param id1         8-bit tone ID value.
@@ -125,6 +126,12 @@ set_ambe2450_tone_id1_and_u1_low_nibble(char ambe_d[49], int id1, int low_nibble
     for (int i = 0; i < 4; ++i) {
         ambe_d[20 + i] = (char)((low_nibble >> (3 - i)) & 1);
     }
+}
+
+/** Every harmonic 1..L of the model lies below Nyquist (L * w0 < pi). */
+static int
+harmonics_below_nyquist(const mbe_parms* mp) {
+    return (mp->w0 > 0.0f) && (mp->L >= 1) && ((float)mp->L * mp->w0 < (float)M_PI);
 }
 
 /**
@@ -320,25 +327,109 @@ main(void) {
         }
     }
 
-    // AMBE 2450 silence mapping: JMBE maps W124->L15 and W125->L14
+    // AMBE 2450 silence frames (TIA-102.BABA-1 4.1 eqs 1-3): both b0 124 and
+    // 125 use w0 = 2*pi/32, L = 14, all bands unvoiced.
     {
         char ambe_d[49];
         mbe_parms cur = {0}, prev = {0};
         mbe_parms dummy;
-        mbe_initMbeParms(&cur, &prev, &dummy);
+        const float w0_silence = (float)(2.0 * M_PI / 32.0);
 
-        set_bits_zero(ambe_d, 49);
-        set_ambe2450_b0(ambe_d, 124);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
-        assert(cur.L == 15);
-        float w0_silence = (float)((M_PI / 32.0) * (2.0 * M_PI));
-        assert(approx_equal(cur.w0, w0_silence, 1e-6f));
+        for (int b0 = 124; b0 <= 125; ++b0) {
+            mbe_initMbeParms(&cur, &prev, &dummy);
+            set_bits_zero(ambe_d, 49);
+            set_ambe2450_b0(ambe_d, b0);
+            assert(mbe_classifyAmbe2450Frame(ambe_d) == MBE_AMBE2450_FRAME_SILENCE);
+            assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
+            assert(cur.L == 14);
+            assert(approx_equal(cur.w0, w0_silence, 1e-6f));
+            assert((float)cur.L * cur.w0 < (float)M_PI);
+            for (int l = 1; l <= cur.L; ++l) {
+                assert(cur.Vl[l] == 0);
+            }
+        }
+        (void)w0_silence;
+    }
 
+    // Nyquist: every model the decoders can emit keeps all L harmonics below
+    // pi. JMBE's AMBE silence/initial model (w0 = pi^2/16, L = 15) did not.
+    {
+        char ambe_d[49];
+        char imbe_d[88];
+        float out[160];
+        mbe_parms cur, prev, enh;
+
+        for (int b0 = 0; b0 < 128; ++b0) {
+            mbe_initMbeParms(&cur, &prev, &enh);
+            set_bits_zero(ambe_d, 49);
+            set_ambe2450_b0(ambe_d, b0);
+            int rc = mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev);
+            if (rc == MBE_AMBE2450_FRAME_VOICE || rc == MBE_AMBE2450_FRAME_SILENCE) {
+                assert(harmonics_below_nyquist(&cur));
+            }
+        }
+        /* Initial AMBE model, reached as the repeat model of an erasure at stream start. */
+        mbe_initMbeParms(&cur, &prev, &enh);
         set_bits_zero(ambe_d, 49);
-        set_ambe2450_b0(ambe_d, 125);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
-        assert(cur.L == 14);
-        assert(approx_equal(cur.w0, w0_silence, 1e-6f));
+        set_ambe2450_b0(ambe_d, 120);
+        assert(mbe_processAmbe2450Dataf(out, NULL, ambe_d, &cur, &prev, &enh) >= 0);
+        assert(harmonics_below_nyquist(&cur));
+        assert(harmonics_below_nyquist(&prev));
+
+        /* D-STAR: every b0 bit pattern (bits 0..5 and 48) that decodes as voice. */
+        for (int pattern = 0; pattern < 128; ++pattern) {
+            mbe_initMbeParms(&cur, &prev, &enh);
+            set_bits_zero(ambe_d, 49);
+            for (int i = 0; i < 6; ++i) {
+                ambe_d[i] = (char)((pattern >> (6 - i)) & 1);
+            }
+            ambe_d[48] = (char)(pattern & 1);
+            if (mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev) == 0) {
+                assert(harmonics_below_nyquist(&cur));
+            }
+        }
+        /* D-STAR state after the standard silence frame (b0 127, tone index 128). */
+        mbe_initMbeParms(&cur, &prev, &enh);
+        set_bits_zero(ambe_d, 49);
+        for (int i = 0; i < 6; ++i) {
+            ambe_d[i] = 1;
+        }
+        ambe_d[48] = 1;
+        assert(mbe_processAmbe2400Dataf(out, NULL, ambe_d, &cur, &prev, &enh) >= 0);
+        assert(harmonics_below_nyquist(&prev));
+        assert(harmonics_below_nyquist(&enh));
+
+        /* IMBE: every voice b0 and the generic initial state. */
+        for (int b0 = 0; b0 <= 207; ++b0) {
+            mbe_initMbeParms(&cur, &prev, &enh);
+            set_bits_zero(imbe_d, 88);
+            set_imbe7200_b0(imbe_d, b0);
+            if (mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) == 0) {
+                assert(harmonics_below_nyquist(&cur));
+            }
+        }
+        mbe_initMbeParms(&cur, &prev, &enh);
+        assert(harmonics_below_nyquist(&prev));
+    }
+
+    // Shared synthesizer Nyquist guard: voiced harmonics at or above pi cannot
+    // be represented at 8 kHz and are skipped instead of aliasing. Only the
+    // above-Nyquist harmonics carry amplitude here, so the output is silent.
+    {
+        float out[160];
+        mbe_parms cur, prev;
+        seed_speech_params(&cur, &prev);
+        cur.w0 = 0.105f;
+        cur.L = 36;
+        for (int l = 1; l <= 56; ++l) {
+            cur.Vl[l] = 1;
+            cur.Ml[l] = ((float)l * cur.w0 >= (float)M_PI) ? 1.0f : 0.0f;
+        }
+        prev = cur;
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        for (int i = 0; i < 160; ++i) {
+            assert(fabsf(out[i]) < 1e-6f);
+        }
     }
 
     // AMBE 2450 Dataf: absent C0-valid context, repeat decision must depend only on total errors
@@ -395,6 +486,48 @@ main(void) {
         assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
     }
 
+    // Frame repeats keep this frame's error accounting and continue the noise
+    // sequence (IMBE and D-STAR). Copying the stale previous parameter set
+    // froze the error-rate recursion and replayed the previous frame's noise.
+    {
+        char imbe_d[88];
+        char ambe_d[49];
+        float out[160];
+        mbe_process_result result;
+        mbe_parms cur, prev, enh;
+
+        set_bits_zero(imbe_d, 88);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int n = 0; n < 2; ++n) {
+            init_result_total(&result, 1);
+            assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        }
+        float er_before = prev.errorRate;
+        float seed_before = enh.noiseSeed;
+        init_result_total(&result, 7); /* Dataf fallback: total > 5 repeats */
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        assert(result_has_marker(&result, 'R'));
+        assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.000365f * 7.0f))) < 1e-7f);
+        assert(cur.errorCountTotal == 7);
+        assert(float_bits_differ(enh.noiseSeed, seed_before));
+
+        set_bits_zero(ambe_d, 49);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int n = 0; n < 2; ++n) {
+            init_result_total(&result, 1);
+            assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        }
+        er_before = prev.errorRate;
+        seed_before = enh.noiseSeed;
+        init_result_total(&result, 4); /* D-STAR: total > 3 repeats */
+        assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        assert(result_has_marker(&result, 'R'));
+        assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.001064f * 4.0f))) < 1e-7f);
+        assert(cur.errorCountTotal == 4);
+        assert(float_bits_differ(enh.noiseSeed, seed_before));
+        (void)er_before;
+    }
+
     // AMBE C0 Golay24 parity behavior: isolated parity-bit error is corrected
     {
         char ambe_fr[4][24] = {{0}};
@@ -433,7 +566,9 @@ main(void) {
         assert(memcmp(hard_d, soft_d, sizeof(hard_d)) == 0);
     }
 
-    // AMBE tone BER gate + ERASURE model fallback semantics
+    // AMBE 2450 tone and erasure frames (TIA-102.BABA-1 5.6, 7.3): the repeat
+    // criteria apply before tone classification, and an erasure is a frame
+    // repeat of the last synthesized frame (not JMBE's W120 model).
     {
         char ambe_d[49];
         float out[160];
@@ -442,22 +577,44 @@ main(void) {
 
         set_bits_zero(ambe_d, 49);
         set_ambe2450_tone_signature(ambe_d);
-        set_ambe2450_b0(ambe_d, 120); /* erasure fundamental if not classified as tone */
+        set_ambe2450_tone_id1_and_u1_low_nibble(ambe_d, 7, 0x0);
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
-        init_result_total(&result, 5);
+        init_result_total(&result, 3);
         assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(result_has_marker(&result, 'T'));
+        assert(!result_has_marker(&result, 'R'));
 
+        /* Without C0 context the Dataf fallback keeps 2.1's rules: a verified
+         * tone with fewer than 6 errors is output, other frames repeat above 3. */
+        for (int total = 4; total <= 6; ++total) {
+            mbe_initMbeParms(&cur, &prev, &prev_enh);
+            init_result_total(&result, total);
+            assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
+            assert(result_has_marker(&result, 'T') == (total < 6));
+            assert(result_has_marker(&result, 'R') == (total >= 6));
+        }
+        set_bits_zero(ambe_d, 49);
+        set_ambe2450_b0(ambe_d, 10);
         mbe_initMbeParms(&cur, &prev, &prev_enh);
-        init_result_total(&result, 6);
+        init_result_total(&result, 4);
         assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
-        assert(!result_has_marker(&result, 'T'));
+        assert(result_has_marker(&result, 'R'));
+
+        set_bits_zero(ambe_d, 49);
+        set_ambe2450_b0(ambe_d, 120);
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        init_result_total(&result, 0);
+        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
         assert(result_has_marker(&result, 'E'));
-        assert(approx_equal(cur.w0, 0.0f, 1e-6f));
-        assert(cur.L == 9);
-        assert(approx_equal(prev.w0, 0.0f, 1e-6f));
-        assert(prev.L == 9);
+        assert(result_has_marker(&result, 'R'));
+        assert(!result_has_marker(&result, 'M'));
+        assert(cur.repeatCount == 1);
+        assert(prev.repeatCount == 1);
+        /* History stays at the spec initial state (L = 15, gamma = 0). */
+        assert(prev.L == 15);
+        assert(float_bits_equal(prev.gamma, 0.0f));
+        assert(cur.L == 15);
     }
 
     // AMBE tone ID validity must depend on ID1 only, not U1 low nibble bits
@@ -512,7 +669,9 @@ main(void) {
         assert(cur_b.L == custom_L);
     }
 
-    // Muting behavior parity: AMBE ignores error-rate muting, IMBE applies it
+    // Shared synthesizer: the AMBE threshold does not error-rate mute (D-STAR
+    // relies on this; the AMBE 2450 process path mutes before synthesis per
+    // TIA-102.BABA-1 5.7), while the IMBE threshold does.
     {
         float out[160];
         mbe_parms cur = {0}, prev = {0};
@@ -530,8 +689,96 @@ main(void) {
         cur.errorRate = 1.0f;
         cur.repeatCount = 0;
         float imbe_seed_before = cur.noiseSeed;
+        float jmbe_noise[160];
+        mbe_setThreadRngSeed(0x1234u);
         mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_equal(cur.noiseSeed, imbe_seed_before));
+
+        /* The public synthesizer cannot tell the codec, so it keeps JMBE's
+         * comfort noise at either threshold (D-STAR: a max-repeat mute). */
+        mbe_setThreadRngSeed(0x1234u);
+        mbe_synthesizeComfortNoisef(jmbe_noise);
+        for (int i = 0; i < 160; ++i) {
+            assert(float_bits_equal(out[i], jmbe_noise[i]));
+        }
+        seed_speech_params(&cur, &prev);
+        cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+        cur.repeatCount = MBE_MAX_FRAME_REPEATS;
+        mbe_setThreadRngSeed(0x1234u);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        for (int i = 0; i < 160; ++i) {
+            assert(float_bits_equal(out[i], jmbe_noise[i]));
+        }
+    }
+
+    // Error-rate mutes on the IMBE process paths: P25 (7200x4400 data path)
+    // uses the TIA-102.BABA 7.8 noise, uniform in [-5, 5] on s(n); ProVoice
+    // (7100x4400, not a TIA-102 codec) keeps JMBE's comfort noise.
+    {
+        float out[160];
+        char imbe_d[88];
+        static const char provoice_fr[7][24] = {{0}};
+        mbe_parms cur, prev, enh;
+        mbe_process_result result;
+
+        set_bits_zero(imbe_d, 88);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        prev.errorRate = 1.0f;
+        mbe_initProcessResult(&result);
+        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+        double sumsq = 0.0;
+        for (int i = 0; i < 160; ++i) {
+            assert(fabsf(out[i]) <= 5.0f);
+            sumsq += (double)out[i] * (double)out[i];
+        }
+        double rms = sqrt(sumsq / 160.0);
+        assert(rms > 1.5 && rms < 4.0);
+        (void)rms;
+
+        mbe_initMbeParms(&cur, &prev, &enh);
+        prev.errorRate = 1.0f;
+        mbe_initProcessResult(&result);
+        assert(mbe_processImbe7100x4400Framef(out, &result, provoice_fr, imbe_d, &cur, &prev, &enh) >= 0);
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+        float peak = 0.0f;
+        for (int i = 0; i < 160; ++i) {
+            peak = fmaxf(peak, fabsf(out[i]));
+        }
+        /* Comfort noise is uniform in about [-14, 14]. */
+        assert(peak > 5.0f && peak < 15.0f);
+        (void)peak;
+
+        /* Staged ProVoice decoding (hard and soft) carries the ProVoice
+         * context into the IMBE 4400 data API and mutes bit-identically. */
+        mbe_soft_bit provoice_soft[7][24];
+        assert(mbe_softBitsFromHard(&provoice_fr[0][0], &provoice_soft[0][0], sizeof(provoice_fr), 255u) == 0);
+        for (int soft = 0; soft < 2; ++soft) {
+            float direct[160];
+            mbe_process_result direct_result;
+            mbe_initMbeParms(&cur, &prev, &enh);
+            prev.errorRate = 1.0f;
+            mbe_setThreadRngSeed(0x1234u);
+            assert(
+                (soft ? mbe_processImbe7100x4400SoftFramef(
+                            direct, &direct_result, (const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &cur, &prev, &enh)
+                      : mbe_processImbe7100x4400Framef(direct, &direct_result, provoice_fr, imbe_d, &cur, &prev, &enh))
+                >= 0);
+
+            mbe_initMbeParms(&cur, &prev, &enh);
+            prev.errorRate = 1.0f;
+            mbe_setThreadRngSeed(0x1234u);
+            assert((soft ? mbe_decodeImbe7100x4400SoftFrame((const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &result)
+                         : mbe_decodeImbe7100x4400Frame(provoice_fr, imbe_d, &result))
+                   >= 0);
+            assert((result.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+            assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+            assert(result.flags == direct_result.flags);
+            assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+            for (int i = 0; i < 160; ++i) {
+                assert(float_bits_equal(out[i], direct[i]));
+            }
+        }
     }
 
     // Muted IMBE frames should still advance adaptive smoothing state (JMBE parity)
@@ -597,7 +844,8 @@ main(void) {
         assert(magnitude_sum <= 40.0f);
         assert(smoothed.amplitudeThreshold == -2999);
 
-        // AMBE does not error-rate mute: the previous voiced frame must fade
+        // The shared synthesizer does not error-rate mute at the AMBE
+        // threshold: the previous voiced frame must fade
         // toward zero, bounded by its linearly decreasing amplitude envelope.
         float out[160];
         mbe_synthesizeSpeechf(out, &cur, &prev);

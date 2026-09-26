@@ -456,6 +456,7 @@ def _correctness(root, manifest, clips, crosschecks, coverage_errors):
                 "erasure_frames",
                 "repeat_frames",
                 "mute_frames",
+                "silence_frames",
                 "c0_errors",
                 "protected_errors",
                 "c4_errors",

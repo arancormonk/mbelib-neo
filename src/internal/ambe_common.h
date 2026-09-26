@@ -55,12 +55,38 @@ void mbe_demodulateAmbe3600DataSoft_common(mbe_soft_bit fr[4][24]);
 int mbe_eccAmbe3600Data_common(char fr[4][24], char* out49);
 int mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49);
 
+/** AMBE+2 silence-frame fundamental 2*pi/32, TIA-102.BABA-1 4.1 eq 1 (radians/sample). */
+#define MBE_AMBE_SILENCE_W0 ((float)0.19634954084936207)
+/** AMBE+2 silence-frame harmonic count, TIA-102.BABA-1 4.1 eq 2. */
+#define MBE_AMBE_SILENCE_L  14
+
+/*
+ * Initial AMBE model. TIA-102.BABA-1 fixes only the initial prediction state:
+ * gamma(-1) = 0, L(-1) = 15 and a constant log magnitude (a constant cancels
+ * exactly in eq 43, so 0 is equivalent to the spec's 1). The initial
+ * fundamental is unspecified; the silence fundamental keeps every initial
+ * harmonic below Nyquist (15 * 2*pi/32 < pi). JMBE's W124 default used
+ * w0 = (pi/32) * 2*pi, which put harmonics 6..15 above Nyquist.
+ */
+#define MBE_AMBE_INIT_W0    MBE_AMBE_SILENCE_W0
+#define MBE_AMBE_INIT_L     15
+
 /**
- * @brief Initialize AMBE parameter state to JMBE-compatible defaults.
+ * @brief Set the initial AMBE model: w0, L, K = 0, gamma = 0, unit unvoiced amplitudes.
  *
- * AMBE in JMBE starts from fundamental W124 (w0=(PI/32)*2*PI, L=15) with
- * unvoiced bands and unit spectral amplitudes. This helper mirrors that
- * state for AMBE-family decode paths.
+ * Shared by the AMBE decode paths and the AMBE 2400 encoder, whose silence
+ * reset mirrors the decoder's state.
+ *
+ * @param mp Parameter set to rewrite (phase, error and synthesis state untouched).
+ */
+void mbe_setAmbeDefaultModel_common(mbe_parms* mp);
+
+/**
+ * @brief Initialize AMBE parameter state to the initial AMBE model.
+ *
+ * Sets the model from mbe_setAmbeDefaultModel_common() with zero phases,
+ * default smoothing and error state, the AMBE muting threshold and a cold
+ * unvoiced-noise start, and copies it to all three parameter sets.
  *
  * @param cur_mp  Output current parameter state.
  * @param prev_mp Output previous parameter state.
