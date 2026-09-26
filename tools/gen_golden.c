@@ -15,23 +15,6 @@
 #include "mbelib-neo/mbelib.h"
 
 /**
- * @brief Compute 32-bit FNV-1a hash of a byte buffer.
- * @param data Pointer to input buffer.
- * @param len  Buffer length in bytes.
- * @return 32-bit FNV-1a hash.
- */
-static uint32_t
-fnv1a32(const void* data, size_t len) {
-    const uint8_t* p = (const uint8_t*)data;
-    uint32_t h = 2166136261u; // FNV offset basis
-    for (size_t i = 0; i < len; ++i) {
-        h ^= p[i];
-        h *= 16777619u; // FNV prime
-    }
-    return h;
-}
-
-/**
  * @brief Program entry: prints float and int16 golden hashes to stdout.
  */
 int
@@ -45,9 +28,9 @@ main(void) {
     mbe_synthesizeSpeechf(out_f, &cur, &prev);
 
     // Hash float bytes and also short bytes after conversion
-    uint32_t hf = fnv1a32(out_f, sizeof(out_f));
+    uint32_t hf = golden_fnv1a32(out_f, sizeof(out_f));
     mbe_floattoshort(out_f, out_s);
-    uint32_t hs = fnv1a32(out_s, sizeof(out_s));
+    uint32_t hs = golden_fnv1a32(out_s, sizeof(out_s));
 
     printf("GOLDEN_F32_FNV1A=0x%08X\n", (unsigned)hf);
     printf("GOLDEN_S16_FNV1A=0x%08X\n", (unsigned)hs);

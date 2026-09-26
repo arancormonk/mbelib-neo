@@ -36,7 +36,8 @@ struct golden_hashes {
     double sumsq; /**< Sum of squared float samples, for sanity bounds. */
 };
 
-static uint32_t
+/** Continue a 32-bit FNV-1a hash over @p len bytes of @p data. */
+static inline uint32_t
 golden_fnv1a32_update(uint32_t h, const void* data, size_t len) {
     const uint8_t* p = (const uint8_t*)data;
     for (size_t i = 0; i < len; ++i) {
@@ -46,7 +47,13 @@ golden_fnv1a32_update(uint32_t h, const void* data, size_t len) {
     return h;
 }
 
-static uint32_t
+/** 32-bit FNV-1a hash of @p len bytes of @p data. */
+static inline uint32_t
+golden_fnv1a32(const void* data, size_t len) {
+    return golden_fnv1a32_update(GOLDEN_FNV1A_OFFSET, data, len);
+}
+
+static inline uint32_t
 golden_xorshift32(uint32_t* state) {
     uint32_t x = *state;
     x ^= x << 13;
@@ -61,7 +68,7 @@ golden_xorshift32(uint32_t* state) {
  * keeps b0 < 64, which rules out tone, erasure and silence frame types, so the
  * sequence exercises only the voice decode and synthesis path.
  */
-static void
+static inline void
 golden_fill_ambe_voice_frame(char ambe_d[49], uint32_t* state) {
     for (int i = 0; i < 49; ++i) {
         ambe_d[i] = (char)(golden_xorshift32(state) & 1u);
@@ -79,7 +86,7 @@ golden_fill_ambe_voice_frame(char ambe_d[49], uint32_t* state) {
  * @param cur  Output current parameter set.
  * @param prev Output previous parameter set (copy of current).
  */
-static void
+static inline void
 golden_fill_single_frame(mbe_parms* cur, mbe_parms* prev) {
     mbe_parms enh;
     mbe_initMbeParms(cur, prev, &enh);
@@ -98,7 +105,7 @@ golden_fill_single_frame(mbe_parms* cur, mbe_parms* prev) {
  * @brief Decode an error-free voice-only AMBE sequence and hash its PCM.
  * @return 0 on success, or the negative status returned by @p process.
  */
-static int
+static inline int
 golden_hash_ambe_voice_sequence(golden_ambe_process_fn process, uint32_t seed, struct golden_hashes* out) {
     mbe_parms cur;
     mbe_parms prev;

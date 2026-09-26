@@ -45,23 +45,6 @@
 #define GOLDEN_AMBE2400_S16 0u
 #endif
 
-/**
- * @brief Compute 32-bit FNV-1a hash of a byte buffer.
- * @param data Pointer to input buffer.
- * @param len  Buffer length in bytes.
- * @return 32-bit FNV-1a hash.
- */
-static uint32_t
-fnv1a32(const void* data, size_t len) {
-    const uint8_t* p = (const uint8_t*)data;
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; ++i) {
-        h ^= p[i];
-        h *= 16777619u;
-    }
-    return h;
-}
-
 static int
 float_bits_equal(float a, float b) {
     uint32_t a_bits;
@@ -142,9 +125,9 @@ main(void) {
     golden_fill_single_frame(&cur, &prev);
     /* First run */
     mbe_synthesizeSpeechf(out_f, &cur, &prev);
-    uint32_t hf1 = fnv1a32(out_f, sizeof(out_f));
+    uint32_t hf1 = golden_fnv1a32(out_f, sizeof(out_f));
     mbe_floattoshort(out_f, out_s);
-    uint32_t hs1 = fnv1a32(out_s, sizeof(out_s));
+    uint32_t hs1 = golden_fnv1a32(out_s, sizeof(out_s));
     (void)hf1; /* Hash computed for potential debug/regression use */
     (void)hs1;
 
