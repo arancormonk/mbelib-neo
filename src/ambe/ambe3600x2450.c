@@ -773,8 +773,7 @@ ambe2450_repeat_required(int total_errors, int c0_errors, int c0_errors_valid) {
  * equals prev_mp_enhanced's; every path below preserves that.
  */
 
-#define AMBE2450_MUTE_NOISE_AMPLITUDE   5.0f /* 5.7: uniform in [-5, 5] on s(n) */
-#define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255  /* Table 9 / 7.3 */
+#define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255 /* Table 9 / 7.3 */
 
 /** Advance prev_mp's per-frame decoder values without touching its prediction history. */
 static void
@@ -801,7 +800,7 @@ static void
 ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
     ambe2450_load_repeat_model(cur_mp, prev_mp_enhanced);
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-    mbe_synthesizeUniformNoisef(aout_buf, AMBE2450_MUTE_NOISE_AMPLITUDE);
+    mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
 }
 
 /**

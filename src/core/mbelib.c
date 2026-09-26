@@ -883,17 +883,22 @@ mbe_synthesizeSilence(short* aout_buf) {
 #define MBE_PHASE_EXTRAP_SLOPE    0.72f
 #define MBE_PHASE_MIN_MAGNITUDE   1e-6f
 
+/* IMBE state (any non-AMBE muting threshold) mutes on the error rate. */
+static int
+mbe_uses_imbe_muting(const mbe_parms* cur_mp) {
+    return fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f;
+}
+
 /*
- * IMBE and D-STAR mute here with the JMBE comfort noise. The AMBE 3600x2450
- * process path decides repeats and muting itself (TIA-102.BABA-1 5.6/5.7) and
- * only calls synthesis with repeatCount below MBE_MAX_FRAME_REPEATS, so this
- * check never fires for it; reaching it from that path would bypass the
- * spec's [-5, 5] mute noise.
+ * IMBE mutes here on max repeats or the error rate, with the TIA-102.BABA 7.8
+ * noise; D-STAR mutes on max repeats with JMBE's comfort noise. The AMBE
+ * 3600x2450 process path decides repeats and muting itself (TIA-102.BABA-1
+ * 5.6/5.7) and only calls synthesis with repeatCount below
+ * MBE_MAX_FRAME_REPEATS, so this check never fires for it.
  */
 static int
 mbe_should_mute_speech(const mbe_parms* cur_mp) {
-    int mute_on_error_rate = (fabsf(cur_mp->mutingThreshold - MBE_MUTING_THRESHOLD_AMBE) > 1e-6f);
-    return mbe_isMaxFrameRepeat(cur_mp) || (mute_on_error_rate && mbe_requiresMuting(cur_mp));
+    return mbe_isMaxFrameRepeat(cur_mp) || (mbe_uses_imbe_muting(cur_mp) && mbe_requiresMuting(cur_mp));
 }
 
 static void
@@ -1084,8 +1089,14 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
      * - JMBE IMBE path mutes on max repeats OR error-rate threshold.
      * - JMBE AMBE path mutes on max repeats only (error-rate muting is not applied in AMBE synth path). */
     if (mbe_should_mute_speech(cur_mp)) {
-        /* Muted frames output comfort noise while preserving model progression. */
-        mbe_synthesizeComfortNoisef(aout_buf);
+        /* Muted frames output noise while preserving model progression: IMBE
+         * uses the TIA-102.BABA 7.8 level ([-5, 5] on s(n)), D-STAR keeps
+         * JMBE's comfort-noise level. */
+        if (mbe_uses_imbe_muting(cur_mp)) {
+            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
+        } else {
+            mbe_synthesizeComfortNoisef(aout_buf);
+        }
         return;
     }
 

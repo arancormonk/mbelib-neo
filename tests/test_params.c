@@ -660,6 +660,29 @@ main(void) {
         float imbe_seed_before = cur.noiseSeed;
         mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_equal(cur.noiseSeed, imbe_seed_before));
+
+        /* TIA-102.BABA 7.8: IMBE mute noise is uniform in [-5, 5] on s(n). */
+        double sumsq = 0.0;
+        for (int i = 0; i < 160; ++i) {
+            assert(fabsf(out[i]) <= 5.0f);
+            sumsq += (double)out[i] * (double)out[i];
+        }
+        double rms = sqrt(sumsq / 160.0);
+        assert(rms > 1.5 && rms < 4.0);
+        (void)rms;
+
+        /* D-STAR (AMBE threshold) keeps JMBE's comfort-noise level on a max-repeat mute. */
+        float jmbe_noise[160];
+        seed_speech_params(&cur, &prev);
+        cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+        cur.repeatCount = MBE_MAX_FRAME_REPEATS;
+        mbe_setThreadRngSeed(0x1234u);
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        mbe_setThreadRngSeed(0x1234u);
+        mbe_synthesizeComfortNoisef(jmbe_noise);
+        for (int i = 0; i < 160; ++i) {
+            assert(float_bits_equal(out[i], jmbe_noise[i]));
+        }
     }
 
     // Muted IMBE frames should still advance adaptive smoothing state (JMBE parity)

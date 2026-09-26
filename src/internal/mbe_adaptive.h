@@ -81,6 +81,12 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0);
 
 /**
+ * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7
+ * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
+ */
+#define MBE_SPEC_MUTE_NOISE_AMPLITUDE 5.0f
+
+/**
  * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].
  *
  * Draws from the same thread-local Java Random-compatible generator as
