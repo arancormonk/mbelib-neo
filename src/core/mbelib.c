@@ -1047,8 +1047,11 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
     for (int l = 1; l <= maxl; l++) {
         float cw0l = cw0 * (float)l;
         float pw0l = pw0 * (float)l;
-        int cur_voiced = (cur_mp->Vl[l] == 1);
-        int prev_voiced = (prev_mp->Vl[l] == 1);
+        /* A harmonic at or above Nyquist cannot be represented at 8 kHz and
+         * would alias back into the band, so it is not rendered. Decoded
+         * models always satisfy L * w0 < pi; this guards caller-supplied ones. */
+        int cur_voiced = (cur_mp->Vl[l] == 1) && (cw0l < (float)M_PI);
+        int prev_voiced = (prev_mp->Vl[l] == 1) && (pw0l < (float)M_PI);
 
         if (cur_voiced || prev_voiced) {
             int use_interpolation = (l < 8) && cur_voiced && prev_voiced && (fabsf(cw0 - pw0) < (0.1f * cw0));

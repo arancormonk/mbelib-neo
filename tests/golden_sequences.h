@@ -5,7 +5,8 @@
 
 /**
  * @file
- * @brief Shared error-free, voice-only AMBE frame sequences for golden PCM hashes.
+ * @brief Shared golden PCM fixtures: the single-frame synthesis model and
+ *        error-free, voice-only AMBE frame sequences.
  *
  * Included by tests/test_golden_pcm.c and tools/gen_golden.c so the pinned
  * hashes and the generator always hash identical input.
@@ -66,6 +67,31 @@ golden_fill_ambe_voice_frame(char ambe_d[49], uint32_t* state) {
         ambe_d[i] = (char)(golden_xorshift32(state) & 1u);
     }
     ambe_d[0] = 0;
+}
+
+/**
+ * @brief Deterministic single-frame synthesis model for the float/int16 golden hashes.
+ *
+ * w0 = 0.105 rad with L = 27, the harmonic count the IMBE rule
+ * floor(0.9254 * floor(pi / w0 + 0.25)) gives, so every harmonic lies below
+ * Nyquist (27 * 0.105 < pi) like the models the decoders produce.
+ *
+ * @param cur  Output current parameter set.
+ * @param prev Output previous parameter set (copy of current).
+ */
+static void
+golden_fill_single_frame(mbe_parms* cur, mbe_parms* prev) {
+    mbe_parms enh;
+    mbe_initMbeParms(cur, prev, &enh);
+    cur->w0 = 0.105f;
+    cur->L = 27;
+    for (int l = 1; l <= cur->L; ++l) {
+        cur->Vl[l] = (l % 4) ? 1 : 0;
+        cur->Ml[l] = 0.035f + 0.0015f * (float)l;
+        cur->PHIl[l] = (float)l * 0.03f;
+        cur->PSIl[l] = (float)l * 0.02f;
+    }
+    *prev = *cur;
 }
 
 /**

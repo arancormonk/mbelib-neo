@@ -32,26 +32,6 @@ fnv1a32(const void* data, size_t len) {
 }
 
 /**
- * @brief Initialize deterministic synthesis parameters for hashing.
- * @param cur  Output current parameter set.
- * @param prev Output previous parameter set (copy of current).
- */
-static void
-fill_params(mbe_parms* cur, mbe_parms* prev) {
-    mbe_parms enh;
-    mbe_initMbeParms(cur, prev, &enh);
-    cur->w0 = 0.105f;
-    cur->L = 36;
-    for (int l = 1; l <= cur->L; ++l) {
-        cur->Vl[l] = (l % 4) ? 1 : 0;
-        cur->Ml[l] = 0.035f + 0.0015f * (float)l;
-        cur->PHIl[l] = (float)l * 0.03f;
-        cur->PSIl[l] = (float)l * 0.02f;
-    }
-    *prev = *cur;
-}
-
-/**
  * @brief Program entry: prints float and int16 golden hashes to stdout.
  */
 int
@@ -61,7 +41,7 @@ main(void) {
     mbe_parms cur, prev;
 
     mbe_setThreadRngSeed(0xC0FFEEu);
-    fill_params(&cur, &prev);
+    golden_fill_single_frame(&cur, &prev);
     mbe_synthesizeSpeechf(out_f, &cur, &prev);
 
     // Hash float bytes and also short bytes after conversion

@@ -72,26 +72,6 @@ float_bits_equal(float a, float b) {
 }
 
 /**
- * @brief Initialize deterministic synthesis parameters for testing.
- * @param cur  Output current parameter set.
- * @param prev Output previous parameter set (copy of current).
- */
-static void
-fill_params(mbe_parms* cur, mbe_parms* prev) {
-    mbe_parms enh;
-    mbe_initMbeParms(cur, prev, &enh);
-    cur->w0 = 0.105f;
-    cur->L = 36;
-    for (int l = 1; l <= cur->L; ++l) {
-        cur->Vl[l] = (l % 4) ? 1 : 0;
-        cur->Ml[l] = 0.035f + 0.0015f * (float)l;
-        cur->PHIl[l] = (float)l * 0.03f;
-        cur->PSIl[l] = (float)l * 0.02f;
-    }
-    *prev = *cur;
-}
-
-/**
  * @brief Check one voice-only AMBE sequence: determinism, energy, and (strict builds) exact hashes.
  * @return 0 on success, 1 on failure.
  */
@@ -142,15 +122,16 @@ main(void) {
      * On other arches (e.g., AArch64/NEON), rounding order can differ; we use
      * determinism and sanity checks so CI remains green.
      */
-    /* Regenerated harmonic phase and the shared spec-exact WOLA window. */
+    /* Regenerated harmonic phase, the shared spec-exact WOLA window, and an
+     * in-band fixture (golden_fill_single_frame: L * w0 < pi). */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0x8A3BA58Fu;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0x31A1D87Cu;
 #ifdef MBELIB_TEST_BUILD_SIMD
-    const uint32_t X86_F32_FNV1A_SIMD = 0xE7D54B0Bu;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x3C152227u;
 #endif
 #endif
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
-    const uint32_t X86_S16_FNV1A = 0xE3E05C68u;
+    const uint32_t X86_S16_FNV1A = 0x4E5E77DCu;
 #endif
 
     float out_f[160];
@@ -158,7 +139,7 @@ main(void) {
     mbe_parms cur, prev;
 
     mbe_setThreadRngSeed(0xC0FFEEu);
-    fill_params(&cur, &prev);
+    golden_fill_single_frame(&cur, &prev);
     /* First run */
     mbe_synthesizeSpeechf(out_f, &cur, &prev);
     uint32_t hf1 = fnv1a32(out_f, sizeof(out_f));
@@ -171,7 +152,7 @@ main(void) {
     float out_f2[160];
     short out_s2[160];
     mbe_setThreadRngSeed(0xC0FFEEu);
-    fill_params(&cur, &prev);
+    golden_fill_single_frame(&cur, &prev);
     mbe_synthesizeSpeechf(out_f2, &cur, &prev);
     for (int i = 0; i < 160; ++i) {
         if (!float_bits_equal(out_f[i], out_f2[i])) {

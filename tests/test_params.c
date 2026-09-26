@@ -410,6 +410,26 @@ main(void) {
         assert(harmonics_below_nyquist(&prev));
     }
 
+    // Shared synthesizer Nyquist guard: voiced harmonics at or above pi cannot
+    // be represented at 8 kHz and are skipped instead of aliasing. Only the
+    // above-Nyquist harmonics carry amplitude here, so the output is silent.
+    {
+        float out[160];
+        mbe_parms cur, prev;
+        seed_speech_params(&cur, &prev);
+        cur.w0 = 0.105f;
+        cur.L = 36;
+        for (int l = 1; l <= 56; ++l) {
+            cur.Vl[l] = 1;
+            cur.Ml[l] = ((float)l * cur.w0 >= (float)M_PI) ? 1.0f : 0.0f;
+        }
+        prev = cur;
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        for (int i = 0; i < 160; ++i) {
+            assert(fabsf(out[i]) < 1e-6f);
+        }
+    }
+
     // AMBE 2450 Dataf: absent C0-valid context, repeat decision must depend only on total errors
     {
         char ambe_d[49];
