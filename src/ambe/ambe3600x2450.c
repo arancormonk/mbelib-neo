@@ -407,7 +407,7 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
     float Sum43 = 0;
     for (int l = 1; l <= cur_mp->L; l++) {
         flokl[l] = ((float)prev_L / (float)cur_mp->L) * (float)l;
-        intkl[l] = (int)(flokl[l]);
+        intkl[l] = (int)flokl[l];
 #ifdef AMBE_DEBUG
         fprintf(stderr, "flok%i: %f, intk%i: %i ", l, flokl[l], l, intkl[l]);
 #endif
