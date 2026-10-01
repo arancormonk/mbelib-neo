@@ -146,6 +146,9 @@ docker run --rm \
         if [[ ! -f "$iwyu_manifest" ]] || ! grep -q "^iwyu_sha=${CI_ARCH_IWYU_SHA}$" "$iwyu_manifest"; then
           echo "Cached include-what-you-use does not match desired SHA; rebuilding"
           rebuild_iwyu=1
+        elif ! grep -q "^llvm_version=$(llvm-config --version)$" "$iwyu_manifest"; then
+          echo "Cached include-what-you-use was built against a different LLVM; rebuilding"
+          rebuild_iwyu=1
         fi
       fi
 
@@ -167,6 +170,7 @@ docker run --rm \
         installed_sha=\$(git -C /tmp/include-what-you-use rev-parse HEAD)
         {
           echo \"iwyu_sha=\$installed_sha\"
+          echo \"llvm_version=\$(llvm-config --version)\"
           echo \"updated=\$(date -u +%FT%TZ)\"
         } > \"\$CI_ARCH_TOOLCHAIN_PREFIX/.iwyu-manifest\"
       "

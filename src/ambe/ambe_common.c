@@ -94,7 +94,7 @@ mbe_demodulateAmbe3600Data_common(char fr[4][24]) {
     /* demodulate fr with pr */
     k = 1;
     for (j = 22; j >= 0; j--) {
-        fr[1][j] = (char)((fr[1][j]) ^ pr[k]);
+        fr[1][j] = (char)(fr[1][j] ^ pr[k]);
         k++;
     }
 }

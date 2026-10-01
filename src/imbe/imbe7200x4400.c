@@ -302,7 +302,7 @@ imbe_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const flo
     float Sum77 = 0;
     for (int l = 1; l <= cur_L; l++) {
         flokl[l] = ((float)prev_L / (float)cur_L) * (float)l;
-        intkl[l] = (int)(flokl[l]);
+        intkl[l] = (int)flokl[l];
         if (intkl[l] < 0) {
             intkl[l] = 0;
         } else if (intkl[l] > MBE_MAX_HARMONIC_BANDS) {
@@ -649,13 +649,13 @@ mbe_demodulateImbe7200x4400Data(char imbe[8][23]) {
     k = 1;
     for (i = 1; i < 4; i++) {
         for (j = 22; j >= 0; j--) {
-            imbe[i][j] = ((imbe[i][j]) ^ pr[k]);
+            imbe[i][j] = imbe[i][j] ^ pr[k];
             k++;
         }
     }
     for (i = 4; i < 7; i++) {
         for (j = 14; j >= 0; j--) {
-            imbe[i][j] = ((imbe[i][j]) ^ pr[k]);
+            imbe[i][j] = imbe[i][j] ^ pr[k];
             k++;
         }
     }

@@ -17,6 +17,7 @@ Checks: >
   clang-diagnostic-tautological-pointer-compare,
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
+  -bugprone-signed-bitwise,
   -readability-function-cognitive-complexity,
   -readability-function-size,
   -readability-identifier-length,
