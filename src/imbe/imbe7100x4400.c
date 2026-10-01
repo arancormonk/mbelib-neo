@@ -313,20 +313,20 @@ mbe_demodulateImbe7100x4400Data(char imbe[7][24]) {
     // demodulate imbe with pr
     k = 1;
     for (j = 23; j >= 0; j--) {
-        imbe[1][j] = ((imbe[1][j]) ^ pr[k]);
+        imbe[1][j] = imbe[1][j] ^ pr[k];
         k++;
     }
 
     for (i = 2; i < 4; i++) {
         for (j = 22; j >= 0; j--) {
-            imbe[i][j] = ((imbe[i][j]) ^ pr[k]);
+            imbe[i][j] = imbe[i][j] ^ pr[k];
             k++;
         }
     }
 
     for (i = 4; i < 6; i++) {
         for (j = 14; j >= 0; j--) {
-            imbe[i][j] = ((imbe[i][j]) ^ pr[k]);
+            imbe[i][j] = imbe[i][j] ^ pr[k];
             k++;
         }
     }

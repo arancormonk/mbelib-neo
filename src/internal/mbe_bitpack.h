@@ -12,7 +12,7 @@ static inline int
 mbe_bits_by_index_to_int(const char* bits, const unsigned* indices, size_t count) {
     int value = 0;
     for (size_t i = 0u; i < count; ++i) {
-        value = (value << 1) | (int)(bits[indices[i]] & 1);
+        value = (value << 1) | (bits[indices[i]] & 1);
     }
     return value;
 }
@@ -21,7 +21,7 @@ static inline int
 mbe_bits_descending_to_int(const char* bits, int high, int low) {
     int value = 0;
     for (int i = high; i >= low; --i) {
-        value = (value << 1) | (int)(bits[i] & 1);
+        value = (value << 1) | (bits[i] & 1);
     }
     return value;
 }
