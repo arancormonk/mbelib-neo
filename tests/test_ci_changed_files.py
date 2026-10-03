@@ -202,6 +202,38 @@ def main():
         run(git, repo, "clean", "-q", "-fdx")
         print("PASS symlinks planted in the output directory do not empty the lists")
 
+        # A directory, or a link to one, where a list goes fails the helper: the rename would put the list inside
+        # it, and the path would read as an empty list. So does a changed name with a newline in it, which the
+        # line-based lists cannot hold.
+        def expect_refused(label, change, message):
+            run(git, repo, "checkout", "-q", "-f", "--detach", base)
+            run(git, repo, "clean", "-q", "-fdx")
+            change(repo)
+            head = commit_all(git, repo, label)
+            returncode, outputs, stderr = run_helper(bash, script, repo, base, head, default_out_dir=True)
+            assert returncode != 0, (label, outputs)
+            assert message in stderr, (label, stderr)
+            assert not outputs, (label, outputs)
+            print(f"PASS {label} fails the helper")
+
+        def directory_at_list(repo_dir):
+            write(repo_dir, "src/core/mbelib.c", "directory case\n")
+            write(repo_dir, ".ci/changed-files/fuzz_targets.txt/keep", "x\n")
+
+        def link_to_directory_at_list(repo_dir):
+            write(repo_dir, "src/core/mbelib.c", "link case\n")
+            write(repo_dir, "elsewhere/keep", "x\n")
+            os.makedirs(os.path.join(repo_dir, ".ci", "changed-files"), exist_ok=True)
+            os.symlink(os.path.join("..", "..", "elsewhere"),
+                       os.path.join(repo_dir, ".ci", "changed-files", "fuzz_targets.txt"))
+
+        expect_refused("a directory at a list path", directory_at_list, "is a directory")
+        expect_refused("a link to a directory at a list path", link_to_directory_at_list, "is a directory")
+        expect_refused("a changed name with a newline", lambda repo_dir: write(repo_dir, "src/line\nbreak.c", "x\n"),
+                       "contains a newline")
+        run(git, repo, "checkout", "-q", "-f", "--detach", base)
+        run(git, repo, "clean", "-q", "-fdx")
+
         # A diff that fails must fail the helper: an empty list would read as "nothing changed" and let the
         # fuzzing and every other changed-files job pass without doing their work. Both commits resolve, so the
         # helper gets past its ref checks, but git diff rejects an invalid diff setting.
