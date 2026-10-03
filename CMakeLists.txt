@@ -1197,8 +1197,98 @@ if(MBELIB_BUILD_TESTS)
                         $<TARGET_FILE:mbe_quality_eval>
                         $<TARGET_FILE:mbe_quality_reframe>
                 )
+                # The A/B runner locks its run directory with fcntl, so it is POSIX-only, and
+                # uses assignment expressions, so it needs Python 3.8.
+                if(NOT WIN32 AND Python3_VERSION VERSION_GREATER_EQUAL 3.8)
+                    add_test(
+                        NAME test_quality_ab_finalize
+                        COMMAND
+                            ${Python3_EXECUTABLE}
+                            ${PROJECT_SOURCE_DIR}/tests/test_quality_ab_finalize.py
+                            ${PROJECT_SOURCE_DIR}/tools/quality
+                    )
+                endif()
             endif()
         endif()
+    endif()
+
+    # tools/ci_changed_files.sh decides which pull requests PR fuzzing runs on. It is
+    # CI tooling for the Linux runners and needs bash 4.4 or later, so the check
+    # registers on Linux hosts that have such a bash, git and Python.
+    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+        find_package(Python3 3.7 QUIET COMPONENTS Interpreter)
+        find_package(Git QUIET)
+        find_program(MBELIB_BASH_EXECUTABLE bash)
+        set(_mbelib_bash_version "")
+        if(MBELIB_BASH_EXECUTABLE)
+            execute_process(
+                COMMAND
+                    ${MBELIB_BASH_EXECUTABLE} -c
+                    [[echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"]]
+                OUTPUT_VARIABLE _mbelib_bash_version
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+        endif()
+        if(
+            Python3_Interpreter_FOUND
+            AND GIT_FOUND
+            AND _mbelib_bash_version VERSION_GREATER_EQUAL 4.4
+        )
+            add_test(
+                NAME test_ci_changed_files
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_ci_changed_files.py
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tools/ci_changed_files.sh
+            )
+            # .githooks/pre-push takes each pushed ref's files from
+            # tools/push_changed_files.sh, which has the same requirements.
+            add_test(
+                NAME test_push_changed_files
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_push_changed_files.py
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tools/push_changed_files.sh
+            )
+            add_test(
+                NAME test_pre_push_paths
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_pre_push_paths.py
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}
+            )
+        else()
+            message(
+                STATUS
+                "test_ci_changed_files, test_push_changed_files and test_pre_push_paths not registered: needs Python 3, git and bash 4.4 or later"
+            )
+        endif()
+        # tools/shell_lint.sh must fail when either of its tools does. The shell/workflow
+        # lint job also runs this test, where both tools are installed.
+        find_program(MBELIB_SHELLCHECK_EXECUTABLE shellcheck)
+        find_program(MBELIB_SHFMT_EXECUTABLE shfmt)
+        if(
+            Python3_Interpreter_FOUND
+            AND GIT_FOUND
+            AND _mbelib_bash_version VERSION_GREATER_EQUAL 4.4
+            AND MBELIB_SHELLCHECK_EXECUTABLE
+            AND MBELIB_SHFMT_EXECUTABLE
+        )
+            add_test(
+                NAME test_shell_lint
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_shell_lint.py
+                    ${PROJECT_SOURCE_DIR}/tools/shell_lint.sh
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${MBELIB_SHELLCHECK_EXECUTABLE} ${MBELIB_SHFMT_EXECUTABLE}
+            )
+        endif()
+        unset(_mbelib_bash_version)
     endif()
 
     set(_MBELIB_TEST_TARGETS

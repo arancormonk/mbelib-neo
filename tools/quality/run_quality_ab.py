@@ -686,6 +686,28 @@ class Runner:
         except (OSError, ValueError, RuntimeError) as exc:
             self.manifest["correctness_tests"] = {"status": "fail", "gates": {}, "tests": [], "error": str(exc)}
 
+    def report_metrics(self):
+        """Read each report's metrics once, for the table and its means.
+
+        A valid report whose metrics file is missing or can no longer be read is invalid: it fails the run like any
+        other invalid report and stays out of the means, rather than counting as a clip with no numbers.
+        """
+        metrics = {}
+        for index, report in enumerate(self.manifest["reports"]):
+            for variant in ("baseline", "candidate"):
+                path = report[variant]["json"]
+                if not path:
+                    if report["valid"]:
+                        report["valid"] = False
+                        report["invalid_reasons"].append(f"{variant}: metrics file missing at run end")
+                    continue
+                try:
+                    metrics[(index, variant)] = read_json(self.output / path)
+                except (OSError, ValueError) as exc:
+                    report["valid"] = False
+                    report["invalid_reasons"].append(f"{variant}: metrics unreadable at run end: {exc}")
+        return metrics
+
     def finalize(self):
         manifest = self.manifest
         for category in ("libraries", "tools"):
@@ -695,6 +717,7 @@ class Runner:
                         manifest["failures"].append(f"{category}/{role} changed during the run")
                 except OSError as exc:
                     manifest["failures"].append(f"{category}/{role} identity unavailable at run end: {exc}")
+        metrics = self.report_metrics()
         expected = len(manifest["references"]) * len(MODES)
         reports_complete = expected > 0 and len(manifest["reports"]) == expected
         valid = reports_complete and all(report["valid"] for report in manifest["reports"])
@@ -743,23 +766,16 @@ class Runner:
             acceptance["reasons"].extend(item["invalid_reasons"])
         rows = []
         groups = {mode: [] for mode in MODES}
-        for report in manifest["reports"]:
+        for index, report in enumerate(manifest["reports"]):
             row = {
                 "name": report["name"],
                 "mode": report["mode"],
                 "valid": report["valid"],
                 "independent": report["name"] in manifest["corpus"].get("independent_references", []),
-                "baseline": None,
-                "candidate": None,
+                "baseline": metrics.get((index, "baseline")),
+                "candidate": metrics.get((index, "candidate")),
                 "invalid_reasons": report["invalid_reasons"],
             }
-            for variant in ("baseline", "candidate"):
-                path = report[variant]["json"]
-                if path:
-                    try:
-                        row[variant] = read_json(self.output / path)
-                    except (OSError, ValueError):
-                        pass
             rows.append(row)
             if row["valid"] and row["independent"]:
                 groups[row["mode"]].append(row)

@@ -71,14 +71,21 @@ if [[ ${#FILTERED[@]} -eq 0 ]]; then
   exit 0
 fi
 
+# Both tools always run, and either one failing fails the lint. (A plain `{ ...; }`
+# group has only its last command's status, so a shellcheck failure went unreported
+# whenever shfmt passed.)
+lint_files() {
+  local status=0
+  echo "shellcheck files: ${#FILTERED[@]}"
+  shellcheck "${FILTERED[@]}" || status=1
+  echo "shfmt files: ${#FILTERED[@]}"
+  shfmt -d -i 2 -ci -sr "${FILTERED[@]}" || status=1
+  return "$status"
+}
+
 LOG_FILE=".shell-lint.local.out"
 set +e
-{
-  echo "shellcheck files: ${#FILTERED[@]}"
-  shellcheck "${FILTERED[@]}"
-  echo "shfmt files: ${#FILTERED[@]}"
-  shfmt -d -i 2 -ci -sr "${FILTERED[@]}"
-} 2>&1 | tee "$LOG_FILE"
+lint_files 2>&1 | tee "$LOG_FILE"
 rc=${PIPESTATUS[0]}
 set -e
 

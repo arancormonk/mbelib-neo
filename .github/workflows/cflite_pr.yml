@@ -1,15 +1,12 @@
 name: ClusterFuzzLite PR fuzzing
 
+# Runs on every pull request so its checks can be required: a required check from a
+# workflow that a path filter kept from starting would wait forever. The job decides
+# for itself whether the fuzzers need to run, from the paths the filter used to list
+# (tools/ci_changed_files.sh, fuzz_targets).
 on:
   pull_request:
     branches: [main, master]
-    paths:
-      - ".clusterfuzzlite/**"
-      - ".github/workflows/cflite_pr.yml"
-      - "fuzz/**"
-      - "include/**"
-      - "src/**"
-      - "CMakeLists.txt"
   workflow_dispatch: {}
 
 permissions:
@@ -33,9 +30,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # Select on the pull request's own changes (base...head), as the former paths
+      # filter did, not on the merge commit that is checked out and fuzzed: an edit
+      # main already has would vanish from base...merge.
+      - name: Compute PR changed files
+        if: github.event_name == 'pull_request'
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          tools/ci_changed_files.sh \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --no-header-expansion
+
+      - name: Skip PR fuzzing
+        if: github.event_name == 'pull_request' && steps.changed.outputs.fuzz_targets == '0'
+        run: echo "No library, header, fuzz harness or fuzz build changes to fuzz."
 
       - name: Build fuzzers
         id: build
+        if: github.event_name != 'pull_request' || steps.changed.outputs.fuzz_targets != '0'
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: c++
@@ -44,6 +63,7 @@ jobs:
 
       - name: Run fuzzers
         id: run
+        if: github.event_name != 'pull_request' || steps.changed.outputs.fuzz_targets != '0'
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

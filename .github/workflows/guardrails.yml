@@ -46,6 +46,7 @@ jobs:
             set -euo pipefail
             tools/shell_lint.sh
             tools/workflow_lint.sh
+            python3 tests/test_shell_lint.py tools/shell_lint.sh
           '
 
       - name: Upload lint output
@@ -255,18 +256,6 @@ jobs:
             .osv-scanner.sarif
           include-hidden-files: true
           retention-days: 7
-
-  dependency-review:
-    name: dependency review
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Review dependency changes
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v4
-        with:
-          fail-on-severity: moderate
-          comment-summary-in-pr: always
 
   warnings-as-errors:
     name: warnings as errors

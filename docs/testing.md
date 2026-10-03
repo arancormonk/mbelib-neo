@@ -35,8 +35,18 @@ ctest --preset dev-debug --output-on-failure
 
 GitHub Actions runs tests and quality checks on pull requests and pushes to the
 primary branch. Required checks include cross-platform builds, sanitizer tests,
-static analysis, repository security guardrails, workflow linting, dependency
-review, secret scanning, OSV scanning, and install/consume checks.
+static analysis, CodeQL (C/C++, workflows and Python), PR fuzzing, repository
+security guardrails, workflow linting, dependency review, secret scanning, OSV
+scanning, and install/consume checks.
+
+Every required check runs on every pull request. A required check that a path
+filter keeps from starting never reports, so the pull request waits on it
+forever. A job that only matters for some paths therefore runs on every pull
+request and skips its work when `tools/ci_changed_files.sh` finds nothing for
+it, as PR fuzzing does. A job that `if:` skips still reports success under its
+name, so a required job that only makes sense on a pull request, such as
+dependency review, lives in `guardrails-pr`, a workflow that only pull requests
+start, with no event condition.
 
 ## Regression Test Requirement
 
@@ -83,8 +93,10 @@ ctest --preset asan-ubsan-debug --output-on-failure
 ```
 
 Frame-processing paths are also covered by ClusterFuzzLite PR fuzzing with
-AddressSanitizer, including fixed-size hard/soft frame decode paths and
-parameter synthesis paths.
+AddressSanitizer and UndefinedBehaviorSanitizer, including fixed-size hard/soft
+frame decode paths and parameter synthesis paths. The fuzzers run on pull
+requests that change the library, its headers, the fuzz harnesses or the fuzz
+build (`fuzz_targets` in `tools/ci_changed_files.sh`).
 
 ## Speech Quality Evaluation
 
