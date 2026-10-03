@@ -1243,10 +1243,28 @@ if(MBELIB_BUILD_TESTS)
                     ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
                     ${PROJECT_SOURCE_DIR}/tools/ci_changed_files.sh
             )
+            # .githooks/pre-push takes each pushed ref's files from
+            # tools/push_changed_files.sh, which has the same requirements.
+            add_test(
+                NAME test_push_changed_files
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_push_changed_files.py
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tools/push_changed_files.sh
+            )
+            add_test(
+                NAME test_pre_push_paths
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_pre_push_paths.py
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}
+            )
         else()
             message(
                 STATUS
-                "test_ci_changed_files not registered: needs Python 3, git and bash 4.4 or later"
+                "test_ci_changed_files, test_push_changed_files and test_pre_push_paths not registered: needs Python 3, git and bash 4.4 or later"
             )
         endif()
         # tools/shell_lint.sh must fail when either of its tools does. The shell/workflow
