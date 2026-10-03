@@ -46,11 +46,12 @@ def commit_all(git, repo, message):
     return run(git, repo, "rev-parse", "HEAD")
 
 
-def run_helper(bash, script, repo, base, head):
+def run_helper(bash, script, repo, base, head, default_out_dir=False):
     """Run the helper from the repository and return (returncode, GITHUB_OUTPUT values, stderr)."""
-    # Outside the repository, so no case commits another's output.
+    # Outside the repository, so no case commits another's output, unless the case is about the default
+    # output directory inside the checkout.
     scratch = os.path.dirname(repo)
-    out_dir = os.path.join(scratch, "ci-out")
+    out_args = [] if default_out_dir else ["--out-dir", os.path.join(scratch, "ci-out")]
     github_output = os.path.join(scratch, "github-output")
     if os.path.exists(github_output):
         os.remove(github_output)
@@ -58,7 +59,7 @@ def run_helper(bash, script, repo, base, head):
     path = os.path.dirname(os.path.abspath(GIT)) + os.pathsep + os.environ.get("PATH", "")
     env = dict(os.environ, GITHUB_OUTPUT=github_output, PATH=path)
     result = subprocess.run(
-        [bash, script, "--base", base, "--head", head, "--no-header-expansion", "--out-dir", out_dir],
+        [bash, script, "--base", base, "--head", head, "--no-header-expansion", *out_args],
         cwd=repo, env=env, capture_output=True, text=True, timeout=60,
     )
     outputs = {}
@@ -175,6 +176,31 @@ def main():
         returncode, outputs, stderr = run_helper(bash, script, repo, main_tip, merge)
         assert returncode == 0 and listed_targets(repo, outputs) == [], (outputs, stderr)
         print("PASS an edit main already has stays in scope against the pull request head")
+
+        # Everything under the checkout comes from the pull request, including the default output directory.
+        # Symlinks to /dev/null where the helper writes (a list, and the raw-diff file an earlier version kept
+        # there) must not empty what the jobs read.
+        def plant_links(repo_dir):
+            write(repo_dir, "src/core/mbelib.c", "planted\n")
+            links = os.path.join(repo_dir, ".ci", "changed-files")
+            os.makedirs(links, exist_ok=True)
+            for name in ("fuzz_targets.txt", "semgrep_targets.txt", ".diff-paths.z"):
+                os.symlink(os.devnull, os.path.join(links, name))
+
+        run(git, repo, "checkout", "-q", "--detach", base)
+        plant_links(repo)
+        planted = commit_all(git, repo, "plant links")
+        returncode, outputs, stderr = run_helper(bash, script, repo, base, planted, default_out_dir=True)
+        assert returncode == 0, stderr
+        assert outputs["fuzz_targets"] == "1" and outputs["semgrep_targets"] == "1", outputs
+        for name in ("fuzz_targets.txt", "semgrep_targets.txt"):
+            listed = os.path.join(repo, ".ci", "changed-files", name)
+            assert not os.path.islink(listed), name
+            with open(listed, encoding="utf-8") as handle:
+                assert handle.read() == "src/core/mbelib.c\n", name
+        run(git, repo, "checkout", "-q", "-f", "--detach", base)
+        run(git, repo, "clean", "-q", "-fdx")
+        print("PASS symlinks planted in the output directory do not empty the lists")
 
         # A diff that fails must fail the helper: an empty list would read as "nothing changed" and let the
         # fuzzing and every other changed-files job pass without doing their work. Both commits resolve, so the
