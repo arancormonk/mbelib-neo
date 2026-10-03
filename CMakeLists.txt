@@ -1197,6 +1197,17 @@ if(MBELIB_BUILD_TESTS)
                         $<TARGET_FILE:mbe_quality_eval>
                         $<TARGET_FILE:mbe_quality_reframe>
                 )
+                # The A/B runner locks its run directory with fcntl, so it is POSIX-only, and
+                # uses assignment expressions, so it needs Python 3.8.
+                if(NOT WIN32 AND Python3_VERSION VERSION_GREATER_EQUAL 3.8)
+                    add_test(
+                        NAME test_quality_ab_finalize
+                        COMMAND
+                            ${Python3_EXECUTABLE}
+                            ${PROJECT_SOURCE_DIR}/tests/test_quality_ab_finalize.py
+                            ${PROJECT_SOURCE_DIR}/tools/quality
+                    )
+                endif()
             endif()
         endif()
     endif()
