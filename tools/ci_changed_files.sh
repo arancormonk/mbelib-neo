@@ -21,6 +21,7 @@ Writes newline-delimited target files for CI jobs:
   cmake_format_files.txt
   workflow_security_targets.txt
   dependency_scan_targets.txt
+  fuzz_targets.txt
 
 Options:
   --base REF      Base ref/SHA for the PR diff.
@@ -126,6 +127,25 @@ collect_header_includers() {
 }
 
 mkdir -p "$OUT_DIR"
+
+# PR fuzzing builds the library with its vendored code and the fuzz harnesses, so any
+# change under these paths counts: deletions, both sides of a rename and src/external/
+# included, as GitHub's own `paths:` filter counted them.
+mapfile -t fuzz_scope_paths < <(
+  git diff --name-only --no-renames "${BASE_REF}...${HEAD_REF}" ||
+    git diff --name-only --no-renames "$BASE_REF" "$HEAD_REF"
+)
+fuzz_targets=()
+for p in "${fuzz_scope_paths[@]}"; do
+  case "$p" in
+    .clusterfuzzlite/* | .github/workflows/cflite_pr.yml | fuzz/* | include/* | src/* | CMakeLists.txt)
+      fuzz_targets+=("$p")
+      ;;
+  esac
+done
+if [[ ${#fuzz_targets[@]} -gt 0 ]]; then
+  mapfile -t fuzz_targets < <(sort_unique_array "${fuzz_targets[@]}")
+fi
 
 mapfile -t changed_paths < <(
   git diff --name-only --diff-filter=ACMR "${BASE_REF}...${HEAD_REF}" ||
@@ -259,12 +279,13 @@ write_list "$OUT_DIR/semgrep_targets.txt" "${semgrep_targets[@]}"
 write_list "$OUT_DIR/cmake_format_files.txt" "${cmake_format_files[@]}"
 write_list "$OUT_DIR/workflow_security_targets.txt" "${workflow_security_targets[@]}"
 write_list "$OUT_DIR/dependency_scan_targets.txt" "${dependency_scan_targets[@]}"
+write_list "$OUT_DIR/fuzz_targets.txt" "${fuzz_targets[@]}"
 
 echo "ci-changed-files: base=${BASE_REF} head=${HEAD_REF}"
 echo "ci-changed-files: changed=${#changed_paths[@]} format=${#format_files[@]}" \
   "tus=${#analysis_tus[@]} cppcheck=${#cppcheck_sources[@]} semgrep=${#semgrep_targets[@]}" \
   "cmake=${#cmake_format_files[@]} workflows=${#workflow_security_targets[@]}" \
-  "deps=${#dependency_scan_targets[@]}"
+  "deps=${#dependency_scan_targets[@]} fuzz=${#fuzz_targets[@]}"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
@@ -277,5 +298,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "cmake_format_files=${#cmake_format_files[@]}"
     echo "workflow_security_targets=${#workflow_security_targets[@]}"
     echo "dependency_scan_targets=${#dependency_scan_targets[@]}"
+    echo "fuzz_targets=${#fuzz_targets[@]}"
   } >> "$GITHUB_OUTPUT"
 fi

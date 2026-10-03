@@ -1212,6 +1212,46 @@ if(MBELIB_BUILD_TESTS)
         endif()
     endif()
 
+    # tools/ci_changed_files.sh decides which pull requests PR fuzzing runs on. It is
+    # CI tooling for the Linux runners and needs bash 4.4 or later, so the check
+    # registers on Linux hosts that have such a bash, git and Python.
+    if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING)
+        find_package(Python3 3.7 QUIET COMPONENTS Interpreter)
+        find_package(Git QUIET)
+        find_program(MBELIB_BASH_EXECUTABLE bash)
+        set(_mbelib_bash_version "")
+        if(MBELIB_BASH_EXECUTABLE)
+            execute_process(
+                COMMAND
+                    ${MBELIB_BASH_EXECUTABLE} -c
+                    [[echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"]]
+                OUTPUT_VARIABLE _mbelib_bash_version
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+        endif()
+        if(
+            Python3_Interpreter_FOUND
+            AND GIT_FOUND
+            AND _mbelib_bash_version VERSION_GREATER_EQUAL 4.4
+        )
+            add_test(
+                NAME test_ci_changed_files
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_ci_changed_files.py
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tools/ci_changed_files.sh
+            )
+        else()
+            message(
+                STATUS
+                "test_ci_changed_files not registered: needs Python 3, git and bash 4.4 or later"
+            )
+        endif()
+        unset(_mbelib_bash_version)
+    endif()
+
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
