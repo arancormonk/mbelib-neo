@@ -46,6 +46,7 @@ jobs:
             set -euo pipefail
             tools/shell_lint.sh
             tools/workflow_lint.sh
+            python3 tests/test_shell_lint.py tools/shell_lint.sh
           '
 
       - name: Upload lint output

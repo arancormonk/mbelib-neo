@@ -1249,6 +1249,27 @@ if(MBELIB_BUILD_TESTS)
                 "test_ci_changed_files not registered: needs Python 3, git and bash 4.4 or later"
             )
         endif()
+        # tools/shell_lint.sh must fail when either of its tools does. The shell/workflow
+        # lint job also runs this test, where both tools are installed.
+        find_program(MBELIB_SHELLCHECK_EXECUTABLE shellcheck)
+        find_program(MBELIB_SHFMT_EXECUTABLE shfmt)
+        if(
+            Python3_Interpreter_FOUND
+            AND GIT_FOUND
+            AND _mbelib_bash_version VERSION_GREATER_EQUAL 4.4
+            AND MBELIB_SHELLCHECK_EXECUTABLE
+            AND MBELIB_SHFMT_EXECUTABLE
+        )
+            add_test(
+                NAME test_shell_lint
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_shell_lint.py
+                    ${PROJECT_SOURCE_DIR}/tools/shell_lint.sh
+                    ${MBELIB_BASH_EXECUTABLE} ${GIT_EXECUTABLE}
+                    ${MBELIB_SHELLCHECK_EXECUTABLE} ${MBELIB_SHFMT_EXECUTABLE}
+            )
+        endif()
         unset(_mbelib_bash_version)
     endif()
 
