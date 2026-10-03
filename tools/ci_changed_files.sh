@@ -5,6 +5,13 @@ set -euo pipefail
 # Changed source files are analyzed directly, and changed headers expand to
 # representative C translation units.
 
+# Needs bash 4.4: `mapfile -d` reads git's NUL-separated names, and expanding an
+# empty array under `set -u` is an error before 4.4.
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+  echo "ci-changed-files: needs bash 4.4 or later (this is ${BASH_VERSION})" >&2
+  exit 2
+fi
+
 ROOT_DIR=$(git rev-parse --show-toplevel 2> /dev/null || pwd)
 cd "$ROOT_DIR"
 
@@ -128,13 +135,33 @@ collect_header_includers() {
 
 mkdir -p "$OUT_DIR"
 
+# The raw diff goes through a private temporary file outside the checkout: anything
+# under the checkout comes from the pull request, which could put a symlink to
+# /dev/null where the diff is written and empty the lists.
+DIFF_RAW=$(mktemp "${TMPDIR:-/tmp}/ci-changed-files.XXXXXX")
+trap 'rm -f "$DIFF_RAW"' EXIT
+
+# Read the paths changed between BASE_REF and HEAD_REF into diff_paths, with any extra
+# `git diff` options. -z keeps each name raw: git otherwise quotes a name with
+# non-ASCII bytes, quotes or tabs, and a quoted name matches no pattern below. A diff
+# that fails ends the run, because an empty list reads as "nothing changed" and would
+# let every job that consumes it skip its work and pass.
+read_diff_paths() {
+  if ! git diff -z --name-only "$@" "${BASE_REF}...${HEAD_REF}" > "$DIFF_RAW"; then
+    if ! git diff -z --name-only "$@" "$BASE_REF" "$HEAD_REF" > "$DIFF_RAW"; then
+      echo "ci-changed-files: git diff between ${BASE_REF} and ${HEAD_REF} failed" >&2
+      exit 1
+    fi
+  fi
+  mapfile -d '' -t diff_paths < "$DIFF_RAW"
+}
+
 # PR fuzzing builds the library with its vendored code and the fuzz harnesses, so any
 # change under these paths counts: deletions, both sides of a rename and src/external/
 # included, as GitHub's own `paths:` filter counted them.
-mapfile -t fuzz_scope_paths < <(
-  git diff --name-only --no-renames "${BASE_REF}...${HEAD_REF}" ||
-    git diff --name-only --no-renames "$BASE_REF" "$HEAD_REF"
-)
+diff_paths=()
+read_diff_paths --no-renames
+fuzz_scope_paths=("${diff_paths[@]}")
 fuzz_targets=()
 for p in "${fuzz_scope_paths[@]}"; do
   case "$p" in
@@ -147,10 +174,8 @@ if [[ ${#fuzz_targets[@]} -gt 0 ]]; then
   mapfile -t fuzz_targets < <(sort_unique_array "${fuzz_targets[@]}")
 fi
 
-mapfile -t changed_paths < <(
-  git diff --name-only --diff-filter=ACMR "${BASE_REF}...${HEAD_REF}" ||
-    git diff --name-only --diff-filter=ACMR "$BASE_REF" "$HEAD_REF"
-)
+read_diff_paths --diff-filter=ACMR
+changed_paths=("${diff_paths[@]}")
 
 if [[ ${#changed_paths[@]} -eq 0 ]]; then
   write_list "$OUT_DIR/changed_paths.txt"

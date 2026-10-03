@@ -108,6 +108,8 @@ def main():
         run(git, repo, "config", "user.name", "ci-changed-files test")
         run(git, repo, "config", "user.email", "ci-changed-files@example.invalid")
         run(git, repo, "config", "commit.gpgsign", "false")
+        # The quoting case needs git's default quoting, whatever the global config says.
+        run(git, repo, "config", "core.quotePath", "true")
         for path, text in BASE_FILES.items():
             write(repo, path, text)
         base = commit_all(git, repo, "base")
@@ -145,6 +147,15 @@ def main():
         assert outputs["semgrep_targets"] == "0" and outputs["format_files"] == "0", outputs
         print("PASS vendored source stays out of the analysis target sets")
 
+        # git quotes a name with non-ASCII bytes, quotes or tabs unless asked for raw (-z) output, and a quoted
+        # name matches no prefix: every set must see the raw name.
+        odd_names = ["src/caf\u00e9.c", "src/quote\"name.c", "src/tab\tname.c"]
+        count, listed, outputs = fuzz_targets(
+            bash, git, script, repo, base, lambda repo_dir: [write(repo_dir, name, "x\n") for name in odd_names])
+        assert listed == sorted(odd_names), listed
+        assert outputs["semgrep_targets"] == "3" and outputs["format_files"] == "3", outputs
+        print(f"PASS raw names with non-ASCII, quote and tab: fuzz_targets={count}")
+
         # The selection follows the pull request's own changes (base...head), as GitHub's paths filter did. An
         # edit main already made the same way stays in scope against the head; against the merge commit it would
         # vanish, which is why cflite_pr.yml passes the pull request's head.
@@ -165,6 +176,18 @@ def main():
         assert returncode == 0 and listed_targets(repo, outputs) == [], (outputs, stderr)
         print("PASS an edit main already has stays in scope against the pull request head")
 
+        # A diff that fails must fail the helper: an empty list would read as "nothing changed" and let the
+        # fuzzing and every other changed-files job pass without doing their work. Both commits resolve, so the
+        # helper gets past its ref checks, but git diff rejects an invalid diff setting.
+        run(git, repo, "checkout", "-q", "--detach", base)
+        write(repo, "src/core/mbelib.c", "after a failing diff\n")
+        changed = commit_all(git, repo, "change")
+        run(git, repo, "config", "diff.context", "notanumber")
+        returncode, outputs, stderr = run_helper(bash, script, repo, base, changed)
+        assert returncode != 0, (outputs, stderr)
+        assert "git diff between" in stderr, stderr
+        assert "fuzz_targets" not in outputs and "changed_paths" not in outputs, outputs
+        print("PASS a failing diff fails the helper instead of reporting no changes")
     return 0
 
 
