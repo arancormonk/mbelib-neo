@@ -232,9 +232,9 @@ ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L
 
 static void
 ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
-    *f0 = exp2f(-4.311767578125f - (2.1336e-2f * ((float)b0 + 0.5f)));
+    *f0 = mbe_ambe2400_f0(b0);
     cur_mp->w0 = *f0 * (float)2 * M_PI;
-    *L = AmbePlusLtable[b0];
+    *L = mbe_ambe2400_harmonic_count(*f0);
     cur_mp->L = *L;
 }
 

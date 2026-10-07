@@ -13,6 +13,8 @@
 #ifndef MBELIB_NEO_INTERNAL_AMBE3600X2400_H
 #define MBELIB_NEO_INTERNAL_AMBE3600X2400_H
 
+#include <math.h>
+
 #include "mbelib-neo/mbelib.h"
 
 /*
@@ -26,6 +28,38 @@
  * reconstruct the intended envelope in DVSI decoders.
  */
 #define MBE_AMBE2400_PREDICTION_RHO 0.8f
+
+/*
+ * D-STAR pitch law: f0 = 2^(OFFSET - SLOPE * (b0 + 0.5)) cycles per sample.
+ * mbelib's -4.311767578125 - 0.021336 * (b0 + 0.5) plays D-STAR flat, by 4%
+ * at b0 13 down to 1% at b0 120. These constants fit the pitch of DVSI's own
+ * decoded AMBE-3000 D-STAR test vectors (pulse trains and speech, b0 13..123)
+ * within 1 cent; the pitch DVSI carries into its D-STAR to P25 rate conversion
+ * and the pitch of the original input speech agree with them. The encoder
+ * quantizes with the same law.
+ */
+#define MBE_AMBE2400_LOG2_F0_OFFSET (-4.24738f)
+#define MBE_AMBE2400_LOG2_F0_SLOPE  0.0217705f
+
+/* Fundamental (cycles per sample) of pitch code b0. */
+static inline float
+mbe_ambe2400_f0(int b0) {
+    return exp2f(MBE_AMBE2400_LOG2_F0_OFFSET - (MBE_AMBE2400_LOG2_F0_SLOPE * ((float)b0 + 0.5f)));
+}
+
+/*
+ * Harmonic count for fundamental f0: every harmonic at or below 0.9254 of
+ * Nyquist. The AMBE+2 L table is exactly floor(0.9254 * pi / w0) of its own w0
+ * table; D-STAR's law gives a higher f0 for the same b0, and DVSI's D-STAR
+ * decoder synthesizes harmonics only up to that same 3.70 kHz edge. Reusing the
+ * AMBE+2 table put up to four harmonics too many into D-STAR's spectral blocks.
+ * The block tables start at 9 harmonics, which caps f0 above 412 Hz (b0 0..1).
+ */
+static inline int
+mbe_ambe2400_harmonic_count(float f0) {
+    int L = (int)(0.9254f * 0.5f / f0);
+    return (L < 9) ? 9 : ((L > 56) ? 56 : L);
+}
 
 struct ambe_dct_cache {
     int inited;

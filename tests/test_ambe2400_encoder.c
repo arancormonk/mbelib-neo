@@ -626,6 +626,58 @@ test_prediction_boundaries(mbe_ambe2400_encoder* enc) {
     return 0;
 }
 
+/* D-STAR pitch law calibrated on DVSI's AMBE-3000 vectors (cycles per sample). */
+static double
+dstar_f0(int b0) {
+    return exp2(-4.24738 - 0.0217705 * (b0 + 0.5));
+}
+
+/* The decoder reconstructs w0 from b0 with the calibrated law across the voice
+ * range, and sizes L like the AMBE+2 table: every harmonic at or below
+ * 0.9254 x 4 kHz, the top harmonic DVSI's D-STAR decoder synthesizes. */
+static int
+test_pitch_law(void) {
+    for (int code = 0; code <= 125; code++) {
+        mbe_parms cur, prev, enhanced;
+        char d[49] = {0};
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int bit = 0; bit < 6; bit++) {
+            d[bit] = (char)((code >> (6 - bit)) & 1);
+        }
+        d[48] = (char)(code & 1);
+        if (mbe_decodeAmbe2400Parms(d, &cur, &prev) != 0) {
+            continue;
+        }
+        int want = (int)(0.9254 * 0.5 / dstar_f0(code));
+        want = want < 9 ? 9 : (want > 56 ? 56 : want);
+        if (cur.L != want) {
+            printf("pitch law: b0 %d gives L %d, want %d\n", code, cur.L, want);
+            return 1;
+        }
+    }
+    static const int codes[] = {0, 13, 40, 76, 100, 123, 125};
+    for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+        mbe_parms cur, prev, enhanced;
+        char d[49] = {0};
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int bit = 0; bit < 6; bit++) {
+            d[bit] = (char)((codes[i] >> (6 - bit)) & 1);
+        }
+        d[48] = (char)(codes[i] & 1);
+        if (mbe_decodeAmbe2400Parms(d, &cur, &prev) != 0) {
+            printf("pitch law: b0 %d did not decode as voice\n", codes[i]);
+            return 1;
+        }
+        double want = 2.0 * M_PI * dstar_f0(codes[i]);
+        if (fabs((double)cur.w0 / want - 1.0) > 1e-5) {
+            printf("pitch law: b0 %d gives w0 %.7f, want %.7f\n", codes[i], (double)cur.w0, want);
+            return 1;
+        }
+    }
+    puts("pitch law: b0 0..125 follow the calibrated D-STAR law and harmonic count");
+    return 0;
+}
+
 static int
 test_pitch_endpoint(mbe_ambe2400_encoder* enc, int period, int expected_b0) {
     mbe_ambe2400EncoderReset(enc);
@@ -769,7 +821,7 @@ struct fixture_stats {
 
 static int
 ideal_b0(double hz) {
-    return (int)lround(((log2(hz / 8000.0) + 4.311767578125) / -0.021336) - 0.5);
+    return (int)lround(((log2(hz / 8000.0) + 4.24738) / -0.0217705) - 0.5);
 }
 
 /* Encode a fixture and count decisions on settled voice frames. */
@@ -979,7 +1031,9 @@ main(void) {
     fails += test_dv_bytes();
     fails += test_state_parity(enc);
     fails += test_prediction_boundaries(enc);
-    fails += test_pitch_endpoint(enc, 20, 0);
+    fails += test_pitch_law();
+    /* 400 Hz, the shortest analysed period, is b0 3; b0 0..2 reach 402..418 Hz. */
+    fails += test_pitch_endpoint(enc, 20, 3);
     fails += test_pitch_endpoint(enc, 127, 125);
     fails += test_dc_noise(enc);
     fails += test_noise_unvoiced(enc);

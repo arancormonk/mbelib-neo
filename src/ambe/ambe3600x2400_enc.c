@@ -25,8 +25,8 @@
  *    standard's frequency- and energy-dependent thresholds (US 8,595,002),
  *    then reduced to the four 1 kHz bits D-STAR transmits by an
  *    energy-weighted choice.
- *  - Every parameter is quantized against the exact tables the decoder
- *    dequantizes from (AmbePlusLtable/AmbePlusVuv/AmbePlusDg/
+ *  - Every parameter is quantized against the exact pitch law, harmonic
+ *    count and tables the decoder dequantizes with (AmbePlusVuv/AmbePlusDg/
  *    AmbePlusPRBA24/AmbePlusPRBA58/AmbePlusHOCb5..b8), so the
  *    reconstructed frame is bit-compatible with this library's
  *    mbe_decodeAmbe2400Parms()/mbe_processAmbe3600x2400*() path and follows
@@ -59,10 +59,6 @@
 #define AMBE2400_ENC_SAMPLES     160
 #define AMBE2400_ENC_SILENCE_RMS 0.0015f
 #define AMBE2400_ENC_PCM_SCALE   32768.0f /* analysis runs on the 16-bit scale */
-
-/* f0 = exp2(-4.311767578125 - 2.1336e-2 * (b0 + 0.5)) */
-#define AMBE2400_ENC_F0_OFFSET   (-4.311767578125f)
-#define AMBE2400_ENC_F0_STEP     (-0.021336f)
 
 /*
  * Level: an input AGC normalizes speech toward AMBE2400_ENC_AGC_TARGET RMS,
@@ -147,7 +143,7 @@ struct ambe2400_enc_frame {
 
 static void
 ambe2400_enc_quantize_pitch(struct ambe2400_enc_frame* q, float f0) {
-    q->b[0] = (int)lroundf((log2f(f0) - AMBE2400_ENC_F0_OFFSET) / AMBE2400_ENC_F0_STEP - 0.5f);
+    q->b[0] = (int)lroundf(((MBE_AMBE2400_LOG2_F0_OFFSET - log2f(f0)) / MBE_AMBE2400_LOG2_F0_SLOPE) - 0.5f);
     if (q->b[0] < 0) {
         q->b[0] = 0;
     }
@@ -155,8 +151,8 @@ ambe2400_enc_quantize_pitch(struct ambe2400_enc_frame* q, float f0) {
         q->b[0] = 125;
     }
 
-    q->L = mbe_clamp_harmonic_count((int)AmbePlusLtable[q->b[0]]);
-    q->f0q = exp2f(AMBE2400_ENC_F0_OFFSET + (AMBE2400_ENC_F0_STEP * ((float)q->b[0] + 0.5f)));
+    q->f0q = mbe_ambe2400_f0(q->b[0]);
+    q->L = mbe_ambe2400_harmonic_count(q->f0q);
 }
 
 /* The decoder's 500 Hz column for harmonic l at the transmitted pitch. */
