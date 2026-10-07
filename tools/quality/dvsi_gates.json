@@ -367,5 +367,61 @@
         "value": 0.1
       }
     ]
+  },
+  "encoder": {
+    "description": "D-STAR encoder changes: our encoding, decoded by this library, gets closer to the input without hurting pitch, voicing or level; the decoder is untouched.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "encoder.lsd_db",
+        "rule": "decrease"
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.3
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.pitch_cents_median",
+        "rule": "no_increase",
+        "value": 0.5
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.octave_error_rate",
+        "rule": "no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.voicing_agreement_mean",
+        "rule": "no_decrease",
+        "value": 0.005
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.pcm_rail_samples",
+        "rule": "no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }
