@@ -9,6 +9,7 @@
  */
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -23,12 +24,17 @@ struct layout {
     int rows;
     int lsb_first;
     int row_bits[8];
+    uint32_t mapping_fnv1a; /* pins the whole input bit -> frame cell permutation */
 };
 
+/* The mappings were validated against DVSI's AMBE-3000 test vectors: every
+ * clean P25, rate-33 and D-STAR frame decodes with zero corrected Golay and
+ * Hamming errors, and the decoded audio matches DVSI's. The hashes catch any
+ * later edit to the tables, which the structural checks alone could miss. */
 static const struct layout layouts[] = {
-    {"imbe7200", 18, 23, 8, 0, {23, 23, 23, 23, 15, 15, 15, 7}},
-    {"ambe2450", 9, 24, 4, 0, {24, 23, 11, 14}},
-    {"ambe2400", 9, 24, 4, 1, {24, 23, 11, 14}},
+    {"imbe7200", 18, 23, 8, 0, {23, 23, 23, 23, 15, 15, 15, 7}, 0xB1BED725u},
+    {"ambe2450", 9, 24, 4, 0, {24, 23, 11, 14}, 0x4AC573E0u},
+    {"ambe2400", 9, 24, 4, 1, {24, 23, 11, 14}, 0x77B5C5C4u},
 };
 
 static void
@@ -76,6 +82,13 @@ test_bijection(const struct layout* l) {
         total += l->row_bits[r];
     }
     assert(total == l->bytes * 8);
+
+    uint32_t hash = 2166136261u;
+    for (int bit = 0; bit < l->bytes * 8; ++bit) {
+        hash ^= (uint32_t)cell_of[bit];
+        hash *= 16777619u;
+    }
+    assert(hash == l->mapping_fnv1a);
 }
 
 /* TIA-102.BABA 7.5: bits of one code vector are at least 3 dibits apart. */

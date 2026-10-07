@@ -43,20 +43,34 @@ LOCAL_SIGNATURE = 0x04034B50
 USER_AGENT = "mbelib-neo-quality/1"
 
 
+def split_response(raw):
+    """Return the final header block and the body, skipping interim (1xx) and proxy CONNECT blocks."""
+    head, separator, body = raw.partition(b"\r\n\r\n")
+    while separator and body.startswith(b"HTTP/"):
+        status = head.split(b"\r\n", 1)[0].split(b" ")
+        code = status[1] if len(status) > 1 else b""
+        if not (code.startswith(b"1") or b"connection established" in head.split(b"\r\n", 1)[0].lower()):
+            break
+        head, separator, body = body.partition(b"\r\n\r\n")
+    if not separator:
+        raise RuntimeError(f"{ARCHIVE_URL}: malformed response")
+    return head, body
+
+
 def fetch_range(start, length):
     """Read bytes [start, start+length) of the fixed archive URL over HTTPS only."""
     result = subprocess.run(
         [
             "curl", "--fail", "--silent", "--show-error", "--proto", "=https", "--max-time", "300",
-            "--user-agent", USER_AGENT, "--range", f"{start}-{start + length - 1}",
+            "--suppress-connect-headers", "--user-agent", USER_AGENT, "--range", f"{start}-{start + length - 1}",
             "--dump-header", "-", "--output", "-", ARCHIVE_URL,
         ],
         capture_output=True, check=False,
     )
     if result.returncode:
         raise RuntimeError(f"{ARCHIVE_URL}: curl failed: {result.stderr.decode('utf-8', errors='replace')}")
-    head, separator, data = result.stdout.partition(b"\r\n\r\n")
-    if not separator or b" 206" not in head.split(b"\r\n", 1)[0]:
+    head, data = split_response(result.stdout)
+    if b" 206" not in head.split(b"\r\n", 1)[0]:
         raise RuntimeError(f"{ARCHIVE_URL}: server ignored the range request")
     total = b""
     for line in head.split(b"\r\n"):
