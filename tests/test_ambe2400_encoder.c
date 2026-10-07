@@ -6,7 +6,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "mbelib-neo/mbelib.h"
 
@@ -760,7 +759,8 @@ run_fixture(mbe_ambe2400_encoder* enc, struct fixture* fx, int frames, int settl
             }
             st->mixed_rows += (b1 == 0x0c);
             st->b0_close += (b0 >= want - 1 && b0 <= want + 1);
-            st->octave_errors += (abs(b0 - want) > 30); /* 2^(30 * 0.021336) is about 1.56 */
+            int distance = (b0 > want) ? b0 - want : want - b0;
+            st->octave_errors += (distance > 30); /* 2^(30 * 0.021336) is about 1.56 */
         }
         mbe_moveMbeParms(&cur, &prev);
     }

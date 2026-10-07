@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "mbe_speech_analysis.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
 static struct mbe_analysis_tables tables;

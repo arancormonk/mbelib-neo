@@ -1471,12 +1471,9 @@ if(MBELIB_BUILD_TOOLS)
         tools/quality/mbe_quality_fs.c
     )
     if(NOT WIN32)
-        target_compile_definitions(
-            mbe_quality_encode
-            PRIVATE _XOPEN_SOURCE=700
-        )
+        target_compile_definitions(mbe_quality_encode PRIVATE _XOPEN_SOURCE=700)
     endif()
-    # Static, like the reframer: the encoder's analysis diagnostics are private.
+    # Static: each binary measures the encoder it was built with.
     target_link_libraries(mbe_quality_encode PRIVATE mbe-static)
     _mbelib_apply_hardening(mbe_quality_encode)
     target_include_directories(
