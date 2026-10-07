@@ -227,11 +227,79 @@ float_array_differs(const float* a, const float* b, size_t n) {
     return 0;
 }
 
+/* A flat, fully voiced 100 Hz model with harmonics to 3.6 kHz. */
+static void
+flat_model(mbe_parms* mp) {
+    mbe_parms prev, enhanced;
+    mbe_initMbeParms(mp, &prev, &enhanced);
+    mp->w0 = (float)(2.0 * M_PI * 100.0 / 8000.0);
+    mp->L = 36;
+    for (int l = 1; l <= mp->L; ++l) {
+        mp->Vl[l] = 1;
+        mp->Ml[l] = 1.0f;
+        mp->log2Ml[l] = 0.0f;
+    }
+}
+
+/* Shelf shape: 0 dB to 2.5 kHz, rising linearly to the full gain at 3 kHz, flat to 3.6 kHz. */
+static void
+test_high_band_shelf_shape(void) {
+    mbe_parms plain, shelved;
+    flat_model(&plain);
+    flat_model(&shelved);
+    (void)mbe_spectralAmpEnhanceWithRm0(&plain, 1.0f);
+    (void)mbe_spectralAmpEnhanceWithRm0(&shelved, MBE_HIGH_BAND_GAIN_AMBE2400);
+    for (int l = 1; l <= 36; ++l) {
+        float hz = 100.0f * (float)l;
+        float t = hz <= 2500.0f ? 0.0f : (hz >= 3000.0f ? 1.0f : (hz - 2500.0f) / 500.0f);
+        float want = 1.0f + ((MBE_HIGH_BAND_GAIN_AMBE2400 - 1.0f) * t);
+        assert(approx_equal(shelved.Ml[l] / plain.Ml[l], want, 1e-5f));
+    }
+}
+
+typedef int (*process_fn)(float*, mbe_process_result*, const char*, mbe_parms*, mbe_parms*, mbe_parms*);
+
+/* A codec's process path enhances with its own shelf: after one voice frame
+ * from a fresh stream, the committed (unenhanced) model enhanced with `gain`
+ * is the model that was synthesized. */
+static void
+expect_codec_shelf(process_fn process, const char* data, float gain) {
+    mbe_parms cur, prev, enhanced;
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    assert(process(out, NULL, data, &cur, &prev, &enhanced) >= 0);
+    mbe_parms model = prev;
+    (void)mbe_spectralAmpEnhanceWithRm0(&model, gain);
+    assert(model.L == enhanced.L);
+    for (int l = 1; l <= model.L; ++l) {
+        assert(approx_equal(enhanced.Ml[l], model.Ml[l], 1e-4f * fmaxf(1.0f, fabsf(model.Ml[l]))));
+    }
+}
+
+/* Each codec's high-band shelf height, matched to DVSI's decoders. */
+static void
+test_high_band_shelf_per_codec(void) {
+    char imbe_d[88] = {0}, ambe_d[49] = {0};
+    for (int i = 0; i < 88; ++i) {
+        imbe_d[i] = (char)((i * 7 + 3) % 5 == 0);
+    }
+    for (int i = 0; i < 49; ++i) {
+        ambe_d[i] = (char)((i * 5 + 1) % 3 == 0);
+    }
+    ambe_d[0] = 0; /* keep b0 a voice code */
+    expect_codec_shelf(mbe_processImbe4400Dataf, imbe_d, MBE_HIGH_BAND_GAIN_IMBE);
+    expect_codec_shelf(mbe_processAmbe2450Dataf, ambe_d, MBE_HIGH_BAND_GAIN_AMBE2450);
+    expect_codec_shelf(mbe_processAmbe2400Dataf, ambe_d, MBE_HIGH_BAND_GAIN_AMBE2400);
+}
+
 /**
  * @brief Test entry: IMBE and AMBE parameter derivation spot checks.
  */
 int
 main(void) {
+    test_high_band_shelf_shape();
+    test_high_band_shelf_per_codec();
+
     // IMBE 7200x4400: verify w0/L/K from b0
     {
         char imbe_d[88];

@@ -631,19 +631,17 @@ mbe_scale_spectral_magnitudes(mbe_parms* cur_mp, float gamma) {
 
 /*
  * High-band compensation, applied after the enhancement's energy
- * renormalization. On DVSI's AMBE-3000 test vectors (P25, AMBE+2 and D-STAR,
- * identical bits) the TIA-102.BABA synthesis renders 2.5-3.75 kHz about
- * 2.4 dB below DVSI's decoder relative to 0-1 kHz, for voiced and unvoiced
- * bands alike and at every pitch, and 1.6 dB below the input speech at
- * 3-4 kHz. A +1.5 dB shelf (0 dB below 2.5 kHz, rising to 3 kHz, flat to
- * 3.6 kHz, back to 0 dB at 3.8 kHz) brings that to -0.2 dB against the input
- * while halving the gap to DVSI. Repeats that resynthesize already enhanced
- * amplitudes do not pass through here, so it is never applied twice.
+ * renormalization. On DVSI's AMBE-3000 test vectors, with identical bits, the
+ * TIA-102.BABA synthesis renders 2.5-3.75 kHz below DVSI's decoder relative to
+ * 0-1 kHz, for voiced and unvoiced bands alike and at every pitch. A shelf
+ * (0 dB below 2.5 kHz, rising to its height at 3 kHz, flat to 3.6 kHz, back to
+ * 0 dB at 3.8 kHz) closes that gap; its height per codec (mbe_adaptive.h) was
+ * chosen on one set of DVSI vectors and checked on another. Repeats that
+ * resynthesize already enhanced amplitudes do not pass through here, so it is
+ * never applied twice.
  */
-#define MBE_HIGH_BAND_GAIN 1.18850223f /* 10^(1.5/20) */
-
 static float
-mbe_high_band_gain(float hz) {
+mbe_high_band_gain(float hz, float gain) {
     float t;
     if (hz <= 2500.0f || hz >= 3800.0f) {
         return 1.0f;
@@ -655,14 +653,14 @@ mbe_high_band_gain(float hz) {
     } else {
         t = (3800.0f - hz) / 200.0f;
     }
-    return 1.0f + ((MBE_HIGH_BAND_GAIN - 1.0f) * t);
+    return 1.0f + ((gain - 1.0f) * t);
 }
 
 static void
-mbe_apply_high_band_gain(mbe_parms* cur_mp) {
+mbe_apply_high_band_gain(mbe_parms* cur_mp, float gain) {
     const float hz_per_harmonic = cur_mp->w0 * (8000.0f / (2.0f * (float)M_PI));
     for (int l = 1; l <= cur_mp->L; l++) {
-        cur_mp->Ml[l] *= mbe_high_band_gain(hz_per_harmonic * (float)l);
+        cur_mp->Ml[l] *= mbe_high_band_gain(hz_per_harmonic * (float)l, gain);
     }
 }
 
@@ -673,7 +671,7 @@ mbe_apply_high_band_gain(mbe_parms* cur_mp) {
  * Uses SIMD optimizations for accumulation and scaling loops when available.
  */
 float
-mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp) {
+mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain) {
 
     float Rm0, Rm1;
     float cos_tab[57];
@@ -690,14 +688,14 @@ mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp) {
     float sum = mbe_sum_spectral_magnitudes_squared(cur_mp);
     float gamma = (sum == 0.0f) ? 1.0f : sqrtf(Rm0 / sum);
     mbe_scale_spectral_magnitudes(cur_mp, gamma);
-    mbe_apply_high_band_gain(cur_mp);
+    mbe_apply_high_band_gain(cur_mp, high_band_gain);
 
     return Rm0;
 }
 
 void
 mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
-    (void)mbe_spectralAmpEnhanceWithRm0(cur_mp);
+    (void)mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
 }
 
 /* JMBE float-domain soft clip translated to this library's float scale. */

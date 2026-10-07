@@ -67,9 +67,19 @@ void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_
 /**
  * @brief Apply spectral amplitude enhancement and return pre-enhancement RM0.
  * @param cur_mp In/out parameter set to enhance.
+ * @param high_band_gain Height of the high-band shelf applied afterwards (1 for none).
  * @return Sum of squared amplitudes before enhancement.
  */
-float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
+float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain);
+
+/*
+ * High-band shelf heights per codec (linear amplitude gain above 3 kHz; see
+ * mbe_apply_high_band_gain), each matched to DVSI's AMBE-3000 decoder for that
+ * mode on its test vectors. ProVoice shares the IMBE synthesis path.
+ */
+#define MBE_HIGH_BAND_GAIN_IMBE     1.25892541f /* +2.0 dB */
+#define MBE_HIGH_BAND_GAIN_AMBE2450 1.33352143f /* +2.5 dB */
+#define MBE_HIGH_BAND_GAIN_AMBE2400 1.41253754f /* +3.0 dB */
 
 /** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
 enum mbe_mute_noise {
