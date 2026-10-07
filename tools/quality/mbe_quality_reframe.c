@@ -144,6 +144,16 @@ parameter_width(const char* codec) {
     return 0;
 }
 
+/* DVSI names its 4-bit soft-decision vectors *_sd.bit. Their size is a whole
+ * number of hard-decision frames, so only the name tells them apart.
+ */
+static int
+is_soft_decision_vector(const char* path) {
+    static const char suffix[] = "_sd.bit";
+    const size_t length = strlen(path);
+    return length >= sizeof(suffix) - 1 && strcmp(path + length - (sizeof(suffix) - 1), suffix) == 0;
+}
+
 /* Parse "--name value" pairs; returns 0 or prints usage and returns 2. */
 static int
 parse_options(int argc, char** argv, struct reframe_options* options) {
@@ -172,6 +182,10 @@ parse_options(int argc, char** argv, struct reframe_options* options) {
     const char* codec = options->codec;
     if (!codec || !options->output_path || (rows_path == NULL) == (dvsi_path == NULL)) {
         usage(argv[0]);
+        return 2;
+    }
+    if (dvsi_path && is_soft_decision_vector(dvsi_path)) {
+        fprintf(stderr, "DVSI soft-decision vectors (*_sd.bit) are not supported; use the *_hd.bit file.\n");
         return 2;
     }
     options->dvsi = dvsi_path != NULL;

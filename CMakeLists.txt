@@ -1238,6 +1238,17 @@ if(MBELIB_BUILD_TESTS)
                         $<TARGET_FILE:mbe_quality_eval>
                         $<TARGET_FILE:mbe_quality_reframe>
                 )
+                add_test(
+                    NAME test_dvsi_scoreboard
+                    COMMAND
+                        ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/tests/test_dvsi_scoreboard.py
+                )
+                # The pitch measurements need NumPy; without it the test reports a skip.
+                set_tests_properties(
+                    test_dvsi_scoreboard
+                    PROPERTIES SKIP_RETURN_CODE 77
+                )
                 # The A/B runner locks its run directory with fcntl, so it is POSIX-only, and
                 # uses assignment expressions, so it needs Python 3.8.
                 if(NOT WIN32 AND Python3_VERSION VERSION_GREATER_EQUAL 3.8)

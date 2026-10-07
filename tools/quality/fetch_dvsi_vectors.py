@@ -27,13 +27,15 @@ from pathlib import Path, PurePosixPath
 
 ARCHIVE_URL = "https://www.dvsinc.com/get-usb/tv-rc.zip"
 DEFAULT_OUT = Path("build/quality/dvsi")
-# Speech inputs plus the D-STAR, P25 (with FEC) and AMBE+2 rate 33 encodings.
+# The modes this library decodes: D-STAR, P25 full rate with and without FEC,
+# and AMBE+2 rate 33 (with FEC) and rate 34 (without).
+SUPPORTED_MODES = ("dstar", "p25", "p25_nofec", "r33", "r34")
+# Speech inputs, each mode's encodings, and DVSI's rate conversions between
+# those modes (tv-rc/<from>/<to>/, made with "-rc -rd <from> -re <to>").
 DEFAULT_PATTERNS = (
-    "tv-rc/*.pcm",
-    "tv-rc/cmprc.txt",
-    "tv-rc/dstar/*",
-    "tv-rc/p25/*",
-    "tv-rc/r33/*",
+    ("tv-rc/*.pcm", "tv-rc/cmprc.txt")
+    + tuple(f"tv-rc/{mode}/*" for mode in SUPPORTED_MODES)
+    + tuple(f"tv-rc/{src}/{dst}/*" for src in SUPPORTED_MODES for dst in SUPPORTED_MODES if src != dst)
 )
 EOCD_SIGNATURE = 0x06054B50
 ZIP64_LOCATOR_SIGNATURE = 0x07064B50
