@@ -43,6 +43,7 @@ sources=(
   src/core/mbelib.c
   src/core/mbe_pcm_convert.c
   src/core/mbe_adaptive.c
+  src/core/mbe_speech_analysis.c
   src/core/mbe_unvoiced_fft.c
   src/external/pffft/pffft.c
   src/external/pffft/fftpack.c

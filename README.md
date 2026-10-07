@@ -188,7 +188,7 @@ Use `mbe_process*Data*` when you already have unpacked parameter bits.
 IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs, passing along the decode's `mbe_process_result` so its C0/C4 context and `MBE_PROCESS_FLAG_PROVOICE` (ProVoice mute noise) apply.
 
 - `mbe_ambe2400EncoderAlloc()` creates a caller-owned encoder context and FFT plan; `mbe_ambe2400EncoderReset(enc)` restarts its analysis state, and `mbe_ambe2400EncoderFree(enc)` releases it.
-- `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables); interoperability with DVSI hardware has not been verified.
+- `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables). Its analysis follows the method of TIA-102.BABA chapter 5, and the spectral reconstruction it targets matches DVSI's AMBE-3000 D-STAR test vectors; on-air interoperability has not been verified.
 - `mbe_encodeAmbe2400ParmsShort(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 signed 16-bit PCM samples into 49 AMBE 2400 parameter bits.
 - `mbe_encodeAmbe3600x2400Frame()` adds FEC and interleaving to 49 parameter bits, producing `char ambe_fr[4][24]`.
 - `mbe_encodeDStarDVData()` packs a frame into nine D-STAR DV data bytes in air order, LSB first, without the sync word.
@@ -196,7 +196,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 
 ### Encoder Workflow
 
-- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail.
+- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail. An input AGC normalizes the talker's level over about a second, adapting on voiced frames only.
 
 ### Stateful Decode Workflow
 

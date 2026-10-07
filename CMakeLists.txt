@@ -263,6 +263,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/core/mbelib.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
+    src/core/mbe_speech_analysis.c
     src/core/mbe_unvoiced_fft.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
@@ -821,6 +822,23 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_ecc COMMAND test_ecc)
 
+    add_executable(test_speech_analysis tests/test_speech_analysis.c)
+    # The analysis is private; link the static library for its symbols.
+    target_link_libraries(test_speech_analysis PRIVATE mbe-static)
+    target_include_directories(
+        test_speech_analysis
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_speech_analysis PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_speech_analysis BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_speech_analysis COMMAND test_speech_analysis)
+
     add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
     # The private Golay encoder is hidden in the shared library.
     target_link_libraries(test_ambe2400_encoder PRIVATE mbe-static)
@@ -1318,6 +1336,7 @@ if(MBELIB_BUILD_TESTS)
         test_api
         test_ecc
         test_ambe2400_encoder
+        test_speech_analysis
         test_noise_determinism
         test_params
         test_frame_paths
@@ -1446,15 +1465,43 @@ if(MBELIB_BUILD_TOOLS)
             PRIVATE _CRT_SECURE_NO_WARNINGS
         )
     endif()
+    add_executable(
+        mbe_quality_encode
+        tools/quality/mbe_quality_encode.c
+        tools/quality/mbe_quality_fs.c
+    )
+    if(NOT WIN32)
+        target_compile_definitions(
+            mbe_quality_encode
+            PRIVATE _XOPEN_SOURCE=700
+        )
+    endif()
+    # Static, like the reframer: the encoder's analysis diagnostics are private.
+    target_link_libraries(mbe_quality_encode PRIVATE mbe-static)
+    _mbelib_apply_hardening(mbe_quality_encode)
+    target_include_directories(
+        mbe_quality_encode
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(MSVC)
+        target_compile_definitions(
+            mbe_quality_encode
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
         target_compile_options(mbe_quality_eval PRIVATE ${_SAN_CFLAGS})
         target_compile_options(mbe_quality_reframe PRIVATE ${_SAN_CFLAGS})
+        target_compile_options(mbe_quality_encode PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(mbe_quality_eval BEFORE PRIVATE ${_SAN_LDFLAGS})
         target_link_options(mbe_quality_reframe BEFORE PRIVATE ${_SAN_LDFLAGS})
+        target_link_options(mbe_quality_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     # Let the CodeQL extraction target compile the quality tools too.
     target_sources(
@@ -1462,6 +1509,7 @@ if(MBELIB_BUILD_TOOLS)
         PRIVATE
             tools/quality/mbe_quality_eval.c
             tools/quality/mbe_quality_reframe.c
+            tools/quality/mbe_quality_encode.c
             tools/quality/mbe_quality_frames.c
             tools/quality/mbe_quality_dvsi.c
             tools/quality/mbe_quality_fs.c

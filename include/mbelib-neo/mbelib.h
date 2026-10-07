@@ -396,10 +396,13 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * Bit-compatible with this library's mbe_decodeAmbe2400Parms()/
  * mbe_processAmbe3600x2400*() path and following the D-STAR AMBE bit layout
  * (interleave, scrambler and Golay parity cross-checked against the MMDVM
- * tables). Interoperability with DVSI hardware has not been verified.
- * Quiet input (frame RMS below the silence threshold) is encoded as voice
- * until the fifth consecutive quiet frame; from then on the standard AMBE
- * silence frame is produced until a louder frame arrives.
+ * tables). The spectral reconstruction it targets matches DVSI's AMBE-3000
+ * D-STAR test vectors; on-air interoperability has not been verified.
+ * Quiet input (frame RMS of the DC-filtered input below the silence
+ * threshold) is encoded as voice until the fifth consecutive quiet frame; from
+ * then on the standard AMBE silence frame is produced until a louder frame
+ * arrives. An input AGC follows the talker's level on voiced frames over about
+ * a second.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
@@ -408,9 +411,10 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * State equivalence applies to the mbe_processAmbe* path, which resets on a
  * silence frame; a bare mbe_decodeAmbe2400Parms() chain must reset explicitly.
  *
- * The analysis window is centred on the frame start: parameters lag audio by
- * about 10 ms, and the final 32 samples are analysed with the next call. Feed
- * a final frame of zeros to flush the tail.
+ * The analysis is centred one sample before the frame: parameters lag audio
+ * by about 10 ms. The pitch analysis spans the whole frame, while the spectral
+ * analysis reaches its first 110 samples and covers the rest with the next
+ * call. Feed a final frame of zeros to flush the tail.
  *
  * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
  * @param samples Input PCM floats (160), nominal range [-1, 1].

@@ -9,7 +9,8 @@ The CTest suite includes:
 
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
-- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread (`test_ambe2400_encoder`)
+- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors (`test_ambe2400_encoder`)
+- MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, and the voicing thresholds (`test_speech_analysis`)
 - Encoder context/FFT allocation failures clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
@@ -20,6 +21,8 @@ The CTest suite includes:
 - quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 - quality-tool CLI alignment, accepted/rejected frame widths, and private output
   permissions (`test_quality_tools`, with tools enabled and Python 3 available)
+- DVSI test-vector import: deinterleave bijection, TIA-102.BABA 7.5 code spacing,
+  fixture round trips and preserved channel bits (`test_quality_dvsi`)
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -423,6 +426,25 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
 - Copy the inputs and DVSI's decoded files to `.raw` names before using them as
   `--ref` or `--decoded` operands. The evaluator selects the format by
   extension.
+
+### Encoder evaluation
+
+`mbe_quality_encode` (built with `MBELIB_BUILD_TOOLS=ON`) encodes 8 kHz s16le
+speech with the D-STAR encoder and writes the 49-bit rows `mbe_quality_eval`
+decodes, so encoder output is scored against the input with the same metrics
+as decoder output. Comparing with DVSI's own encoding of the same input:
+
+```sh
+build/dev-debug/mbe_quality_encode --codec ambe2400 --in dam.raw --out dam.rows
+build/dev-debug/mbe_quality_eval --codec ambe2400 --frames dam.rows --out ours.wav --ref dam.raw --json ours.json
+build/dev-debug/mbe_quality_reframe --codec ambe2400 --from-dvsi build/quality/dvsi/tv-rc/dstar/dam.bit --out dvsi.frames
+build/dev-debug/mbe_quality_eval --codec ambe2400 --frames dvsi.frames --out dvsi.wav --ref dam.raw --json dvsi.json
+```
+
+Both bit streams then go through the same decoder, which itself matches DVSI's
+output on DVSI's bits, so the band, LSD and envelope figures compare the
+encoders. One zero flush frame (`--flush-frames`, default 1) covers the
+encoder's analysis delay.
 
 ### Attribution and limitations
 
