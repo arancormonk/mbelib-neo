@@ -521,7 +521,7 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
     q->mean_p /= (float)q->L;
 
     for (int l = 1; l <= q->L; l++) {
-        q->Tl[l] = q->a[l] - q->mean_a - (0.65f * (q->p[l] - q->mean_p));
+        q->Tl[l] = q->a[l] - q->mean_a - (MBE_AMBE2400_PREDICTION_RHO * (q->p[l] - q->mean_p));
     }
 }
 

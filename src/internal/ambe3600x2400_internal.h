@@ -15,6 +15,18 @@
 
 #include "mbelib-neo/mbelib.h"
 
+/*
+ * Weight of the previous frame's log2 spectral amplitudes in the D-STAR
+ * prediction (log2Ml = Tl + rho * interpolated previous - mean terms).
+ * mbelib took 0.65 from AMBE+2 (TIA-102.BABA-1). Decoding DVSI's own
+ * AMBE-3000 D-STAR test vectors with 0.65 compresses the spectral envelope to
+ * about 60% in the log domain and plays the 2-4 kHz bands 8-10 dB hotter than
+ * DVSI's decoder relative to 0-1 kHz; 0.80 matches DVSI's output within about
+ * 1 dB per band. The encoder predicts with the same value so that its frames
+ * reconstruct the intended envelope in DVSI decoders.
+ */
+#define MBE_AMBE2400_PREDICTION_RHO 0.8f
+
 struct ambe_dct_cache {
     int inited;
     float ri_cos[9][9];         /* [m][i] for m=1..8, i=1..8 (index 0 unused) */

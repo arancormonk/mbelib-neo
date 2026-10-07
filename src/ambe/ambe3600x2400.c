@@ -471,7 +471,7 @@ mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, c
         }
         Sum43 = Sum43 + ambe2400_interpolate_prediction(deltal[l], prev_mp->log2Ml[intkl[l]], prev_mp->log2Ml[upper]);
     }
-    Sum43 = (((float)0.65 / (float)cur_mp->L) * Sum43);
+    Sum43 = ((MBE_AMBE2400_PREDICTION_RHO / (float)cur_mp->L) * Sum43);
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\n");
     fprintf(stderr, "Sum43: %f\n", Sum43);
@@ -489,8 +489,8 @@ mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, c
         if (upper > MBE_MAX_HARMONIC_BANDS) {
             upper = MBE_MAX_HARMONIC_BANDS;
         }
-        float c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[upper]);
+        float c1 = (MBE_AMBE2400_PREDICTION_RHO * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
+        float c2 = (MBE_AMBE2400_PREDICTION_RHO * deltal[l] * prev_mp->log2Ml[upper]);
         cur_mp->log2Ml[l] = ambe2400_reconstruct_log2Ml(Tl[l], c1, c2, Sum43, BigGamma);
         if (cur_mp->Vl[l] == 1) {
             cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);
