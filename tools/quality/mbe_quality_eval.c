@@ -392,7 +392,7 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, F
             fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
             exit(2);
         }
-        char bits[184];
+        char bits[184] = {0};
         for (size_t i = 0; i < n; ++i) {
             if (line[i] != '0' && line[i] != '1') {
                 fprintf(stderr, "frame %zu: expected literal binary digits\n", frame);
