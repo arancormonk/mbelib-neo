@@ -460,11 +460,20 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   it, both decoded by this library: pitch error against the input, octave
   errors, per-1 kHz-band voicing agreement and the speech metrics. It cannot
   show how DVSI hardware decodes our bits.
-- **Partitions** are by utterance. `development` and `validation` were both
-  examined during earlier changes; `final` vectors are scored once per change
-  set (`--partitions final`).
+- **Partitions** are by utterance, so `dam`'s level, overload and car-noise
+  variants sit with `dam`. `development` and `validation` were both examined
+  during earlier changes; `final` vectors are scored once per change set
+  (`--partitions final`). Not scored as speech: `xfer`, the DTX and
+  channel-error variants and the synthetic pulse trains and sweeps. The
+  `tones` partition covers the DTMF, single, KNOX, alert and call-progress
+  vectors.
+- **Tones** are compared with one acoustic detector run on both outputs, on
+  windows where DVSI's output is steady: level, frequencies, balance, how
+  often both agree on the tone playing (the same tone within 5%), and the
+  fraction of windows playing a different tone.
 - `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
-  worst vector. `--gates` evaluates a gate set from
+  worst vector, and counts the baseline's speech vectors whose PCM changed
+  (a vector missing from the run counts as changed). `--gates` evaluates a gate set from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and
   exits non-zero when a gate fails.
 

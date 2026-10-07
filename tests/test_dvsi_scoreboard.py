@@ -192,6 +192,42 @@ def check_tone_aggregation(board):
     assert board.pcm_changes({"vectors": [before]}, {"vectors": [before]}) == {"dstar": 0}
 
 
+def check_review_regressions(board):
+    # Pooled pitch medians come from the frames, not from averaging per-vector medians.
+    def pitch_result(name, pairs):
+        empty = board.summarize_ratios([])
+        return {"mode": "dstar", "name": name, "partition": "validation", "ours": {}, "dvsi": {}, "vs_dvsi": {},
+                "pitch": {"ours": empty, "dvsi": board.summarize_ratios(pairs), "input": empty},
+                "pitch_pairs": {"ours": [], "dvsi": pairs, "input": []}}
+    pooled = board.aggregate([pitch_result("a", [(125.0, 1.02)] * 40), pitch_result("b", [(125.0, 0.96)] * 20)])
+    entry = pooled["dstar/validation"]
+    assert abs(entry["pitch_dvsi_by_f0"]["100_150"]["median"] - 1.02) < 1e-9, entry["pitch_dvsi_by_f0"]
+    assert abs(entry["mean"]["pitch.dvsi_max_band_deviation"] - 0.02) < 1e-9, entry["mean"]
+
+    # A wrong tone for 40% of the time is caught, though level and balance match.
+    dvsi = tone((697.0, 1209.0), (-13.0, -13.0), seconds=1.0)
+    ours = tone((697.0, 1209.0), (-13.0, -13.0), seconds=0.6) + tone((770.0, 1336.0), (-13.0, -13.0), seconds=0.4)
+    metrics = board.compare_tones(ours, dvsi, 0)
+    assert 0.35 < metrics["wrong_tone_fraction"] < 0.45, metrics
+    assert metrics["detector_agreement"] < 0.7, metrics
+    # DVSI's off-nominal dual tones (two harmonics of one fundamental, up to 3.4% off) still agree.
+    near = board.compare_tones(tone((440.0, 620.0), (-13.0, -13.0)), tone((425.0, 640.0), (-13.0, -13.0)), 0)
+    assert near["wrong_tone_fraction"] == 0.0 and near["detector_agreement"] == 1.0, near
+
+    # Speech identity needs the baseline's full coverage and real hashes.
+    before = vector("dam", "development", 7.0, 0.88)
+    before["ours"]["pcm_fnv1a"] = "0x00000001"
+    other = vector("clean", "development", 7.0, 0.88)
+    other["ours"]["pcm_fnv1a"] = "0x00000002"
+    assert board.pcm_changes({"vectors": [before]}, {"vectors": [before, other]}) == {"dstar": 1}
+    unhashed = json.loads(json.dumps(before))
+    unhashed["ours"]["pcm_fnv1a"] = None
+    assert board.pcm_changes({"vectors": [unhashed]}, {"vectors": [unhashed]}) == {"dstar": 1}
+
+    # Quartiles without statistics.quantiles (Python 3.7).
+    assert board.quartiles([1.0, 2.0, 3.0, 4.0, 5.0]) == (2.0, 4.0)
+
+
 def main():
     board = load_scoreboard()
     check_configuration(board)
@@ -205,6 +241,7 @@ def main():
     check_frame_selection(board)
     check_tone_detector(board)
     check_tone_comparison(board)
+    check_review_regressions(board)
     return 0
 
 

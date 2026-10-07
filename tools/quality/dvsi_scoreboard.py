@@ -32,9 +32,14 @@ from pathlib import Path
 MODES = {"dstar": "ambe2400", "p25": "imbe7200", "r33": "ambe2450"}
 # Partitions by original utterance. Development and validation were both examined
 # while earlier changes were made, so they are retrospective; "final" vectors are
-# scored once per change set and never used for tuning.
+# scored once per change set and never used for tuning. dam's level, overload and
+# car-noise variants stay with dam. Not scored as speech: xfer (not speech), the
+# *_dtx, *_eN_hd and *_eN_sd variants, and the synthetic ptrain*/sine*/zero/grbge.
 PARTITIONS = {
-    "development": ("dam", "clean", "fambf22c", "fambm22a", "t01", "t02", "tia11", "tambf22a", "ucarm15a"),
+    "development": (
+        "dam", "dam10", "dam20", "dam40", "dam80", "dam_10ov", "damcar", "lvl",
+        "clean", "noisy", "fambf22c", "fambm22a", "t01", "t02", "tia11", "tambf22a", "ucarm15a",
+    ),
     "validation": ("t03", "t04", "tambf22b", "tambf32b", "tambf32e", "ucarf15a", "ucarm20a"),
     "final": ("irstia", "p01mirs", "mark"),
     # Not speech: scored with the tone detector against DVSI's decoder only.
@@ -146,15 +151,27 @@ def pitch_ratios(records, signal, shift):
     return pairs
 
 
+def quartiles(values):
+    """(q1, q3) by linear interpolation between order statistics (statistics.quantiles needs 3.8)."""
+    ordered = sorted(values)
+
+    def at(fraction):
+        position = fraction * (len(ordered) - 1)
+        low = int(math.floor(position))
+        high = min(low + 1, len(ordered) - 1)
+        return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+    return at(0.25), at(0.75)
+
+
 def summarize_ratios(pairs):
     summary = {}
     for low, high in F0_BANDS:
         values = sorted(ratio for nominal, ratio in pairs if low <= nominal < high)
         key = f"{int(low)}_{int(high)}"
         if values:
-            quartiles = statistics.quantiles(values, n=4) if len(values) > 1 else [values[0]] * 3
-            summary[key] = {"n": len(values), "median": statistics.median(values), "q1": quartiles[0],
-                            "q3": quartiles[2]}
+            q1, q3 = quartiles(values)
+            summary[key] = {"n": len(values), "median": statistics.median(values), "q1": q1, "q3": q3}
         else:
             summary[key] = {"n": 0, "median": None, "q1": None, "q3": None}
     values = [ratio for _, ratio in pairs]
@@ -235,15 +252,19 @@ def compare_tones(ours, dvsi, shift, window=320, hop=160):
             break
         pairs.append((detect_tone(ours[start:start + window]), detect_tone(dvsi[other:other + window])))
     level, frequency, balance = [], [], []
-    agree = checked = 0
+    agree = checked = wrong = 0
     for index in range(1, len(pairs) - 1):
         ours_tone, dvsi_tone = pairs[index]
         if not (same_tone(pairs[index - 1][1], dvsi_tone) and same_tone(dvsi_tone, pairs[index + 1][1])):
             continue  # DVSI's output changes here: a transition, not a steady window
         checked += 1
-        agree += (ours_tone is None) == (dvsi_tone is None)
-        if ours_tone is None or dvsi_tone is None:
+        # The same tone within 5%: DVSI's own dual tones sit up to 3.4% off nominal,
+        # while neighbouring DTMF rows and columns are 9% or more apart.
+        both = ours_tone is not None and dvsi_tone is not None
+        agree += (ours_tone is None and dvsi_tone is None) or (both and same_tone(ours_tone, dvsi_tone, 0.05))
+        if not both:
             continue
+        wrong += not same_tone(ours_tone, dvsi_tone, 0.05)
         level.append(abs(ours_tone["level_db"] - dvsi_tone["level_db"]))
         errors = [abs(ours_tone["f1"] / dvsi_tone["f1"] - 1.0)]
         if ours_tone["f2"] is not None and dvsi_tone["f2"] is not None:
@@ -257,6 +278,7 @@ def compare_tones(ours, dvsi, shift, window=320, hop=160):
         "freq_rel_error": statistics.median(frequency) if frequency else None,
         "balance_abs_error_db": statistics.median(balance) if balance else None,
         "detector_agreement": agree / checked if checked else None,
+        "wrong_tone_fraction": wrong / len(level) if level else None,
         "steady_tone_windows": len(level),
     }
 
@@ -382,12 +404,14 @@ def score_vector(tools, vectors, mode, name, work, encoder):
         "ours": {key: ours.get(key) for key in SPEECH_KEYS + ("pcm_fnv1a",)},
         "dvsi": {key: dvsi.get(key) for key in SPEECH_KEYS},
         "vs_dvsi": {key: versus.get(key) for key in SPEECH_KEYS},
-        "pitch": {
-            "ours": summarize_ratios(pitch_ratios(records, ours_pcm, 0)),
-            "dvsi": summarize_ratios(pitch_ratios(records, dvsi_samples, versus["lag_samples"])),
-            "input": summarize_ratios(pitch_ratios(records, speech_samples, ours["lag_samples"])),
-        },
     }
+    pairs = {
+        "ours": pitch_ratios(records, ours_pcm, 0),
+        "dvsi": pitch_ratios(records, dvsi_samples, versus["lag_samples"]),
+        "input": pitch_ratios(records, speech_samples, ours["lag_samples"]),
+    }
+    result["pitch"] = {source: summarize_ratios(values) for source, values in pairs.items()}
+    result["pitch_pairs"] = pairs
     if encoder and mode == "dstar":
         result["encoder"] = score_encoder(tools, speech, base, records, ours, speech_samples)
     return result
@@ -479,18 +503,9 @@ def flatten(result):
 
 
 def pooled_pitch(results, source):
-    pairs = []
-    for result in results:
-        for key, entry in result["pitch"][source].items():
-            if key != "all" and entry["n"]:
-                pairs.append((key, entry["n"], entry["median"]))
-    summary = {}
-    for low, high in F0_BANDS:
-        key = f"{int(low)}_{int(high)}"
-        entries = [(n, median) for band, n, median in pairs if band == key]
-        count = sum(n for n, _ in entries)
-        summary[key] = {"n": count, "median": (sum(n * m for n, m in entries) / count) if count else None}
-    return summary
+    """Per-f0-band summary of every vector's frames pooled together."""
+    pairs = [tuple(pair) for result in results for pair in result.get("pitch_pairs", {}).get(source, [])]
+    return {key: entry for key, entry in summarize_ratios(pairs).items() if key != "all"}
 
 
 def aggregate(results):
@@ -521,14 +536,28 @@ def aggregate(results):
 
 
 def pcm_changes(candidate, baseline):
-    """Per mode, the number of speech vectors whose decoded PCM hash differs from the baseline's."""
-    before = {(r["mode"], r["name"]): r["ours"].get("pcm_fnv1a") for r in baseline["vectors"] if "ours" in r}
+    """Per mode, the baseline's speech vectors whose decoded PCM differs in the candidate.
+
+    A vector missing from the candidate, or without a hash on either side, counts
+    as changed, so incomplete runs cannot pass an identity gate.
+    """
+    after = {(r["mode"], r["name"]): r["ours"].get("pcm_fnv1a") for r in candidate["vectors"] if "ours" in r}
     counts = {}
-    for result in candidate["vectors"]:
+    for result in baseline["vectors"]:
+        if "ours" not in result:
+            continue
         key = (result["mode"], result["name"])
-        if "ours" in result and key in before:
-            counts[result["mode"]] = counts.get(result["mode"], 0) + (result["ours"].get("pcm_fnv1a") != before[key])
+        before, now = result["ours"].get("pcm_fnv1a"), after.get(key)
+        counts[result["mode"]] = counts.get(result["mode"], 0) + (before is None or now is None or before != now)
     return counts
+
+
+def add_pcm_changes(summary, candidate, baseline):
+    """Expose pcm_changes() as speech.pcm_changed_vectors in every group of each mode."""
+    for mode, count in pcm_changes(candidate, baseline).items():
+        groups = [key for key in summary if key.startswith(f"{mode}/")] or [f"{mode}/tones"]
+        for group in set(groups) | {f"{mode}/tones"}:
+            summary.setdefault(group, {"vectors": [], "mean": {}})["mean"]["speech.pcm_changed_vectors"] = count
 
 
 def bootstrap_interval(deltas, replicates=2000, seed=0x5EED):
@@ -683,9 +712,7 @@ def main():
     if args.compare:
         baseline = load_json(args.compare)
         report["comparison"] = compare(report, baseline)
-        for mode, count in pcm_changes(report, baseline).items():
-            group = summary.setdefault(f"{mode}/tones", {"vectors": [], "mean": {}})
-            group["mean"]["speech.pcm_changed_vectors"] = count
+        add_pcm_changes(summary, report, baseline)
     (args.out / "scoreboard.json").write_text(json.dumps(report, indent=1) + "\n")
     (args.out / "scoreboard.md").write_text(markdown(summary) + "\n")
     print(markdown(summary))

@@ -96,7 +96,17 @@
         ],
         "metric": "ours.lsd_db",
         "rule": "abs_delta_max",
-        "value": 0.0
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
       }
     ]
   },
@@ -223,6 +233,15 @@
         "metric": "tone.detector_agreement",
         "rule": "min",
         "value": 0.99
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "max",
+        "value": 0.01
       },
       {
         "mode": [
