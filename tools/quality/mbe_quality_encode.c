@@ -145,8 +145,8 @@ encode_stream(FILE* input, FILE* staged, long flush_frames) {
         fprintf(stderr, "Input contains no samples.\n");
         ret = 2;
     }
+    static const short silence[FRAME_SAMPLES] = {0};
     for (long i = 0; ret == 0 && i < flush_frames; ++i) {
-        static const short silence[FRAME_SAMPLES];
         ret = encode_frame(enc, silence, &cur, &prev, staged);
     }
     mbe_ambe2400EncoderFree(enc);

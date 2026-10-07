@@ -14,6 +14,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include "mbe_speech_analysis.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"

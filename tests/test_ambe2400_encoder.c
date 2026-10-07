@@ -544,10 +544,10 @@ test_invalid_arguments(mbe_ambe2400_encoder* enc) {
  * exactly as if the frame had never been offered. */
 static int
 test_invalid_samples(mbe_ambe2400_encoder* enc) {
-    static const float bad_values[] = {NAN, INFINITY, -INFINITY, 3.40282347e38f /* FLT_MAX */, 2097152.0f};
+    const float bad_values[] = {NAN, INFINITY, -INFINITY, 3.40282347e38f /* FLT_MAX */, 2097152.0f};
     for (size_t b = 0; b < sizeof(bad_values) / sizeof(bad_values[0]); b++) {
-        char reference[30][49];
-        char observed[30][49];
+        char reference[30][49] = {{0}};
+        char observed[30][49] = {{0}};
         for (int pass = 0; pass < 2; pass++) {
             mbe_parms cur, prev, enhanced;
             mbe_ambe2400EncoderReset(enc);
