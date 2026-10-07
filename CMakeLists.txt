@@ -957,6 +957,29 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_frame_paths COMMAND test_frame_paths)
 
+    add_executable(
+        test_quality_dvsi
+        tests/test_quality_dvsi.c
+        tools/quality/mbe_quality_dvsi.c
+        tools/quality/mbe_quality_frames.c
+        src/ecc/ecc_const.c
+    )
+    target_link_libraries(test_quality_dvsi PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    target_include_directories(
+        test_quality_dvsi
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+            "${PROJECT_SOURCE_DIR}/tools/quality"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_quality_dvsi PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_quality_dvsi BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_quality_dvsi COMMAND test_quality_dvsi)
+
     add_executable(test_input_validation tests/test_input_validation.c)
     target_link_libraries(test_input_validation PRIVATE ${MBELIB_EXEC_LINK_TGT})
     target_include_directories(
@@ -1298,6 +1321,7 @@ if(MBELIB_BUILD_TESTS)
         test_noise_determinism
         test_params
         test_frame_paths
+        test_quality_dvsi
         test_input_validation
         test_floattoshort_parity
         test_ambe2450_frame_types
@@ -1400,6 +1424,7 @@ if(MBELIB_BUILD_TOOLS)
         tools/quality/mbe_quality_reframe.c
         tools/quality/mbe_quality_fs.c
         tools/quality/mbe_quality_frames.c
+        tools/quality/mbe_quality_dvsi.c
     )
     if(NOT WIN32)
         target_compile_definitions(
@@ -1438,6 +1463,7 @@ if(MBELIB_BUILD_TOOLS)
             tools/quality/mbe_quality_eval.c
             tools/quality/mbe_quality_reframe.c
             tools/quality/mbe_quality_frames.c
+            tools/quality/mbe_quality_dvsi.c
             tools/quality/mbe_quality_fs.c
     )
     target_include_directories(

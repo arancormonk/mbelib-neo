@@ -81,6 +81,25 @@ def verify(evaluator, reframer, root):
         run(reframer, "--codec", codec, "--in", parameters, "--out", reframed, success=False)
         assert reframed.read_bytes() == before
 
+    # DVSI hard-decision vectors: whole binary frames only; a truncated tail,
+    # an unsupported codec or a second input leaves the output untouched.
+    vector = root / "vector.bit"
+    for codec, size, width in (("imbe7200", 18, 184), ("ambe2450", 9, 96), ("ambe2400", 9, 96)):
+        vector.write_bytes(bytes(range(size)) * 3)
+        run(reframer, "--codec", codec, "--from-dvsi", vector, "--out", reframed)
+        assert [len(row) for row in reframed.read_text().splitlines()] == [width] * 3
+        private_output(reframed)
+        before = reframed.read_bytes()
+        vector.write_bytes(bytes(range(size)) * 3 + b"\x00")
+        result = run(reframer, "--codec", codec, "--from-dvsi", vector, "--out", reframed, success=False)
+        assert b"truncated DVSI frame" in result.stderr
+        assert reframed.read_bytes() == before
+    vector.write_bytes(bytes(168))
+    run(reframer, "--codec", "imbe7100", "--from-dvsi", vector, "--out", reframed, success=False)
+    run(reframer, "--codec", "ambe2400", "--from-dvsi", vector, "--in", parameters, "--out", reframed, success=False)
+    vector.write_bytes(b"")
+    run(reframer, "--codec", "ambe2400", "--from-dvsi", vector, "--out", reframed, success=False)
+
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="mbe-quality-tools-") as directory:

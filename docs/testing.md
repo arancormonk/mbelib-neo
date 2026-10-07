@@ -388,6 +388,42 @@ each `pass`, `fail`, or `not_established`, for every actual mode:
   sample size. This is a small blinded engineering comparison, not an
   ITU-compliant MOS/MUSHRA study. Playback alone is not a judgment.
 
+### DVSI reference vectors
+
+DVSI publishes AMBE-3000 test vectors on
+<https://www.dvsinc.com/dlapps/appsoft.shtml>: input speech, DVSI-encoded bit
+streams and DVSI-decoded speech for D-STAR, P25 and AMBE+2 (rate 33), plus
+channel-error variants. They are the closest available stand-in for real
+hardware, and they let decoder output be compared with DVSI's own decoder on
+identical bits.
+
+The site grants no license to copy, modify, transfer or mirror its
+materials. Fetch the vectors only for local measurement. Never commit them,
+attach them to issues or pull requests, or use DVSI audio in published
+listening material. Only URLs, SHA-256 digests and aggregate numbers belong in
+this repository.
+
+```sh
+python3 tools/quality/fetch_dvsi_vectors.py          # about 148 MB of the 1.9 GB archive
+build/dev-debug/mbe_quality_reframe --codec ambe2400 \
+  --from-dvsi build/quality/dvsi/tv-rc/dstar/dam.bit --out dam.frames
+```
+
+- The fetcher needs `curl`. It reads only the needed members of
+  `get-usb/tv-rc.zip` through HTTPS range requests. It verifies each CRC-32 and writes
+  `build/quality/dvsi/dvsi-manifest.json` with SHA-256 digests.
+- `tv-rc/*.pcm` are the inputs (s16le, 8 kHz). Each mode directory holds
+  `X.bit` (DVSI encoder) and `X.pcm` (DVSI decoder). `cmprc.txt` records the
+  rate words: D-STAR uses `0x0130 0x0763 0x4000 0x0000 0x0000 0x0048`.
+- `--from-dvsi` takes 9-byte D-STAR DV data (LSB first), 18-byte P25 frames, or
+  9-byte rate-33 frames (MSB first, DMR interleave). It writes Framef rows for
+  `mbe_quality_eval`. Bits are only deinterleaved, so the `_eN` channel-error
+  variants still exercise FEC and repeat handling. A truncated final frame is
+  rejected.
+- Copy the inputs and DVSI's decoded files to `.raw` names before using them as
+  `--ref` or `--decoded` operands. The evaluator selects the format by
+  extension.
+
 ### Attribution and limitations
 
 Shared phase regeneration and corrected WOLA were already present at checkpoint
