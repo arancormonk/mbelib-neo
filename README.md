@@ -218,6 +218,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 - The `short` entry points write 16-bit PCM with soft clipping (~95% full-scale).
 - The `*f` entry points return mbelib’s historical float scale (not normalized `[-1, +1]`). `mbe_floattoshort()` applies the same `* 7.0` scaling and clipping used by the `short` APIs.
 - To feed a normalized float pipeline, scale each float sample by `(7.0f / 32768.0f)` (range is approximately `[-0.95, +0.95]` after soft clipping).
+- Decoded speech comes out at the level of the original speech, the same level DVSI's AMBE-3000 decoders produce on identical bits. Releases up to 2.2.x played speech about 17 dB louder and soft-clipped 5–7% of the samples of normally recorded speech; adjust any downstream gain that compensated for that.
 
 ## Windows (MSVC) Quickstart
 

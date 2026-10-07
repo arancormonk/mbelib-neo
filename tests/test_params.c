@@ -16,6 +16,7 @@
 #endif
 #include <string.h>
 
+#include "mbe_adaptive.h"
 #include "mbe_tone.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
@@ -727,10 +728,11 @@ main(void) {
         mbe_initProcessResult(&result);
         assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+        /* TIA-102.BABA 7.8: [-5, 5] on the 16-bit output scale (float x 7). */
         double sumsq = 0.0;
         for (int i = 0; i < 160; ++i) {
-            assert(fabsf(out[i]) <= 5.0f);
-            sumsq += (double)out[i] * (double)out[i];
+            assert(fabsf(out[i]) * 7.0f <= 5.0f + 1e-4f);
+            sumsq += (double)out[i] * (double)out[i] * 49.0;
         }
         double rms = sqrt(sumsq / 160.0);
         assert(rms > 1.5 && rms < 4.0);
@@ -849,9 +851,10 @@ main(void) {
         // toward zero, bounded by its linearly decreasing amplitude envelope.
         float out[160];
         mbe_synthesizeSpeechf(out, &cur, &prev);
-        assert(approx_equal(out[0], 80.0f, 1e-5f));
+        const float peak = 80.0f * MBE_SPEECH_OUTPUT_GAIN; /* 2 * 10 * 4 on s(n) */
+        assert(approx_equal(out[0], peak, 1e-5f));
         for (int n = 0; n < 160; ++n) {
-            float envelope = 80.0f * (1.0f - (float)n / 160.0f);
+            float envelope = peak * (1.0f - (float)n / 160.0f);
             assert(fabsf(out[n]) <= envelope + 1e-4f);
         }
         for (int l = 1; l <= cur.L; ++l) {

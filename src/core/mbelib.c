@@ -1141,7 +1141,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
          * IMBE uses the TIA-102.BABA 7.8 level ([-5, 5] on s(n)); D-STAR,
          * ProVoice and direct callers keep JMBE's comfort-noise level. */
         if (mute_noise == MBE_MUTE_NOISE_SPEC) {
-            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
+            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
         } else {
             mbe_synthesizeComfortNoisef(aout_buf);
         }
@@ -1175,7 +1175,11 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
     }
 
-    /* Match JMBE float-path soft clipping semantics for synthesized speech. */
+    /* s(n) to output scale, then JMBE's float-path soft clip, which should
+     * now only catch genuine overloads. */
+    for (int i = 0; i < N; i++) {
+        aout_buf[i] *= MBE_SPEECH_OUTPUT_GAIN;
+    }
     mbe_clipFloatBuffer(aout_buf, N);
 }
 

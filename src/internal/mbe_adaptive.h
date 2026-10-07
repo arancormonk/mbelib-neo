@@ -107,6 +107,18 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
 #define MBE_SPEC_MUTE_NOISE_AMPLITUDE 5.0f
 
 /**
+ * Gain from the synthesized-speech scale s(n) to this library's float samples,
+ * which mbe_floattoshort() multiplies by 7. s(n) is on the 16-bit scale of the
+ * TIA-102 reference and JMBE, so 1/7 makes the short output match DVSI's
+ * AMBE-3000 decoders on identical bits (within 0.5 dB). Without it, decoded
+ * speech ran 17 dB hotter than the original and the soft clip limited 5-7% of
+ * the samples of normally recorded speech. Speech and the 7.8 mute noise, both
+ * on s(n), take this gain; comfort noise and tones already have absolute
+ * output levels.
+ */
+#define MBE_SPEECH_OUTPUT_GAIN        (1.0f / 7.0f)
+
+/**
  * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].
  *
  * Draws from the same thread-local Java Random-compatible generator as
