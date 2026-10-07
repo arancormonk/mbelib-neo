@@ -228,6 +228,11 @@ def check_review_regressions(board):
     unhashed["ours"]["pcm_fnv1a"] = None
     assert board.pcm_changes({"vectors": [unhashed]}, {"vectors": [unhashed]}) == {"dstar": 1}
 
+    # The low-band error against DVSI is the size of the 0-250 Hz band difference.
+    low = vector("dam", "development", 7.0, 0.88)
+    low["vs_dvsi"] = {"band_delta_db_0_250": -1.5}
+    assert board.flatten(low)["vs_dvsi.lf_abs_error_db"] == 1.5
+
     # Quartiles without statistics.quantiles (Python 3.7).
     assert board.quartiles([1.0, 2.0, 3.0, 4.0, 5.0]) == (2.0, 4.0)
 

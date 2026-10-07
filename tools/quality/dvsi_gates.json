@@ -254,5 +254,118 @@
         "value": 0
       }
     ]
+  },
+  "low-band": {
+    "description": "Low-frequency roll-off matched to DVSI's decoders: closer to DVSI's output, nothing else regresses.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lf_abs_error_db",
+        "rule": "decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.2
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.band_delta_db_500_1000",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.band_delta_db_1000_2000",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.band_delta_db_2000_3000",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.band_delta_db_3000_4000",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.pcm_rail_samples",
+        "rule": "no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.env_corr",
+        "rule": "no_decrease",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.1
+      }
+    ]
   }
 }
