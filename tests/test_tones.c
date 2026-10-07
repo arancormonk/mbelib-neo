@@ -66,6 +66,41 @@ pack_dstar_tone(char d[49], int tone_id, int volume) {
     d[17] = (char)(volume & 1);
 }
 
+#ifndef MBELIB_TEST_NOTONES
+/* Energy left after removing the sinusoids at f1 and f2 (if nonzero), relative to the
+ * total energy, in dB. Each component is fitted by projection over the window,
+ * which spans many periods, so the fits barely interact. */
+static double
+residual_db(const float* pcm, int n, double f1, double f2) {
+    static double residual[(FRAMES - 1) * 160];
+    double total = 0.0, left = 0.0;
+    for (int i = 0; i < n; ++i) {
+        residual[i] = (double)pcm[i];
+        total += residual[i] * residual[i];
+    }
+    const double freqs[2] = {f1, f2};
+    for (int k = 0; k < 2; ++k) {
+        if (freqs[k] <= 0.0) {
+            continue;
+        }
+        double c = 0.0, s = 0.0;
+        for (int i = 0; i < n; ++i) {
+            c += residual[i] * cos(2.0 * M_PI * freqs[k] * i / 8000.0);
+            s += residual[i] * sin(2.0 * M_PI * freqs[k] * i / 8000.0);
+        }
+        for (int i = 0; i < n; ++i) {
+            residual[i] -=
+                (2.0 / n)
+                * ((c * cos(2.0 * M_PI * freqs[k] * i / 8000.0)) + (s * sin(2.0 * M_PI * freqs[k] * i / 8000.0)));
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        left += residual[i] * residual[i];
+    }
+    return 10.0 * log10(left / total + 1e-30);
+}
+#endif
+
 /* Amplitude of the component at `hz`, in dB re an RMS of 32768 on the int16 scale. */
 static double
 component_db(const float* pcm, int n, double hz) {
@@ -79,6 +114,7 @@ component_db(const float* pcm, int n, double hz) {
     return 20.0 * log10(amplitude / sqrt(2.0) / 32768.0 + 1e-30);
 }
 
+#ifdef MBELIB_TEST_NOTONES
 static double
 energy(const float* pcm, int n) {
     double sum = 0.0;
@@ -87,6 +123,7 @@ energy(const float* pcm, int n) {
     }
     return sum;
 }
+#endif
 
 typedef int (*process_fn)(float*, mbe_process_result*, const char[49], mbe_parms*, mbe_parms*, mbe_parms*);
 
@@ -128,9 +165,7 @@ expect_tone(const char* name, process_fn process, const char d[49], double f1, d
     assert(fabs(a - level_db) < 0.1);
     assert(fabs(b - level_db) < 0.1);
     /* Everything else is at least 40 dB down: the components are the whole signal. */
-    double components = pow(10.0, a / 10.0) + (f2 > 0.0 ? pow(10.0, b / 10.0) : 0.0);
-    double total = 10.0 * log10(49.0 * energy(pcm, n) / n / (32768.0 * 32768.0));
-    assert(fabs(10.0 * log10(components) - total) < 0.05);
+    assert(residual_db(pcm, n, f1, f2) < -40.0);
 #endif
 }
 
