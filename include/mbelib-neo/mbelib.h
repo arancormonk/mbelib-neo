@@ -819,9 +819,10 @@ MBE_API void mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms*
 /**
  * @brief Synthesize tone for D-STAR style indices into float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param ambe_d   AMBE parameter bits (49).
- * @param cur_mp   Current parameter set. NULL synthesizes silence.
- * @param ID1      Tone index selector.
+ * @param ambe_d   AMBE parameter bits (49); the tone volume is read from them.
+ * @param cur_mp   Current parameter set. NULL, invalid bits or an unknown index synthesize silence.
+ * @param ID1      Tone index: single tones 5..122, DTMF 128..143 (128 + 4 * column + row),
+ *                 call progress 144..147.
  */
 MBE_API void mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp, int ID1);
 /** @brief Fill float PCM buffer with 160 samples of silence. */

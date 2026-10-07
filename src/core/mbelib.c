@@ -739,15 +739,23 @@ mbe_toneSampleFromPhase(uint32_t phase) {
     return sinf(angle);
 }
 
+/* Peak amplitude, on this library's float scale (int16 / 7), of a sinusoid
+ * whose RMS is level_db relative to 32768. */
+static float
+mbe_toneAmplitude(double level_db) {
+    return (float)(sqrt(2.0) * 32768.0 * pow(10.0, level_db / 20.0) / 7.0);
+}
+
+/* Render one or two sinusoids, each of peak amplitude `gain`, through the same
+ * 0.95 full-scale limit as speech. */
 static void
-mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, int amplitude_id) {
+mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, float gain) {
     if (!aout_buf || !cur_mp || freq1 <= 0.0f) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
 
     const int dual_tone = (freq2 > 0.0f) && (fabsf(freq2 - freq1) > 1e-6f);
-    const float gain = (((amplitude_id < 0) ? 0.0f : (float)amplitude_id) / 127.0f) * MBE_AUDIO_SOFT_CLIP_FLOAT;
     const uint32_t step1 = mbe_tonePhaseStep((double)freq1);
     const uint32_t step2 = dual_tone ? mbe_tonePhaseStep((double)freq2) : 0u;
     uint32_t phase1 = (uint32_t)cur_mp->swn;
@@ -760,9 +768,9 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
         if (dual_tone) {
             phase2 += step2;
             float s2 = mbe_toneSampleFromPhase(phase2);
-            aout_buf[n] = (0.5f * gain * s1) + (0.5f * gain * s2);
+            aout_buf[n] = mbe_clipFloatSample((gain * s1) + (gain * s2));
         } else {
-            aout_buf[n] = gain * s1;
+            aout_buf[n] = mbe_clipFloatSample(gain * s1);
         }
     }
 
@@ -820,7 +828,7 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
     ID0 = 0;
     ID1 = ((u1 & 0xfff) >> 4);
     ID2 = ((u1 & 0xf) << 4) + ((u2 >> 7) & 0xf);
-    ID3 = ((u2 & 0x7f) << 1) + ((u2 >> 13) & 0x1);
+    ID3 = ((u2 & 0x7f) << 1) + ((u3 >> 13) & 0x1);
     ID4 = ((u3 & 0x1fe0) >> 5);
 
     float freq1, freq2;
@@ -834,7 +842,7 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
         return;
     }
 
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)));
 #endif
 }
 
@@ -854,39 +862,15 @@ mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp,
     mbe_synthesizeSilencef(aout_buf);
     return;
 #else
-    int AD = 103; /* JMBE nominal D-STAR tone amplitude */
     float freq1 = 0, freq2 = 0;
-    (void)ambe_d;
 
-    if (!cur_mp) {
+    if (!cur_mp || mbe_validate_bits(ambe_d, 49u) < 0 || !mbe_tone_lookup_dstar_freqs(ID1, &freq1, &freq2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
 
-    switch (ID1) {
-        // single tones, set frequency
-        case 5:
-            freq1 = 156.25;
-            freq2 = freq1;
-            break;
-        case 6:
-            freq1 = 187.5;
-            freq2 = freq1;
-            break;
-        // single tones, calculated frequency
-        default:
-            if ((ID1 >= 7) && (ID1 <= 122)) {
-                freq1 = 31.25f * (float)ID1;
-                freq2 = freq1;
-            }
-    }
-
-    if (freq1 <= 0.0f) {
-        mbe_synthesizeSilencef(aout_buf);
-        return;
-    }
-
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
+    const double level_db = mbe_tone_dstar_level_db(mbe_tone_dstar_volume(ambe_d));
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(level_db));
 #endif
 }
 

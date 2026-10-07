@@ -25,6 +25,7 @@
 #include "mbe_compiler.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
+#include "mbe_tone.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -188,11 +189,6 @@ ambe2400_decode_tone_index(const char* ambe_d) {
     tone_index |= ambe_d[10] << 1;
     tone_index |= ambe_d[11];
 
-#ifdef AMBE_DEBUG
-    int tone_volume = (ambe_d[12] << 7) | (ambe_d[13] << 6) | (ambe_d[14] << 5) | (ambe_d[15] << 4) | (ambe_d[16] << 3)
-                      | (ambe_d[44] << 2) | (ambe_d[45] << 1) | ambe_d[17];
-    (void)tone_volume;
-#endif
     return tone_index;
 }
 
@@ -214,6 +210,13 @@ ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L
 
     int tone_index = ambe2400_decode_tone_index(ambe_d);
     if ((tone_index >= 5) && (tone_index <= 122)) {
+        return tone_index;
+    }
+    /* Dual tones with a nonzero volume. Volume 0 with index 128 is this
+     * library's encoder's silence frame, which resets both sides. */
+    float freq1, freq2;
+    if ((tone_index >= 128) && mbe_tone_dstar_volume(ambe_d) != 0
+        && mbe_tone_lookup_dstar_freqs(tone_index, &freq1, &freq2)) {
         return tone_index;
     }
 
@@ -671,7 +674,7 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
 
 static int
 ambe2400_is_accepted_tone(int bad, int c0_errors, int total_errors) {
-    return bad >= 5 && bad <= 122 && c0_errors < 2 && total_errors < 3;
+    return ((bad >= 5 && bad <= 122) || (bad >= 128 && bad <= 147)) && c0_errors < 2 && total_errors < 3;
 }
 
 static void

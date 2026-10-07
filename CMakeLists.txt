@@ -1058,6 +1058,23 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_ambe2450_frame_types COMMAND test_ambe2450_frame_types)
 
+    add_executable(test_tones tests/test_tones.c)
+    target_link_libraries(test_tones PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    target_include_directories(
+        test_tones
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(NOTONES)
+        target_compile_definitions(test_tones PRIVATE MBELIB_TEST_NOTONES=1)
+    endif()
+    if(_SAN_CFLAGS)
+        target_compile_options(test_tones PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_tones BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_tones COMMAND test_tones)
+
     add_executable(test_golden_pcm tests/test_golden_pcm.c)
     target_link_libraries(test_golden_pcm PRIVATE ${MBELIB_EXEC_LINK_TGT})
     target_include_directories(
@@ -1355,6 +1372,7 @@ if(MBELIB_BUILD_TESTS)
         test_input_validation
         test_floattoshort_parity
         test_ambe2450_frame_types
+        test_tones
         test_golden_pcm
         test_simd_arch_detection_x64
         test_simd_arch_detection_arm64ec
