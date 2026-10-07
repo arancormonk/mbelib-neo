@@ -37,7 +37,16 @@ PARTITIONS = {
     "development": ("dam", "clean", "fambf22c", "fambm22a", "t01", "t02", "tia11", "tambf22a", "ucarm15a"),
     "validation": ("t03", "t04", "tambf22b", "tambf32b", "tambf32e", "ucarf15a", "ucarm20a"),
     "final": ("irstia", "p01mirs", "mark"),
+    # Not speech: scored with the tone detector against DVSI's decoder only.
+    "tones": tuple(
+        ["alert", "alltone", "cp0", "cp1", "cp2", "cp31", "cpvbad"]
+        + ["dtmf", "dtmf4", "dtmf4r", "dtmf8", "dtmf8r", "dtmf15n", "dtmf15p", "dtmf25", "dtmf50", "dtmf60"]
+        + ["dtmf100", "dtmf180", "dtmfvbad"]
+        + [f"dtone_{i}" for i in range(1, 17)]
+        + [f"knox_{i}" for i in range(1, 17)]
+    ),
 }
+SPEECH_PARTITIONS = ("development", "validation", "final")
 BAND_KEYS = tuple(
     f"band_delta_db_{band}" for band in ("0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
 )
@@ -158,6 +167,98 @@ def max_ratio_deviation(summary, minimum=20):
     deviations = [abs(entry["median"] - 1.0) for key, entry in summary.items()
                   if key != "all" and entry["n"] >= minimum]
     return max(deviations) if deviations else None
+
+
+# --------------------------------------------------------------------------------------------
+# Tones
+
+
+def detect_tone(segment, nfft=8192, floor_db=-60.0):
+    """{level_db, f1, f2, balance_db} for a window holding one or two steady sinusoids, else None.
+
+    level_db is the window's RMS in dB relative to 32768. f1 < f2 for a dual tone,
+    whose balance_db is the high component's power over the low one's.
+    """
+    import numpy as np
+
+    x = np.asarray(segment, dtype=np.float64)
+    rms = math.sqrt(float(np.mean(x * x))) if len(x) else 0.0
+    if rms <= 32768.0 * 10 ** (floor_db / 20.0):
+        return None
+    power = np.abs(np.fft.rfft(x * np.hanning(len(x)), nfft)) ** 2
+    hz = np.arange(len(power)) * SAMPLE_RATE / nfft
+    total = float(np.sum(power))
+
+    def peak(spectrum):
+        k = int(np.argmax(spectrum))
+        if 0 < k < len(spectrum) - 1 and spectrum[k - 1] > 0 and spectrum[k + 1] > 0:
+            a, b, c = (math.log(float(spectrum[i])) for i in (k - 1, k, k + 1))
+            curvature = a - 2.0 * b + c
+            if curvature < 0:
+                return (k + 0.5 * (a - c) / curvature) * SAMPLE_RATE / nfft
+        return k * SAMPLE_RATE / nfft
+
+    def energy(frequency):
+        return float(np.sum(power[np.abs(hz - frequency) <= 40.0]))
+
+    first = peak(power)
+    # Past the first component's Hann main lobe (+-50 Hz for 320 samples) and its
+    # energy window. Components closer than that (440 + 480 Hz ringback) read as one.
+    rest = np.where(np.abs(hz - first) <= 100.0, 0.0, power)
+    second = peak(rest)
+    e1, e2 = energy(first), energy(second)
+    level_db = 20.0 * math.log10(rms / 32768.0)
+    if e2 >= 0.01 * total and e1 + e2 >= 0.9 * total:
+        (low, e_low), (high, e_high) = sorted(((first, e1), (second, e2)))
+        return {"level_db": level_db, "f1": low, "f2": high, "balance_db": 10.0 * math.log10(e_high / e_low)}
+    if e1 >= 0.9 * total:
+        return {"level_db": level_db, "f1": first, "f2": None, "balance_db": None}
+    return None
+
+
+def same_tone(a, b, tolerance=0.01):
+    if a is None or b is None:
+        return a is None and b is None
+    if (a["f2"] is None) != (b["f2"] is None):
+        return False
+    pairs = [(a["f1"], b["f1"])] + ([(a["f2"], b["f2"])] if a["f2"] is not None else [])
+    return all(abs(x / y - 1.0) <= tolerance for x, y in pairs)
+
+
+def compare_tones(ours, dvsi, shift, window=320, hop=160):
+    """Tone agreement on DVSI's steady windows; `shift` is our delay relative to DVSI's output."""
+    starts = range(max(0, shift), len(ours) - window + 1, hop)
+    pairs = []
+    for start in starts:
+        other = start - shift
+        if other + window > len(dvsi):
+            break
+        pairs.append((detect_tone(ours[start:start + window]), detect_tone(dvsi[other:other + window])))
+    level, frequency, balance = [], [], []
+    agree = checked = 0
+    for index in range(1, len(pairs) - 1):
+        ours_tone, dvsi_tone = pairs[index]
+        if not (same_tone(pairs[index - 1][1], dvsi_tone) and same_tone(dvsi_tone, pairs[index + 1][1])):
+            continue  # DVSI's output changes here: a transition, not a steady window
+        checked += 1
+        agree += (ours_tone is None) == (dvsi_tone is None)
+        if ours_tone is None or dvsi_tone is None:
+            continue
+        level.append(abs(ours_tone["level_db"] - dvsi_tone["level_db"]))
+        errors = [abs(ours_tone["f1"] / dvsi_tone["f1"] - 1.0)]
+        if ours_tone["f2"] is not None and dvsi_tone["f2"] is not None:
+            errors.append(abs(ours_tone["f2"] / dvsi_tone["f2"] - 1.0))
+            balance.append(abs(ours_tone["balance_db"] - dvsi_tone["balance_db"]))
+        elif (ours_tone["f2"] is None) != (dvsi_tone["f2"] is None):
+            errors.append(1.0)  # one plays a single tone, the other a dual tone
+        frequency.append(max(errors))
+    return {
+        "level_abs_error_db": statistics.median(level) if level else None,
+        "freq_rel_error": statistics.median(frequency) if frequency else None,
+        "balance_abs_error_db": statistics.median(balance) if balance else None,
+        "detector_agreement": agree / checked if checked else None,
+        "steady_tone_windows": len(level),
+    }
 
 
 # --------------------------------------------------------------------------------------------
@@ -321,6 +422,27 @@ def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
     }
 
 
+def score_tone_vector(tools, vectors, mode, name, work):
+    """Our decode of DVSI's bits for a tone vector against DVSI's decoded output."""
+    codec = MODES[mode]
+    base = work / f"{mode}_{name}"
+    dvsi_pcm = Path(f"{base}_dvsi.raw")
+    shutil.copyfile(vectors / mode / f"{name}.pcm", dvsi_pcm)
+    run([tools / "mbe_quality_reframe", "--codec", codec, "--from-dvsi", vectors / mode / f"{name}.bit",
+         "--out", f"{base}.frames"])
+    run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ours.wav",
+         "--params", f"{base}_ours.jsonl"])
+    run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
+         "--json", f"{base}_vs_dvsi.json"])
+    versus = load_json(f"{base}_vs_dvsi.json")
+    records = load_records(f"{base}_ours.jsonl")
+    metrics = compare_tones(read_pcm(f"{base}_ours.wav"), read_pcm(dvsi_pcm), versus.get("lag_samples") or 0)
+    metrics["tone_frames"] = sum(1 for record in records if record["flags"] & 0x0010)
+    metrics["frames"] = len(records)
+    metrics["alignment_corr"] = versus.get("alignment_corr")
+    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics}
+
+
 # --------------------------------------------------------------------------------------------
 # Aggregation, comparison and gates
 
@@ -333,6 +455,8 @@ def mean(values):
 def flatten(result):
     """Scalar metrics of one vector as dotted keys (the namespace the gates use)."""
     flat = {}
+    if "tone" in result:
+        return {f"tone.{key}": value for key, value in result["tone"].items()}
     for group in ("ours", "dvsi", "vs_dvsi"):
         for key, value in result[group].items():
             if isinstance(value, (int, float)):
@@ -380,12 +504,31 @@ def aggregate(results):
             keys = sorted({key for flat in flats for key in flat})
             entry = {"vectors": [result["name"] for result in group],
                      "mean": {key: mean([flat.get(key) for flat in flats]) for key in keys}}
+            if partition == "tones":
+                # The worst tone vector decides: errors take the maximum, agreement the minimum.
+                for key in keys:
+                    values = [flat[key] for flat in flats if flat.get(key) is not None]
+                    pick = min if key == "tone.detector_agreement" else max
+                    entry["mean"][key] = pick(values) if values else None
+                summary[f"{mode}/{partition}"] = entry
+                continue
             for source in ("ours", "dvsi", "input"):
                 pooled = pooled_pitch(group, source)
                 entry[f"pitch_{source}_by_f0"] = pooled
                 entry["mean"][f"pitch.{source}_max_band_deviation"] = max_ratio_deviation(pooled)
             summary[f"{mode}/{partition}"] = entry
     return summary
+
+
+def pcm_changes(candidate, baseline):
+    """Per mode, the number of speech vectors whose decoded PCM hash differs from the baseline's."""
+    before = {(r["mode"], r["name"]): r["ours"].get("pcm_fnv1a") for r in baseline["vectors"] if "ours" in r}
+    counts = {}
+    for result in candidate["vectors"]:
+        key = (result["mode"], result["name"])
+        if "ours" in result and key in before:
+            counts[result["mode"]] = counts.get(result["mode"], 0) + (result["ours"].get("pcm_fnv1a") != before[key])
+    return counts
 
 
 def bootstrap_interval(deltas, replicates=2000, seed=0x5EED):
@@ -466,6 +609,14 @@ def markdown(summary):
     for group, entry in summary.items():
         means = entry["mean"]
         lines.append(f"### {group} ({len(entry['vectors'])} vectors)\n")
+        if group.endswith("/tones"):
+            lines.append("| Metric | Worst vector |")
+            lines.append("|---|---|")
+            for key in sorted(means):
+                value = means[key]
+                lines.append(f"| {key} | {'' if value is None else f'{value:.4f}'} |")
+            lines.append("")
+            continue
         lines.append("| Metric | Ours vs input | DVSI vs input | Ours vs DVSI |")
         lines.append("|---|---|---|---|")
         for key in SPEECH_KEYS:
@@ -522,12 +673,19 @@ def main():
                 if not all(path.is_file() for path in needed):
                     print(f"skip {mode}/{name}: not fetched", file=sys.stderr)
                     continue
-                results.append(score_vector(args.tools, vectors, mode, name, work, not args.no_encoder))
+                if partition == "tones":
+                    results.append(score_tone_vector(args.tools, vectors, mode, name, work))
+                else:
+                    results.append(score_vector(args.tools, vectors, mode, name, work, not args.no_encoder))
                 print(f"scored {mode}/{name}", file=sys.stderr)
     summary = aggregate(results)
     report = {"schema_version": 1, "vectors": results, "summary": summary}
     if args.compare:
-        report["comparison"] = compare(report, load_json(args.compare))
+        baseline = load_json(args.compare)
+        report["comparison"] = compare(report, baseline)
+        for mode, count in pcm_changes(report, baseline).items():
+            group = summary.setdefault(f"{mode}/tones", {"vectors": [], "mean": {}})
+            group["mean"]["speech.pcm_changed_vectors"] = count
     (args.out / "scoreboard.json").write_text(json.dumps(report, indent=1) + "\n")
     (args.out / "scoreboard.md").write_text(markdown(summary) + "\n")
     print(markdown(summary))

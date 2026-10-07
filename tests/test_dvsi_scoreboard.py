@@ -124,7 +124,7 @@ def check_configuration(board):
         seen |= set(names)
     gates = json.loads((Path(board.__file__).with_name("dvsi_gates.json")).read_text())
     rules = {"max", "min", "decrease", "increase", "no_increase", "no_decrease", "abs_delta_max"}
-    prefixes = ("ours.", "dvsi.", "vs_dvsi.", "pitch.", "encoder.")
+    prefixes = ("ours.", "dvsi.", "vs_dvsi.", "pitch.", "encoder.", "tone.", "speech.")
     for name, gate_set in gates.items():
         assert gate_set["partition"] in board.PARTITIONS, name
         for check in gate_set["checks"]:
@@ -134,16 +134,77 @@ def check_configuration(board):
             assert set(modes) <= set(board.MODES), (name, check)
 
 
+def tone(freqs, levels_db, seconds=1.0, seed=3):
+    rng = random.Random(seed)
+    amplitudes = [32768.0 * 10 ** (level / 20.0) * math.sqrt(2.0) for level in levels_db]
+    phases = [rng.uniform(0, 2 * math.pi) for _ in freqs]
+    return [sum(a * math.sin(2 * math.pi * f * n / 8000.0 + p) for f, a, p in zip(freqs, amplitudes, phases))
+            for n in range(int(8000 * seconds))]
+
+
+def check_tone_detector(board):
+    # A DTMF "1" with 2 dB twist: both components, their balance and the total level.
+    found = board.detect_tone(tone((697.0, 1209.0), (-12.0, -10.0))[1000:1320])
+    assert found is not None
+    assert abs(found["f1"] / 697.0 - 1) < 2e-3 and abs(found["f2"] / 1209.0 - 1) < 2e-3, found
+    assert abs(found["balance_db"] - 2.0) < 0.2, found
+    total = 10 * math.log10(10 ** (-1.2) + 10 ** (-1.0))
+    assert abs(found["level_db"] - total) < 0.2, found
+    single = board.detect_tone(tone((1000.0,), (-20.0,))[1000:1320])
+    assert single is not None and single["f2"] is None and abs(single["f1"] / 1000.0 - 1) < 2e-3, single
+    rng = random.Random(9)
+    assert board.detect_tone([rng.gauss(0, 3000.0) for _ in range(320)]) is None
+    assert board.detect_tone(harmonic_signal(140.0)[1000:1320]) is None
+    assert board.detect_tone([0.0] * 320) is None
+
+
+def check_tone_comparison(board):
+    # DVSI plays the tone 1 dB louder and starts 40 ms later; ours is delayed 37 samples overall.
+    dvsi = [0.0] * 1600 + tone((770.0, 1336.0), (-13.0, -11.0), seconds=0.8)
+    ours = [0.0] * 37 + [0.0] * 1280 + tone((770.0, 1336.0), (-14.0, -12.0), seconds=0.84)
+    metrics = board.compare_tones(ours, dvsi, 37)
+    assert abs(metrics["level_abs_error_db"] - 1.0) < 0.1, metrics
+    assert metrics["freq_rel_error"] < 1e-3, metrics
+    assert metrics["balance_abs_error_db"] < 0.1, metrics
+    assert 0.9 < metrics["detector_agreement"] < 0.99, metrics  # the 40 ms early start disagrees
+    same = board.compare_tones(dvsi, dvsi, 0)
+    assert same["detector_agreement"] == 1.0 and same["level_abs_error_db"] < 1e-6, same
+
+
+def check_tone_aggregation(board):
+    def tone_result(name, level, agreement):
+        return {"mode": "r33", "name": name, "partition": "tones",
+                "tone": {"level_abs_error_db": level, "freq_rel_error": 0.0, "balance_abs_error_db": None,
+                         "detector_agreement": agreement, "steady_tone_windows": 10}}
+    summary = board.aggregate([tone_result("dtmf", 0.2, 1.0), tone_result("alltone", 3.0, 0.95)])
+    means = summary["r33/tones"]["mean"]
+    # The worst tone vector decides: errors take the maximum, agreement the minimum.
+    assert means["tone.level_abs_error_db"] == 3.0 and means["tone.detector_agreement"] == 0.95, means
+    assert means["tone.balance_abs_error_db"] is None, means
+
+    # Speech PCM identity against the baseline, counted per mode under the tones group.
+    before = vector("dam", "development", 7.0, 0.88)
+    before["ours"]["pcm_fnv1a"] = "0x00000001"
+    after = json.loads(json.dumps(before))
+    after["ours"]["pcm_fnv1a"] = "0x00000002"
+    counts = board.pcm_changes({"vectors": [after]}, {"vectors": [before]})
+    assert counts == {"dstar": 1}, counts
+    assert board.pcm_changes({"vectors": [before]}, {"vectors": [before]}) == {"dstar": 0}
+
+
 def main():
     board = load_scoreboard()
     check_configuration(board)
     check_voicing(board)
     check_gates(board)
+    check_tone_aggregation(board)
     if importlib.util.find_spec("numpy") is None:
         print("NumPy not available: pitch checks skipped")
         return SKIP
     check_pitch(board)
     check_frame_selection(board)
+    check_tone_detector(board)
+    check_tone_comparison(board)
     return 0
 
 

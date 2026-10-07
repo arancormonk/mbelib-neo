@@ -183,5 +183,57 @@
         "value": 0.002
       }
     ]
+  },
+  "tones": {
+    "description": "Tone frames match DVSI's decoder on steady windows; speech PCM is unchanged.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "max",
+        "value": 1.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "max",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "max",
+        "value": 1.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "min",
+        "value": 0.99
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }
