@@ -301,7 +301,7 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
-- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] on the synthesized-speech scale (about ±35 in int16 output; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
+- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] at the int16 output (±5/7 in the float output, which is int16 / 7; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
 
 - **Nyquist guard**: the shared synthesizer skips voiced harmonics at or above Nyquist (`l * w0 >= pi`) instead of rendering them as aliases. Decoded models never contain such harmonics; the guard protects caller-supplied models.
 
