@@ -43,6 +43,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -597,12 +598,29 @@ ambe2400_enc_update_agc(mbe_ambe2400_encoder* enc, float rms, bool periodic) {
  * @brief Encode 160 samples (20 ms, 8 kHz) of PCM into AMBE 2400
  *        parameter bits.
  *
- * @param samples Input PCM floats (160), nominal range [-1, 1].
+ * @param samples Input PCM floats (160), nominal range [-1, 1]; a non-finite
+ *                sample or one beyond +-2^20 rejects the frame.
  * @param ambe_d  Output parameter bits (49).
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous frame state (see mbe_initMbeParms()).
- * @return 0 for a voice frame, 1 for a silence frame, negative on error.
+ * @return 0 for a voice frame, 1 for a silence frame, negative on error
+ *         (the context is unchanged).
  */
+/* Finite and within +-2^20 (0x49800000), checked on the bit pattern so the
+ * test survives fast-math. One bad sample would otherwise poison the DC
+ * filter and AGC state for the rest of the stream. */
+static bool
+ambe2400_enc_samples_valid(const float* samples) {
+    for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
+        uint32_t bits;
+        memcpy(&bits, &samples[i], sizeof(bits));
+        if ((bits & 0x7FFFFFFFu) > 0x49800000u) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int
 mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
                         const mbe_parms* prev_mp) {
@@ -610,7 +628,8 @@ mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char am
     float filtered[AMBE2400_ENC_SAMPLES];
     float rms = 0.0f;
 
-    if (enc == NULL || samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
+    if (enc == NULL || samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL
+        || !ambe2400_enc_samples_valid(samples)) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
 

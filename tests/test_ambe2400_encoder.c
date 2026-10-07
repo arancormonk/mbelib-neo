@@ -540,6 +540,51 @@ test_invalid_arguments(mbe_ambe2400_encoder* enc) {
     return 0;
 }
 
+/* A rejected frame (non-finite or absurdly large samples) leaves the stream
+ * exactly as if the frame had never been offered. */
+static int
+test_invalid_samples(mbe_ambe2400_encoder* enc) {
+    static const float bad_values[] = {NAN, INFINITY, -INFINITY, 3.40282347e38f /* FLT_MAX */, 2097152.0f};
+    for (size_t b = 0; b < sizeof(bad_values) / sizeof(bad_values[0]); b++) {
+        char reference[30][49];
+        char observed[30][49];
+        for (int pass = 0; pass < 2; pass++) {
+            mbe_parms cur, prev, enhanced;
+            mbe_ambe2400EncoderReset(enc);
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            for (int f = 0; f < 30; f++) {
+                float pcm[160];
+                for (int i = 0; i < 160; i++) {
+                    pcm[i] = 0.2f * sinf((float)(2.0 * M_PI * 200.0 * (f * 160 + i) / 8000.0));
+                }
+                if (pass == 1 && f == 10) {
+                    float bad[160];
+                    memcpy(bad, pcm, sizeof(bad));
+                    bad[37] = bad_values[b];
+                    char unused[49];
+                    mbe_parms before = cur;
+                    if (mbe_encodeAmbe2400Parms(enc, bad, unused, &cur, &prev) != MBE_STATUS_INVALID_ARGUMENT
+                        || memcmp(&before, &cur, sizeof(cur)) != 0) {
+                        printf("invalid samples: value %zu was not rejected cleanly\n", b);
+                        return 1;
+                    }
+                }
+                char* bits = (pass == 0) ? reference[f] : observed[f];
+                if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) < 0) {
+                    return 1;
+                }
+                mbe_moveMbeParms(&cur, &prev);
+            }
+        }
+        if (memcmp(reference, observed, sizeof(reference)) != 0) {
+            printf("invalid samples: value %zu changed the stream\n", b);
+            return 1;
+        }
+    }
+    puts("non-finite and out-of-range samples are rejected without touching state");
+    return 0;
+}
+
 static int
 test_prediction_boundaries(mbe_ambe2400_encoder* enc) {
     mbe_ambe2400EncoderReset(enc);
@@ -926,6 +971,7 @@ main(void) {
     }
     int fails = 0;
     fails += test_invalid_arguments(enc);
+    fails += test_invalid_samples(enc);
     fails += test_c1_parity();
     fails += test_golay();
     fails += test_frame_roundtrip();

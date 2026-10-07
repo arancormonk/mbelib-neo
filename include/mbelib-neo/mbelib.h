@@ -417,7 +417,9 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * call. Feed a final frame of zeros to flush the tail.
  *
  * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
- * @param samples Input PCM floats (160), nominal range [-1, 1].
+ * @param samples Input PCM floats (160), nominal range [-1, 1]. A frame with a
+ *                non-finite sample or one beyond +-2^20 returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context unchanged.
  * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous quantized frame state; never modified.
