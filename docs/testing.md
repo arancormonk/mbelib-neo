@@ -469,8 +469,11 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   vectors.
 - **Tones** are compared with one acoustic detector run on both outputs, on
   windows where DVSI's output is steady: level, frequencies, balance, how
-  often both agree on the tone playing (the same tone within 5%), and the
-  fraction of windows playing a different tone.
+  often both agree on the tone playing, and the fraction of windows playing a
+  different tone. Single tones must agree within 10 Hz (they are 31.25 Hz
+  apart); each dual-tone component within 25 Hz, since DVSI plays dual tones
+  up to 20 Hz off nominal and neighbouring DTMF frequencies are 73 Hz or more
+  apart.
 - `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
   worst vector, and counts the baseline's speech vectors whose PCM changed
   (a vector missing from the run counts as changed). `--gates` evaluates a gate set from

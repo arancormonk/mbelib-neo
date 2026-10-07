@@ -242,6 +242,20 @@ def same_tone(a, b, tolerance=0.01):
     return all(abs(x / y - 1.0) <= tolerance for x, y in pairs)
 
 
+def same_tone_identity(a, b):
+    """Whether two detected tones are the same tone ID despite DVSI's approximations.
+
+    Single tones sit 31.25 Hz apart, so they must agree within 10 Hz. DVSI plays a
+    dual tone as two harmonics of one fundamental, up to 20 Hz off each nominal
+    component, while neighbouring DTMF frequencies are at least 73 Hz apart.
+    """
+    if (a["f2"] is None) != (b["f2"] is None):
+        return False
+    if a["f2"] is None:
+        return abs(a["f1"] - b["f1"]) <= 10.0
+    return abs(a["f1"] - b["f1"]) <= 25.0 and abs(a["f2"] - b["f2"]) <= 25.0
+
+
 def compare_tones(ours, dvsi, shift, window=320, hop=160):
     """Tone agreement on DVSI's steady windows; `shift` is our delay relative to DVSI's output."""
     starts = range(max(0, shift), len(ours) - window + 1, hop)
@@ -258,13 +272,11 @@ def compare_tones(ours, dvsi, shift, window=320, hop=160):
         if not (same_tone(pairs[index - 1][1], dvsi_tone) and same_tone(dvsi_tone, pairs[index + 1][1])):
             continue  # DVSI's output changes here: a transition, not a steady window
         checked += 1
-        # The same tone within 5%: DVSI's own dual tones sit up to 3.4% off nominal,
-        # while neighbouring DTMF rows and columns are 9% or more apart.
         both = ours_tone is not None and dvsi_tone is not None
-        agree += (ours_tone is None and dvsi_tone is None) or (both and same_tone(ours_tone, dvsi_tone, 0.05))
+        agree += (ours_tone is None and dvsi_tone is None) or (both and same_tone_identity(ours_tone, dvsi_tone))
         if not both:
             continue
-        wrong += not same_tone(ours_tone, dvsi_tone, 0.05)
+        wrong += not same_tone_identity(ours_tone, dvsi_tone)
         level.append(abs(ours_tone["level_db"] - dvsi_tone["level_db"]))
         errors = [abs(ours_tone["f1"] / dvsi_tone["f1"] - 1.0)]
         if ours_tone["f2"] is not None and dvsi_tone["f2"] is not None:
