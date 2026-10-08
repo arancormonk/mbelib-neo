@@ -212,8 +212,9 @@ ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L
     if ((tone_index >= 5) && (tone_index <= 122)) {
         return tone_index;
     }
-    /* Dual tones with a nonzero volume. Volume 0 with index 128 is this
-     * library's encoder's silence frame, which resets both sides. */
+    /* Dual tones with a nonzero volume. Volume 0 with index 128 is the
+     * silence frame earlier versions of this library's encoder sent; it plays
+     * comfort noise and resets the decoder. */
     float freq1, freq2;
     if ((tone_index >= 128) && mbe_tone_dstar_volume(ambe_d) != 0
         && mbe_tone_lookup_dstar_freqs(tone_index, &freq1, &freq2)) {

@@ -9,6 +9,7 @@
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -112,7 +113,7 @@ synthesize(struct harmonic_signal* s, float out[MBE_ANALYSIS_FRAME]) {
 /* Off-grid harmonics with arbitrary phases: pitch within a quarter sample,
  * magnitudes A/2 within 1 dB for resolved harmonics, small fit errors. */
 static void
-test_harmonic_fit(mbe_fft_plan* fft) {
+test_harmonic_fit(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     const double f0s[] = {137.3, 181.9, 233.7};
     for (size_t c = 0; c < sizeof(f0s) / sizeof(f0s[0]); c++) {
         struct mbe_analysis_state state;
@@ -124,10 +125,9 @@ test_harmonic_fit(mbe_fft_plan* fft) {
         mbe_analysis_reset(&state);
         for (int f = 0; f < 8; f++) {
             float in[MBE_ANALYSIS_FRAME];
-            float filtered[MBE_ANALYSIS_FRAME];
             synthesize(&s, in);
-            mbe_analysis_push(&state, in, filtered);
-            assert(mbe_analysis_frame(&tables, &state, fft, 1.0f, &r) == 0);
+            mbe_analysis_push(&state, in);
+            assert(mbe_analysis_frame(&tables, &state, fft, acf, &r) == 0);
         }
         double period = 8000.0 / s.f0;
         assert(near(1.0 / r.f0, period, 0.3));
@@ -143,7 +143,7 @@ test_harmonic_fit(mbe_fft_plan* fft) {
 /* White noise: E(P) near 1 on average, fit errors large, and no
  * alternating-width ripple across harmonics on average. */
 static void
-test_noise(mbe_fft_plan* fft) {
+test_noise(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     struct mbe_analysis_state state;
     double error_sum = 0.0;
     double fit_sum = 0.0;
@@ -153,13 +153,12 @@ test_noise(mbe_fft_plan* fft) {
     mbe_analysis_reset(&state);
     for (int f = 0; f < 300; f++) {
         float in[MBE_ANALYSIS_FRAME];
-        float filtered[MBE_ANALYSIS_FRAME];
         struct mbe_analysis_result r;
         for (int i = 0; i < MBE_ANALYSIS_FRAME; i++) {
             in[i] = (float)(2000.0 * gauss());
         }
-        mbe_analysis_push(&state, in, filtered);
-        assert(mbe_analysis_frame(&tables, &state, fft, 1.0f, &r) == 0);
+        mbe_analysis_push(&state, in);
+        assert(mbe_analysis_frame(&tables, &state, fft, acf, &r) == 0);
         if (f < 4) {
             continue;
         }
@@ -215,29 +214,78 @@ test_reset_and_commit(void) {
     mbe_analysis_reset(&state);
     assert(near(state.pitch_prev[0], 100.0, 0.0) && near(state.pitch_prev[1], 100.0, 0.0));
     assert(state.trusted == 0 && near(state.xi_max, 20000.0, 0.0));
-    mbe_analysis_commit(&state, voiced, 1);
+    mbe_analysis_commit(&state, voiced);
     assert(memcmp(state.columns_prev, voiced, sizeof(voiced)) == 0);
-    state.trusted = 1;
-    state.pitch_prev[0] = 40.0f;
-    mbe_analysis_commit(&state, NULL, 0);
-    assert(state.trusted == 0 && near(state.pitch_prev[0], 100.0, 0.0));
-    for (int k = 0; k < MBE_ANALYSIS_COLUMNS; k++) {
-        assert(state.columns_prev[k] == 0);
+    mbe_analysis_commit(&state, NULL);
+    assert(memcmp(state.columns_prev, voiced, sizeof(voiced)) == 0);
+    assert(mbe_analysis_frame(NULL, &state, NULL, NULL, NULL) == MBE_STATUS_INVALID_ARGUMENT);
+}
+
+/* FFT autocorrelation matches the direct sum for every lag. */
+static void
+test_autocorrelation(mbe_acf_plan* acf) {
+    float x[301];
+    double scale = 0.0;
+    for (int n = 0; n < 301; ++n) {
+        x[n] = (float)(gauss() * 1000.0);
     }
-    assert(mbe_analysis_frame(NULL, &state, NULL, 1.0f, NULL) == MBE_STATUS_INVALID_ARGUMENT);
+    float r[153];
+    assert(mbe_acf_compute(acf, x, 301, r, 152) == 0);
+    for (int n = 0; n < 301; ++n) {
+        scale += (double)x[n] * x[n];
+    }
+    for (int lag = 0; lag <= 152; ++lag) {
+        double want = 0.0;
+        for (int n = 0; n + lag < 301; ++n) {
+            want += (double)x[n] * x[n + lag];
+        }
+        assert(fabs((double)r[lag] - want) <= 1e-5 * scale);
+    }
+    assert(mbe_acf_compute(acf, x, 400, r, 152) == MBE_STATUS_INVALID_ARGUMENT); /* 400 + 152 > 512 */
+    assert(mbe_acf_compute(NULL, x, 301, r, 152) == MBE_STATUS_INVALID_ARGUMENT);
+}
+
+/* Counts at and past the transform size: lags up to 511, len + lags up to 512,
+ * and sums that would overflow int are rejected before any access. */
+static void
+test_autocorrelation_bounds(mbe_acf_plan* acf) {
+    static float x[MBE_ACF_SIZE];
+    static float r[MBE_ACF_SIZE];
+    for (int n = 0; n < MBE_ACF_SIZE; ++n) {
+        x[n] = 1.0f;
+        r[n] = -1.0f;
+    }
+    assert(mbe_acf_compute(acf, x, 0, r, MBE_ACF_SIZE - 1) == 0);
+    for (int lag = 0; lag < MBE_ACF_SIZE; ++lag) {
+        assert(fabsf(r[lag]) < 1e-6f); /* empty input */
+    }
+    assert(mbe_acf_compute(acf, x, MBE_ACF_SIZE, r, 0) == 0 && fabsf(r[0] - (float)MBE_ACF_SIZE) < 1e-2f);
+    assert(mbe_acf_compute(acf, x, 301, r, MBE_ACF_SIZE - 301) == 0);
+    assert(fabsf(r[MBE_ACF_SIZE - 301] - 90.0f) < 1e-3f); /* 301 - 211 overlapping ones */
+    assert(mbe_acf_compute(acf, x, 0, r, MBE_ACF_SIZE) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_acf_compute(acf, x, 301, r, MBE_ACF_SIZE - 300) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_acf_compute(acf, x, MBE_ACF_SIZE + 1, r, 0) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_acf_compute(acf, x, INT_MAX, r, INT_MAX) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_acf_compute(acf, x, -1, r, 10) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_acf_compute(acf, x, 10, r, -1) == MBE_STATUS_INVALID_ARGUMENT);
 }
 
 int
 main(void) {
     mbe_fft_plan* fft = mbe_fft_plan_alloc();
     assert(fft != NULL);
+    mbe_acf_plan* acf = mbe_acf_plan_alloc();
+    assert(acf != NULL);
+    test_autocorrelation(acf);
+    test_autocorrelation_bounds(acf);
     mbe_analysis_init_tables(&tables);
     test_windows();
     test_window_transform();
-    test_harmonic_fit(fft);
-    test_noise(fft);
+    test_harmonic_fit(fft, acf);
+    test_noise(fft, acf);
     test_thresholds();
     test_reset_and_commit();
+    mbe_acf_plan_free(acf);
     mbe_fft_plan_free(fft);
     puts("speech analysis: ok");
     return 0;

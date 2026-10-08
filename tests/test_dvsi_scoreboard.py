@@ -7,7 +7,9 @@ import json
 import math
 from pathlib import Path
 import random
+import struct
 import sys
+import tempfile
 
 SKIP = 77  # CTest SKIP_RETURN_CODE: the pitch measurements need NumPy
 
@@ -115,6 +117,75 @@ def check_gates(board):
         {"mode": "dstar", "metric": "ours.lsd_db", "rule": "abs_delta_max", "value": 0.0}]}
     assert board.check_gates(absolute, {}, board.compare(baseline, baseline))[0]
     assert not board.check_gates(absolute, {}, board.compare(better, baseline))[0]
+
+
+def check_encoder_metrics(board):
+    # Our encoding against DVSI's, both decoded by this library: the level gap is unsigned.
+    result = vector("v0", "validation", 7.0, 0.88)
+    result["encoder"] = {
+        "speech": {"lsd_db": 5.0, "level_offset_db": 0.4},
+        "vs_dvsi_bits": {"lsd_db": 4.2, "level_offset_db": -2.5, "env_corr": None},
+        "rail_excess_samples": 3, "silence_frame_rate": 0.25, "dvsi_silence_frame_rate": 0.0,
+        "pitch_cents_median": 6.0, "dvsi_pitch_cents_median": 9.0, "octave_error_rate": 0.0,
+        "dvsi_octave_error_rate": 0.01, "voicing_agreement": [0.9, None, 0.7, 0.8],
+    }
+    flat = board.flatten(result)
+    assert flat["encoder.vs_dvsi_bits.lsd_db"] == 4.2 and "encoder.vs_dvsi_bits.env_corr" not in flat, flat
+    assert abs(flat["encoder.level_gap_db"] - 2.5) < 1e-12, flat
+    assert flat["encoder.rail_excess_samples"] == 3 and flat["encoder.silence_frame_rate"] == 0.25, flat
+    assert abs(flat["encoder.voicing_agreement_mean"] - 0.8) < 1e-12, flat
+    del result["encoder"]["vs_dvsi_bits"], result["encoder"]["rail_excess_samples"]
+    flat = board.flatten(result)  # scoreboards from before these metrics still flatten
+    assert "encoder.level_gap_db" not in flat and "encoder.rail_excess_samples" not in flat, flat
+    # A comparison pinned at the evaluator's lag search limit, or with no alignment at all (a silent
+    # decode), is rejected, not scored.
+    good = {"alignment_at_limit": False, "alignment_corr": 0.97, "lsd_db": 4.0}
+    assert board.aligned(good, "x")["lsd_db"] == 4.0
+    for bad in ({"alignment_at_limit": True, "alignment_corr": 0.9, "auto_lag_samples": -160},
+                {"alignment_at_limit": False, "alignment_corr": None},
+                {"alignment_at_limit": False, "alignment_corr": float("nan")}, {}):
+        assert not board.alignment_ok(bad), bad
+        try:
+            board.aligned(bad, "dstar_t03_enc_vs_dvsi")
+        except RuntimeError as error:
+            assert "dstar_t03_enc_vs_dvsi" in str(error), error
+        else:
+            raise AssertionError(f"an unusable alignment must fail: {bad}")
+    # Our encoding, delayed so that DVSI's later one can stay the reference inside the lag search.
+    with tempfile.TemporaryDirectory() as work:
+        delayed = Path(work) / "delayed.raw"
+        board.write_delayed(delayed, [1, -2, 3], 2)
+        assert delayed.read_bytes() == struct.pack("<5h", 0, 0, 1, -2, 3)
+    # An encoding that cannot be aligned with the input is excluded from the means and pairs, counted, and
+    # fails any gate on its partition.
+    failed = vector("v1", "validation", 7.0, 0.88)
+    failed["encoder"] = {"alignment_failures": ["v1_enc"]}
+    flat = board.flatten(failed)
+    assert flat["encoder.alignment_failures"] == 1 and "encoder.lsd_db" not in flat, flat
+    clean = vector("v2", "validation", 7.0, 0.88)
+    clean["encoder"] = dict(result["encoder"], alignment_failures=[])
+    assert board.flatten(clean)["encoder.alignment_failures"] == 0
+    gates = {"partition": "validation", "checks": [{"mode": "dstar", "metric": "ours.lsd_db", "rule": "no_increase"}]}
+    candidate, baseline = {"vectors": [failed, clean]}, {"vectors": [failed, clean]}
+    passed, lines = board.check_gates(gates, board.aggregate(candidate["vectors"]), board.compare(candidate, baseline))
+    assert not passed and any("alignment" in line for line in lines), lines
+    # A metric the candidate has but the baseline lacks (or the reverse) is not a pair to skip: the
+    # check fails rather than pass on the remaining vectors.
+    encoder_gate = {"partition": "validation", "checks": [
+        {"mode": "dstar", "metric": "encoder.lsd_db", "rule": "no_increase"}]}
+    worse = dict(clean, encoder=dict(clean["encoder"], speech={"lsd_db": 100.0}))
+    candidate, baseline = {"vectors": [worse, result]}, {"vectors": [dict(failed, name="v2"), result]}
+    passed, lines = board.check_gates(encoder_gate, board.aggregate(candidate["vectors"]),
+                                      board.compare(candidate, baseline))
+    assert not passed and any("unpaired" in line for line in lines), lines
+    # So is a baseline vector the candidate run left out.
+    candidate, baseline = {"vectors": [result]}, {"vectors": [clean, result]}
+    passed, lines = board.check_gates(encoder_gate, board.aggregate(candidate["vectors"]),
+                                      board.compare(candidate, baseline))
+    assert not passed and any("unpaired" in line and "v2" in line for line in lines), lines
+    tone, voice = {"flags": 0x0010}, {"flags": 0x0002}
+    assert board.tone_frame_rate([tone, voice, voice, voice]) == 0.25
+    assert board.tone_frame_rate([]) is None
 
 
 def check_configuration(board):
@@ -242,6 +313,7 @@ def main():
     check_configuration(board)
     check_voicing(board)
     check_gates(board)
+    check_encoder_metrics(board)
     check_tone_aggregation(board)
     if importlib.util.find_spec("numpy") is None:
         print("NumPy not available: pitch checks skipped")

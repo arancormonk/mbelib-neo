@@ -53,6 +53,17 @@ def verify(evaluator, reframer, root):
         assert abs(metrics["band_delta_db_0_250"]) < 1e-10, metrics
         private_output(report)
 
+    # A decode that leads the reference by more than 160 samples lies outside the
+    # search: the report says so, and the reverse comparison finds the lag.
+    write_pcm(decoded, samples[176:])
+    run(evaluator, "--decoded", decoded, "--ref", reference, "--json", report)
+    metrics = json.loads(report.read_text())
+    assert metrics["lag_samples"] == -160 and metrics["alignment_at_limit"], metrics
+    run(evaluator, "--decoded", reference, "--ref", decoded, "--json", report)
+    metrics = json.loads(report.read_text())
+    assert metrics["lag_samples"] == 176 and not metrics["alignment_at_limit"], metrics
+    private_output(report)
+
     write_pcm(reference, [0] * 640)
     write_pcm(decoded, [0] * 640)
     run(evaluator, "--decoded", decoded, "--ref", reference, "--json", report)

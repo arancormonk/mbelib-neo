@@ -159,8 +159,7 @@ mbe_analysis_reset(struct mbe_analysis_state* state) {
 }
 
 void
-mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME],
-                  float filtered[MBE_ANALYSIS_FRAME]) {
+mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME]) {
     memmove(state->buf, state->buf + MBE_ANALYSIS_FRAME, MBE_ANALYSIS_HISTORY * sizeof(float));
     float* frame = state->buf + MBE_ANALYSIS_HISTORY;
     for (int i = 0; i < MBE_ANALYSIS_FRAME; ++i) {
@@ -169,7 +168,6 @@ mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYS
         state->hp_in = input[i];
         state->hp_out = y;
         frame[i] = y;
-        filtered[i] = y;
     }
 }
 
@@ -187,9 +185,9 @@ pitch_of(int index) {
     return PITCH_MIN + (PITCH_STEP * (float)index);
 }
 
-static void
-pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, struct pitch_work* w,
-                      float* energy) {
+static int
+pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, mbe_acf_plan* acf,
+                      struct pitch_work* w, float* energy) {
     const int span = (2 * MBE_ANALYSIS_PITCH_HALF) + 1;
     float e = 0.0f;
     for (int j = 0; j < span; ++j) {
@@ -203,14 +201,8 @@ pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_anal
         w->u[j] = acc * wi2;
         e += acc * acc * wi2;
     }
-    for (int lag = 0; lag <= MBE_ANALYSIS_PITCH_HALF + 1; ++lag) {
-        float acc = 0.0f;
-        for (int j = 0; j + lag < span; ++j) {
-            acc += w->u[j] * w->u[j + lag]; /* eq (7) */
-        }
-        w->r[lag] = acc;
-    }
     *energy = e;
+    return mbe_acf_compute(acf, w->u, span, w->r, MBE_ANALYSIS_PITCH_HALF + 1); /* eq (7) */
 }
 
 static float
@@ -350,11 +342,17 @@ window_at(const struct mbe_analysis_tables* t, float offset_bins) {
     return (i < 0 || i >= MBE_ANALYSIS_WTAB_LEN) ? 0.0f : t->w_r_dtft[i];
 }
 
+/* Bins one harmonic band can span: refinement goes down to a pitch of
+ * PITCH_MIN - 9/8, where f0 is 13.6 bins, so a band covers at most 14 bins. */
+#define BAND_BINS_MAX 16
+
 struct band_fit {
     float a_re; /* A_l of eq (28) */
     float a_im;
-    float energy; /* sum |S|^2 over the band */
-    float error;  /* sum |S - A W|^2 over the band */
+    float energy;           /* sum |S|^2 over the band */
+    float error;            /* sum |S - A W|^2 over the band */
+    int bins;               /* bins fitted, from lo */
+    float w[BAND_BINS_MAX]; /* W_R at each fitted bin */
 };
 
 /* Least-squares fit of one harmonic over bins [lo, hi). */
@@ -365,8 +363,10 @@ fit_band(const struct mbe_analysis_tables* t, const struct spectrum* sp, float c
     float c_im = 0.0f;
     float q = 0.0f;
     float energy = 0.0f;
-    for (int m = lo; m < hi && m <= ANALYSIS_BINS; ++m) {
+    fit->bins = 0;
+    for (int m = lo; m < hi && m <= ANALYSIS_BINS && fit->bins < BAND_BINS_MAX; ++m) {
         float w = window_at(t, (float)m - centre);
+        fit->w[fit->bins++] = w;
         c_re += sp->re[m] * w;
         c_im += sp->im[m] * w;
         q += w * w;
@@ -408,8 +408,13 @@ refinement_error(const struct mbe_analysis_tables* t, const struct spectrum* sp,
         }
         struct band_fit fit;
         fit_band(t, sp, (float)l * f0_bins, lo, hi, &fit);
-        for (int m = (lo > first) ? lo : first; m < hi && m <= upper && m <= ANALYSIS_BINS; ++m) {
-            float w = window_at(t, (float)m - ((float)l * f0_bins));
+        /* The fit's window samples cover bins lo .. lo + bins - 1. */
+        for (int k = 0; k < fit.bins && k < BAND_BINS_MAX && lo + k <= upper; ++k) {
+            const int m = lo + k;
+            if (m < first) {
+                continue;
+            }
+            float w = fit.w[k];
             float dr = sp->re[m] - (fit.a_re * w);
             float di = sp->im[m] - (fit.a_im * w);
             total += (dr * dr) + (di * di);
@@ -547,12 +552,10 @@ harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp
     }
 }
 
-/* eqs (38)-(42), with energies scaled to the level the voicing thresholds
- * assume (level_gain is the caller's input gain). */
+/* eqs (38)-(42), with energies on the 16-bit input scale. */
 static float
-energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp,
-              float level_gain) {
-    const float norm = (level_gain * level_gain) / (t->w_r_sum * t->w_r_sum);
+energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp) {
+    const float norm = 1.0f / (t->w_r_sum * t->w_r_sum);
     float lf = 0.0f;
     float hf = 0.0f;
     for (int m = 0; m <= ANALYSIS_BINS; ++m) {
@@ -579,13 +582,16 @@ energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s,
 
 int
 mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis_state* state, mbe_fft_plan* fft,
-                   float level_gain, struct mbe_analysis_result* result) {
-    if (tables == NULL || state == NULL || fft == NULL || result == NULL) {
+                   mbe_acf_plan* acf, struct mbe_analysis_result* result) {
+    if (tables == NULL || state == NULL || fft == NULL || acf == NULL || result == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
     struct pitch_work work;
     float energy;
-    pitch_autocorrelation(tables, state, &work, &energy);
+    int acf_status = pitch_autocorrelation(tables, state, acf, &work, &energy);
+    if (acf_status < 0) {
+        return acf_status;
+    }
     pitch_errors(tables, &work, energy);
     int initial = track_pitch(state, work.error);
     float initial_pitch = pitch_of(initial);
@@ -605,7 +611,7 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     result->f0 = 1.0f / pitch;
     result->pitch_error = work.error[initial];
     harmonic_measures(tables, &sp, result);
-    result->energy_factor = energy_factor(tables, state, &sp, level_gain);
+    result->energy_factor = energy_factor(tables, state, &sp);
 
     state->pitch_prev[1] = state->pitch_prev[0];
     state->pitch_prev[0] = initial_pitch;
@@ -633,17 +639,7 @@ mbe_analysis_column_threshold(const struct mbe_analysis_state* state, const stru
 }
 
 void
-mbe_analysis_commit(struct mbe_analysis_state* state, const unsigned char columns[MBE_ANALYSIS_COLUMNS],
-                    int voice_frame) {
-    if (!voice_frame) {
-        state->pitch_prev[0] = 100.0f;
-        state->pitch_prev[1] = 100.0f;
-        state->error_prev[0] = 0.0f;
-        state->error_prev[1] = 0.0f;
-        state->trusted = 0;
-        memset(state->columns_prev, 0, sizeof(state->columns_prev));
-        return;
-    }
+mbe_analysis_commit(struct mbe_analysis_state* state, const unsigned char columns[MBE_ANALYSIS_COLUMNS]) {
     if (columns != NULL) {
         memcpy(state->columns_prev, columns, sizeof(state->columns_prev));
     }

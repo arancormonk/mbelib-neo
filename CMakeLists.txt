@@ -907,7 +907,7 @@ if(MBELIB_BUILD_TESTS)
                 PRIVATE ${_SAN_LDFLAGS}
             )
         endif()
-        foreach(allocation RANGE 1 6)
+        foreach(allocation RANGE 1 11)
             add_test(
                 NAME test_ambe2400_encoder_oom_${allocation}
                 COMMAND test_ambe2400_encoder_oom ${allocation}
@@ -1410,6 +1410,19 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(bench_synth BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_executable(bench_encode bench/bench_encode.c)
+    target_link_libraries(bench_encode PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_encode)
+    target_include_directories(
+        bench_encode
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(bench_encode PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(bench_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_executable(bench_unvoiced bench/bench_unvoiced.c)
     target_link_libraries(bench_unvoiced PRIVATE ${MBELIB_EXEC_LINK_TGT})

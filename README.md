@@ -136,7 +136,7 @@ git push origin vX.Y.Z
 - `-DMBELIB_ENABLE_HARDENING=ON` — Enable supported Release-like compiler/linker hardening (default ON).
 - `-DMBELIB_ENABLE_SIMD=ON` — Enable SSE2/NEON routines when the compiler target provides them, otherwise use scalar routines. The bundled FFT also falls back to scalar when its compiler target has no supported SIMD backend. On 32-bit ARM, pass `-DCMAKE_C_FLAGS=-mfpu=neon` to enable NEON; the option itself preserves the toolchain's FPU selection. Measure performance on your own core. On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability. See [SIMD target selection](docs/build-installation.md#simd-target-selection).
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
-- `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, and `bench_convert`.
+- `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, `bench_convert`, and `bench_encode` (D-STAR encoder).
 - `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation).
 
 ## Using The Library
@@ -196,7 +196,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 
 ### Encoder Workflow
 
-- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail. An input AGC normalizes the talker's level over about a second, adapting on voiced frames only.
+- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence holds with both the `mbe_processAmbe2400*` path and a bare `mbe_decodeAmbe2400Parms()` chain. The analysis delay is about 10 ms; feed one final zero frame to flush the tail. As with DVSI's encoder, every frame is a voice frame (quiet and silent input is coded as low-level voice) and the decoded level follows the input level; there is no AGC.
 
 ### Stateful Decode Workflow
 
@@ -297,7 +297,7 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
   - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
   - **Recovery after mutes and tones**: a mute or a tone frame also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping the speech from before it, and a repeat right after either replays silence. The spec doesn't define the synthesis state across these frames.
 
-- **D-STAR tones**: single tones 5–122 as AMBE+2, DTMF 128–143 (128 + 4 × column + row) and call-progress tones 144–147, at the level the 8-bit tone volume gives on DVSI's decoder. The zero-volume frame this library's encoder sends for silence still decodes as silence and resets both sides.
+- **D-STAR tones**: single tones 5–122 as AMBE+2, DTMF 128–143 (128 + 4 × column + row) and call-progress tones 144–147, at the level the 8-bit tone volume gives on DVSI's decoder. The zero-volume frame (b0 127, tone index 128) that earlier versions of this library's encoder sent for silence plays comfort noise and resets the decoder.
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
@@ -337,7 +337,7 @@ Build micro-benchmarks:
 
 ```
 cmake --preset dev-release -DMBELIB_BUILD_BENCHMARKS=ON
-cmake --build --preset dev-release -j --target bench_synth bench_unvoiced bench_convert
+cmake --build --preset dev-release -j --target bench_synth bench_unvoiced bench_convert bench_encode
 ```
 
 Run benchmark executables:
@@ -346,6 +346,7 @@ Run benchmark executables:
 ./build/dev-release/bench_synth
 ./build/dev-release/bench_unvoiced
 ./build/dev-release/bench_convert
+./build/dev-release/bench_encode
 ```
 
 Quick scalar-vs-SIMD comparison helper (builds ad hoc comparison trees under `build/bench-compare-scalar/` and `build/bench-compare-simd/`):
