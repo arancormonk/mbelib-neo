@@ -53,7 +53,8 @@ PARTITIONS = {
 }
 SPEECH_PARTITIONS = ("development", "validation", "final")
 BAND_KEYS = tuple(
-    f"band_delta_db_{band}" for band in ("0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
+    f"band_delta_db_{band}"
+    for band in ("0_250", "0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
 )
 SPEECH_KEYS = ("level_offset_db", "lsd_db", "env_corr", "crest_delta_db", "pcm_rail_samples") + BAND_KEYS
 F0_BANDS = ((0.0, 100.0), (100.0, 150.0), (150.0, 200.0), (200.0, 300.0), (300.0, 1000.0))
@@ -497,6 +498,9 @@ def flatten(result):
         for key, value in result[group].items():
             if isinstance(value, (int, float)):
                 flat[f"{group}.{key}"] = value
+    low = result["vs_dvsi"].get("band_delta_db_0_250")
+    if isinstance(low, (int, float)):
+        flat["vs_dvsi.lf_abs_error_db"] = abs(low)
     bands = [result["vs_dvsi"].get(f"band_delta_db_{band}") for band in ("2000_3000", "3000_4000")]
     if all(isinstance(value, (int, float)) for value in bands):
         flat["vs_dvsi.hf_abs_error_db"] = (abs(bands[0]) + abs(bands[1])) / 2.0

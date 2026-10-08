@@ -81,6 +81,13 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain);
 #define MBE_HIGH_BAND_GAIN_AMBE2450 1.33352143f /* +2.5 dB */
 #define MBE_HIGH_BAND_GAIN_AMBE2400 1.41253754f /* +3.0 dB */
 
+/**
+ * @brief Low-band roll-off synthesis renders at a harmonic frequency.
+ * @param hz Harmonic frequency in Hz.
+ * @return Amplitude gain of a second-order high-pass at 100 Hz.
+ */
+float mbe_low_band_gain(float hz);
+
 /** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
 enum mbe_mute_noise {
     MBE_MUTE_NOISE_COMFORT, /**< JMBE comfort noise: D-STAR, ProVoice and the public synthesis API. */

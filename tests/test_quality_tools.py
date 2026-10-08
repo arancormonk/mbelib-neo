@@ -50,6 +50,7 @@ def verify(evaluator, reframer, root):
         assert abs(metrics["lsd_db"]) < 1e-10, metrics
         # The top band overlaps 3000_4000 and covers what LSD (to 3687.5 Hz) leaves out.
         assert abs(metrics["band_delta_db_3500_4000"]) < 1e-10, metrics
+        assert abs(metrics["band_delta_db_0_250"]) < 1e-10, metrics
         private_output(report)
 
     write_pcm(reference, [0] * 640)

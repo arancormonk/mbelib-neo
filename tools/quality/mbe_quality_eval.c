@@ -827,11 +827,12 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
     }
     double epsilon = fmax(max_power * 1e-6, 1e-20);
 
-    /* Bin ranges [first, end) of the reported bands; the last (3.5-4 kHz)
-     * overlaps 3000_4000 and covers what LSD (bins 2..118) leaves out. */
-    enum { BANDS = 6 };
+    /* Bin ranges [first, end) of the reported bands. The last two overlap the
+     * others: 3.5-4 kHz covers what LSD (bins 2..118) leaves out at the top, and
+     * 0-250 Hz resolves the bottom of 0_500. */
+    enum { BANDS = 7 };
 
-    static const size_t edges[BANDS][2] = {{0, 16}, {16, 32}, {32, 64}, {64, 96}, {96, 129}, {112, 129}};
+    static const size_t edges[BANDS][2] = {{0, 16}, {16, 32}, {32, 64}, {64, 96}, {96, 129}, {112, 129}, {0, 8}};
     double br[BANDS] = {0}, bd[BANDS] = {0}, lsd = 0;
     size_t spectra = 0;
     for (size_t i = 0; i + FFT_N <= n; i += 80) {
@@ -857,11 +858,12 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
     }
     metric("spectral_frames", (double)spectra);
     metric_valid("lsd_db", spectra ? lsd / (double)spectra : 0, speech && spectra > 0);
-    static const char* delta_names[BANDS] = {"band_delta_db_0_500",     "band_delta_db_500_1000",
-                                             "band_delta_db_1000_2000", "band_delta_db_2000_3000",
-                                             "band_delta_db_3000_4000", "band_delta_db_3500_4000"};
+    static const char* delta_names[BANDS] = {
+        "band_delta_db_0_500",     "band_delta_db_500_1000",  "band_delta_db_1000_2000", "band_delta_db_2000_3000",
+        "band_delta_db_3000_4000", "band_delta_db_3500_4000", "band_delta_db_0_250"};
     static const char* absolute_names[BANDS] = {"band_db_0_500",     "band_db_500_1000",  "band_db_1000_2000",
-                                                "band_db_2000_3000", "band_db_3000_4000", "band_db_3500_4000"};
+                                                "band_db_2000_3000", "band_db_3000_4000", "band_db_3500_4000",
+                                                "band_db_0_250"};
     for (size_t band = 0; band < BANDS; ++band) {
         /* Absolute levels: mean STFT band power in unnormalized int16 units. */
         metric_valid(delta_names[band], db_ratio(bd[band], br[band]), speech && spectra > 0);

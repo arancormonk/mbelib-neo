@@ -257,6 +257,53 @@ test_high_band_shelf_shape(void) {
     }
 }
 
+/* The low-band roll-off of DVSI's decoders: a second-order high-pass at 100 Hz. */
+static void
+test_low_band_gain(void) {
+    static const float hz[] = {50.0f, 62.5f, 100.0f, 200.0f, 400.0f, 1000.0f, 3300.0f};
+    for (size_t i = 0; i < sizeof(hz) / sizeof(hz[0]); ++i) {
+        float want = 1.0f / sqrtf(1.0f + powf(100.0f / hz[i], 4.0f));
+        assert(approx_equal(mbe_low_band_gain(hz[i]), want, 1e-5f));
+    }
+}
+
+/* Amplitude of the component at `hz` over a buffer of n samples. */
+static double
+component_amplitude(const float* x, int n, double hz) {
+    double re = 0.0, im = 0.0;
+    for (int i = 0; i < n; ++i) {
+        re += x[i] * cos(2.0 * M_PI * hz * i / 8000.0);
+        im += x[i] * sin(2.0 * M_PI * hz * i / 8000.0);
+    }
+    return 2.0 * sqrt(re * re + im * im) / n;
+}
+
+/* Synthesis renders the roll-off without touching the model: a flat, fully
+ * voiced 62.5 Hz series comes out with harmonic 1 at the roll-off's gain
+ * relative to harmonic 8 (500 Hz), and the stored amplitudes stay flat. */
+static void
+test_low_band_rendering(void) {
+    mbe_parms cur, prev, enhanced;
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    cur.w0 = (float)(2.0 * M_PI * 62.5 / 8000.0);
+    cur.L = 48;
+    for (int l = 1; l <= cur.L; ++l) {
+        cur.Vl[l] = 1;
+        cur.Ml[l] = 1.0f;
+    }
+    static float out[8 * 160];
+    for (int frame = 0; frame < 9; ++frame) {
+        prev = cur;
+        mbe_synthesizeSpeechf(frame ? out + (size_t)(frame - 1) * 160u : out, &cur, &prev);
+    }
+    for (int l = 1; l <= cur.L; ++l) {
+        assert(cur.Ml[l] == 1.0f);
+    }
+    double ratio = component_amplitude(out, 8 * 160, 62.5) / component_amplitude(out, 8 * 160, 500.0);
+    double want = (double)mbe_low_band_gain(62.5f) / (double)mbe_low_band_gain(500.0f);
+    assert(fabs(20.0 * log10(ratio / want)) < 0.2);
+}
+
 typedef int (*process_fn)(float*, mbe_process_result*, const char*, mbe_parms*, mbe_parms*, mbe_parms*);
 
 /* A codec's process path enhances with its own shelf: after one voice frame
@@ -292,11 +339,56 @@ test_high_band_shelf_per_codec(void) {
     expect_codec_shelf(mbe_processAmbe2400Dataf, ambe_d, MBE_HIGH_BAND_GAIN_AMBE2400);
 }
 
+/* Direct callers may pass the same model as current and previous frame, and a
+ * degenerate pitch: the roll-off must neither compound on the shared model nor
+ * overflow (w0 of zero or near zero gives finite, quiet output). */
+static void
+test_low_band_edge_cases(void) {
+    mbe_parms model, unused_prev, unused_enhanced;
+    mbe_initMbeParms(&model, &unused_prev, &unused_enhanced);
+    model.w0 = (float)(2.0 * M_PI * 62.5 / 8000.0);
+    model.L = 48;
+    for (int l = 1; l <= model.L; ++l) {
+        model.Vl[l] = 1;
+        model.Ml[l] = 1.0f;
+    }
+    float out[160];
+    for (int call = 0; call < 3; ++call) {
+        mbe_synthesizeSpeechf(out, &model, &model);
+    }
+    for (int l = 1; l <= model.L; ++l) {
+        assert(model.Ml[l] == 1.0f);
+    }
+
+    static const float pitches[] = {0.0f, 1e-15f, 1e-6f};
+    for (size_t i = 0; i < sizeof(pitches) / sizeof(pitches[0]); ++i) {
+        mbe_parms cur, prev, enhanced;
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        cur.L = 20;
+        for (int l = 1; l <= cur.L; ++l) {
+            cur.Vl[l] = 1;
+            cur.Ml[l] = 1.0f;
+        }
+        prev = cur;
+        cur.w0 = prev.w0 = pitches[i];
+        mbe_synthesizeSpeechf(out, &cur, &prev);
+        for (int n = 0; n < 160; ++n) {
+            uint32_t bits;
+            memcpy(&bits, &out[n], sizeof(bits));
+            assert((bits & UINT32_C(0x7f800000)) != UINT32_C(0x7f800000));
+            assert(fabsf(out[n]) < 1.0f);
+        }
+    }
+}
+
 /**
  * @brief Test entry: IMBE and AMBE parameter derivation spot checks.
  */
 int
 main(void) {
+    test_low_band_gain();
+    test_low_band_rendering();
+    test_low_band_edge_cases();
     test_high_band_shelf_shape();
     test_high_band_shelf_per_codec();
 
@@ -919,7 +1011,12 @@ main(void) {
         // toward zero, bounded by its linearly decreasing amplitude envelope.
         float out[160];
         mbe_synthesizeSpeechf(out, &cur, &prev);
-        const float peak = 80.0f * MBE_SPEECH_OUTPUT_GAIN; /* 2 * 10 * 4 on s(n) */
+        /* 2 * 10 per harmonic on s(n), after the rendered low-band roll-off. */
+        float rendered = 0.0f;
+        for (int l = 1; l <= 4; ++l) {
+            rendered += 20.0f * mbe_low_band_gain(prev.w0 * (8000.0f / (2.0f * (float)M_PI)) * (float)l);
+        }
+        const float peak = rendered * MBE_SPEECH_OUTPUT_GAIN;
         assert(approx_equal(out[0], peak, 1e-5f));
         for (int n = 0; n < 160; ++n) {
             float envelope = peak * (1.0f - (float)n / 160.0f);

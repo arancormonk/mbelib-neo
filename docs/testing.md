@@ -280,8 +280,8 @@ Schema-2 metrics preserve the original supported formulas:
   maximum. `crest_ref_db`, `crest_dec_db`, and `crest_delta_db` are mean 20-ms
   peak/RMS values and decoded-minus-reference difference. `band_delta_db_*`
   measures active STFT power ratios in 0–500, 500–1000, 1000–2000, 2000–3000,
-  and 3000–4000 Hz, plus an overlapping 3500–4000 Hz band that covers what
-  `lsd_db` (up to 3687.5 Hz) leaves out. Without reference, decoded absolute
+  and 3000–4000 Hz, plus overlapping 0–250 Hz and 3500–4000 Hz bands; the
+  top one covers what `lsd_db` (up to 3687.5 Hz) leaves out. Without reference, decoded absolute
   `band_db_*` remains available where supported.
 - `join_dec_db`/`join_ref_db` compare squared across-join derivatives with the
   eight neighboring derivatives on the same reference mask and actual retained
