@@ -255,15 +255,19 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2400_enc.c
     src/ambe/dstar_frame.c
     src/ambe/ambe3600x2450.c
+    src/ambe/ambe3600x2450_enc.c
     src/ambe/ambe_common.c
     src/ecc/ecc.c
     src/ecc/ecc_const.c
     src/imbe/imbe7100x4400.c
     src/imbe/imbe7200x4400.c
+    src/imbe/imbe7200x4400_enc.c
     src/core/mbelib.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
+    src/core/mbe_frame_analysis.c
     src/core/mbe_speech_analysis.c
+    src/core/mbe_tone_detect.c
     src/core/mbe_unvoiced_fft.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
@@ -859,6 +863,31 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
+    # The AMBE+2 and IMBE encoder tests use the private Hamming encoder, which
+    # the shared library does not export.
+    foreach(_enc_test test_ambe2450_encoder test_imbe7200_encoder)
+        add_executable(${_enc_test} tests/${_enc_test}.c)
+        target_link_libraries(${_enc_test} PRIVATE mbe-static)
+        if(NOTONES)
+            target_compile_definitions(
+                ${_enc_test}
+                PRIVATE MBELIB_TEST_NOTONES=1
+            )
+        endif()
+        target_include_directories(
+            ${_enc_test}
+            PRIVATE
+                "${PROJECT_SOURCE_DIR}/include"
+                "${PROJECT_SOURCE_DIR}/src/internal"
+        )
+        if(_SAN_CFLAGS)
+            target_compile_options(${_enc_test} PRIVATE ${_SAN_CFLAGS})
+        endif()
+        if(_SAN_LDFLAGS)
+            target_link_options(${_enc_test} BEFORE PRIVATE ${_SAN_LDFLAGS})
+        endif()
+        add_test(NAME ${_enc_test} COMMAND ${_enc_test})
+    endforeach()
     # Exercise every partial plan allocation and retry with GNU link wrapping.
     # LTO can resolve allocator calls before the linker can wrap them.
     if(

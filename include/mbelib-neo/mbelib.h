@@ -629,6 +629,76 @@ MBE_API int mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_resul
                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
+/* === AMBE+2 3600x2450 (DMR, NXDN, YSF, P25 Phase 2) encoding === */
+
+/**
+ * @brief Caller-owned AMBE+2 2450 encoder state.
+ *
+ * Use one context per stream. A context is not thread-safe for concurrent use;
+ * any number of independent contexts may be used in one thread.
+ */
+typedef struct mbe_ambe2450_encoder mbe_ambe2450_encoder;
+
+/**
+ * @brief Allocate a fresh encoder context. Encoding never allocates.
+ * @return Owned context, or NULL when it cannot be allocated.
+ * @see mbe_ambe2450EncoderFree
+ */
+MBE_API mbe_ambe2450_encoder* mbe_ambe2450EncoderAlloc(void);
+
+/**
+ * @brief Restore freshly allocated state, including the prediction history.
+ * @param enc Context to reset; NULL is accepted.
+ */
+MBE_API void mbe_ambe2450EncoderReset(mbe_ambe2450_encoder* enc);
+
+/** @brief Free an encoder context; NULL is accepted. */
+MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
+
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of float PCM into AMBE+2 2450
+ *        parameter bits.
+ *
+ * C port of the float AMBE+2 half-rate encoder of Bruce Perens'
+ * ham_digital_modes: TIA-102.BABA pitch, voicing and amplitude analysis,
+ * quantized against this library's AMBE+2 tables. The prediction history is
+ * kept inside the context and updated by decoding each emitted frame with
+ * mbe_decodeAmbe2450Parms(), so that the encoder's prediction remains
+ * identical to the decoder's. DTMF digits and single tones (200 Hz,
+ * 400-3800 Hz) are sent as TIA-102.BABA-1 tone frames, which do not update
+ * the prediction history.
+ *
+ * The analysis looks two frames ahead: the bits returned by call n describe
+ * the 20 ms of input given to call n - 3 (60 ms delay). The first three calls
+ * return low-level voice frames. To obtain the frames for the last 60 ms of
+ * input, encode three further frames of zeros.
+ *
+ * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
+ * @param samples Input PCM floats (160), nominal range [-1, 1]. A frame with a
+ *                non-finite sample or one beyond +-2^20 returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context unchanged.
+ * @param ambe_d  Output parameter bits (49).
+ * @return MBE_AMBE2450_FRAME_VOICE or MBE_AMBE2450_FRAME_TONE, or a negative
+ *         `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeAmbe2450Parms(mbe_ambe2450_encoder* enc, const float* samples, char ambe_d[49]);
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into AMBE+2 2450
+ *        parameter bits.
+ * @see mbe_encodeAmbe2450Parms for details.
+ */
+MBE_API int mbe_encodeAmbe2450ParmsShort(mbe_ambe2450_encoder* enc, const short* samples, char ambe_d[49]);
+/**
+ * @brief Encode 49 AMBE+2 2450 parameter bits into a 72-bit AMBE 3600x2450
+ *        frame (Golay FEC and C1 scrambling), in the plane layout
+ *        mbe_decodeAmbe3600x2450Frame() consumes. All 49 bits round-trip.
+ *
+ * @param ambe_d  Input parameter bits (49).
+ * @param ambe_fr Output frame as 4x24 bitplanes.
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeAmbe3600x2450Frame(const char ambe_d[49], char ambe_fr[4][24]);
+
 /* Prototypes from imbe7200x4400.c */
 /** @brief Print IMBE 4400 parameter bits to stderr (debug). */
 MBE_API void mbe_dumpImbe4400Data(const char* imbe_d);
@@ -707,6 +777,78 @@ MBE_API int mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_resu
 MBE_API int mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
+
+/* === IMBE 7200x4400 (P25 Phase 1 full rate) encoding === */
+
+/**
+ * @brief Caller-owned IMBE 4400 encoder state.
+ *
+ * Use one context per stream. A context is not thread-safe for concurrent use;
+ * any number of independent contexts may be used in one thread.
+ */
+typedef struct mbe_imbe4400_encoder mbe_imbe4400_encoder;
+
+/**
+ * @brief Allocate a fresh encoder context. Encoding never allocates.
+ * @return Owned context, or NULL when it cannot be allocated.
+ * @see mbe_imbe4400EncoderFree
+ */
+MBE_API mbe_imbe4400_encoder* mbe_imbe4400EncoderAlloc(void);
+
+/**
+ * @brief Restore freshly allocated state, including the prediction history.
+ * @param enc Context to reset; NULL is accepted.
+ */
+MBE_API void mbe_imbe4400EncoderReset(mbe_imbe4400_encoder* enc);
+
+/** @brief Free an encoder context; NULL is accepted. */
+MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
+
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of float PCM into IMBE 4400
+ *        parameter bits.
+ *
+ * C port of the float TIA-102.BABA encoder of Bruce Perens'
+ * ham_digital_modes: the standard's pitch estimation and refinement, V/UV
+ * determination, spectral amplitude estimation, prediction and block DCT
+ * quantization (TIA-102.BABA chapters 5-6). Bits are laid out as
+ * mbe_decodeImbe4400Parms() reads them. The prediction history is kept
+ * inside the context and updated by decoding each emitted frame with
+ * mbe_decodeImbe4400Parms(), so that the encoder's prediction remains
+ * identical to the decoder's.
+ *
+ * The analysis looks two frames ahead: the bits returned by call n describe
+ * the 20 ms of input given to call n - 3 (60 ms delay). The first three calls
+ * return low-level voice frames. To obtain the frames for the last 60 ms of
+ * input, encode three further frames of zeros.
+ *
+ * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
+ * @param samples Input PCM floats (160), nominal range [-1, 1]. A frame with a
+ *                non-finite sample or one beyond +-2^20 returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context unchanged.
+ * @param imbe_d  Output parameter bits (88); imbe_d[87] is always 0.
+ * @return 0, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeImbe4400Parms(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88]);
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into IMBE 4400
+ *        parameter bits.
+ * @see mbe_encodeImbe4400Parms for details.
+ */
+MBE_API int mbe_encodeImbe4400ParmsShort(mbe_imbe4400_encoder* enc, const short* samples, char imbe_d[88]);
+/**
+ * @brief Encode 88 IMBE 4400 parameter bits into a 144-bit IMBE 7200x4400
+ *        frame: four (23,12) Golay and three (15,11) Hamming code vectors,
+ *        seven unprotected bits, and the pseudo-random modulation of vectors
+ *        1-6 (TIA-102.BABA eq 81-94), in the plane layout
+ *        mbe_decodeImbe7200x4400Frame() consumes. Positions beyond each
+ *        vector's length are zero. All 88 bits round-trip.
+ *
+ * @param imbe_d  Input parameter bits (88).
+ * @param imbe_fr Output frame as 8x23 bitplanes.
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeImbe7200x4400Frame(const char imbe_d[88], char imbe_fr[8][23]);
 
 /* Prototypes from imbe7100x4400.c */
 /** @brief Print IMBE 7100x4400 parameter bits to stderr (debug). */

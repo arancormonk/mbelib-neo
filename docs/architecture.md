@@ -24,6 +24,9 @@ the library.
 - `src/ecc/`: error-correction helpers and constants.
 - `src/ambe/`: AMBE frame and data processing.
 - `src/ambe/ambe3600x2400_enc.c`: AMBE 2400 speech analysis and encoding.
+- `src/ambe/ambe3600x2450_enc.c`: AMBE+2 2450 quantization, tone frames and frame encoding.
+- `src/imbe/imbe7200x4400_enc.c`: IMBE 4400 quantization and 7200x4400 frame encoding.
+- `src/core/mbe_frame_analysis.c`, `src/core/mbe_tone_detect.c`: TIA-102.BABA analysis and tone detection for the AMBE+2 and IMBE encoders (ported from ham_digital_modes).
 - `src/ambe/dstar_frame.c`: D-STAR DV air-interface byte mapping.
 - `src/imbe/`: IMBE frame and data processing.
 - `src/internal/`: private headers shared by implementation units.

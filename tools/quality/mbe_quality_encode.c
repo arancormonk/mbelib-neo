@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * @file
- * @brief Encode 8 kHz speech with the AMBE 3600x2400 (D-STAR) encoder for
- *        quality measurement.
+ * @brief Encode 8 kHz speech with the AMBE 3600x2400 (D-STAR), AMBE+2
+ *        3600x2450 or IMBE 7200x4400 encoder for quality measurement.
  *
- * Writes one row of 49 literal 0/1 parameter bits per 20 ms frame, the
- * Dataf input mbe_quality_eval --codec ambe2400 accepts, so encoder output
- * can be decoded and scored against the input with the existing evaluator.
+ * Writes one row of literal 0/1 parameter bits per 20 ms frame (49 for the
+ * AMBE codecs, 88 for IMBE), the Dataf input mbe_quality_eval --codec
+ * ambe2400|ambe2450|imbe7200 accepts, so encoder output can be decoded and
+ * scored against the input with the existing evaluator.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -18,15 +19,20 @@
 
 #define FRAME_SAMPLES 160
 
+enum encode_codec { CODEC_AMBE2400, CODEC_AMBE2450, CODEC_IMBE7200 };
+
 struct encode_options {
     const char* input_path;
     const char* output_path;
     long flush_frames;
+    enum encode_codec codec;
 };
 
 static void
 usage(const char* program) {
-    fprintf(stderr, "Usage: %s --codec ambe2400 --in SPEECH.raw --out ROWS.txt [--flush-frames 0..50]\n", program);
+    fprintf(stderr,
+            "Usage: %s --codec ambe2400|ambe2450|imbe7200 --in SPEECH.raw --out ROWS.txt [--flush-frames 0..50]\n",
+            program);
 }
 
 static int
@@ -68,7 +74,6 @@ static int
 parse_options(int argc, char** argv, struct encode_options* options) {
     struct option_slots slots = {NULL, NULL};
     memset(options, 0, sizeof(*options));
-    options->flush_frames = 1; /* covers the encoder's documented 10 ms analysis delay */
     for (int i = 1; i < argc; i += 2) {
         const char** value = (i + 1 < argc) ? option_slot(argv[i], options, &slots) : NULL;
         if (!value || *value || argv[i + 1][0] == '\0') {
@@ -77,7 +82,20 @@ parse_options(int argc, char** argv, struct encode_options* options) {
         }
         *value = argv[i + 1];
     }
-    if (!slots.codec || strcmp(slots.codec, "ambe2400") != 0 || !options->input_path || !options->output_path
+    if (slots.codec && strcmp(slots.codec, "ambe2400") == 0) {
+        options->codec = CODEC_AMBE2400;
+        options->flush_frames = 1; /* covers the encoder's documented 10 ms analysis delay */
+    } else if (slots.codec && strcmp(slots.codec, "ambe2450") == 0) {
+        options->codec = CODEC_AMBE2450;
+        options->flush_frames = 3; /* the encoder's two-frame look-ahead, 60 ms */
+    } else if (slots.codec && strcmp(slots.codec, "imbe7200") == 0) {
+        options->codec = CODEC_IMBE7200;
+        options->flush_frames = 3;
+    } else {
+        usage(argv[0]);
+        return 2;
+    }
+    if (!options->input_path || !options->output_path
         || (slots.flush && parse_count(slots.flush, &options->flush_frames) != 0)) {
         usage(argv[0]);
         return 2;
@@ -86,40 +104,82 @@ parse_options(int argc, char** argv, struct encode_options* options) {
 }
 
 static int
-write_row(FILE* staged, const char bits[49]) {
-    char row[50];
-    for (int i = 0; i < 49; ++i) {
+write_row(FILE* staged, const char* bits, int count) {
+    char row[89];
+    for (int i = 0; i < count; ++i) {
         row[i] = (char)('0' + bits[i]);
     }
-    row[49] = '\n';
-    if (fwrite(row, 1, sizeof(row), staged) != sizeof(row)) {
+    row[count] = '\n';
+    if (fwrite(row, 1, (size_t)count + 1u, staged) != (size_t)count + 1u) {
         fprintf(stderr, "Cannot stage encoded output.\n");
         return 2;
     }
     return 0;
 }
 
+/* One encoder of the selected codec; the AMBE 2400 encoder takes the caller's parameter state. */
+struct encoder {
+    enum encode_codec codec;
+    mbe_ambe2400_encoder* ambe2400;
+    mbe_ambe2450_encoder* ambe2450;
+    mbe_imbe4400_encoder* imbe;
+    mbe_parms cur, prev, enhanced;
+};
+
 static int
-encode_frame(mbe_ambe2400_encoder* enc, const short pcm[FRAME_SAMPLES], mbe_parms* cur, mbe_parms* prev, FILE* staged) {
-    char bits[49];
-    if (mbe_encodeAmbe2400ParmsShort(enc, pcm, bits, cur, prev) < 0) {
+encoder_open(struct encoder* enc, enum encode_codec codec) {
+    memset(enc, 0, sizeof(*enc));
+    enc->codec = codec;
+    mbe_initMbeParms(&enc->cur, &enc->prev, &enc->enhanced);
+    if (codec == CODEC_AMBE2400) {
+        enc->ambe2400 = mbe_ambe2400EncoderAlloc();
+        return enc->ambe2400 ? 0 : -1;
+    }
+    if (codec == CODEC_AMBE2450) {
+        enc->ambe2450 = mbe_ambe2450EncoderAlloc();
+        return enc->ambe2450 ? 0 : -1;
+    }
+    enc->imbe = mbe_imbe4400EncoderAlloc();
+    return enc->imbe ? 0 : -1;
+}
+
+static void
+encoder_close(struct encoder* enc) {
+    mbe_ambe2400EncoderFree(enc->ambe2400);
+    mbe_ambe2450EncoderFree(enc->ambe2450);
+    mbe_imbe4400EncoderFree(enc->imbe);
+}
+
+static int
+encode_frame(struct encoder* enc, const short pcm[FRAME_SAMPLES], FILE* staged) {
+    char bits[88];
+    int count = 49;
+    int ret;
+    if (enc->codec == CODEC_AMBE2400) {
+        ret = mbe_encodeAmbe2400ParmsShort(enc->ambe2400, pcm, bits, &enc->cur, &enc->prev);
+        mbe_moveMbeParms(&enc->cur, &enc->prev);
+    } else if (enc->codec == CODEC_AMBE2450) {
+        ret = mbe_encodeAmbe2450ParmsShort(enc->ambe2450, pcm, bits);
+    } else {
+        ret = mbe_encodeImbe4400ParmsShort(enc->imbe, pcm, bits);
+        count = 88;
+    }
+    if (ret < 0) {
         fprintf(stderr, "Encoder rejected a frame.\n");
         return 2;
     }
-    mbe_moveMbeParms(cur, prev);
-    return write_row(staged, bits);
+    return write_row(staged, bits, count);
 }
 
 /* Encode every whole or zero-padded final frame, then the flush frames. */
 static int
-encode_stream(FILE* input, FILE* staged, long flush_frames) {
-    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
-    if (!enc) {
+encode_stream(FILE* input, FILE* staged, enum encode_codec codec, long flush_frames) {
+    struct encoder enc;
+    if (encoder_open(&enc, codec) != 0) {
+        encoder_close(&enc);
         fprintf(stderr, "Cannot allocate the encoder.\n");
         return 2;
     }
-    mbe_parms cur, prev, enhanced;
-    mbe_initMbeParms(&cur, &prev, &enhanced);
     unsigned char raw[FRAME_SAMPLES * 2];
     size_t count;
     long frames = 0;
@@ -134,7 +194,7 @@ encode_stream(FILE* input, FILE* staged, long flush_frames) {
         for (size_t i = 0; i < count / 2; ++i) {
             pcm[i] = (short)(unsigned short)(raw[2 * i] | (raw[(2 * i) + 1] << 8));
         }
-        ret = encode_frame(enc, pcm, &cur, &prev, staged);
+        ret = encode_frame(&enc, pcm, staged);
         ++frames;
     }
     if (ret == 0 && ferror(input)) {
@@ -147,9 +207,9 @@ encode_stream(FILE* input, FILE* staged, long flush_frames) {
     }
     static const short silence[FRAME_SAMPLES] = {0};
     for (long i = 0; ret == 0 && i < flush_frames; ++i) {
-        ret = encode_frame(enc, silence, &cur, &prev, staged);
+        ret = encode_frame(&enc, silence, staged);
     }
-    mbe_ambe2400EncoderFree(enc);
+    encoder_close(&enc);
     return ret;
 }
 
@@ -208,7 +268,7 @@ main(int argc, char** argv) {
         fclose(input);
         return 2;
     }
-    int ret = encode_stream(input, staged, options.flush_frames);
+    int ret = encode_stream(input, staged, options.codec, options.flush_frames);
     if (fclose(input) != 0) {
         fprintf(stderr, "Error closing input: %s\n", options.input_path);
         ret = 2;
