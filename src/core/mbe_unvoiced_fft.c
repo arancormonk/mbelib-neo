@@ -8,6 +8,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "mbe_compiler.h"
@@ -170,6 +171,74 @@ mbe_fft_forward_real(mbe_fft_plan* plan, const float input[MBE_FFT_SIZE], float 
     memcpy(plan->Uw, input, MBE_FFT_SIZE * sizeof(float));
     pffft_transform_ordered(plan->setup, plan->Uw, plan->Uw_fft, plan->work, PFFFT_FORWARD);
     memcpy(output, plan->Uw_fft, MBE_FFT_SIZE * sizeof(float));
+    return 0;
+}
+
+struct mbe_acf_plan {
+    PFFFT_Setup* setup;
+    float* in;
+    float* spectrum;
+    float* out;
+    float* work;
+};
+
+void
+mbe_acf_plan_free(mbe_acf_plan* plan) {
+    if (plan == NULL) {
+        return;
+    }
+    if (plan->setup) {
+        pffft_destroy_setup(plan->setup);
+    }
+    pffft_aligned_free(plan->in);
+    pffft_aligned_free(plan->spectrum);
+    pffft_aligned_free(plan->out);
+    pffft_aligned_free(plan->work);
+    free(plan);
+}
+
+mbe_acf_plan*
+mbe_acf_plan_alloc(void) {
+    mbe_acf_plan* plan = (mbe_acf_plan*)calloc(1, sizeof(*plan));
+    if (plan == NULL) {
+        return NULL;
+    }
+    plan->setup = pffft_new_setup(MBE_ACF_SIZE, PFFFT_REAL);
+    plan->in = (float*)pffft_aligned_malloc(MBE_ACF_SIZE * sizeof(float));
+    plan->spectrum = (float*)pffft_aligned_malloc(MBE_ACF_SIZE * sizeof(float));
+    plan->out = (float*)pffft_aligned_malloc(MBE_ACF_SIZE * sizeof(float));
+    plan->work = (float*)pffft_aligned_malloc(MBE_ACF_SIZE * sizeof(float));
+    if (!plan->setup || !plan->in || !plan->spectrum || !plan->out || !plan->work) {
+        mbe_acf_plan_free(plan);
+        return NULL;
+    }
+    return plan;
+}
+
+int
+mbe_acf_compute(mbe_acf_plan* plan, const float* x, int len, float* r, int lags) {
+    /* lags < MBE_ACF_SIZE bounds the output read; len + lags <= MBE_ACF_SIZE
+     * keeps the circular correlation from wrapping (checked by subtraction). */
+    if (plan == NULL || x == NULL || r == NULL || len < 0 || lags < 0 || len > MBE_ACF_SIZE || lags >= MBE_ACF_SIZE
+        || lags > MBE_ACF_SIZE - len) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    memcpy(plan->in, x, (size_t)len * sizeof(float));
+    memset(plan->in + len, 0, (size_t)(MBE_ACF_SIZE - len) * sizeof(float));
+    pffft_transform_ordered(plan->setup, plan->in, plan->spectrum, plan->work, PFFFT_FORWARD);
+    /* Ordered layout: DC at [0], Nyquist at [1], then (re, im) pairs. */
+    float* sp = plan->spectrum;
+    sp[0] *= sp[0];
+    sp[1] *= sp[1];
+    for (int k = 2; k < MBE_ACF_SIZE; k += 2) {
+        sp[k] = (sp[k] * sp[k]) + (sp[k + 1] * sp[k + 1]);
+        sp[k + 1] = 0.0f;
+    }
+    pffft_transform_ordered(plan->setup, sp, plan->out, plan->work, PFFFT_BACKWARD);
+    const float scale = 1.0f / (float)MBE_ACF_SIZE;
+    for (int lag = 0; lag <= lags; ++lag) {
+        r[lag] = plan->out[lag] * scale;
+    }
     return 0;
 }
 

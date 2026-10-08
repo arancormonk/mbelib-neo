@@ -6,15 +6,16 @@
 #define M_PI 3.14159265358979323846
 #endif
 #include <stdio.h>
-#include <string.h>
 #include "mbelib-neo/mbelib.h"
 
 #ifdef MBE_ENCODER_TEST_OOM
-/* GNU link wrapping covers six allocation points: the context and its
- * project-owned FFT plan buffers. These failures return NULL. Allocation
- * failures inside the vendored pffft setup are not recoverable; the same
- * limitation applies to decoder plan allocation. PFFFT's same-object internal
- * aligned calls are not wrapped. */
+/* GNU link wrapping covers eleven allocation points: the context, the
+ * project-owned synthesis FFT plan and its buffers, and the autocorrelation
+ * plan and its buffers. These failures return NULL. Allocation failures inside
+ * the vendored pffft setup are not recoverable; the same limitation applies to
+ * decoder plan allocation. PFFFT's same-object internal aligned calls are not
+ * wrapped. */
+#define ENCODER_ALLOCATIONS 11
 void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
 void encoder_real_free(void* ptr) __asm__("__real_pffft_aligned_free");
 void* encoder_real_calloc(size_t count, size_t size) __asm__("__real_calloc");
@@ -29,7 +30,7 @@ static int allocation_count;
 static int fail_at;
 static int live_allocations;
 static int heap_allocation_count;
-static void* live_context;
+static void* live_callocs[2];
 
 extern void*
 encoder_track_malloc(size_t size) {
@@ -43,14 +44,31 @@ encoder_fault_calloc(size_t count, size_t size) {
     if (allocation_count == fail_at) {
         return NULL;
     }
-    live_context = encoder_real_calloc(count, size);
-    return live_context;
+    void* ptr = encoder_real_calloc(count, size);
+    for (size_t i = 0; ptr != NULL && i < sizeof(live_callocs) / sizeof(live_callocs[0]); i++) {
+        if (live_callocs[i] == NULL) {
+            live_callocs[i] = ptr;
+            break;
+        }
+    }
+    return ptr;
+}
+
+static int
+live_calloc_count(void) {
+    int count = 0;
+    for (size_t i = 0; i < sizeof(live_callocs) / sizeof(live_callocs[0]); i++) {
+        count += live_callocs[i] != NULL;
+    }
+    return count;
 }
 
 extern void
 encoder_track_heap_free(void* ptr) {
-    if (ptr == live_context) {
-        live_context = NULL;
+    for (size_t i = 0; ptr != NULL && i < sizeof(live_callocs) / sizeof(live_callocs[0]); i++) {
+        if (live_callocs[i] == ptr) {
+            live_callocs[i] = NULL;
+        }
     }
     encoder_real_heap_free(ptr);
 }
@@ -103,24 +121,31 @@ check_no_encode_allocations(mbe_ambe2400_encoder* enc) {
 
 int
 main(int argc, char** argv) {
-    if (argc != 2 || strlen(argv[1]) != 1 || argv[1][0] < '1' || argv[1][0] > '6') {
+    fail_at = 0;
+    for (const char* p = argc == 2 ? argv[1] : ""; *p != '\0' && fail_at <= ENCODER_ALLOCATIONS; p++) {
+        fail_at = *p >= '0' && *p <= '9' ? (fail_at * 10) + (*p - '0') : ENCODER_ALLOCATIONS + 1;
+    }
+    if (fail_at < 1 || fail_at > ENCODER_ALLOCATIONS) {
         return 1;
     }
-    fail_at = argv[1][0] - '0';
     mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
-    if (enc != NULL || live_allocations != 0 || live_context != NULL) {
-        (void)fprintf(stderr, "failed allocation %d: live=%d context=%p\n", fail_at, live_allocations, live_context);
+    if (enc != NULL || allocation_count < fail_at || live_allocations != 0 || live_calloc_count() != 0) {
+        (void)fprintf(stderr, "failed allocation %d: calls=%d live=%d callocs=%d\n", fail_at, allocation_count,
+                      live_allocations, live_calloc_count());
         mbe_ambe2400EncoderFree(enc);
         return 1;
     }
     fail_at = 0;
+    allocation_count = 0;
     enc = mbe_ambe2400EncoderAlloc();
-    if (enc == NULL) {
+    if (enc == NULL || allocation_count != ENCODER_ALLOCATIONS) {
+        (void)fprintf(stderr, "encoder allocation points: %d, want %d\n", allocation_count, ENCODER_ALLOCATIONS);
+        mbe_ambe2400EncoderFree(enc);
         return 1;
     }
     int failed = check_no_encode_allocations(enc);
     mbe_ambe2400EncoderFree(enc);
-    if (failed || live_allocations != 0 || live_context != NULL) {
+    if (failed || live_allocations != 0 || live_calloc_count() != 0) {
         return 1;
     }
     (void)puts("allocation failure: NULL, no leaks; retry, reset and encoding: no allocations");
@@ -129,6 +154,7 @@ main(int argc, char** argv) {
 #else
 
 #include <stdint.h>
+#include <string.h>
 
 #include "ambe_common.h"
 #include "mbe_ecc.h"

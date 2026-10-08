@@ -70,6 +70,37 @@ void mbe_fft_plan_free(mbe_fft_plan* plan);
  */
 int mbe_fft_forward_real(mbe_fft_plan* plan, const float input[MBE_FFT_SIZE], float output[MBE_FFT_SIZE]);
 
+/** Transform size of the autocorrelation plan: len + lags must not exceed it. */
+#define MBE_ACF_SIZE 512
+
+/**
+ * @brief Opaque plan for FFT autocorrelation of short real sequences.
+ */
+typedef struct mbe_acf_plan mbe_acf_plan;
+
+/**
+ * @brief Allocate an autocorrelation plan (512-point real FFT and buffers).
+ * @return Allocated plan, or NULL on failure.
+ */
+mbe_acf_plan* mbe_acf_plan_alloc(void);
+
+/**
+ * @brief Free an autocorrelation plan.
+ * @param plan Plan to free (NULL is ignored).
+ */
+void mbe_acf_plan_free(mbe_acf_plan* plan);
+
+/**
+ * @brief Autocorrelation r[lag] = sum_n x[n] x[n + lag] for lag = 0..lags.
+ *
+ * Computed through a zero-padded MBE_ACF_SIZE-point FFT, so it matches the
+ * direct sum up to floating-point rounding. No allocations occur.
+ * @return 0, or MBE_STATUS_INVALID_ARGUMENT for NULL pointers, a negative
+ *         count, lags of MBE_ACF_SIZE or more, or len + lags beyond
+ *         MBE_ACF_SIZE.
+ */
+int mbe_acf_compute(mbe_acf_plan* plan, const float* x, int len, float* r, int lags);
+
 /**
  * @brief Generate LCG noise samples for unvoiced synthesis.
  *

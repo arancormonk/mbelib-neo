@@ -92,6 +92,7 @@ struct mbe_ambe2400_encoder {
     float hist_gain;
     int silence_run;
     mbe_fft_plan* fft;
+    mbe_acf_plan* acf;
     struct mbe_analysis_tables tables;
 };
 
@@ -114,7 +115,10 @@ mbe_ambe2400EncoderAlloc(void) {
         return NULL;
     }
     enc->fft = mbe_fft_plan_alloc();
-    if (enc->fft == NULL) {
+    enc->acf = mbe_acf_plan_alloc();
+    if (enc->fft == NULL || enc->acf == NULL) {
+        mbe_fft_plan_free(enc->fft);
+        mbe_acf_plan_free(enc->acf);
         free(enc);
         return NULL;
     }
@@ -127,6 +131,7 @@ void
 mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc) {
     if (enc != NULL) {
         mbe_fft_plan_free(enc->fft);
+        mbe_acf_plan_free(enc->acf);
         free(enc);
     }
 }
@@ -497,7 +502,7 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, char ambe_d[49], mbe_parms* cur
      * halfway between the two frames it spans. */
     const float gain = sqrtf(enc->hist_gain * enc->agc_gain);
     struct mbe_analysis_result res;
-    int status = mbe_analysis_frame(&enc->tables, &enc->analysis, enc->fft, gain, &res);
+    int status = mbe_analysis_frame(&enc->tables, &enc->analysis, enc->fft, enc->acf, gain, &res);
     if (status < 0) {
         return status;
     }

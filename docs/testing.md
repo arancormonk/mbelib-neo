@@ -10,8 +10,8 @@ The CTest suite includes:
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
 - AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors (`test_ambe2400_encoder`)
-- MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, and the voicing thresholds (`test_speech_analysis`)
-- Encoder context/FFT allocation failures clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
+- MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, the FFT autocorrelation against the direct sum, and the voicing thresholds (`test_speech_analysis`)
+- Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven) clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)

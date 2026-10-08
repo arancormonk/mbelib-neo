@@ -136,7 +136,7 @@ git push origin vX.Y.Z
 - `-DMBELIB_ENABLE_HARDENING=ON` — Enable supported Release-like compiler/linker hardening (default ON).
 - `-DMBELIB_ENABLE_SIMD=ON` — Enable SSE2/NEON routines when the compiler target provides them, otherwise use scalar routines. The bundled FFT also falls back to scalar when its compiler target has no supported SIMD backend. On 32-bit ARM, pass `-DCMAKE_C_FLAGS=-mfpu=neon` to enable NEON; the option itself preserves the toolchain's FPU selection. Measure performance on your own core. On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability. See [SIMD target selection](docs/build-installation.md#simd-target-selection).
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
-- `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, and `bench_convert`.
+- `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, `bench_convert`, and `bench_encode` (D-STAR encoder).
 - `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation).
 
 ## Using The Library
@@ -337,7 +337,7 @@ Build micro-benchmarks:
 
 ```
 cmake --preset dev-release -DMBELIB_BUILD_BENCHMARKS=ON
-cmake --build --preset dev-release -j --target bench_synth bench_unvoiced bench_convert
+cmake --build --preset dev-release -j --target bench_synth bench_unvoiced bench_convert bench_encode
 ```
 
 Run benchmark executables:
@@ -346,6 +346,7 @@ Run benchmark executables:
 ./build/dev-release/bench_synth
 ./build/dev-release/bench_unvoiced
 ./build/dev-release/bench_convert
+./build/dev-release/bench_encode
 ```
 
 Quick scalar-vs-SIMD comparison helper (builds ad hoc comparison trees under `build/bench-compare-scalar/` and `build/bench-compare-simd/`):

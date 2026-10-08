@@ -77,7 +77,7 @@ void mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_A
  * scales the signal energies used by M(xi), e.g. an input AGC gain. Returns 0
  * or a negative MBE_STATUS_* value. */
 int mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis_state* state, mbe_fft_plan* fft,
-                       float level_gain, struct mbe_analysis_result* result);
+                       mbe_acf_plan* acf, float level_gain, struct mbe_analysis_result* result);
 
 /* Voicing threshold Theta(k, 0.1309) of eq (37) for 1-based column k, with
  * hysteresis from the previously transmitted column voicing. */
