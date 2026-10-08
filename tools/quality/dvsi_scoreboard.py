@@ -25,6 +25,7 @@ import math
 import random
 import shutil
 import statistics
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -57,6 +58,9 @@ BAND_KEYS = tuple(
     for band in ("0_250", "0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
 )
 SPEECH_KEYS = ("level_offset_db", "lsd_db", "env_corr", "crest_delta_db", "pcm_rail_samples") + BAND_KEYS
+# DVSI's encoder delays the speech about 180 samples more than ours, past the evaluator's -160-sample
+# lag search, so our decoded encoding is delayed by this much before DVSI's is used as its reference.
+ENCODER_COMPARE_DELAY = 320
 F0_BANDS = ((0.0, 100.0), (100.0, 150.0), (150.0, 200.0), (200.0, 300.0), (300.0, 1000.0))
 # MBE_PROCESS_FLAG_TONE, _ERASURE, _REPEAT, _MUTE and _SILENCE: frames not synthesized from their own voice model.
 FLAG_SKIP = 0x0010 | 0x0020 | 0x0040 | 0x0080 | 0x0100
@@ -389,6 +393,26 @@ def load_json(path):
     return json.loads(Path(path).read_text())
 
 
+def alignment_ok(metrics):
+    """True when the evaluator found an alignment inside its lag search (not none, and not at a limit)."""
+    corr = metrics.get("alignment_corr")
+    return isinstance(corr, (int, float)) and math.isfinite(corr) and not metrics.get("alignment_at_limit")
+
+
+def aligned(metrics, label):
+    """The evaluator's metrics, unless it found no usable alignment (a silent decode, or a lag past its search)."""
+    if not alignment_ok(metrics):
+        raise RuntimeError(f"{label}: no usable alignment (lag {metrics.get('auto_lag_samples')}, "
+                           f"correlation {metrics.get('alignment_corr')})")
+    return metrics
+
+
+def write_delayed(path, samples, delay):
+    """Raw s16le PCM of `samples` after `delay` zero samples."""
+    values = [0] * delay + [int(sample) for sample in samples]
+    Path(path).write_bytes(struct.pack(f"<{len(values)}h", *values))
+
+
 def load_records(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line]
 
@@ -409,7 +433,8 @@ def score_vector(tools, vectors, mode, name, work, encoder):
     run([tools / "mbe_quality_eval", "--decoded", dvsi_pcm, "--ref", speech, "--json", f"{base}_dvsi.json"])
     run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
          "--json", f"{base}_vs_dvsi.json"])
-    ours, dvsi, versus = (load_json(f"{base}_{tag}.json") for tag in ("ours", "dvsi", "vs_dvsi"))
+    ours, dvsi, versus = (aligned(load_json(f"{base}_{tag}.json"), f"{base.name}_{tag}")
+                          for tag in ("ours", "dvsi", "vs_dvsi"))
     records = load_records(f"{base}_ours.jsonl")
     ours_pcm, dvsi_samples, speech_samples = read_pcm(f"{base}_ours.wav"), read_pcm(dvsi_pcm), read_pcm(speech)
     result = {
@@ -430,6 +455,11 @@ def score_vector(tools, vectors, mode, name, work, encoder):
     return result
 
 
+def tone_frame_rate(records):
+    """Fraction of frames decoded as tone or silence frames rather than voice."""
+    return sum(1 for record in records if record["flags"] & 0x0010) / len(records) if records else None
+
+
 def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
     """Our D-STAR encoding of the input against DVSI's, both decoded by this library."""
     run([tools / "mbe_quality_encode", "--codec", "ambe2400", "--in", speech, "--out", f"{base}_enc.rows"])
@@ -437,6 +467,23 @@ def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
          "--out", f"{base}_enc.wav", "--ref", speech, "--json", f"{base}_enc.json",
          "--params", f"{base}_enc.jsonl"])
     encoded = load_json(f"{base}_enc.json")
+    if not alignment_ok(encoded):
+        # Our encoding cannot be aligned with the input (say, it is mostly silence frames), so nothing
+        # measured through that alignment is scored. The count still reaches the summary and the gates.
+        print(f"warning: {base.name}_enc: no usable alignment with the input; not scored", file=sys.stderr)
+        return {"alignment_failures": [f"{base.name}_enc"]}
+    # Both encodings through the same decoder: what remains is the encoders' difference, measured with
+    # DVSI's encoding as the reference (its active frames, its level).
+    delayed = Path(f"{base}_enc_delayed.raw")
+    write_delayed(delayed, read_pcm(f"{base}_enc.wav"), ENCODER_COMPARE_DELAY)
+    run([tools / "mbe_quality_eval", "--decoded", delayed, "--ref", f"{base}_ours.wav",
+         "--json", f"{base}_enc_vs_dvsi.json"])
+    failures = []
+    versus = load_json(f"{base}_enc_vs_dvsi.json")
+    if not alignment_ok(versus):
+        print(f"warning: {base.name}_enc_vs_dvsi: no usable alignment; not scored", file=sys.stderr)
+        failures.append(f"{base.name}_enc_vs_dvsi")
+        versus = {}
     records = load_records(f"{base}_enc.jsonl")
 
     def cents(pairs):
@@ -448,6 +495,11 @@ def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
     frame_offset = round((encoded["lag_samples"] - dvsi_eval["lag_samples"]) / FRAME)
     return {
         "speech": {key: encoded.get(key) for key in SPEECH_KEYS},
+        "vs_dvsi_bits": {key: versus.get(key) for key in SPEECH_KEYS},
+        "rail_excess_samples": max(0, (encoded.get("pcm_rail_samples") or 0) - (dvsi_eval.get("pcm_rail_samples") or 0)),
+        "silence_frame_rate": tone_frame_rate(records),
+        "dvsi_silence_frame_rate": tone_frame_rate(dvsi_records),
+        "alignment_failures": failures,
         "pitch_cents_median": cents(ours_pairs),
         "dvsi_pitch_cents_median": cents(dvsi_pairs),
         "pitch_input_over_coded": summarize_ratios(ours_pairs),
@@ -471,7 +523,7 @@ def score_tone_vector(tools, vectors, mode, name, work):
          "--params", f"{base}_ours.jsonl"])
     run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
          "--json", f"{base}_vs_dvsi.json"])
-    versus = load_json(f"{base}_vs_dvsi.json")
+    versus = aligned(load_json(f"{base}_vs_dvsi.json"), f"{base.name}_vs_dvsi")
     records = load_records(f"{base}_ours.jsonl")
     metrics = compare_tones(read_pcm(f"{base}_ours.wav"), read_pcm(dvsi_pcm), versus.get("lag_samples") or 0)
     metrics["tone_frames"] = sum(1 for record in records if record["flags"] & 0x0010)
@@ -508,12 +560,21 @@ def flatten(result):
         flat[f"pitch.{source}_ratio"] = summary["all"]["median"]
     encoder = result.get("encoder")
     if encoder:
-        for key, value in encoder["speech"].items():
+        flat["encoder.alignment_failures"] = len(encoder.get("alignment_failures", []))
+        for key, value in encoder.get("speech", {}).items():
             if isinstance(value, (int, float)):
                 flat[f"encoder.{key}"] = value
-        for key in ("pitch_cents_median", "dvsi_pitch_cents_median", "octave_error_rate", "dvsi_octave_error_rate"):
-            flat[f"encoder.{key}"] = encoder[key]
-        agreement = [value for value in encoder["voicing_agreement"] if value is not None]
+        for key, value in encoder.get("vs_dvsi_bits", {}).items():
+            if isinstance(value, (int, float)):
+                flat[f"encoder.vs_dvsi_bits.{key}"] = value
+        level = encoder.get("vs_dvsi_bits", {}).get("level_offset_db")
+        if isinstance(level, (int, float)):
+            flat["encoder.level_gap_db"] = abs(level)
+        for key in ("pitch_cents_median", "dvsi_pitch_cents_median", "octave_error_rate", "dvsi_octave_error_rate",
+                    "rail_excess_samples", "silence_frame_rate", "dvsi_silence_frame_rate"):
+            if key in encoder:
+                flat[f"encoder.{key}"] = encoder[key]
+        agreement = [value for value in encoder.get("voicing_agreement", []) if value is not None]
         flat["encoder.voicing_agreement_mean"] = mean(agreement)
     return flat
 
@@ -587,23 +648,38 @@ def bootstrap_interval(deltas, replicates=2000, seed=0x5EED):
 def compare(candidate, baseline):
     """Paired per-vector deltas (candidate - baseline) for every shared metric, by mode and partition."""
     base = {(result["mode"], result["name"]): flatten(result) for result in baseline["vectors"]}
-    report = {}
+    report, unpaired = {}, {}
     for result in candidate["vectors"]:
-        before = base.get((result["mode"], result["name"]))
-        if before is None:
-            continue
+        before = base.get((result["mode"], result["name"]), {})
         after = flatten(result)
-        group = report.setdefault(f"{result['mode']}/{result['partition']}", {})
-        for key, value in after.items():
-            if value is not None and before.get(key) is not None:
-                group.setdefault(key, []).append((result["name"], value - before[key]))
+        name = f"{result['mode']}/{result['partition']}"
+        group = report.setdefault(name, {})
+        for key in sorted(set(after) | set(before)):
+            value, previous = after.get(key), before.get(key)
+            if value is not None and previous is not None:
+                group.setdefault(key, []).append((result["name"], value - previous))
+            elif value is not None or previous is not None:
+                # Measured in one run only (an alignment failure, a vector missing from the baseline).
+                unpaired.setdefault(name, {}).setdefault(key, []).append(result["name"])
+    seen = {(result["mode"], result["name"]) for result in candidate["vectors"]}
+    for result in baseline["vectors"]:
+        if (result["mode"], result["name"]) in seen:
+            continue
+        # A baseline vector the candidate run left out: every metric it has goes unpaired.
+        name = f"{result['mode']}/{result['partition']}"
+        report.setdefault(name, {})
+        for key, value in sorted(flatten(result).items()):
+            if value is not None:
+                unpaired.setdefault(name, {}).setdefault(key, []).append(result["name"])
     summary = {}
     for group, metrics in report.items():
         summary[group] = {}
-        for key, items in metrics.items():
+        for key in sorted(set(metrics) | set(unpaired.get(group, {}))):
+            items = metrics.get(key, [])
             deltas = [delta for _, delta in items]
             summary[group][key] = {"mean": mean(deltas), "ci95": bootstrap_interval(deltas),
-                                   "worst": max(items, key=lambda item: abs(item[1])), "n": len(items)}
+                                   "worst": max(items, key=lambda item: abs(item[1])) if items else None,
+                                   "n": len(items), "unpaired": unpaired.get(group, {}).get(key, [])}
     return summary
 
 
@@ -611,6 +687,15 @@ def check_gates(gates, candidate_summary, comparison):
     """Evaluate a predeclared gate set; returns (passed, lines)."""
     lines = []
     passed = True
+    # A partition with unscorable vectors cannot pass: their metrics are missing, not measured.
+    gated = {mode for check in gates["checks"]
+             for mode in (check["mode"] if isinstance(check["mode"], list) else [check["mode"]])}
+    for mode in sorted(gated):
+        group = f"{mode}/{gates['partition']}"
+        for key, value in sorted(candidate_summary.get(group, {}).get("mean", {}).items()):
+            if key.endswith("alignment_failures") and value:
+                passed = False
+                lines.append(f"FAIL {group} {key}: vectors that could not be aligned")
     for check in gates["checks"]:
         modes = check["mode"] if isinstance(check["mode"], list) else [check["mode"]]
         for mode in modes:
@@ -632,8 +717,10 @@ def evaluate_check(check, metric, means, deltas):
         value = means.get(metric)
         return value is not None and value >= check["value"], f"value={value}"
     entry = deltas.get(metric)
-    if entry is None:
+    if entry is None or entry["mean"] is None:
         return False, "no paired data"
+    if entry.get("unpaired"):
+        return False, f"unpaired vectors {entry['unpaired']}"
     delta, interval = entry["mean"], entry["ci95"]
     detail = f"mean delta={delta:+.4g} ci95={interval} worst={entry['worst']}"
     if rule == "decrease":

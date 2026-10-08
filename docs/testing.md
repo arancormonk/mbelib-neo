@@ -458,8 +458,19 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   ratio away from 1.
 - **Encoder (D-STAR):** our encoding of the input against DVSI's encoding of
   it, both decoded by this library: pitch error against the input, octave
-  errors, per-1 kHz-band voicing agreement and the speech metrics. It cannot
-  show how DVSI hardware decodes our bits.
+  errors, per-1 kHz-band voicing agreement, the speech metrics against the
+  input, the same metrics of our decoded encoding against DVSI's
+  (`encoder.vs_dvsi_bits.*`, with `encoder.level_gap_db` the unsigned level
+  difference), rail samples beyond DVSI's encoding and the fraction of tone
+  or silence frames. DVSI's encoding is the reference there (its active
+  frames and level); DVSI's encoder delays the speech about 180 samples more
+  than ours, past the evaluator's -160 lag limit, so ours is first delayed by
+  320 samples. It cannot show how DVSI hardware decodes our bits.
+- Every comparison must find an alignment inside the evaluator's lag search.
+  A decoder comparison without one (a silent decode, or a lag at a limit)
+  fails the run. An encoding without one (one that is mostly silence frames,
+  say) is left unscored, counted in `encoder.alignment_failures`, and fails
+  any gate on its partition.
 - **Partitions** are by utterance, so `dam`'s level, overload and car-noise
   variants sit with `dam`. `development` and `validation` were both examined
   during earlier changes; `final` vectors are scored once per change set
@@ -478,7 +489,8 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   worst vector, and counts the baseline's speech vectors whose PCM changed
   (a vector missing from the run counts as changed). `--gates` evaluates a gate set from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and
-  exits non-zero when a gate fails.
+  exits non-zero when a gate fails. A paired check fails when a metric was
+  measured for a vector in only one of the two runs.
 
 `mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
 `decoded` (the frame's own model from the public `mbe_decode*Parms` decoder,
