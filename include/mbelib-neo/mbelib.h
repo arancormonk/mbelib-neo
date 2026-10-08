@@ -398,18 +398,18 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * (interleave, scrambler and Golay parity cross-checked against the MMDVM
  * tables). The spectral reconstruction it targets matches DVSI's AMBE-3000
  * D-STAR test vectors; on-air interoperability has not been verified.
- * Quiet input (frame RMS of the DC-filtered input below the silence
- * threshold) is encoded as voice until the fifth consecutive quiet frame; from
- * then on the standard AMBE silence frame is produced until a louder frame
- * arrives. An input AGC follows the talker's level on voiced frames over about
- * a second.
+ * Every frame is a voice frame, as from DVSI's encoder: quiet and silent
+ * input is coded as low-level voice, and the decoded level follows the input
+ * level (there is no AGC). Earlier versions normalized the level and sent
+ * the AMBE silence frame (b0 127, tone index 128) for quiet input; this
+ * library's decoders play that frame as comfort noise and reset.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
  * frames. prev_mp is read-only. To restart a stream, call
  * mbe_ambe2400EncoderReset() and mbe_initMbeParms().
- * State equivalence applies to the mbe_processAmbe* path, which resets on a
- * silence frame; a bare mbe_decodeAmbe2400Parms() chain must reset explicitly.
+ * State equivalence holds with both the mbe_processAmbe2400* path and a bare
+ * mbe_decodeAmbe2400Parms() chain.
  *
  * The analysis is centred one sample before the frame: parameters lag audio
  * by about 10 ms. The pitch analysis spans the whole frame, while the spectral
@@ -423,8 +423,7 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous quantized frame state; never modified.
- * @return 0 for a voice frame, 1 for a silence frame, or a negative
- *         `MBE_STATUS_*` code.
+ * @return 0, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
                                     const mbe_parms* prev_mp);

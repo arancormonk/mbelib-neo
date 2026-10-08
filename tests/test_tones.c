@@ -207,9 +207,9 @@ test_dstar_tones(void) {
     expect_tone("D-STAR 350+490 vol 203", mbe_processAmbe2400Dataf, d, 350.0, 490.0, dstar_level(203));
 }
 
-/* The encoder's silence frame (b0 127, index 128, volume 0) stays silence and
- * resets the decoder, as the encoder resets itself: the voice frame after it
- * decodes exactly as from a fresh stream. */
+/* The silence frame earlier versions of this library's encoder sent (b0 127,
+ * index 128, volume 0) plays comfort noise, never a tone, and resets the
+ * decoder: the voice frame after it decodes exactly as from a fresh stream. */
 static void
 test_dstar_silence_frame(void) {
     char voice[49] = {0}, silence[49] = {0};

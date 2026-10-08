@@ -68,25 +68,20 @@ struct mbe_analysis_result {
 void mbe_analysis_init_tables(struct mbe_analysis_tables* tables);
 void mbe_analysis_reset(struct mbe_analysis_state* state);
 
-/* DC-filter one frame (16-bit scale) into the history; filtered receives the
- * frame's filtered samples. */
-void mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME],
-                       float filtered[MBE_ANALYSIS_FRAME]);
+/* DC-filter one frame (16-bit scale) into the history. */
+void mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME]);
 
-/* Analyze the window centred one sample before the newest frame. level_gain
- * scales the signal energies used by M(xi), e.g. an input AGC gain. Returns 0
+/* Analyze the window centred one sample before the newest frame. Returns 0
  * or a negative MBE_STATUS_* value. */
 int mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis_state* state, mbe_fft_plan* fft,
-                       mbe_acf_plan* acf, float level_gain, struct mbe_analysis_result* result);
+                       mbe_acf_plan* acf, struct mbe_analysis_result* result);
 
 /* Voicing threshold Theta(k, 0.1309) of eq (37) for 1-based column k, with
  * hysteresis from the previously transmitted column voicing. */
 float mbe_analysis_column_threshold(const struct mbe_analysis_state* state, const struct mbe_analysis_result* result,
                                     int column);
 
-/* Record the transmitted voicing for hysteresis; silence frames pass
- * voice_frame = 0, which also restarts pitch acquisition. */
-void mbe_analysis_commit(struct mbe_analysis_state* state, const unsigned char columns[MBE_ANALYSIS_COLUMNS],
-                         int voice_frame);
+/* Record the transmitted voicing for hysteresis. */
+void mbe_analysis_commit(struct mbe_analysis_state* state, const unsigned char columns[MBE_ANALYSIS_COLUMNS]);
 
 #endif /* MBELIB_NEO_INTERNAL_MBE_SPEECH_ANALYSIS_H */

@@ -100,10 +100,19 @@ def verify(encode, decode):
             assert result.returncode == 1 and result.stdout == b"" and b"usage:" in result.stderr
     print(f"PASS {len(invalid)} malformed WAVs, truncated containers, and path arguments: exit 1")
 
+    def peak(wav_bytes, first_sample=0):
+        samples = struct.unpack_from(f"<{len(wav_bytes) // 2 - 22 - first_sample}h", wav_bytes, 44 + 2 * first_sample)
+        return max(abs(sample) for sample in samples)
+
+    # Silent input is coded as voice frames, as DVSI's encoder codes it, and decodes near silence.
     silence = success(encode, riff(fmt, chunk(b"data", bytes(len(pcm)))))
-    # Fixed b0=127/tone-index=128 payload, independent of encoder startup.
     silence_frame = bytes.fromhex("55 2d 16 e3 0b 2c c3 42 18 20 40 11")
-    assert silence[-12:] == silence_frame
+    assert all(silence[i:i + 12] != silence_frame for i in range(0, len(silence), 12))
+    quiet_wav = success(decode, silence)
+    check_wav(quiet_wav, frames + 1)
+    assert peak(quiet_wav) <= 64
+    # The example decoder writes the b0=127/tone-index=128 frame earlier encoders sent as exact silence
+    # (the library itself plays comfort noise for it).
     silent_wav = success(decode, silence_frame * (frames + 1))
     check_wav(silent_wav, frames + 1)
     assert not any(silent_wav[44:])
@@ -114,8 +123,8 @@ def verify(encode, decode):
     assert len(flushed) == len(encoded) and flushed[-12:] != silence[-12:]
     flushed_wav = success(decode, flushed)
     check_wav(flushed_wav, frames + 1)
-    assert any(flushed_wav[-320:])
-    print("PASS exact silence mute and last-32-sample burst: non-silent flush frame")
+    assert peak(flushed_wav, 160 * frames) > 200  # quiet frames stay within 64
+    print("PASS silent input as quiet voice frames, silence-frame mute, last-32-sample burst in the flush frame")
 
     mismatched = invoke(decode, b"\x1a\r\n" + encoded[3:])
     assert mismatched.returncode == 0

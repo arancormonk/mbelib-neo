@@ -159,8 +159,7 @@ mbe_analysis_reset(struct mbe_analysis_state* state) {
 }
 
 void
-mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME],
-                  float filtered[MBE_ANALYSIS_FRAME]) {
+mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME]) {
     memmove(state->buf, state->buf + MBE_ANALYSIS_FRAME, MBE_ANALYSIS_HISTORY * sizeof(float));
     float* frame = state->buf + MBE_ANALYSIS_HISTORY;
     for (int i = 0; i < MBE_ANALYSIS_FRAME; ++i) {
@@ -169,7 +168,6 @@ mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYS
         state->hp_in = input[i];
         state->hp_out = y;
         frame[i] = y;
-        filtered[i] = y;
     }
 }
 
@@ -554,12 +552,10 @@ harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp
     }
 }
 
-/* eqs (38)-(42), with energies scaled to the level the voicing thresholds
- * assume (level_gain is the caller's input gain). */
+/* eqs (38)-(42), with energies on the 16-bit input scale. */
 static float
-energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp,
-              float level_gain) {
-    const float norm = (level_gain * level_gain) / (t->w_r_sum * t->w_r_sum);
+energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp) {
+    const float norm = 1.0f / (t->w_r_sum * t->w_r_sum);
     float lf = 0.0f;
     float hf = 0.0f;
     for (int m = 0; m <= ANALYSIS_BINS; ++m) {
@@ -586,7 +582,7 @@ energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s,
 
 int
 mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis_state* state, mbe_fft_plan* fft,
-                   mbe_acf_plan* acf, float level_gain, struct mbe_analysis_result* result) {
+                   mbe_acf_plan* acf, struct mbe_analysis_result* result) {
     if (tables == NULL || state == NULL || fft == NULL || acf == NULL || result == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
@@ -615,7 +611,7 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     result->f0 = 1.0f / pitch;
     result->pitch_error = work.error[initial];
     harmonic_measures(tables, &sp, result);
-    result->energy_factor = energy_factor(tables, state, &sp, level_gain);
+    result->energy_factor = energy_factor(tables, state, &sp);
 
     state->pitch_prev[1] = state->pitch_prev[0];
     state->pitch_prev[0] = initial_pitch;
@@ -643,17 +639,7 @@ mbe_analysis_column_threshold(const struct mbe_analysis_state* state, const stru
 }
 
 void
-mbe_analysis_commit(struct mbe_analysis_state* state, const unsigned char columns[MBE_ANALYSIS_COLUMNS],
-                    int voice_frame) {
-    if (!voice_frame) {
-        state->pitch_prev[0] = 100.0f;
-        state->pitch_prev[1] = 100.0f;
-        state->error_prev[0] = 0.0f;
-        state->error_prev[1] = 0.0f;
-        state->trusted = 0;
-        memset(state->columns_prev, 0, sizeof(state->columns_prev));
-        return;
-    }
+mbe_analysis_commit(struct mbe_analysis_state* state, const unsigned char columns[MBE_ANALYSIS_COLUMNS]) {
     if (columns != NULL) {
         memcpy(state->columns_prev, columns, sizeof(state->columns_prev));
     }

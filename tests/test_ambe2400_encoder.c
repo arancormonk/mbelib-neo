@@ -360,22 +360,6 @@ gen_signal(short* pcm, int n) {
     }
 }
 
-/** Model equality (w0, L, K, gamma, Vl, Ml, log2Ml over 0..56), compared bitwise. */
-static int
-ambe_model_equal(const mbe_parms* a, const mbe_parms* b) {
-    if (!float_bits_equal(a->w0, b->w0) || a->L != b->L || a->K != b->K || !float_bits_equal(a->gamma, b->gamma)) {
-        return 0;
-    }
-    for (int l = 0; l <= 56; l++) {
-        if (a->Vl[l] != b->Vl[l] || !float_bits_equal(a->Ml[l], b->Ml[l])
-            || !float_bits_equal(a->log2Ml[l], b->log2Ml[l])) {
-            return 0;
-        }
-    }
-    /* The initial model keeps every harmonic below Nyquist. */
-    return (float)a->L * a->w0 < 3.14159265f;
-}
-
 static int
 test_state_parity(mbe_ambe2400_encoder* enc) {
     mbe_ambe2400EncoderReset(enc);
@@ -390,10 +374,10 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     mbe_initMbeParms(&e_cur, &e_prev, &e_enh);
     mbe_initMbeParms(&d_cur, &d_prev, &d_enh);
 
-    int bad_frames = 0, silence = 0, voice = 0, first_bad = -1;
+    int bad_frames = 0, voice = 0, first_bad = -1;
     float worst = 0;
     int worst_frame = -1, worst_l = -1;
-    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0, reset_mism = 0;
+    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0;
     for (int f = 0; f < FRAMES; f++) {
         char d[49];
         unsigned char saved_prev[sizeof(e_prev)];
@@ -404,81 +388,65 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
         if (memcmp(saved_prev, after_prev, sizeof(e_prev)) != 0) {
             return 1;
         }
-        if (r < 0) {
-            printf("  encode error %d at frame %d\n", r, f);
+        if (r != 0) {
+            printf("  encode returned %d at frame %d\n", r, f);
             return 1;
         }
         int dr = mbe_decodeAmbe2400Parms(d, &d_cur, &d_prev);
-        if (r == 1) {
-            silence++;
-            if (dr != 3) {
-                printf("  frame %d: encoder said silence but decoder returned %d\n", f, dr);
-                bad_frames++;
-            }
-            /* The process path resets to the initial AMBE model on silence and
-             * the encoder mirrors that reset: the two model states must match. */
-            mbe_initAmbeParms_common(&d_cur, &d_prev, &d_enh);
-            if (!ambe_model_equal(&d_prev, &e_cur)) {
-                printf("  frame %d: decoder silence reset differs from encoder state\n", f);
-                reset_mism++;
-                bad_frames++;
-            }
-        } else {
-            voice++;
-            if (dr != 0) {
-                printf("  frame %d: decoder returned %d for a voice frame\n", f, dr);
-                bad_frames++;
-            }
-            int frame_bad = 0;
-            unsigned char decoder_w0[sizeof(d_cur.w0)], encoder_w0[sizeof(e_cur.w0)];
-            memcpy(decoder_w0, &d_cur.w0, sizeof(decoder_w0));
-            memcpy(encoder_w0, &e_cur.w0, sizeof(encoder_w0));
-            if (memcmp(decoder_w0, encoder_w0, sizeof(decoder_w0)) != 0) {
-                w0_mism++;
-                frame_bad = 1;
-            }
-            if (d_cur.L != e_cur.L) {
-                L_mism++;
-                frame_bad = 1;
-            }
-            if (!float_bits_equal(d_cur.gamma, e_cur.gamma)) {
-                gamma_mism++;
-                frame_bad = 1;
-            }
-            for (int l = 1; l <= d_cur.L && l <= 56; l++) {
-                if (d_cur.Vl[l] != e_cur.Vl[l]) {
-                    Vl_mism++;
-                    frame_bad = 1;
-                }
-                float dl = fabsf(d_cur.log2Ml[l] - e_cur.log2Ml[l]);
-                if (dl > worst) {
-                    worst = dl;
-                    worst_frame = f;
-                    worst_l = l;
-                }
-                if (!float_bits_equal(d_cur.log2Ml[l], e_cur.log2Ml[l])) {
-                    log2_mism++;
-                    frame_bad = 1;
-                }
-                if (!float_bits_equal(d_cur.Ml[l], e_cur.Ml[l])) {
-                    Ml_mism++;
-                    frame_bad = 1;
-                }
-            }
-            if (frame_bad) {
-                bad_frames++;
-                if (first_bad < 0) {
-                    first_bad = f;
-                }
-            }
-            mbe_moveMbeParms(&d_cur, &d_prev);
+        voice++;
+        if (dr != 0) {
+            printf("  frame %d: decoder returned %d for a voice frame\n", f, dr);
+            bad_frames++;
         }
+        int frame_bad = 0;
+        unsigned char decoder_w0[sizeof(d_cur.w0)], encoder_w0[sizeof(e_cur.w0)];
+        memcpy(decoder_w0, &d_cur.w0, sizeof(decoder_w0));
+        memcpy(encoder_w0, &e_cur.w0, sizeof(encoder_w0));
+        if (memcmp(decoder_w0, encoder_w0, sizeof(decoder_w0)) != 0) {
+            w0_mism++;
+            frame_bad = 1;
+        }
+        if (d_cur.L != e_cur.L) {
+            L_mism++;
+            frame_bad = 1;
+        }
+        if (!float_bits_equal(d_cur.gamma, e_cur.gamma)) {
+            gamma_mism++;
+            frame_bad = 1;
+        }
+        for (int l = 1; l <= d_cur.L && l <= 56; l++) {
+            if (d_cur.Vl[l] != e_cur.Vl[l]) {
+                Vl_mism++;
+                frame_bad = 1;
+            }
+            float dl = fabsf(d_cur.log2Ml[l] - e_cur.log2Ml[l]);
+            if (dl > worst) {
+                worst = dl;
+                worst_frame = f;
+                worst_l = l;
+            }
+            if (!float_bits_equal(d_cur.log2Ml[l], e_cur.log2Ml[l])) {
+                log2_mism++;
+                frame_bad = 1;
+            }
+            if (!float_bits_equal(d_cur.Ml[l], e_cur.Ml[l])) {
+                Ml_mism++;
+                frame_bad = 1;
+            }
+        }
+        if (frame_bad) {
+            bad_frames++;
+            if (first_bad < 0) {
+                first_bad = f;
+            }
+        }
+        mbe_moveMbeParms(&d_cur, &d_prev);
         mbe_moveMbeParms(&e_cur, &e_prev);
     }
-    printf("encoder/decoder state parity over %d frames (%d voice, %d silence):\n", FRAMES, voice, silence);
+    printf("encoder/decoder state parity over %d frames (%d voice):\n", FRAMES, voice);
     printf("  frames with any mismatch: %d (first at %d)\n", bad_frames, first_bad);
     printf("  L mismatches: %d, gamma mismatches: %d, Vl mismatches: %d\n", L_mism, gamma_mism, Vl_mism);
-    printf("  bitwise w0 mismatches: %d, silence reset mismatches: %d\n", w0_mism, reset_mism);
+    printf("  bitwise w0 mismatches: %d\n", w0_mism);
     printf("  bitwise log2Ml mismatches: %d, bitwise Ml mismatches: %d\n", log2_mism, Ml_mism);
     printf("  worst |log2Ml| diff: %g (frame %d, l=%d)\n", worst, worst_frame, worst_l);
     return bad_frames ? 1 : 0;
@@ -711,7 +679,7 @@ test_pitch_endpoint(mbe_ambe2400_encoder* enc, int period, int expected_b0) {
     char d[49];
     float pcm[160];
     mbe_initMbeParms(&c, &p, &h);
-    /* Let the AGC converge so period 20 exposes the old interior-minimum fallback. */
+    /* A long steady run, so period 20 exposes the old interior-minimum fallback. */
     for (int frame = 0; frame < 200; frame++) {
         for (int i = 0; i < 160; i++) {
             int phase = (frame * 160 + i) % period;
@@ -986,8 +954,106 @@ test_pitch_cases(mbe_ambe2400_encoder* enc) {
     return 0;
 }
 
+/* Level of a steady 140 Hz voice, amplitude * sum sin(h x) / h over the given
+ * number of harmonics, encoded and then decoded by the process path, in dB re
+ * an RMS of 32768 on the int16 scale (float output is int16 / 7). The first 20
+ * frames are skipped. */
+static double
+decoded_level_db(mbe_ambe2400_encoder* enc, double amplitude, int harmonics) {
+    mbe_ambe2400EncoderReset(enc);
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    double phase = 0.0, sum = 0.0;
+    int n = 0;
+    for (int frame = 0; frame < 80; frame++) {
+        float pcm[160], out[160];
+        char bits[49];
+        for (int i = 0; i < 160; i++) {
+            phase += 2.0 * M_PI * 140.0 / 8000.0;
+            double v = 0.0;
+            for (int h = 1; h <= harmonics; h++) {
+                v += sin(h * phase) / h;
+            }
+            pcm[i] = (float)(amplitude * v);
+        }
+        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &ec, &ep) != 0
+            || mbe_processAmbe2400Dataf(out, NULL, bits, &dc, &dp, &dh) < 0) {
+            return 1e9;
+        }
+        mbe_moveMbeParms(&ec, &ep);
+        for (int i = 0; frame >= 20 && i < 160; i++) {
+            double x = 7.0 * (double)out[i];
+            sum += x * x;
+            n++;
+        }
+    }
+    return 10.0 * log10((sum / n) + 1e-30) - (20.0 * log10(32768.0));
+}
+
+/* The encoder keeps the input level, as DVSI's does: the decoded level follows
+ * the input down 20 and 40 dB, and a -21 dBFS voice decodes near its own level. */
+static int
+test_level_follows_input(mbe_ambe2400_encoder* enc) {
+    const double input_db = 20.0 * log10(0.1 * sqrt(1.5962 / 2.0)); /* RMS of 0.1 sum sin(h x)/h, h 1..20 */
+    double loud = decoded_level_db(enc, 0.1, 20);
+    double quiet = decoded_level_db(enc, 0.01, 20);
+    double faint = decoded_level_db(enc, 0.001, 20);
+    printf("level: input %.1f dB decodes at %.1f, -20 dB at %.1f, -40 dB at %.1f\n", input_db, loud, quiet - loud,
+           faint - loud);
+    return fabs(loud - input_db) > 2.0 || fabs((quiet - loud) + 20.0) > 1.0 || fabs((faint - loud) + 40.0) > 2.0;
+}
+
+/* A quiet pure tone has a far lower mean log magnitude than the lowest gain
+ * the codec can send. The envelope is flattened just enough that the frame
+ * still decodes at the input level instead of putting the excess in the peak. */
+static int
+test_quiet_tone_level(mbe_ambe2400_encoder* enc) {
+    int fails = 0;
+    const double amplitudes[] = {0.03, 0.003, 0.0003};
+    for (size_t k = 0; k < sizeof(amplitudes) / sizeof(amplitudes[0]); k++) {
+        double input_db = 20.0 * log10(amplitudes[k] / sqrt(2.0));
+        double decoded = decoded_level_db(enc, amplitudes[k], 1);
+        printf("quiet tone: %.1f dBFS decodes at %.1f\n", input_db, decoded);
+        fails += fabs(decoded - input_db) > 3.0;
+    }
+    return fails != 0;
+}
+
+/* Quiet and silent input is coded as voice frames, as DVSI's encoder codes it,
+ * never as tone or silence frames, and decodes near silence. */
+static int
+test_quiet_input(mbe_ambe2400_encoder* enc) {
+    mbe_ambe2400EncoderReset(enc);
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    double peak = 0.0;
+    for (int frame = 0; frame < 60; frame++) {
+        float pcm[160], out[160];
+        char bits[49];
+        for (int i = 0; i < 160; i++) {
+            pcm[i] = frame < 30 ? 0.0f : 3e-4f * (float)(((rnd() & 0xffff) / 32768.0) - 1.0); /* -70 dBFS */
+        }
+        mbe_process_result result;
+        mbe_initProcessResult(&result);
+        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &ec, &ep) != 0
+            || mbe_processAmbe2400Dataf(out, &result, bits, &dc, &dp, &dh) < 0
+            || (result.flags & MBE_PROCESS_FLAG_TONE) != 0) {
+            printf("quiet input: frame %d was not coded as voice\n", frame);
+            return 1;
+        }
+        mbe_moveMbeParms(&ec, &ep);
+        for (int i = 0; i < 160; i++) {
+            peak = fmax(peak, fabs(7.0 * (double)out[i]));
+        }
+    }
+    printf("quiet input: voice frames, decoded peak %.1f\n", peak);
+    return peak > 64.0;
+}
+
 /* Compare interleaved streams with standalone replays, then replay after reset.
- * The sequence exercises pitch, voicing, AGC, PCM history and the silence gate. */
+ * The sequence exercises pitch, voicing, PCM history and silent input. */
 static int
 test_context_stream(mbe_ambe2400_encoder* stream, mbe_ambe2400_encoder* neighbor) {
     mbe_parms cur, prev, enhanced, other_cur, other_prev, other_enhanced;
@@ -1067,6 +1133,9 @@ main(void) {
     fails += test_mixed_bands(enc);
     fails += test_pitch_cases(enc);
     fails += test_contexts(enc);
+    fails += test_level_follows_input(enc);
+    fails += test_quiet_tone_level(enc);
+    fails += test_quiet_input(enc);
     mbe_ambe2400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

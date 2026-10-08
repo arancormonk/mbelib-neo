@@ -196,7 +196,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 
 ### Encoder Workflow
 
-- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail. An input AGC normalizes the talker's level over about a second, adapting on voiced frames only.
+- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence holds with both the `mbe_processAmbe2400*` path and a bare `mbe_decodeAmbe2400Parms()` chain. The analysis delay is about 10 ms; feed one final zero frame to flush the tail. As with DVSI's encoder, every frame is a voice frame (quiet and silent input is coded as low-level voice) and the decoded level follows the input level; there is no AGC.
 
 ### Stateful Decode Workflow
 
@@ -297,7 +297,7 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
   - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
   - **Recovery after mutes and tones**: a mute or a tone frame also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping the speech from before it, and a repeat right after either replays silence. The spec doesn't define the synthesis state across these frames.
 
-- **D-STAR tones**: single tones 5–122 as AMBE+2, DTMF 128–143 (128 + 4 × column + row) and call-progress tones 144–147, at the level the 8-bit tone volume gives on DVSI's decoder. The zero-volume frame this library's encoder sends for silence still decodes as silence and resets both sides.
+- **D-STAR tones**: single tones 5–122 as AMBE+2, DTMF 128–143 (128 + 4 × column + row) and call-progress tones 144–147, at the level the 8-bit tone volume gives on DVSI's decoder. The zero-volume frame (b0 127, tone index 128) that earlier versions of this library's encoder sent for silence plays comfort noise and resets the decoder.
 
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 

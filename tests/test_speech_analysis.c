@@ -125,10 +125,9 @@ test_harmonic_fit(mbe_fft_plan* fft, mbe_acf_plan* acf) {
         mbe_analysis_reset(&state);
         for (int f = 0; f < 8; f++) {
             float in[MBE_ANALYSIS_FRAME];
-            float filtered[MBE_ANALYSIS_FRAME];
             synthesize(&s, in);
-            mbe_analysis_push(&state, in, filtered);
-            assert(mbe_analysis_frame(&tables, &state, fft, acf, 1.0f, &r) == 0);
+            mbe_analysis_push(&state, in);
+            assert(mbe_analysis_frame(&tables, &state, fft, acf, &r) == 0);
         }
         double period = 8000.0 / s.f0;
         assert(near(1.0 / r.f0, period, 0.3));
@@ -154,13 +153,12 @@ test_noise(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     mbe_analysis_reset(&state);
     for (int f = 0; f < 300; f++) {
         float in[MBE_ANALYSIS_FRAME];
-        float filtered[MBE_ANALYSIS_FRAME];
         struct mbe_analysis_result r;
         for (int i = 0; i < MBE_ANALYSIS_FRAME; i++) {
             in[i] = (float)(2000.0 * gauss());
         }
-        mbe_analysis_push(&state, in, filtered);
-        assert(mbe_analysis_frame(&tables, &state, fft, acf, 1.0f, &r) == 0);
+        mbe_analysis_push(&state, in);
+        assert(mbe_analysis_frame(&tables, &state, fft, acf, &r) == 0);
         if (f < 4) {
             continue;
         }
@@ -216,16 +214,11 @@ test_reset_and_commit(void) {
     mbe_analysis_reset(&state);
     assert(near(state.pitch_prev[0], 100.0, 0.0) && near(state.pitch_prev[1], 100.0, 0.0));
     assert(state.trusted == 0 && near(state.xi_max, 20000.0, 0.0));
-    mbe_analysis_commit(&state, voiced, 1);
+    mbe_analysis_commit(&state, voiced);
     assert(memcmp(state.columns_prev, voiced, sizeof(voiced)) == 0);
-    state.trusted = 1;
-    state.pitch_prev[0] = 40.0f;
-    mbe_analysis_commit(&state, NULL, 0);
-    assert(state.trusted == 0 && near(state.pitch_prev[0], 100.0, 0.0));
-    for (int k = 0; k < MBE_ANALYSIS_COLUMNS; k++) {
-        assert(state.columns_prev[k] == 0);
-    }
-    assert(mbe_analysis_frame(NULL, &state, NULL, NULL, 1.0f, NULL) == MBE_STATUS_INVALID_ARGUMENT);
+    mbe_analysis_commit(&state, NULL);
+    assert(memcmp(state.columns_prev, voiced, sizeof(voiced)) == 0);
+    assert(mbe_analysis_frame(NULL, &state, NULL, NULL, NULL) == MBE_STATUS_INVALID_ARGUMENT);
 }
 
 /* FFT autocorrelation matches the direct sum for every lag. */

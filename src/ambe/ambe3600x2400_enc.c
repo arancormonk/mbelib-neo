@@ -37,8 +37,10 @@
  *    QUANTIZED values, mirroring the decoder state so the encoder and
  *    decoder never drift apart.
  *
- * Tone (DTMF) encoding is not supported; silent input produces the
- * standard AMBE silence frame (b0 == 127, tone index 128).
+ * Every frame is a voice frame, as from DVSI's encoder: quiet and silent
+ * input is coded as low-level voice rather than as a silence frame, and the
+ * decoded level follows the input level (there is no AGC). Tone (DTMF)
+ * encoding is not supported.
  */
 
 #include <math.h>
@@ -49,37 +51,26 @@
 
 #include "ambe3600x2400_const.h"
 #include "ambe3600x2400_internal.h"
-#include "ambe_common.h"
 #include "mbe_ecc.h"
 #include "mbe_speech_analysis.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
-#define AMBE2400_ENC_SAMPLES     160
-#define AMBE2400_ENC_SILENCE_RMS 0.0015f
-#define AMBE2400_ENC_PCM_SCALE   32768.0f /* analysis runs on the 16-bit scale */
+#define AMBE2400_ENC_SAMPLES   160
+#define AMBE2400_ENC_PCM_SCALE 32768.0f /* analysis runs on the 16-bit scale */
 
 /*
- * Level: an input AGC normalizes speech toward AMBE2400_ENC_AGC_TARGET RMS,
- * and AMBE2400_ENC_MAG_SCALE maps the analysis magnitudes (A/2 for a sinusoid
- * of amplitude A on the 16-bit scale) into the codec's log2 amplitude domain.
- * The scale is set so that normally recorded speech (DVSI's test inputs,
- * -22 to -25 dBFS active RMS) decodes at its input level through decoders
- * that match DVSI's AMBE-3000 output, as DVSI's own encoder does.
- *
- * The AGC follows the talker's level over about a second (50 voiced frames).
- * A faster AGC (0.9, ~200 ms) flattened syllable dynamics: envelope
- * correlation with the input fell from 0.89 to 0.81 and fricatives came out
- * about 2.5 dB too bright relative to vowels. Tracking every non-silent frame
- * also pumped background noise toward speech level (DVSI's speech-in-noise
- * vector: envelope correlation 0.71 against DVSI's 0.90).
+ * Level: AMBE2400_ENC_MAG_SCALE maps the analysis magnitudes (A/2 for a
+ * sinusoid of amplitude A on the 16-bit scale) into the codec's log2 amplitude
+ * domain. DVSI's encoder keeps the input level: across its D-STAR test vectors
+ * (-2 to -63 dBFS active level) its bits decode at the input level within
+ * about 1 dB. The scale is the median, over the development vectors, of the
+ * level that puts our encoding at DVSI's encoding of the same input, both
+ * decoded by this library; the validation vectors then sit within about
+ * 1 dB of DVSI's.
  */
-#define AMBE2400_ENC_MAG_SCALE   0.765f
-#define AMBE2400_ENC_AGC_TARGET  0.08f
-#define AMBE2400_ENC_AGC_ALPHA   0.98f
-#define AMBE2400_ENC_AGC_MIN     0.1f
-#define AMBE2400_ENC_AGC_MAX     10.0f
+#define AMBE2400_ENC_MAG_SCALE 1.02f
 
 /*
  * Caller-owned encoder state: one context per stream. The analysis tables
@@ -87,10 +78,6 @@
  */
 struct mbe_ambe2400_encoder {
     struct mbe_analysis_state analysis;
-    float agc_gain;
-    float agc_rms;
-    float hist_gain;
-    int silence_run;
     mbe_fft_plan* fft;
     mbe_acf_plan* acf;
     struct mbe_analysis_tables tables;
@@ -102,10 +89,6 @@ mbe_ambe2400EncoderReset(mbe_ambe2400_encoder* enc) {
         return;
     }
     mbe_analysis_reset(&enc->analysis);
-    enc->agc_gain = 1.0f;
-    enc->agc_rms = AMBE2400_ENC_AGC_TARGET;
-    enc->hist_gain = 1.0f;
-    enc->silence_run = 0;
 }
 
 mbe_ambe2400_encoder*
@@ -220,13 +203,54 @@ ambe2400_enc_voicing(struct ambe2400_enc_frame* q, const struct mbe_analysis_sta
 }
 
 static void
-ambe2400_enc_magnitudes(struct ambe2400_enc_frame* q, const struct mbe_analysis_result* res, float gain) {
+ambe2400_enc_magnitudes(struct ambe2400_enc_frame* q, const struct mbe_analysis_result* res) {
     q->mean_a = 0.0f;
     for (int l = 1; l <= q->L; l++) {
-        q->a[l] = log2f((res->magnitude[l] * AMBE2400_ENC_MAG_SCALE * gain) + 1e-12f);
+        q->a[l] = log2f((res->magnitude[l] * AMBE2400_ENC_MAG_SCALE) + 1e-12f);
         q->mean_a += q->a[l];
     }
     q->mean_a /= (float)q->L;
+}
+
+/* Energy of the envelope mean + s * (a - mean_a), in the log2 amplitude domain. */
+static float
+ambe2400_enc_envelope_energy(const struct ambe2400_enc_frame* q, float mean, float s) {
+    float energy = 0.0f;
+    for (int l = 1; l <= q->L; l++) {
+        energy += exp2f(2.0f * (mean + (s * (q->a[l] - q->mean_a))));
+    }
+    return energy;
+}
+
+/*
+ * The decoder sets the mean log2 magnitude to the transmitted gain, which
+ * cannot go below AmbePlusDg[0]. A frame whose own mean lies below that (a
+ * quiet tone: one strong harmonic over empty bands) would decode with the
+ * excess pushed into its peak. Scale the deviations from the mean toward a
+ * flat envelope until the energy at the floor gain matches the frame's; a
+ * flat envelope is the quietest the floor gain can play.
+ */
+static void
+ambe2400_enc_fit_floor_gain(struct ambe2400_enc_frame* q) {
+    const float floor_mean = q->gamma_q - (0.5f * log2f((float)q->L));
+    const float target = ambe2400_enc_envelope_energy(q, q->mean_a, 1.0f);
+    float lo = 0.0f;
+    float hi = 1.0f;
+    if (ambe2400_enc_envelope_energy(q, floor_mean, 0.0f) >= target) {
+        hi = 0.0f;
+    }
+    for (int i = 0; i < 30 && hi > 0.0f; i++) {
+        float mid = 0.5f * (lo + hi);
+        if (ambe2400_enc_envelope_energy(q, floor_mean, mid) > target) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    for (int l = 1; l <= q->L; l++) {
+        q->a[l] = floor_mean + (hi * (q->a[l] - q->mean_a));
+    }
+    q->mean_a = floor_mean;
 }
 
 static void
@@ -247,6 +271,9 @@ ambe2400_enc_quantize_gain(struct ambe2400_enc_frame* q, const mbe_parms* prev_m
         }
         q->b[2] = best;
         q->gamma_q = AmbePlusDg[q->b[2]] + (0.5f * prev_mp->gamma);
+        if (target < AmbePlusDg[0]) {
+            ambe2400_enc_fit_floor_gain(q);
+        }
     }
 }
 
@@ -498,11 +525,8 @@ ambe2400_enc_fill_parms(const struct ambe2400_enc_frame* q, mbe_parms* cur_mp) {
  * pack 49 bits. */
 static int
 ambe2400_encode_voice(mbe_ambe2400_encoder* enc, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
-    /* The analysis window is centred on the frame boundary; take the AGC gain
-     * halfway between the two frames it spans. */
-    const float gain = sqrtf(enc->hist_gain * enc->agc_gain);
     struct mbe_analysis_result res;
-    int status = mbe_analysis_frame(&enc->tables, &enc->analysis, enc->fft, enc->acf, gain, &res);
+    int status = mbe_analysis_frame(&enc->tables, &enc->analysis, enc->fft, enc->acf, &res);
     if (status < 0) {
         return status;
     }
@@ -511,7 +535,7 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, char ambe_d[49], mbe_parms* cur
     q.cache = mbe_ambe2400_get_dct_cache();
     ambe2400_enc_quantize_pitch(&q, res.f0);
     ambe2400_enc_voicing(&q, &enc->analysis, &res, columns);
-    ambe2400_enc_magnitudes(&q, &res, gain);
+    ambe2400_enc_magnitudes(&q, &res);
     ambe2400_enc_quantize_gain(&q, prev_mp);
     ambe2400_enc_prediction(&q, prev_mp);
     ambe2400_enc_block_dct(&q);
@@ -525,74 +549,8 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, char ambe_d[49], mbe_parms* cur
     /* Share the decoder update without changing the caller's predictor. */
     mbe_parms prediction_prev = *prev_mp;
     mbe_ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
-    mbe_analysis_commit(&enc->analysis, columns, 1);
+    mbe_analysis_commit(&enc->analysis, columns);
     return 0;
-}
-
-/*
- * Silence frame: b0 = 127, tone index = 128 (the standard AMBE silence
- * pattern). The decoder resets its parameter state on this frame, so the
- * encoder resets its prediction state as well.
- */
-static void
-ambe2400_encode_silence(char ambe_d[49], mbe_parms* cur_mp) {
-    memset(ambe_d, 0, 49);
-    for (int i = 0; i < 6; i++) {
-        ambe_d[i] = 1;
-    }
-    ambe_d[48] = 1;
-
-    /* tone index 128: t7t6t5 = 100, low bits 0 */
-    ambe_d[6] = 0;
-    ambe_d[7] = 0;
-    ambe_d[8] = 0;
-    ambe_d[9] = 0;
-    ambe_d[42] = 0;
-    ambe_d[43] = 0;
-    ambe_d[10] = 0;
-    ambe_d[11] = 0;
-
-    mbe_setAmbeDefaultModel_common(cur_mp);
-    cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-}
-
-static bool
-ambe2400_enc_silence_gate(mbe_ambe2400_encoder* enc, float rms) {
-    /* Silence gate with hang-over: a frame is only "silence" after a few
-     * consecutive quiet frames (squelch close delay); speech opens the gate
-     * immediately. This avoids the squelch-like flapping between silence and
-     * speech on boundary frames. Noise within speech is left to caller-side
-     * preprocessing; the gate only decides silence frames. */
-    bool is_silence = false;
-    if (rms < AMBE2400_ENC_SILENCE_RMS) {
-        if (enc->silence_run < 5) {
-            enc->silence_run++;
-        }
-        is_silence = (enc->silence_run >= 5);
-    } else {
-        enc->silence_run = 0;
-    }
-
-    return is_silence;
-}
-
-static void
-ambe2400_enc_update_agc(mbe_ambe2400_encoder* enc, float rms, bool periodic) {
-    /* Input AGC: follow the talker's level on periodic (voiced) frames only and
-     * normalize to the nominal target. Background noise and pauses hold the
-     * gain, so noise is neither pumped up toward speech level nor allowed to
-     * drag the level estimate down. The gain scales the analysis magnitudes,
-     * so the analysis window itself is never reshaped by gain changes. */
-    if (periodic && rms > 1e-6f) {
-        enc->agc_rms = (AMBE2400_ENC_AGC_ALPHA * enc->agc_rms) + ((1.0f - AMBE2400_ENC_AGC_ALPHA) * rms);
-    }
-    enc->agc_gain = AMBE2400_ENC_AGC_TARGET / (enc->agc_rms + 1e-9f);
-    if (enc->agc_gain < AMBE2400_ENC_AGC_MIN) {
-        enc->agc_gain = AMBE2400_ENC_AGC_MIN;
-    }
-    if (enc->agc_gain > AMBE2400_ENC_AGC_MAX) {
-        enc->agc_gain = AMBE2400_ENC_AGC_MAX;
-    }
 }
 
 /**
@@ -604,12 +562,11 @@ ambe2400_enc_update_agc(mbe_ambe2400_encoder* enc, float rms, bool periodic) {
  * @param ambe_d  Output parameter bits (49).
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous frame state (see mbe_initMbeParms()).
- * @return 0 for a voice frame, 1 for a silence frame, negative on error
- *         (the context is unchanged).
+ * @return 0, or negative on error (the context is unchanged).
  */
 /* Finite and within +-2^20 (0x49800000), checked on the bit pattern so the
  * test survives fast-math. One bad sample would otherwise poison the DC
- * filter and AGC state for the rest of the stream. */
+ * filter and analysis history for the rest of the stream. */
 static bool
 ambe2400_enc_samples_valid(const float* samples) {
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
@@ -626,44 +583,18 @@ int
 mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
                         const mbe_parms* prev_mp) {
     float scaled[AMBE2400_ENC_SAMPLES];
-    float filtered[AMBE2400_ENC_SAMPLES];
-    float rms = 0.0f;
 
     if (enc == NULL || samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL
         || !ambe2400_enc_samples_valid(samples)) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
 
-    /* DC-filter every frame, silence included, so the history is continuous;
-     * level and silence decisions use the filtered signal, so a DC offset
-     * neither lowers the AGC gain nor keeps the silence gate open. */
+    /* DC-filter into the analysis history, then analyze and quantize. */
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
         scaled[i] = samples[i] * AMBE2400_ENC_PCM_SCALE;
     }
-    mbe_analysis_push(&enc->analysis, scaled, filtered);
-    for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
-        rms += filtered[i] * filtered[i];
-    }
-    rms = sqrtf(rms / (float)AMBE2400_ENC_SAMPLES) / AMBE2400_ENC_PCM_SCALE;
-
-    bool is_silence = ambe2400_enc_silence_gate(enc, rms);
-
-    if (is_silence) {
-        ambe2400_encode_silence(ambe_d, cur_mp);
-        mbe_analysis_commit(&enc->analysis, NULL, 0);
-    } else {
-        int ret = ambe2400_encode_voice(enc, ambe_d, cur_mp, prev_mp);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* This frame used the gain set so far; adapt for the next one. After a
-     * voice frame the analysis state says whether the frame was periodic. */
-    enc->hist_gain = enc->agc_gain;
-    ambe2400_enc_update_agc(enc, rms, !is_silence && enc->analysis.trusted);
-
-    return (int)is_silence;
+    mbe_analysis_push(&enc->analysis, scaled);
+    return ambe2400_encode_voice(enc, ambe_d, cur_mp, prev_mp);
 }
 
 /**
