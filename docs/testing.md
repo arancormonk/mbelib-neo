@@ -9,7 +9,8 @@ The CTest suite includes:
 
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
-- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread (`test_ambe2400_encoder`)
+- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors (`test_ambe2400_encoder`)
+- MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, and the voicing thresholds (`test_speech_analysis`)
 - Encoder context/FFT allocation failures clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
@@ -20,6 +21,8 @@ The CTest suite includes:
 - quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 - quality-tool CLI alignment, accepted/rejected frame widths, and private output
   permissions (`test_quality_tools`, with tools enabled and Python 3 available)
+- DVSI test-vector import: deinterleave bijection, TIA-102.BABA 7.5 code spacing,
+  fixture round trips and preserved channel bits (`test_quality_dvsi`)
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -277,8 +280,9 @@ Schema-2 metrics preserve the original supported formulas:
   maximum. `crest_ref_db`, `crest_dec_db`, and `crest_delta_db` are mean 20-ms
   peak/RMS values and decoded-minus-reference difference. `band_delta_db_*`
   measures active STFT power ratios in 0–500, 500–1000, 1000–2000, 2000–3000,
-  and 3000–4000 Hz. Without reference, decoded absolute `band_db_*` remains
-  available where supported.
+  and 3000–4000 Hz, plus an overlapping 3500–4000 Hz band that covers what
+  `lsd_db` (up to 3687.5 Hz) leaves out. Without reference, decoded absolute
+  `band_db_*` remains available where supported.
 - `join_dec_db`/`join_ref_db` compare squared across-join derivatives with the
   eight neighboring derivatives on the same reference mask and actual retained
   synthesis grid; `join_excess_db` is their difference. `boundary_index_db`
@@ -387,6 +391,121 @@ each `pass`, `fail`, or `not_established`, for every actual mode:
   is not established. Shared IMBE7100/7200 PCM does not inflate independent
   sample size. This is a small blinded engineering comparison, not an
   ITU-compliant MOS/MUSHRA study. Playback alone is not a judgment.
+
+### DVSI reference vectors
+
+DVSI publishes AMBE-3000 test vectors on
+<https://www.dvsinc.com/dlapps/appsoft.shtml>: input speech, DVSI-encoded bit
+streams and DVSI-decoded speech for D-STAR, P25 and AMBE+2 (rate 33), plus
+channel-error variants. They are the closest available stand-in for real
+hardware, and they let decoder output be compared with DVSI's own decoder on
+identical bits.
+
+The site grants no license to copy, modify, transfer or mirror its
+materials. Fetch the vectors only for local measurement. Never commit them,
+attach them to issues or pull requests, or use DVSI audio in published
+listening material. Only URLs, SHA-256 digests and aggregate numbers belong in
+this repository.
+
+```sh
+# about 223 MB of the 1.9 GB archive; a directory outside the checkout survives
+# rebuilds and can be shared by several checkouts
+python3 tools/quality/fetch_dvsi_vectors.py --out ../dvsi-vectors
+build/dev-debug/mbe_quality_reframe --codec ambe2400 \
+  --from-dvsi ../dvsi-vectors/tv-rc/dstar/dam.bit --out dam.frames
+```
+
+- The fetcher needs `curl`. It reads only the needed members of
+  `get-usb/tv-rc.zip` through HTTPS range requests. It verifies each CRC-32 and writes
+  `dvsi-manifest.json` with SHA-256 digests into the output directory
+  (default `build/quality/dvsi`).
+- `tv-rc/*.pcm` are the inputs (s16le, 8 kHz). Each mode directory holds
+  `X.bit` (DVSI encoder) and `X.pcm` (DVSI decoder). The fetcher takes the modes
+  this library decodes: `dstar`, `p25`, `p25_nofec`, `r33` and `r34`.
+  `cmprc.txt` records the rate words: D-STAR uses
+  `0x0130 0x0763 0x4000 0x0000 0x0000 0x0048`.
+- `tv-rc/<from>/<to>/` (only `alltone`, `dam` and `sine0_4k`) hold DVSI's rate
+  conversions between those modes, made with `-rc -rd <from> -re <to>`: DVSI's
+  decoded model of the `<from>` bits, re-quantized into `<to>`. They are lossy
+  probes of DVSI's model, not an exact readout of it.
+- `--from-dvsi` takes 9-byte D-STAR DV data (LSB first), 18-byte P25 frames, or
+  9-byte rate-33 frames (MSB first, DMR interleave). It writes Framef rows for
+  `mbe_quality_eval`. Bits are only deinterleaved, so the `_eN` channel-error
+  variants still exercise FEC and repeat handling. A truncated final frame is
+  rejected, and so are the 4-bit soft-decision `*_sd.bit` files.
+- Copy the inputs and DVSI's decoded files to `.raw` names before using them as
+  `--ref` or `--decoded` operands. The evaluator selects the format by
+  extension.
+
+### DVSI scoreboard
+
+`tools/quality/dvsi_scoreboard.py` runs every speech vector of the D-STAR, P25
+and rate-33 sets through the tools above and writes `scoreboard.json` and
+`scoreboard.md` (needs NumPy):
+
+```sh
+python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
+  --tools build/tools-debug --out build/quality/scoreboard/candidate \
+  --compare build/quality/scoreboard/baseline/scoreboard.json --gates pitch-law
+```
+
+- **Speech:** ours vs the input, DVSI's decoder vs the input, and ours vs
+  DVSI's decoder, with the `mbe_quality_eval` metrics above (absolute level and
+  RMS-matched spectra).
+- **Pitch:** a harmonic-peak f0 estimator measures our output, DVSI's output
+  and the input on stable voiced frames and reports each against the pitch our
+  decoder coded, by f0 band. A decoder that plays sharp or flat shows up as a
+  ratio away from 1.
+- **Encoder (D-STAR):** our encoding of the input against DVSI's encoding of
+  it, both decoded by this library: pitch error against the input, octave
+  errors, per-1 kHz-band voicing agreement and the speech metrics. It cannot
+  show how DVSI hardware decodes our bits.
+- **Partitions** are by utterance, so `dam`'s level, overload and car-noise
+  variants sit with `dam`. `development` and `validation` were both examined
+  during earlier changes; `final` vectors are scored once per change set
+  (`--partitions final`). Not scored as speech: `xfer`, the DTX and
+  channel-error variants and the synthetic pulse trains and sweeps. The
+  `tones` partition covers the DTMF, single, KNOX, alert and call-progress
+  vectors.
+- **Tones** are compared with one acoustic detector run on both outputs, on
+  windows where DVSI's output is steady: level, frequencies, balance, how
+  often both agree on the tone playing, and the fraction of windows playing a
+  different tone. Single tones must agree within 10 Hz (they are 31.25 Hz
+  apart); each dual-tone component within 25 Hz, since DVSI plays dual tones
+  up to 20 Hz off nominal and neighbouring DTMF frequencies are 73 Hz or more
+  apart.
+- `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
+  worst vector, and counts the baseline's speech vectors whose PCM changed
+  (a vector missing from the run counts as changed). `--gates` evaluates a gate set from
+  `tools/quality/dvsi_gates.json`, declared before the change it judges, and
+  exits non-zero when a gate fails.
+
+`mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
+`decoded` (the frame's own model from the public `mbe_decode*Parms` decoder,
+with its status), `history` (the prediction state after the frame) and `synth`
+(the enhanced model synthesized). Each holds `w0` (radians per sample), `L` and
+per-band `Vl`, `Ml` (linear amplitude as synthesized; for AMBE unvoiced bands
+it includes the unvoiced scale factor) and `log2Ml` (the codec's log2 spectral
+amplitude before that factor), plus `gamma`. Dumping does not change the PCM.
+
+### Encoder evaluation
+
+`mbe_quality_encode` (built with `MBELIB_BUILD_TOOLS=ON`) encodes 8 kHz s16le
+speech with the D-STAR encoder and writes the 49-bit rows `mbe_quality_eval`
+decodes, so encoder output is scored against the input with the same metrics
+as decoder output. Comparing with DVSI's own encoding of the same input:
+
+```sh
+build/dev-debug/mbe_quality_encode --codec ambe2400 --in dam.raw --out dam.rows
+build/dev-debug/mbe_quality_eval --codec ambe2400 --frames dam.rows --out ours.wav --ref dam.raw --json ours.json
+build/dev-debug/mbe_quality_reframe --codec ambe2400 --from-dvsi ../dvsi-vectors/tv-rc/dstar/dam.bit --out dvsi.frames
+build/dev-debug/mbe_quality_eval --codec ambe2400 --frames dvsi.frames --out dvsi.wav --ref dam.raw --json dvsi.json
+```
+
+Both bit streams then go through the same decoder, which itself matches DVSI's
+output on DVSI's bits, so the band, LSD and envelope figures compare the
+encoders. One zero flush frame (`--flush-frames`, default 1) covers the
+encoder's analysis delay.
 
 ### Attribution and limitations
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.2.0 LANGUAGES C)
+project(mbelib-neo VERSION 2.3.0 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -263,6 +263,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/core/mbelib.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
+    src/core/mbe_speech_analysis.c
     src/core/mbe_unvoiced_fft.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
@@ -821,6 +822,23 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_ecc COMMAND test_ecc)
 
+    add_executable(test_speech_analysis tests/test_speech_analysis.c)
+    # The analysis is private; link the static library for its symbols.
+    target_link_libraries(test_speech_analysis PRIVATE mbe-static)
+    target_include_directories(
+        test_speech_analysis
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_speech_analysis PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_speech_analysis BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_speech_analysis COMMAND test_speech_analysis)
+
     add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
     # The private Golay encoder is hidden in the shared library.
     target_link_libraries(test_ambe2400_encoder PRIVATE mbe-static)
@@ -957,6 +975,29 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_frame_paths COMMAND test_frame_paths)
 
+    add_executable(
+        test_quality_dvsi
+        tests/test_quality_dvsi.c
+        tools/quality/mbe_quality_dvsi.c
+        tools/quality/mbe_quality_frames.c
+        src/ecc/ecc_const.c
+    )
+    target_link_libraries(test_quality_dvsi PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    target_include_directories(
+        test_quality_dvsi
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+            "${PROJECT_SOURCE_DIR}/tools/quality"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_quality_dvsi PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_quality_dvsi BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_quality_dvsi COMMAND test_quality_dvsi)
+
     add_executable(test_input_validation tests/test_input_validation.c)
     target_link_libraries(test_input_validation PRIVATE ${MBELIB_EXEC_LINK_TGT})
     target_include_directories(
@@ -1016,6 +1057,23 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_ambe2450_frame_types COMMAND test_ambe2450_frame_types)
+
+    add_executable(test_tones tests/test_tones.c)
+    target_link_libraries(test_tones PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    target_include_directories(
+        test_tones
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(NOTONES)
+        target_compile_definitions(test_tones PRIVATE MBELIB_TEST_NOTONES=1)
+    endif()
+    if(_SAN_CFLAGS)
+        target_compile_options(test_tones PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_tones BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_tones COMMAND test_tones)
 
     add_executable(test_golden_pcm tests/test_golden_pcm.c)
     target_link_libraries(test_golden_pcm PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -1197,6 +1255,17 @@ if(MBELIB_BUILD_TESTS)
                         $<TARGET_FILE:mbe_quality_eval>
                         $<TARGET_FILE:mbe_quality_reframe>
                 )
+                add_test(
+                    NAME test_dvsi_scoreboard
+                    COMMAND
+                        ${Python3_EXECUTABLE}
+                        ${PROJECT_SOURCE_DIR}/tests/test_dvsi_scoreboard.py
+                )
+                # The pitch measurements need NumPy; without it the test reports a skip.
+                set_tests_properties(
+                    test_dvsi_scoreboard
+                    PROPERTIES SKIP_RETURN_CODE 77
+                )
                 # The A/B runner locks its run directory with fcntl, so it is POSIX-only, and
                 # uses assignment expressions, so it needs Python 3.8.
                 if(NOT WIN32 AND Python3_VERSION VERSION_GREATER_EQUAL 3.8)
@@ -1295,12 +1364,15 @@ if(MBELIB_BUILD_TESTS)
         test_api
         test_ecc
         test_ambe2400_encoder
+        test_speech_analysis
         test_noise_determinism
         test_params
         test_frame_paths
+        test_quality_dvsi
         test_input_validation
         test_floattoshort_parity
         test_ambe2450_frame_types
+        test_tones
         test_golden_pcm
         test_simd_arch_detection_x64
         test_simd_arch_detection_arm64ec
@@ -1400,6 +1472,7 @@ if(MBELIB_BUILD_TOOLS)
         tools/quality/mbe_quality_reframe.c
         tools/quality/mbe_quality_fs.c
         tools/quality/mbe_quality_frames.c
+        tools/quality/mbe_quality_dvsi.c
     )
     if(NOT WIN32)
         target_compile_definitions(
@@ -1421,15 +1494,40 @@ if(MBELIB_BUILD_TOOLS)
             PRIVATE _CRT_SECURE_NO_WARNINGS
         )
     endif()
+    add_executable(
+        mbe_quality_encode
+        tools/quality/mbe_quality_encode.c
+        tools/quality/mbe_quality_fs.c
+    )
+    if(NOT WIN32)
+        target_compile_definitions(mbe_quality_encode PRIVATE _XOPEN_SOURCE=700)
+    endif()
+    # Static: each binary measures the encoder it was built with.
+    target_link_libraries(mbe_quality_encode PRIVATE mbe-static)
+    _mbelib_apply_hardening(mbe_quality_encode)
+    target_include_directories(
+        mbe_quality_encode
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(MSVC)
+        target_compile_definitions(
+            mbe_quality_encode
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
         target_compile_options(mbe_quality_eval PRIVATE ${_SAN_CFLAGS})
         target_compile_options(mbe_quality_reframe PRIVATE ${_SAN_CFLAGS})
+        target_compile_options(mbe_quality_encode PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(mbe_quality_eval BEFORE PRIVATE ${_SAN_LDFLAGS})
         target_link_options(mbe_quality_reframe BEFORE PRIVATE ${_SAN_LDFLAGS})
+        target_link_options(mbe_quality_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     # Let the CodeQL extraction target compile the quality tools too.
     target_sources(
@@ -1437,7 +1535,9 @@ if(MBELIB_BUILD_TOOLS)
         PRIVATE
             tools/quality/mbe_quality_eval.c
             tools/quality/mbe_quality_reframe.c
+            tools/quality/mbe_quality_encode.c
             tools/quality/mbe_quality_frames.c
+            tools/quality/mbe_quality_dvsi.c
             tools/quality/mbe_quality_fs.c
     )
     target_include_directories(

@@ -27,15 +27,15 @@
     && !defined(_MSC_VER)
 #define GOLDEN_AMBE_STRICT 1
 #ifdef MBELIB_TEST_BUILD_SIMD
-#define GOLDEN_AMBE2450_F32 0xB026A344u
-#define GOLDEN_AMBE2450_S16 0x9F0FB174u
-#define GOLDEN_AMBE2400_F32 0x4F175D4Au
-#define GOLDEN_AMBE2400_S16 0xC4789A1Bu
+#define GOLDEN_AMBE2450_F32 0x089326EFu
+#define GOLDEN_AMBE2450_S16 0x880889FBu
+#define GOLDEN_AMBE2400_F32 0x8D9D7F97u
+#define GOLDEN_AMBE2400_S16 0xE9137886u
 #else
-#define GOLDEN_AMBE2450_F32 0x07279174u
-#define GOLDEN_AMBE2450_S16 0xE9B94DABu
-#define GOLDEN_AMBE2400_F32 0x45F5E353u
-#define GOLDEN_AMBE2400_S16 0xE545DCECu
+#define GOLDEN_AMBE2450_F32 0x87FC689Du
+#define GOLDEN_AMBE2450_S16 0x880889FBu
+#define GOLDEN_AMBE2400_F32 0xA9512D30u
+#define GOLDEN_AMBE2400_S16 0xF5210E3Fu
 #endif
 #else
 #define GOLDEN_AMBE_STRICT  0
@@ -108,13 +108,13 @@ main(void) {
     /* Regenerated harmonic phase, the shared spec-exact WOLA window, and an
      * in-band fixture (golden_fill_single_frame: L * w0 < pi). */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0x31A1D87Cu;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0x79039967u;
 #ifdef MBELIB_TEST_BUILD_SIMD
-    const uint32_t X86_F32_FNV1A_SIMD = 0x3C152227u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x011C2E78u;
 #endif
 #endif
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
-    const uint32_t X86_S16_FNV1A = 0x4E5E77DCu;
+    const uint32_t X86_S16_FNV1A = 0x0A60361Eu;
 #endif
 
     float out_f[160];

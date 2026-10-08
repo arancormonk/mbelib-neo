@@ -16,17 +16,23 @@
  *
  * Performs the inverse of mbe_decodeAmbe2400Parms():
  *
- *  - 20 ms of 8 kHz PCM is windowed and analysed (pitch, voicing,
- *    harmonic spectral amplitudes) to produce the same parameters the
- *    decoder consumes.
- *  - Every parameter is quantized against the exact tables the decoder
- *    dequantizes from (AmbePlusLtable/AmbePlusVuv/AmbePlusDg/
+ *  - Speech analysis (mbe_speech_analysis.c) follows the method of
+ *    ANSI/TIA-102.BABA chapter 5: pitch from the E(P) error function with
+ *    tracking and quarter-sample refinement, per-harmonic fit errors against
+ *    the window spectrum, and voicing-independent spectral magnitudes
+ *    (US 5,701,390).
+ *  - Voicing is decided per 500 Hz column as soft decisions against the
+ *    standard's frequency- and energy-dependent thresholds (US 8,595,002),
+ *    then reduced to the four 1 kHz bits D-STAR transmits by an
+ *    energy-weighted choice.
+ *  - Every parameter is quantized against the exact pitch law, harmonic
+ *    count and tables the decoder dequantizes with (AmbePlusVuv/AmbePlusDg/
  *    AmbePlusPRBA24/AmbePlusPRBA58/AmbePlusHOCb5..b8), so the
  *    reconstructed frame is bit-compatible with this library's
  *    mbe_decodeAmbe2400Parms()/mbe_processAmbe3600x2400*() path and follows
  *    the D-STAR AMBE bit layout (interleave, scrambler and Golay parity
- *    cross-checked against the MMDVM tables). Interoperability with DVSI
- *    hardware has not been verified.
+ *    cross-checked against the MMDVM tables). Reconstruction matches DVSI's
+ *    AMBE-3000 D-STAR test vectors; on-air interoperability is not verified.
  *  - The prediction state (log2Ml, gamma) is advanced with the
  *    QUANTIZED values, mirroring the decoder state so the encoder and
  *    decoder never drift apart.
@@ -37,6 +43,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,49 +51,48 @@
 #include "ambe3600x2400_internal.h"
 #include "ambe_common.h"
 #include "mbe_ecc.h"
+#include "mbe_speech_analysis.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
-#define AMBE2400_ENC_FFT_SIZE    256
 #define AMBE2400_ENC_SAMPLES     160
 #define AMBE2400_ENC_SILENCE_RMS 0.0015f
-
-/* f0 = exp2(-4.311767578125 - 2.1336e-2 * (b0 + 0.5)) */
-#define AMBE2400_ENC_F0_OFFSET   (-4.311767578125f)
-#define AMBE2400_ENC_F0_STEP     (-0.021336f)
+#define AMBE2400_ENC_PCM_SCALE   32768.0f /* analysis runs on the 16-bit scale */
 
 /*
- * Calibration: the AMBE 2400 gain field (AmbePlusDg) is non-negative and
- * spans about 5.35 log2 units (32 dB), so the encoder keeps a fixed nominal
- * level. An input AGC normalizes every frame to AMBE2400_ENC_AGC_TARGET
- * RMS and this scale places that nominal level in the middle of the
- * codec's magnitude range. 77.0 was tuned empirically so that encoded
- * frames decode at a level comparable to off-air reference recordings,
- * keeping the gain field within the range its codebook spans.
+ * Level: an input AGC normalizes speech toward AMBE2400_ENC_AGC_TARGET RMS,
+ * and AMBE2400_ENC_MAG_SCALE maps the analysis magnitudes (A/2 for a sinusoid
+ * of amplitude A on the 16-bit scale) into the codec's log2 amplitude domain.
+ * The scale is set so that normally recorded speech (DVSI's test inputs,
+ * -22 to -25 dBFS active RMS) decodes at its input level through decoders
+ * that match DVSI's AMBE-3000 output, as DVSI's own encoder does.
+ *
+ * The AGC follows the talker's level over about a second (50 voiced frames).
+ * A faster AGC (0.9, ~200 ms) flattened syllable dynamics: envelope
+ * correlation with the input fell from 0.89 to 0.81 and fricatives came out
+ * about 2.5 dB too bright relative to vowels. Tracking every non-silent frame
+ * also pumped background noise toward speech level (DVSI's speech-in-noise
+ * vector: envelope correlation 0.71 against DVSI's 0.90).
  */
-#define AMBE2400_ENC_MAG_SCALE   77.0f
+#define AMBE2400_ENC_MAG_SCALE   0.765f
 #define AMBE2400_ENC_AGC_TARGET  0.08f
-#define AMBE2400_ENC_AGC_ALPHA   0.9f
+#define AMBE2400_ENC_AGC_ALPHA   0.98f
 #define AMBE2400_ENC_AGC_MIN     0.1f
 #define AMBE2400_ENC_AGC_MAX     10.0f
 
 /*
- * Caller-owned analysis state: one context per stream.
- *
- * history holds the previous 160 samples so the encoder can analyse
- * a 256 sample (32 ms) window centred on the current frame start without
- * blocking for look-ahead.
+ * Caller-owned encoder state: one context per stream. The analysis tables
+ * are computed once at allocation and kept across resets.
  */
 struct mbe_ambe2400_encoder {
-    float history[AMBE2400_ENC_SAMPLES];
+    struct mbe_analysis_state analysis;
     float agc_gain;
     float agc_rms;
     float hist_gain;
     int silence_run;
-    float prev_lag;
-    float max_energy;
     mbe_fft_plan* fft;
+    struct mbe_analysis_tables tables;
 };
 
 void
@@ -94,13 +100,11 @@ mbe_ambe2400EncoderReset(mbe_ambe2400_encoder* enc) {
     if (enc == NULL) {
         return;
     }
-    mbe_fft_plan* fft = enc->fft;
-    memset(enc, 0, sizeof(*enc));
-    enc->fft = fft;
+    mbe_analysis_reset(&enc->analysis);
     enc->agc_gain = 1.0f;
     enc->agc_rms = AMBE2400_ENC_AGC_TARGET;
     enc->hist_gain = 1.0f;
-    enc->max_energy = 1e-6f;
+    enc->silence_run = 0;
 }
 
 mbe_ambe2400_encoder*
@@ -114,6 +118,7 @@ mbe_ambe2400EncoderAlloc(void) {
         free(enc);
         return NULL;
     }
+    mbe_analysis_init_tables(&enc->tables);
     mbe_ambe2400EncoderReset(enc);
     return enc;
 }
@@ -126,255 +131,19 @@ mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc) {
     }
 }
 
-/*
- * Compute log2 spectral magnitudes and raw per-harmonic voicing from a
- * pitch estimate over the windowed analysis buffer.
- */
-static int
-ambe2400_enc_spectrum(mbe_ambe2400_encoder* enc, const float* windowed, float f0q, int L, float mag[57],
-                      int vl_ana[57]) {
-    float fft_out[AMBE2400_ENC_FFT_SIZE];
-    const float f0_bin = f0q * (float)AMBE2400_ENC_FFT_SIZE;
-    float max_band_energy = 0.0f;
-
-    int status = mbe_fft_forward_real(enc->fft, windowed, fft_out);
-    if (status < 0) {
-        return status;
-    }
-
-    /* Ordered real FFT: [DC, Nyquist, re1, im1, ..., re127, im127]. */
-    for (int l = 1; l <= L; l++) {
-        float lo = ((float)l - 0.5f) * f0_bin;
-        float hi = ((float)l + 0.5f) * f0_bin;
-        int lo_bin = (int)lo;
-        int hi_bin = (int)hi + 1;
-        float band_energy = 0.0f;
-        float band_peak = 0.0f;
-        int n_bins = 0;
-
-        if (lo_bin < 1) {
-            lo_bin = 1;
-        }
-        if (hi_bin > (AMBE2400_ENC_FFT_SIZE / 2) - 1) {
-            hi_bin = (AMBE2400_ENC_FFT_SIZE / 2) - 1;
-        }
-
-        for (int b = lo_bin; b <= hi_bin; b++) {
-            float re = fft_out[2 * (size_t)b];
-            float im = fft_out[(2 * b) + 1];
-            float e = (re * re) + (im * im);
-            band_energy += e;
-            n_bins++;
-            if (e > band_peak) {
-                band_peak = e;
-            }
-        }
-
-        mag[l] = sqrtf(band_energy + 1e-12f);
-        if (band_energy > max_band_energy) {
-            max_band_energy = band_energy;
-        }
-        /* Voiced when the dominant bin stands clear of the in-band
-         * background (window leakage raises the background uniformly).
-         * Thresholds are deliberately loose: too strict a criterion makes
-         * soft/sloped frames drop to "unvoiced", which sounds like the voice
-         * cutting out. The VUV codebook + hysteresis smooth the rest. */
-        {
-            float background = (n_bins > 1) ? ((band_energy - band_peak) / (float)(n_bins - 1)) : band_energy;
-            vl_ana[l] = (band_peak > (1.35f * background)) && (band_energy > (0.0008f * max_band_energy + 1e-12f));
-        }
-    }
-    return 0;
-}
-
-static float
-ambe2400_enc_pitch_strength(const float* buf, int n, float lag_f) {
-    float strength;
-    /* Voicing strength: normalized autocorrelation at the chosen lag.
-     * ~1.0 for clean periodic speech, ~0.0 for noise. */
-    int lag = (int)(lag_f + 0.5f);
-    if (lag < 20) {
-        lag = 20;
-    }
-    if (lag > 127) {
-        lag = 127;
-    }
-    float num = 0.0f;
-    float den_a = 0.0f;
-    float den_b = 0.0f;
-    for (int i = 0; i + lag < n; i++) {
-        num += buf[i] * buf[i + lag];
-        den_a += buf[i] * buf[i];
-        den_b += buf[i + lag] * buf[i + lag];
-    }
-    float den = sqrtf(den_a * den_b);
-    float r = (den > 1e-12f) ? (num / den) : 0.0f;
-    strength = r;
-    if (strength < 0.0f) {
-        strength = 0.0f;
-    }
-    if (strength > 1.0f) {
-        strength = 1.0f;
-    }
-    return strength;
-}
-
-static float
-ambe2400_enc_refine_lag(const float amdf[128], int lag) {
-    /* Parabolic refinement */
-    float denom = 0.0f;
-    if (lag > 20 && lag < 127) {
-        denom = amdf[lag - 1] + amdf[lag + 1] - (2.0f * amdf[lag]);
-    }
-    float lag_f = (float)lag;
-    if (fabsf(denom) > 1e-12f) {
-        float shift = 0.5f * (amdf[lag - 1] - amdf[lag + 1]) / denom;
-        if (shift > -1.0f && shift < 1.0f) {
-            lag_f += shift;
-        }
-    }
-
-    return lag_f;
-}
-
-static float
-ambe2400_enc_pitch_candidate(const mbe_ambe2400_encoder* enc, const float amdf[128], float global_min) {
-    const float tol = global_min * 1.4f;
-    int have_prev = (enc->prev_lag >= (float)20);
-
-    float best_lag_f = 20.0f;
-    float best_score = 1e30f;
-
-    for (int lag = 20; lag <= 127; lag++) {
-        if ((lag > 20 && amdf[lag] >= amdf[lag - 1]) || (lag < 127 && amdf[lag] > amdf[lag + 1])) {
-            continue;
-        }
-        if (amdf[lag] > tol) {
-            continue;
-        }
-
-        float lag_f = ambe2400_enc_refine_lag(amdf, lag);
-
-        float score;
-        if (have_prev) {
-            /* AMDF quality + continuity (octave-aware). */
-            score = (amdf[lag] / (global_min + 1e-12f)) + (0.8f * fabsf(log2f(lag_f / enc->prev_lag)));
-        } else {
-            /* Cold start: among the tied minima, the shortest period is
-             * the true fundamental (kills the octave-down error). */
-            score = (amdf[lag] / (global_min + 1e-12f)) + (0.25f * (lag_f / 64.0f));
-        }
-
-        if (score < best_score) {
-            best_score = score;
-            best_lag_f = lag_f;
-        }
-    }
-
-    return best_lag_f;
-}
-
-/*
- * Pitch search: AMDF over lags 20..127 (63..400 Hz) with octave-error
- * protection. For a periodic signal the AMDF has near-equal minima at the
- * true period and its multiples; a plain global minimum therefore often
- * latches onto double the true period (half the pitch). We collect every
- * local minimum within a tolerance of the global minimum and pick among
- * them by continuity (and, on cold start, the shortest period).
- */
-static float
-ambe2400_enc_pitch(mbe_ambe2400_encoder* enc, const float* buf, int n, float* strength) {
-    const int min_lag = 20;
-    const int max_lag = 127;
-    float amdf[128];
-    float global_min = 1e30f;
-
-    for (int lag = min_lag; lag <= max_lag; lag++) {
-        float acc = 0.0f;
-        int cnt = 0;
-        for (int i = 0; i + lag < n; i++) {
-            float d = buf[i] - buf[i + lag];
-            acc += fabsf(d);
-            cnt++;
-        }
-        amdf[lag] = acc / (float)cnt;
-        if (amdf[lag] < global_min) {
-            global_min = amdf[lag];
-        }
-    }
-
-    float best_lag_f = ambe2400_enc_pitch_candidate(enc, amdf, global_min);
-    int have_prev = (enc->prev_lag >= (float)min_lag);
-
-    /* Final guard: limit frame-to-frame jumps to 25%. */
-    if (have_prev) {
-        float max_jump = 0.25f * enc->prev_lag;
-        float diff = best_lag_f - enc->prev_lag;
-        if (fabsf(diff) > max_jump) {
-            best_lag_f = enc->prev_lag + (diff > 0.0f ? max_jump : -max_jump);
-        }
-    }
-
-    enc->prev_lag = best_lag_f;
-
-    if (strength != NULL) {
-        *strength = ambe2400_enc_pitch_strength(buf, n, best_lag_f);
-    }
-    return best_lag_f;
-}
-
 /* Temporary analysis and quantization workspace; no inter-frame state. */
 struct ambe2400_enc_frame {
     const struct ambe_dct_cache* cache;
-    float buf[AMBE2400_ENC_FFT_SIZE];
-    float windowed[AMBE2400_ENC_FFT_SIZE];
     float p[57];
-    float mag[57], a[57], Tl[57], Tl_q[57];
+    float a[57], Tl[57], Tl_q[57];
     float Cik[5][18], Cik_q[5][18], Gm[9];
-    int Vl_ana[57], Ji[5], L, b[9];
-    float f0q, gamma_q, mean_a, mean_p, strength;
+    int Ji[5], L, b[9];
+    float f0q, gamma_q, mean_a, mean_p;
 };
 
 static void
-ambe2400_enc_window(const mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame* q, const float* pcm) {
-    /* Build the centred analysis window: last 128 of history + first 128 of pcm.
-     * The AGC gain is applied per frame; ramp it smoothly across the window so
-     * the frame boundary does not introduce a step discontinuity (which smears
-     * the spectrum and destroys the voicing decision). */
-    for (int i = 0; i < 128; i++) {
-        q->buf[i] = enc->history[AMBE2400_ENC_SAMPLES - 128 + i] / enc->hist_gain;
-    }
-    for (int i = 0; i < 128; i++) {
-        q->buf[128 + i] = pcm[i] / enc->agc_gain;
-    }
-    for (int i = 0; i < AMBE2400_ENC_FFT_SIZE; i++) {
-        float t = (float)i / (float)(AMBE2400_ENC_FFT_SIZE - 1);
-        float g = enc->hist_gain + (enc->agc_gain - enc->hist_gain) * t;
-        q->buf[i] *= g;
-    }
-
-    /* DC removal */
-    float dc = 0.0f;
-    for (int i = 0; i < AMBE2400_ENC_FFT_SIZE; i++) {
-        dc += q->buf[i];
-    }
-    dc /= (float)AMBE2400_ENC_FFT_SIZE;
-
-    for (int i = 0; i < AMBE2400_ENC_FFT_SIZE; i++) {
-        float w = (float)(0.54 - (0.46 * cos((2.0 * M_PI * (double)i) / (double)(AMBE2400_ENC_FFT_SIZE - 1))));
-        q->buf[i] -= dc;
-        q->windowed[i] = q->buf[i] * w;
-    }
-}
-
-static void
-ambe2400_enc_quantize_pitch(mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame* q) {
-    /* Pitch */
-    q->strength = 0.0f;
-    float lag_f = ambe2400_enc_pitch(enc, q->buf, AMBE2400_ENC_FFT_SIZE, &q->strength);
-    float f0 = 1.0f / lag_f;
-
-    q->b[0] = (int)lroundf((log2f(f0) - AMBE2400_ENC_F0_OFFSET) / AMBE2400_ENC_F0_STEP - 0.5f);
+ambe2400_enc_quantize_pitch(struct ambe2400_enc_frame* q, float f0) {
+    q->b[0] = (int)lroundf(((MBE_AMBE2400_LOG2_F0_OFFSET - log2f(f0)) / MBE_AMBE2400_LOG2_F0_SLOPE) - 0.5f);
     if (q->b[0] < 0) {
         q->b[0] = 0;
     }
@@ -382,98 +151,81 @@ ambe2400_enc_quantize_pitch(mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame
         q->b[0] = 125;
     }
 
-    q->L = mbe_clamp_harmonic_count((int)AmbePlusLtable[q->b[0]]);
-    q->f0q = exp2f(AMBE2400_ENC_F0_OFFSET + (AMBE2400_ENC_F0_STEP * ((float)q->b[0] + 0.5f)));
+    q->f0q = mbe_ambe2400_f0(q->b[0]);
+    q->L = mbe_ambe2400_harmonic_count(q->f0q);
 }
 
+/* The decoder's 500 Hz column for harmonic l at the transmitted pitch. */
+static int
+ambe2400_enc_column(const struct ambe2400_enc_frame* q, int l) {
+    int jl = (int)((float)l * 16.0f * q->f0q);
+    return (jl > 7) ? 7 : jl;
+}
+
+/* US 8,595,002 eq [3]: soft voicing from the energy-weighted fit error. */
+static float
+ambe2400_enc_soft_voicing(float energy, float error, float threshold) {
+    if (energy <= 0.0f || threshold <= 0.0f) {
+        return 0.0f;
+    }
+    if (error <= 0.0f) {
+        return 1.0f;
+    }
+    float lv = 0.5f * (1.0f - log2f(error / (threshold * energy)));
+    if (lv < 0.0f) {
+        return 0.0f;
+    }
+    return (lv > 1.0f) ? 1.0f : lv;
+}
+
+/*
+ * V/UV: soft voicing per 500 Hz column, then the four 1 kHz bits D-STAR sends
+ * (each covers two columns) by the energy-weighted squared error of
+ * US 8,595,002. Columns follow the decoder's floor(16 l f0) assignment, so a
+ * decision lands on the harmonics it was measured from; ties and empty bands
+ * are unvoiced.
+ */
 static void
-ambe2400_enc_voicing(mbe_ambe2400_encoder* enc, struct ambe2400_enc_frame* q) {
-    /* Voicing: energy-aware. Track the frame's energy against a
-     * running max and bias weak, non-periodic frames toward unvoiced. A weak
-     * frame the AMDF still judges periodic is kept voiced; weak + noisy
-     * frames (consonants, silences) are forced unvoiced so the decoder
-     * renders them as soft noise rather than a wrong periodic "splatter".
-     * Otherwise force voiced harmonics up to a cutoff that rises with the
-     * voicing strength, since the peak/background test under-voices high
-     * harmonics of gliding/soft voiced speech. */
-    {
-        float frame_e = 0.0f;
-        for (int i = 0; i < AMBE2400_ENC_FFT_SIZE; i++) {
-            frame_e += q->buf[i] * q->buf[i];
-        }
-        frame_e /= (float)AMBE2400_ENC_FFT_SIZE;
-
-        if (frame_e > enc->max_energy) {
-            enc->max_energy = frame_e;
-        } else {
-            enc->max_energy = (0.99f * enc->max_energy) + (0.01f * frame_e);
-        }
-
-        float rel = frame_e / (enc->max_energy + 1e-12f);
-
-        if (rel < 0.03f && q->strength < 0.65f) {
-            for (int l = 1; l <= q->L; l++) {
-                q->Vl_ana[l] = 0;
-            }
-        } else {
-            int max_jl = -1;
-            if (q->strength > 0.60f) {
-                max_jl = 7; /* ~3.5 kHz: fully voiced */
-            } else if (q->strength > 0.40f) {
-                max_jl = 5; /* ~2.5 kHz */
-            }
-            if (max_jl >= 0) {
-                for (int l = 1; l <= q->L; l++) {
-                    int jl = (int)((float)l * 16.0f * q->f0q);
-                    if (jl <= max_jl) {
-                        q->Vl_ana[l] = 1;
-                    }
-                }
-            }
-        }
+ambe2400_enc_voicing(struct ambe2400_enc_frame* q, const struct mbe_analysis_state* state,
+                     const struct mbe_analysis_result* res, unsigned char columns[MBE_ANALYSIS_COLUMNS]) {
+    float energy[MBE_ANALYSIS_COLUMNS] = {0};
+    float error[MBE_ANALYSIS_COLUMNS] = {0};
+    float lv[MBE_ANALYSIS_COLUMNS];
+    for (int l = 1; l <= q->L && l <= res->harmonics; l++) {
+        int column = ambe2400_enc_column(q, l);
+        float e = res->magnitude[l] * res->magnitude[l];
+        energy[column] += e;
+        error[column] += res->fit_error[l] * e;
+    }
+    for (int k = 0; k < MBE_ANALYSIS_COLUMNS; k++) {
+        lv[k] = ambe2400_enc_soft_voicing(energy[k], error[k], mbe_analysis_column_threshold(state, res, k + 1));
+    }
+    q->b[1] = 0;
+    for (int bit = 0; bit < 4; bit++) {
+        int c0 = 2 * bit;
+        int c1 = c0 + 1;
+        float voiced_cost =
+            (energy[c0] * (1.0f - lv[c0]) * (1.0f - lv[c0])) + (energy[c1] * (1.0f - lv[c1]) * (1.0f - lv[c1]));
+        float unvoiced_cost = (energy[c0] * lv[c0] * lv[c0]) + (energy[c1] * lv[c1] * lv[c1]);
+        int voiced = (energy[c0] + energy[c1] > 0.0f) && (voiced_cost < unvoiced_cost);
+        columns[c0] = (unsigned char)voiced;
+        columns[c1] = (unsigned char)voiced;
+        q->b[1] |= voiced << (3 - bit);
     }
 }
 
 static void
-ambe2400_enc_quantize_vuv(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) {
-    /* V/UV quantization */
-    {
-        int best_row = 0;
-        float best_dist = 1e30f;
-
-        for (int row = 0; row < 16; row++) {
-            float dist = 0.0f;
-            for (int l = 1; l <= q->L; l++) {
-                int jl = (int)((float)l * 16.0f * q->f0q);
-                if (jl > 7) {
-                    jl = 7;
-                }
-                float d = (float)(q->Vl_ana[l] - AmbePlusVuv[row][jl]);
-                /* hysteresis: a band voiced last frame that is borderline now
-                 * stays voiced (halve the cost of retaining voicing) */
-                if (q->Vl_ana[l] == 0 && prev_mp->Vl[l] == 1) {
-                    d *= 0.5f;
-                }
-                dist += fabsf(d);
-            }
-            if (dist < best_dist) {
-                best_dist = dist;
-                best_row = row;
-            }
-        }
-        q->b[1] = best_row;
+ambe2400_enc_magnitudes(struct ambe2400_enc_frame* q, const struct mbe_analysis_result* res, float gain) {
+    q->mean_a = 0.0f;
+    for (int l = 1; l <= q->L; l++) {
+        q->a[l] = log2f((res->magnitude[l] * AMBE2400_ENC_MAG_SCALE * gain) + 1e-12f);
+        q->mean_a += q->a[l];
     }
+    q->mean_a /= (float)q->L;
 }
 
 static void
 ambe2400_enc_quantize_gain(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) {
-    q->mean_a = 0.0f;
-    for (int l = 1; l <= q->L; l++) {
-        q->a[l] = log2f((q->mag[l] * AMBE2400_ENC_MAG_SCALE) + 1e-12f);
-        q->mean_a += q->a[l];
-    }
-    q->mean_a /= (float)q->L;
-
     /* Gain quantization */
     {
         float gamma_raw = q->mean_a + (0.5f * log2f((float)q->L));
@@ -521,7 +273,7 @@ ambe2400_enc_prediction(struct ambe2400_enc_frame* q, const mbe_parms* prev_mp) 
     q->mean_p /= (float)q->L;
 
     for (int l = 1; l <= q->L; l++) {
-        q->Tl[l] = q->a[l] - q->mean_a - (0.65f * (q->p[l] - q->mean_p));
+        q->Tl[l] = q->a[l] - q->mean_a - (MBE_AMBE2400_PREDICTION_RHO * (q->p[l] - q->mean_p));
     }
 }
 
@@ -737,20 +489,24 @@ ambe2400_enc_fill_parms(const struct ambe2400_enc_frame* q, mbe_parms* cur_mp) {
     cur_mp->gamma = q->gamma_q;
 }
 
-/* Quantize a voice frame, reconstruct its predictor state, and pack 49 bits. */
+/* Analyze and quantize a voice frame, reconstruct its predictor state, and
+ * pack 49 bits. */
 static int
-ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[49], mbe_parms* cur_mp,
-                      const mbe_parms* prev_mp) {
-    struct ambe2400_enc_frame q = {0};
-    q.cache = mbe_ambe2400_get_dct_cache();
-    ambe2400_enc_window(enc, &q, pcm);
-    ambe2400_enc_quantize_pitch(enc, &q);
-    int status = ambe2400_enc_spectrum(enc, q.windowed, q.f0q, q.L, q.mag, q.Vl_ana);
+ambe2400_encode_voice(mbe_ambe2400_encoder* enc, char ambe_d[49], mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    /* The analysis window is centred on the frame boundary; take the AGC gain
+     * halfway between the two frames it spans. */
+    const float gain = sqrtf(enc->hist_gain * enc->agc_gain);
+    struct mbe_analysis_result res;
+    int status = mbe_analysis_frame(&enc->tables, &enc->analysis, enc->fft, gain, &res);
     if (status < 0) {
         return status;
     }
-    ambe2400_enc_voicing(enc, &q);
-    ambe2400_enc_quantize_vuv(&q, prev_mp);
+    struct ambe2400_enc_frame q = {0};
+    unsigned char columns[MBE_ANALYSIS_COLUMNS];
+    q.cache = mbe_ambe2400_get_dct_cache();
+    ambe2400_enc_quantize_pitch(&q, res.f0);
+    ambe2400_enc_voicing(&q, &enc->analysis, &res, columns);
+    ambe2400_enc_magnitudes(&q, &res, gain);
     ambe2400_enc_quantize_gain(&q, prev_mp);
     ambe2400_enc_prediction(&q, prev_mp);
     ambe2400_enc_block_dct(&q);
@@ -764,6 +520,7 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* pcm, char ambe_d[4
     /* Share the decoder update without changing the caller's predictor. */
     mbe_parms prediction_prev = *prev_mp;
     mbe_ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
+    mbe_analysis_commit(&enc->analysis, columns, 1);
     return 0;
 }
 
@@ -815,11 +572,13 @@ ambe2400_enc_silence_gate(mbe_ambe2400_encoder* enc, float rms) {
 }
 
 static void
-ambe2400_enc_apply_agc(mbe_ambe2400_encoder* enc, const float* samples, float rms, bool is_silence, float* agc_buf) {
-    /* Input AGC: track level only on speech frames, normalize to the
-     * nominal target. Noise frames would drag the level estimate down and
-     * over-drive the speech. */
-    if (!is_silence && rms > 1e-6f) {
+ambe2400_enc_update_agc(mbe_ambe2400_encoder* enc, float rms, bool periodic) {
+    /* Input AGC: follow the talker's level on periodic (voiced) frames only and
+     * normalize to the nominal target. Background noise and pauses hold the
+     * gain, so noise is neither pumped up toward speech level nor allowed to
+     * drag the level estimate down. The gain scales the analysis magnitudes,
+     * so the analysis window itself is never reshaped by gain changes. */
+    if (periodic && rms > 1e-6f) {
         enc->agc_rms = (AMBE2400_ENC_AGC_ALPHA * enc->agc_rms) + ((1.0f - AMBE2400_ENC_AGC_ALPHA) * rms);
     }
     enc->agc_gain = AMBE2400_ENC_AGC_TARGET / (enc->agc_rms + 1e-9f);
@@ -829,51 +588,75 @@ ambe2400_enc_apply_agc(mbe_ambe2400_encoder* enc, const float* samples, float rm
     if (enc->agc_gain > AMBE2400_ENC_AGC_MAX) {
         enc->agc_gain = AMBE2400_ENC_AGC_MAX;
     }
-    for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
-        agc_buf[i] = samples[i] * enc->agc_gain;
-    }
 }
 
 /**
  * @brief Encode 160 samples (20 ms, 8 kHz) of PCM into AMBE 2400
  *        parameter bits.
  *
- * @param samples Input PCM floats (160), nominal range [-1, 1].
+ * @param samples Input PCM floats (160), nominal range [-1, 1]; a non-finite
+ *                sample or one beyond +-2^20 rejects the frame.
  * @param ambe_d  Output parameter bits (49).
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous frame state (see mbe_initMbeParms()).
- * @return 0 for a voice frame, 1 for a silence frame, negative on error.
+ * @return 0 for a voice frame, 1 for a silence frame, negative on error
+ *         (the context is unchanged).
  */
+/* Finite and within +-2^20 (0x49800000), checked on the bit pattern so the
+ * test survives fast-math. One bad sample would otherwise poison the DC
+ * filter and AGC state for the rest of the stream. */
+static bool
+ambe2400_enc_samples_valid(const float* samples) {
+    for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
+        uint32_t bits;
+        memcpy(&bits, &samples[i], sizeof(bits));
+        if ((bits & 0x7FFFFFFFu) > 0x49800000u) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int
 mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
                         const mbe_parms* prev_mp) {
-    float agc_buf[AMBE2400_ENC_SAMPLES];
+    float scaled[AMBE2400_ENC_SAMPLES];
+    float filtered[AMBE2400_ENC_SAMPLES];
     float rms = 0.0f;
 
-    if (enc == NULL || samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL) {
+    if (enc == NULL || samples == NULL || ambe_d == NULL || cur_mp == NULL || prev_mp == NULL
+        || !ambe2400_enc_samples_valid(samples)) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
 
+    /* DC-filter every frame, silence included, so the history is continuous;
+     * level and silence decisions use the filtered signal, so a DC offset
+     * neither lowers the AGC gain nor keeps the silence gate open. */
     for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
-        rms += samples[i] * samples[i];
+        scaled[i] = samples[i] * AMBE2400_ENC_PCM_SCALE;
     }
-    rms = sqrtf(rms / (float)AMBE2400_ENC_SAMPLES);
+    mbe_analysis_push(&enc->analysis, scaled, filtered);
+    for (int i = 0; i < AMBE2400_ENC_SAMPLES; i++) {
+        rms += filtered[i] * filtered[i];
+    }
+    rms = sqrtf(rms / (float)AMBE2400_ENC_SAMPLES) / AMBE2400_ENC_PCM_SCALE;
 
     bool is_silence = ambe2400_enc_silence_gate(enc, rms);
 
-    ambe2400_enc_apply_agc(enc, samples, rms, is_silence, agc_buf);
-
     if (is_silence) {
         ambe2400_encode_silence(ambe_d, cur_mp);
+        mbe_analysis_commit(&enc->analysis, NULL, 0);
     } else {
-        int ret = ambe2400_encode_voice(enc, agc_buf, ambe_d, cur_mp, prev_mp);
+        int ret = ambe2400_encode_voice(enc, ambe_d, cur_mp, prev_mp);
         if (ret < 0) {
             return ret;
         }
     }
 
-    memcpy(enc->history, agc_buf, (size_t)AMBE2400_ENC_SAMPLES * sizeof(float));
+    /* This frame used the gain set so far; adapt for the next one. After a
+     * voice frame the analysis state says whether the frame was periodic. */
     enc->hist_gain = enc->agc_gain;
+    ambe2400_enc_update_agc(enc, rms, !is_silence && enc->analysis.trusted);
 
     return (int)is_silence;
 }

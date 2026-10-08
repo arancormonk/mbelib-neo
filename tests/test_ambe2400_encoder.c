@@ -540,6 +540,51 @@ test_invalid_arguments(mbe_ambe2400_encoder* enc) {
     return 0;
 }
 
+/* A rejected frame (non-finite or absurdly large samples) leaves the stream
+ * exactly as if the frame had never been offered. */
+static int
+test_invalid_samples(mbe_ambe2400_encoder* enc) {
+    const float bad_values[] = {NAN, INFINITY, -INFINITY, 3.40282347e38f /* FLT_MAX */, 2097152.0f};
+    for (size_t b = 0; b < sizeof(bad_values) / sizeof(bad_values[0]); b++) {
+        char reference[30][49] = {{0}};
+        char observed[30][49] = {{0}};
+        for (int pass = 0; pass < 2; pass++) {
+            mbe_parms cur, prev, enhanced;
+            mbe_ambe2400EncoderReset(enc);
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            for (int f = 0; f < 30; f++) {
+                float pcm[160];
+                for (int i = 0; i < 160; i++) {
+                    pcm[i] = 0.2f * sinf((float)(2.0 * M_PI * 200.0 * (f * 160 + i) / 8000.0));
+                }
+                if (pass == 1 && f == 10) {
+                    float bad[160];
+                    memcpy(bad, pcm, sizeof(bad));
+                    bad[37] = bad_values[b];
+                    char unused[49];
+                    mbe_parms before = cur;
+                    if (mbe_encodeAmbe2400Parms(enc, bad, unused, &cur, &prev) != MBE_STATUS_INVALID_ARGUMENT
+                        || memcmp(&before, &cur, sizeof(cur)) != 0) {
+                        printf("invalid samples: value %zu was not rejected cleanly\n", b);
+                        return 1;
+                    }
+                }
+                char* bits = (pass == 0) ? reference[f] : observed[f];
+                if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) < 0) {
+                    return 1;
+                }
+                mbe_moveMbeParms(&cur, &prev);
+            }
+        }
+        if (memcmp(reference, observed, sizeof(reference)) != 0) {
+            printf("invalid samples: value %zu changed the stream\n", b);
+            return 1;
+        }
+    }
+    puts("non-finite and out-of-range samples are rejected without touching state");
+    return 0;
+}
+
 static int
 test_prediction_boundaries(mbe_ambe2400_encoder* enc) {
     mbe_ambe2400EncoderReset(enc);
@@ -581,51 +626,56 @@ test_prediction_boundaries(mbe_ambe2400_encoder* enc) {
     return 0;
 }
 
+/* D-STAR pitch law calibrated on DVSI's AMBE-3000 vectors (cycles per sample). */
+static double
+dstar_f0(int b0) {
+    return exp2(-4.24738 - 0.0217705 * (b0 + 0.5));
+}
+
+/* The decoder reconstructs w0 from b0 with the calibrated law across the voice
+ * range, and sizes L like the AMBE+2 table: every harmonic at or below
+ * 0.9254 x 4 kHz, the top harmonic DVSI's D-STAR decoder synthesizes. */
 static int
-test_vuv_hysteresis(mbe_ambe2400_encoder* enc) {
-    mbe_ambe2400EncoderReset(enc);
-    int retained = 0;
-    for (int fixture = 0; fixture < 64; fixture++) {
+test_pitch_law(void) {
+    for (int code = 0; code <= 125; code++) {
         mbe_parms cur, prev, enhanced;
-        float pcm[160];
-        char bits[49];
+        char d[49] = {0};
         mbe_initMbeParms(&cur, &prev, &enhanced);
-        for (int i = 0; i < 160; i++) {
-            pcm[i] = 0.0001f * ((float)(rnd() & 65535u) / 32768.0f - 1.0f)
-                     + 0.03f * sinf((float)(2.0 * M_PI * (fixture % 8 + 1) * i / 160));
-            if (i == 0) {
-                pcm[i] += 0.01f * (float)(fixture + 1);
-            }
+        for (int bit = 0; bit < 6; bit++) {
+            d[bit] = (char)((code >> (6 - bit)) & 1);
         }
-        /* Repetition makes the analysis window, pitch and AGC settle. */
-        for (int frame = 0; frame < 200; frame++) {
-            if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) != 0) {
-                return 1;
-            }
+        d[48] = (char)(code & 1);
+        if (mbe_decodeAmbe2400Parms(d, &cur, &prev) != 0) {
+            continue;
         }
-        for (int l = 1; l <= 56; l++) {
-            prev.Vl[l] = 0;
-        }
-        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) != 0) {
+        int want = (int)(0.9254 * 0.5 / dstar_f0(code));
+        want = want < 9 ? 9 : (want > 56 ? 56 : want);
+        if (cur.L != want) {
+            printf("pitch law: b0 %d gives L %d, want %d\n", code, cur.L, want);
             return 1;
-        }
-        int without_history = cur.K;
-        int harmonics = cur.L;
-        for (int l = 1; l <= 56; l++) {
-            prev.Vl[l] = 1;
-        }
-        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) != 0) {
-            return 1;
-        }
-        if (cur.L != harmonics || cur.K < without_history) {
-            return 1;
-        }
-        if (cur.K > without_history) {
-            retained++;
         }
     }
-    printf("voiced history retains additional bands in %d fixtures\n", retained);
-    return retained == 0;
+    static const int codes[] = {0, 13, 40, 76, 100, 123, 125};
+    for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+        mbe_parms cur, prev, enhanced;
+        char d[49] = {0};
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int bit = 0; bit < 6; bit++) {
+            d[bit] = (char)((codes[i] >> (6 - bit)) & 1);
+        }
+        d[48] = (char)(codes[i] & 1);
+        if (mbe_decodeAmbe2400Parms(d, &cur, &prev) != 0) {
+            printf("pitch law: b0 %d did not decode as voice\n", codes[i]);
+            return 1;
+        }
+        double want = 2.0 * M_PI * dstar_f0(codes[i]);
+        if (fabs((double)cur.w0 / want - 1.0) > 1e-5) {
+            printf("pitch law: b0 %d gives w0 %.7f, want %.7f\n", codes[i], (double)cur.w0, want);
+            return 1;
+        }
+    }
+    puts("pitch law: b0 0..125 follow the calibrated D-STAR law and harmonic count");
+    return 0;
 }
 
 static int
@@ -678,7 +728,236 @@ test_dc_noise(mbe_ambe2400_encoder* enc) {
         mbe_moveMbeParms(&c, &p);
     }
     printf("DC-offset noise: %d/%d voiced harmonics\n", voiced, total);
-    return voiced > total / 2;
+    return voiced * 20 > total; /* at most 5% */
+}
+
+static double
+gauss_noise(void) {
+    double sum = 0.0;
+    for (int i = 0; i < 12; i++) {
+        sum += (double)(rnd() & 0xffffu) / 65536.0;
+    }
+    return sum - 6.0;
+}
+
+/* Formant-like envelope: -6 dB/oct tilt with peaks near 500, 1500, 2500 Hz. */
+static double
+vowel_envelope(double hz) {
+    double peaks = 1.0 + (2.0 * exp(-pow((hz - 500.0) / 150.0, 2))) + (1.5 * exp(-pow((hz - 1500.0) / 200.0, 2)))
+                   + exp(-pow((hz - 2500.0) / 250.0, 2));
+    return peaks / (1.0 + (hz / 300.0));
+}
+
+enum fixture_kind {
+    FIX_NOISE,
+    FIX_COLORED_NOISE,
+    FIX_VOWEL,
+    FIX_MIXED,
+    FIX_MISSING_F0,
+    FIX_STRONG_H2,
+    FIX_GLIDE,
+    FIX_ONSET
+};
+
+struct fixture {
+    enum fixture_kind kind;
+    double f0;    /* Hz; the glide starts here and doubles over the run */
+    double level; /* noise RMS or harmonic scale, full scale = 1 */
+    double phase[64];
+    double lowpass;
+};
+
+static double
+fixture_f0(const struct fixture* fx, int frame) {
+    return (fx->kind == FIX_GLIDE) ? fx->f0 * pow(2.0, (double)frame / 150.0) : fx->f0;
+}
+
+static double
+fixture_harmonics(struct fixture* fx, double f0) {
+    double v = 0.0;
+    for (int h = 1; h < 64 && h * f0 < 3800.0; h++) {
+        double hz = h * f0;
+        double a = vowel_envelope(hz);
+        if ((fx->kind == FIX_MIXED && hz >= 2000.0) || (fx->kind == FIX_MISSING_F0 && h == 1)) {
+            a = 0.0;
+        } else if (fx->kind == FIX_STRONG_H2 && h == 2) {
+            a *= 3.0;
+        }
+        fx->phase[h] += 2.0 * M_PI * hz / 8000.0;
+        v += a * sin(fx->phase[h]);
+    }
+    return v * fx->level;
+}
+
+static void
+fixture_frame(struct fixture* fx, int frame, float pcm[160]) {
+    const double f0 = fixture_f0(fx, frame);
+    for (int i = 0; i < 160; i++) {
+        double v;
+        if (fx->kind == FIX_NOISE || (fx->kind == FIX_ONSET && frame < 40)) {
+            v = fx->level * gauss_noise();
+        } else if (fx->kind == FIX_COLORED_NOISE) {
+            fx->lowpass = (0.8 * fx->lowpass) + (fx->level * gauss_noise()); /* -6 dB/oct above ~300 Hz */
+            v = fx->lowpass;
+        } else {
+            v = fixture_harmonics(fx, f0);
+            if (fx->kind == FIX_MIXED) {
+                v += 0.05 * fx->level * gauss_noise(); /* about 30 dB below the harmonics */
+            }
+        }
+        pcm[i] = (float)v;
+    }
+}
+
+struct fixture_stats {
+    int frames;
+    int voiced_harmonics;
+    int harmonics;
+    int band_voiced[4];
+    int mixed_rows;
+    int b0_close;
+    int octave_errors;
+};
+
+static int
+ideal_b0(double hz) {
+    return (int)lround(((log2(hz / 8000.0) + 4.24738) / -0.0217705) - 0.5);
+}
+
+/* Encode a fixture and count decisions on settled voice frames. */
+static int
+run_fixture(mbe_ambe2400_encoder* enc, struct fixture* fx, int frames, int settle, struct fixture_stats* st) {
+    mbe_parms cur, prev, enhanced;
+    memset(st, 0, sizeof(*st));
+    mbe_ambe2400EncoderReset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < frames; f++) {
+        float pcm[160];
+        char d[49];
+        fixture_frame(fx, f, pcm);
+        int r = mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev);
+        if (r < 0) {
+            return 1;
+        }
+        if (r == 0 && f >= settle) {
+            int b0 = d[48];
+            for (int i = 0; i < 6; i++) {
+                b0 |= d[i] << (6 - i);
+            }
+            int b1 = (d[38] << 3) | (d[39] << 2) | (d[40] << 1) | d[41];
+            int want = ideal_b0(fixture_f0(fx, f));
+            st->frames++;
+            for (int l = 1; l <= cur.L; l++) {
+                st->voiced_harmonics += cur.Vl[l];
+                st->harmonics++;
+            }
+            for (int band = 0; band < 4; band++) {
+                st->band_voiced[band] += (b1 >> (3 - band)) & 1;
+            }
+            st->mixed_rows += (b1 == 0x0c);
+            st->b0_close += (b0 >= want - 1 && b0 <= want + 1);
+            int distance = (b0 > want) ? b0 - want : want - b0;
+            st->octave_errors += (distance > 30); /* 2^(30 * 0.021336) is about 1.56 */
+        }
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    return 0;
+}
+
+/* Noise of any colour and level is unvoiced (the old encoder voiced all of it). */
+static int
+test_noise_unvoiced(mbe_ambe2400_encoder* enc) {
+    const struct {
+        enum fixture_kind kind;
+        double level;
+    } cases[] = {{FIX_NOISE, 0.1}, {FIX_NOISE, 0.0056}, {FIX_COLORED_NOISE, 0.03}};
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        for (int seed = 0; seed < 3; seed++) {
+            struct fixture fx = {.kind = cases[c].kind, .level = cases[c].level};
+            struct fixture_stats st;
+            rng = 0x1234u + (uint32_t)(seed * 7919);
+            if (run_fixture(enc, &fx, 200, 50, &st) != 0 || st.harmonics == 0) {
+                return 1;
+            }
+            if (st.voiced_harmonics * 20 > st.harmonics) {
+                printf("noise case %zu seed %d: %d/%d voiced harmonics\n", c, seed, st.voiced_harmonics, st.harmonics);
+                return 1;
+            }
+        }
+    }
+    puts("noise (white -20/-45 dBFS, coloured): at most 5% voiced harmonics");
+    return 0;
+}
+
+/* Steady vowels across the pitch range are voiced and on pitch. */
+static int
+test_vowels_voiced(mbe_ambe2400_encoder* enc) {
+    const double f0s[] = {70.0, 95.0, 120.0, 150.0, 200.0, 240.0, 310.0};
+    for (size_t i = 0; i < sizeof(f0s) / sizeof(f0s[0]); i++) {
+        struct fixture fx = {.kind = FIX_VOWEL, .f0 = f0s[i], .level = 0.05};
+        struct fixture_stats st;
+        if (run_fixture(enc, &fx, 150, 50, &st) != 0 || st.frames == 0) {
+            return 1;
+        }
+        for (int band = 0; band < 4; band++) {
+            if (st.band_voiced[band] * 20 < st.frames * 19) {
+                printf("vowel %.0f Hz: band %d voiced in %d/%d frames\n", f0s[i], band, st.band_voiced[band],
+                       st.frames);
+                return 1;
+            }
+        }
+        if (st.b0_close * 20 < st.frames * 19) {
+            printf("vowel %.0f Hz: b0 within 1 in %d/%d frames\n", f0s[i], st.b0_close, st.frames);
+            return 1;
+        }
+    }
+    puts("vowels 70-310 Hz: voiced in all bands, b0 within 1");
+    return 0;
+}
+
+/* Harmonics below 2 kHz with noise above are voiced only below 2 kHz. */
+static int
+test_mixed_bands(mbe_ambe2400_encoder* enc) {
+    struct fixture fx = {.kind = FIX_MIXED, .f0 = 200.0, .level = 0.05};
+    struct fixture_stats st;
+    rng = 0xBEEFu;
+    if (run_fixture(enc, &fx, 150, 50, &st) != 0 || st.frames == 0) {
+        return 1;
+    }
+    printf("harmonics below 2 kHz, noise above: b1 = 0x0c in %d/%d frames\n", st.mixed_rows, st.frames);
+    return st.mixed_rows * 10 < st.frames * 9;
+}
+
+/* Pitch cases that trip simple trackers: no octave errors once settled. */
+static int
+test_pitch_cases(mbe_ambe2400_encoder* enc) {
+    const struct {
+        enum fixture_kind kind;
+        double f0;
+        int settle;
+        const char* name;
+    } cases[] = {{FIX_VOWEL, 240.0, 3, "240 Hz"},
+                 {FIX_MISSING_F0, 120.0, 3, "missing fundamental"},
+                 {FIX_STRONG_H2, 150.0, 3, "dominant 2nd harmonic"},
+                 {FIX_GLIDE, 100.0, 3, "100-200 Hz glide"},
+                 {FIX_ONSET, 150.0, 43, "onset after noise"}};
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        struct fixture fx = {.kind = cases[c].kind, .f0 = cases[c].f0, .level = 0.05};
+        struct fixture_stats st;
+        rng = 0xC0DEu;
+        if (run_fixture(enc, &fx, 150, cases[c].settle, &st) != 0 || st.frames == 0) {
+            return 1;
+        }
+        if (st.octave_errors != 0 || st.b0_close * 20 < st.frames * 19) {
+            printf("%s: %d octave errors, b0 within 1 in %d/%d frames\n", cases[c].name, st.octave_errors, st.b0_close,
+                   st.frames);
+            return 1;
+        }
+    }
+    puts("pitch: 240 Hz, missing fundamental, strong 2nd harmonic, glide, onset: on pitch");
+    return 0;
 }
 
 /* Compare interleaved streams with standalone replays, then replay after reset.
@@ -744,6 +1023,7 @@ main(void) {
     }
     int fails = 0;
     fails += test_invalid_arguments(enc);
+    fails += test_invalid_samples(enc);
     fails += test_c1_parity();
     fails += test_golay();
     fails += test_frame_roundtrip();
@@ -751,10 +1031,15 @@ main(void) {
     fails += test_dv_bytes();
     fails += test_state_parity(enc);
     fails += test_prediction_boundaries(enc);
-    fails += test_pitch_endpoint(enc, 20, 0);
+    fails += test_pitch_law();
+    /* 400 Hz, the shortest analysed period, is b0 3; b0 0..2 reach 402..418 Hz. */
+    fails += test_pitch_endpoint(enc, 20, 3);
     fails += test_pitch_endpoint(enc, 127, 125);
     fails += test_dc_noise(enc);
-    fails += test_vuv_hysteresis(enc);
+    fails += test_noise_unvoiced(enc);
+    fails += test_vowels_voiced(enc);
+    fails += test_mixed_bands(enc);
+    fails += test_pitch_cases(enc);
     fails += test_contexts(enc);
     mbe_ambe2400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");

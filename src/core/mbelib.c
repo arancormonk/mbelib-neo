@@ -629,6 +629,41 @@ mbe_scale_spectral_magnitudes(mbe_parms* cur_mp, float gamma) {
     }
 }
 
+/*
+ * High-band compensation, applied after the enhancement's energy
+ * renormalization. On DVSI's AMBE-3000 test vectors, with identical bits, the
+ * TIA-102.BABA synthesis renders 2.5-3.75 kHz below DVSI's decoder relative to
+ * 0-1 kHz, for voiced and unvoiced bands alike and at every pitch. A shelf
+ * (0 dB below 2.5 kHz, rising to its height at 3 kHz, flat to 3.6 kHz, back to
+ * 0 dB at 3.8 kHz) closes that gap; its height per codec (mbe_adaptive.h) was
+ * chosen on one set of DVSI vectors and checked on another. Repeats that
+ * resynthesize already enhanced amplitudes do not pass through here, so it is
+ * never applied twice.
+ */
+static float
+mbe_high_band_gain(float hz, float gain) {
+    float t;
+    if (hz <= 2500.0f || hz >= 3800.0f) {
+        return 1.0f;
+    }
+    if (hz < 3000.0f) {
+        t = (hz - 2500.0f) / 500.0f;
+    } else if (hz <= 3600.0f) {
+        t = 1.0f;
+    } else {
+        t = (3800.0f - hz) / 200.0f;
+    }
+    return 1.0f + ((gain - 1.0f) * t);
+}
+
+static void
+mbe_apply_high_band_gain(mbe_parms* cur_mp, float gain) {
+    const float hz_per_harmonic = cur_mp->w0 * (8000.0f / (2.0f * (float)M_PI));
+    for (int l = 1; l <= cur_mp->L; l++) {
+        cur_mp->Ml[l] *= mbe_high_band_gain(hz_per_harmonic * (float)l, gain);
+    }
+}
+
 /**
  * @brief Apply spectral amplitude enhancement to the current parameters.
  * @param cur_mp In/out parameter set to enhance.
@@ -636,7 +671,7 @@ mbe_scale_spectral_magnitudes(mbe_parms* cur_mp, float gamma) {
  * Uses SIMD optimizations for accumulation and scaling loops when available.
  */
 float
-mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp) {
+mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain) {
 
     float Rm0, Rm1;
     float cos_tab[57];
@@ -653,13 +688,14 @@ mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp) {
     float sum = mbe_sum_spectral_magnitudes_squared(cur_mp);
     float gamma = (sum == 0.0f) ? 1.0f : sqrtf(Rm0 / sum);
     mbe_scale_spectral_magnitudes(cur_mp, gamma);
+    mbe_apply_high_band_gain(cur_mp, high_band_gain);
 
     return Rm0;
 }
 
 void
 mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
-    (void)mbe_spectralAmpEnhanceWithRm0(cur_mp);
+    (void)mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
 }
 
 /* JMBE float-domain soft clip translated to this library's float scale. */
@@ -701,15 +737,23 @@ mbe_toneSampleFromPhase(uint32_t phase) {
     return sinf(angle);
 }
 
+/* Peak amplitude, on this library's float scale (int16 / 7), of a sinusoid
+ * whose RMS is level_db relative to 32768. */
+static float
+mbe_toneAmplitude(double level_db) {
+    return (float)(sqrt(2.0) * 32768.0 * pow(10.0, level_db / 20.0) / 7.0);
+}
+
+/* Render one or two sinusoids, each of peak amplitude `gain`, through the same
+ * 0.95 full-scale limit as speech. */
 static void
-mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, int amplitude_id) {
+mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, float gain) {
     if (!aout_buf || !cur_mp || freq1 <= 0.0f) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
 
     const int dual_tone = (freq2 > 0.0f) && (fabsf(freq2 - freq1) > 1e-6f);
-    const float gain = (((amplitude_id < 0) ? 0.0f : (float)amplitude_id) / 127.0f) * MBE_AUDIO_SOFT_CLIP_FLOAT;
     const uint32_t step1 = mbe_tonePhaseStep((double)freq1);
     const uint32_t step2 = dual_tone ? mbe_tonePhaseStep((double)freq2) : 0u;
     uint32_t phase1 = (uint32_t)cur_mp->swn;
@@ -722,9 +766,9 @@ mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, in
         if (dual_tone) {
             phase2 += step2;
             float s2 = mbe_toneSampleFromPhase(phase2);
-            aout_buf[n] = (0.5f * gain * s1) + (0.5f * gain * s2);
+            aout_buf[n] = mbe_clipFloatSample((gain * s1) + (gain * s2));
         } else {
-            aout_buf[n] = gain * s1;
+            aout_buf[n] = mbe_clipFloatSample(gain * s1);
         }
     }
 
@@ -782,7 +826,7 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
     ID0 = 0;
     ID1 = ((u1 & 0xfff) >> 4);
     ID2 = ((u1 & 0xf) << 4) + ((u2 >> 7) & 0xf);
-    ID3 = ((u2 & 0x7f) << 1) + ((u2 >> 13) & 0x1);
+    ID3 = ((u2 & 0x7f) << 1) + ((u3 >> 13) & 0x1);
     ID4 = ((u3 & 0x1fe0) >> 5);
 
     float freq1, freq2;
@@ -796,7 +840,7 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
         return;
     }
 
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)));
 #endif
 }
 
@@ -816,39 +860,15 @@ mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp,
     mbe_synthesizeSilencef(aout_buf);
     return;
 #else
-    int AD = 103; /* JMBE nominal D-STAR tone amplitude */
     float freq1 = 0, freq2 = 0;
-    (void)ambe_d;
 
-    if (!cur_mp) {
+    if (!cur_mp || mbe_validate_bits(ambe_d, 49u) < 0 || !mbe_tone_lookup_dstar_freqs(ID1, &freq1, &freq2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
 
-    switch (ID1) {
-        // single tones, set frequency
-        case 5:
-            freq1 = 156.25;
-            freq2 = freq1;
-            break;
-        case 6:
-            freq1 = 187.5;
-            freq2 = freq1;
-            break;
-        // single tones, calculated frequency
-        default:
-            if ((ID1 >= 7) && (ID1 <= 122)) {
-                freq1 = 31.25f * (float)ID1;
-                freq2 = freq1;
-            }
-    }
-
-    if (freq1 <= 0.0f) {
-        mbe_synthesizeSilencef(aout_buf);
-        return;
-    }
-
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, AD);
+    const double level_db = mbe_tone_dstar_level_db(mbe_tone_dstar_volume(ambe_d));
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(level_db));
 #endif
 }
 
@@ -1103,7 +1123,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
          * IMBE uses the TIA-102.BABA 7.8 level ([-5, 5] on s(n)); D-STAR,
          * ProVoice and direct callers keep JMBE's comfort-noise level. */
         if (mute_noise == MBE_MUTE_NOISE_SPEC) {
-            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE);
+            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
         } else {
             mbe_synthesizeComfortNoisef(aout_buf);
         }
@@ -1137,7 +1157,11 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
     }
 
-    /* Match JMBE float-path soft clipping semantics for synthesized speech. */
+    /* s(n) to output scale, then JMBE's float-path soft clip, which should
+     * now only catch genuine overloads. */
+    for (int i = 0; i < N; i++) {
+        aout_buf[i] *= MBE_SPEECH_OUTPUT_GAIN;
+    }
     mbe_clipFloatBuffer(aout_buf, N);
 }
 

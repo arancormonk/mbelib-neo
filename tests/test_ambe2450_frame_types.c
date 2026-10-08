@@ -224,11 +224,12 @@ rms(const float* x) {
     return sqrt(acc / 160.0);
 }
 
-/** Muted output is the 5.7 uniform noise in [-5, 5]. */
+/** Muted output is the 5.7 uniform noise in [-5, 5] on the 16-bit output
+ * scale (float samples times 7, as mbe_floattoshort() applies). */
 static void
 assert_mute_noise(const float* x) {
-    assert(peak_abs(x) <= 5.0f);
-    double r = rms(x);
+    assert(peak_abs(x) * 7.0f <= 5.0f + 1e-4f);
+    double r = rms(x) * 7.0;
     assert(r > 1.5 && r < 4.0);
     (void)r;
 }

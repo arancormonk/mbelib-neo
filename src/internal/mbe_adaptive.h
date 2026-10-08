@@ -67,9 +67,19 @@ void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_
 /**
  * @brief Apply spectral amplitude enhancement and return pre-enhancement RM0.
  * @param cur_mp In/out parameter set to enhance.
+ * @param high_band_gain Height of the high-band shelf applied afterwards (1 for none).
  * @return Sum of squared amplitudes before enhancement.
  */
-float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp);
+float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain);
+
+/*
+ * High-band shelf heights per codec (linear amplitude gain above 3 kHz; see
+ * mbe_apply_high_band_gain), each matched to DVSI's AMBE-3000 decoder for that
+ * mode on its test vectors. ProVoice shares the IMBE synthesis path.
+ */
+#define MBE_HIGH_BAND_GAIN_IMBE     1.25892541f /* +2.0 dB */
+#define MBE_HIGH_BAND_GAIN_AMBE2450 1.33352143f /* +2.5 dB */
+#define MBE_HIGH_BAND_GAIN_AMBE2400 1.41253754f /* +3.0 dB */
 
 /** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
 enum mbe_mute_noise {
@@ -105,6 +115,18 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
  * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
  */
 #define MBE_SPEC_MUTE_NOISE_AMPLITUDE 5.0f
+
+/**
+ * Gain from the synthesized-speech scale s(n) to this library's float samples,
+ * which mbe_floattoshort() multiplies by 7. s(n) is on the 16-bit scale of the
+ * TIA-102 reference and JMBE, so 1/7 makes the short output match DVSI's
+ * AMBE-3000 decoders on identical bits (within 0.5 dB). Without it, decoded
+ * speech ran 17 dB hotter than the original and the soft clip limited 5-7% of
+ * the samples of normally recorded speech. Speech and the 7.8 mute noise, both
+ * on s(n), take this gain; comfort noise and tones already have absolute
+ * output levels.
+ */
+#define MBE_SPEECH_OUTPUT_GAIN        (1.0f / 7.0f)
 
 /**
  * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].

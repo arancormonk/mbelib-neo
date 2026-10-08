@@ -276,8 +276,85 @@ write_wav(const char* path, const Signal* s) {
     return hash;
 }
 
+/* JSON number, or null for a nonfinite value (checked on object bits, since
+ * Release may assume finite math). */
+static void
+put_number(FILE* f, float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    if ((bits & UINT32_C(0x7f800000)) == UINT32_C(0x7f800000)) {
+        fputs("null", f);
+    } else {
+        fprintf(f, "%.9g", (double)value);
+    }
+}
+
+/* One model as {"w0", "L", "Vl", "Ml", "log2Ml", "gamma"} over bands 1..L,
+ * led by "status" when one is given. Without a usable L only the status is
+ * written, or null. */
+static void
+put_model(FILE* f, const mbe_parms* mp, const int* status) {
+    if (mp->L < 1 || mp->L > 56) {
+        if (status) {
+            fprintf(f, "{\"status\":%d}", *status);
+        } else {
+            fputs("null", f);
+        }
+        return;
+    }
+    if (status) {
+        fprintf(f, "{\"status\":%d,\"w0\":", *status);
+    } else {
+        fputs("{\"w0\":", f);
+    }
+    put_number(f, mp->w0);
+    fprintf(f, ",\"L\":%d,\"Vl\":[", mp->L);
+    for (int l = 1; l <= mp->L; ++l) {
+        fprintf(f, "%s%d", l > 1 ? "," : "", mp->Vl[l]);
+    }
+    fputs("],\"Ml\":[", f);
+    for (int l = 1; l <= mp->L; ++l) {
+        fputs(l > 1 ? "," : "", f);
+        put_number(f, mp->Ml[l]);
+    }
+    fputs("],\"log2Ml\":[", f);
+    for (int l = 1; l <= mp->L; ++l) {
+        fputs(l > 1 ? "," : "", f);
+        put_number(f, mp->log2Ml[l]);
+    }
+    fputs("],\"gamma\":", f);
+    put_number(f, mp->gamma);
+    fputc('}', f);
+}
+
+/* One --params record. "decoded" re-runs the codec's public parameter decoder
+ * on copies of the state before this frame, so it is the frame's own model
+ * even when the process path does not commit it; "history" is the prediction
+ * state and "synth" the synthesized (enhanced) model after the frame. */
+static void
+put_params(FILE* f, size_t frame, int imbe, int ambe2450, const char* data, const mbe_parms* cur_before,
+           const mbe_parms* prev_before, const mbe_parms* prev, const mbe_parms* enhanced,
+           const mbe_process_result* result) {
+    mbe_parms dcur = *cur_before, dprev = *prev_before;
+    int status;
+    if (imbe) {
+        status = mbe_decodeImbe4400Parms(data, &dcur, &dprev);
+    } else if (ambe2450) {
+        status = mbe_decodeAmbe2450Parms(data, &dcur, &dprev);
+    } else {
+        status = mbe_decodeAmbe2400Parms(data, &dcur, &dprev);
+    }
+    fprintf(f, "{\"f\":%zu,\"flags\":%u,\"errors\":%d,\"decoded\":", frame, result->flags, result->total_errors);
+    put_model(f, &dcur, &status);
+    fputs(",\"history\":", f);
+    put_model(f, prev, NULL);
+    fputs(",\"synth\":", f);
+    put_model(f, enhanced, NULL);
+    fputs("}\n", f);
+}
+
 static Signal
-decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
+decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, FILE* params) {
     FILE* f = open_file(path, "rb");
     Signal s = {0};
     mbe_parms cur, prev, enhanced;
@@ -315,7 +392,7 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
             fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
             exit(2);
         }
-        char bits[184];
+        char bits[184] = {0};
         for (size_t i = 0; i < n; ++i) {
             if (line[i] != '0' && line[i] != '1') {
                 fprintf(stderr, "frame %zu: expected literal binary digits\n", frame);
@@ -329,26 +406,32 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
         mbe_initProcessResult(&result);
         int status;
         const char* api;
+        /* Parameter bits of this frame: the row itself, or what the Frame API extracts. */
+        char data[88] = {0};
+        if (n <= sizeof(data)) {
+            memcpy(data, bits, n);
+        }
+        mbe_parms cur_before, prev_before;
+        if (params) {
+            cur_before = cur;
+            prev_before = prev;
+        }
         if (imbe7200 && n == 88) {
             api = "mbe_processImbe4400Dataf";
             status = mbe_processImbe4400Dataf(audio, &result, bits, &cur, &prev, &enhanced);
         } else if (imbe7200 && n == 184) {
-            char data[88];
             api = "mbe_processImbe7200x4400Framef";
             status =
                 mbe_processImbe7200x4400Framef(audio, &result, (const char (*)[23])bits, data, &cur, &prev, &enhanced);
         } else if (imbe7100 && n == 168) {
-            char data[88];
             api = "mbe_processImbe7100x4400Framef";
             status =
                 mbe_processImbe7100x4400Framef(audio, &result, (const char (*)[24])bits, data, &cur, &prev, &enhanced);
         } else if (ambe2450 && n == 96) {
-            char data[49];
             api = "mbe_processAmbe3600x2450Framef";
             status =
                 mbe_processAmbe3600x2450Framef(audio, &result, (const char (*)[24])bits, data, &cur, &prev, &enhanced);
         } else if (ambe2400 && n == 96) {
-            char data[49];
             api = "mbe_processAmbe3600x2400Framef";
             status =
                 mbe_processAmbe3600x2400Framef(audio, &result, (const char (*)[24])bits, data, &cur, &prev, &enhanced);
@@ -367,6 +450,10 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats) {
             fail("frame file must use one public input API");
         }
         stats->input_api = api;
+        if (params) {
+            put_params(params, frame, imbe7200 || imbe7100, ambe2450, data, &cur_before, &prev_before, &prev, &enhanced,
+                       &result);
+        }
         stats->tone += (result.flags & MBE_PROCESS_FLAG_TONE) != 0;
         stats->erasure += (result.flags & MBE_PROCESS_FLAG_ERASURE) != 0;
         stats->repeat += (result.flags & MBE_PROCESS_FLAG_REPEAT) != 0;
@@ -739,9 +826,14 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
         }
     }
     double epsilon = fmax(max_power * 1e-6, 1e-20);
-    double br[5] = {0}, bd[5] = {0}, lsd = 0;
+
+    /* Bin ranges [first, end) of the reported bands; the last (3.5-4 kHz)
+     * overlaps 3000_4000 and covers what LSD (bins 2..118) leaves out. */
+    enum { BANDS = 6 };
+
+    static const size_t edges[BANDS][2] = {{0, 16}, {16, 32}, {32, 64}, {64, 96}, {96, 129}, {112, 129}};
+    double br[BANDS] = {0}, bd[BANDS] = {0}, lsd = 0;
     size_t spectra = 0;
-    static const size_t edges[] = {0, 16, 32, 64, 96, 129};
     for (size_t i = 0; i + FFT_N <= n; i += 80) {
         size_t frame = (i + FFT_N / 2) / 160;
         if (frame >= nf || !active[frame]) {
@@ -755,8 +847,8 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
             error += delta * delta;
         }
         lsd += sqrt(error / 117);
-        for (size_t band = 0; band < 5; ++band) {
-            for (size_t k = edges[band]; k < edges[band + 1]; ++k) {
+        for (size_t band = 0; band < BANDS; ++band) {
+            for (size_t k = edges[band][0]; k < edges[band][1]; ++k) {
                 br[band] += pr[k];
                 bd[band] += pd[k];
             }
@@ -765,11 +857,12 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
     }
     metric("spectral_frames", (double)spectra);
     metric_valid("lsd_db", spectra ? lsd / (double)spectra : 0, speech && spectra > 0);
-    static const char* delta_names[] = {"band_delta_db_0_500", "band_delta_db_500_1000", "band_delta_db_1000_2000",
-                                        "band_delta_db_2000_3000", "band_delta_db_3000_4000"};
-    static const char* absolute_names[] = {"band_db_0_500", "band_db_500_1000", "band_db_1000_2000",
-                                           "band_db_2000_3000", "band_db_3000_4000"};
-    for (size_t band = 0; band < 5; ++band) {
+    static const char* delta_names[BANDS] = {"band_delta_db_0_500",     "band_delta_db_500_1000",
+                                             "band_delta_db_1000_2000", "band_delta_db_2000_3000",
+                                             "band_delta_db_3000_4000", "band_delta_db_3500_4000"};
+    static const char* absolute_names[BANDS] = {"band_db_0_500",     "band_db_500_1000",  "band_db_1000_2000",
+                                                "band_db_2000_3000", "band_db_3000_4000", "band_db_3500_4000"};
+    for (size_t band = 0; band < BANDS; ++band) {
         /* Absolute levels: mean STFT band power in unnormalized int16 units. */
         metric_valid(delta_names[band], db_ratio(bd[band], br[band]), speech && spectra > 0);
         if (!reference) {
@@ -783,7 +876,7 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
 
 int
 main(int argc, char** argv) {
-    const char *codec = NULL, *frames = NULL, *out = NULL, *ref = NULL, *json = NULL, *pcm = NULL;
+    const char *codec = NULL, *frames = NULL, *out = NULL, *ref = NULL, *json = NULL, *pcm = NULL, *params = NULL;
     uint32_t seed = 0x12345678u;
     int have_seed = 0, have_lag = 0, lag = 0;
     for (int i = 1; i < argc; i += 2) {
@@ -808,6 +901,8 @@ main(int argc, char** argv) {
             json = v;
         } else if (!strcmp(argv[i], "--decoded")) {
             pcm = v;
+        } else if (!strcmp(argv[i], "--params")) {
+            params = v;
         } else if (!strcmp(argv[i], "--seed")) {
             char* end;
             errno = 0;
@@ -831,14 +926,15 @@ main(int argc, char** argv) {
         }
     }
     if (pcm) {
-        if (codec || frames || out || have_seed) {
-            fail("--decoded rejects --codec, --frames, --out, and --seed");
+        if (codec || frames || out || have_seed || params) {
+            fail("--decoded rejects --codec, --frames, --out, --seed, and --params");
         }
     } else if (!codec || !frames || !out
                || (strcmp(codec, "imbe7200") != 0 && strcmp(codec, "imbe7100") != 0 && strcmp(codec, "ambe2400") != 0
                    && strcmp(codec, "ambe2450") != 0)) {
         fail("usage: mbe_quality_eval --codec imbe7200|imbe7100|ambe2400|ambe2450 --frames file --out decoded.wav "
-             "[--ref speech.raw|speech.wav] [--seed uint32] [--lag-samples -160..800] [--json metrics.json]\n"
+             "[--ref speech.raw|speech.wav] [--seed uint32] [--lag-samples -160..800] [--json metrics.json] "
+             "[--params frames.jsonl]\n"
              "   or: mbe_quality_eval --decoded input.raw|input.wav [--ref speech.raw|speech.wav] "
              "[--lag-samples -160..800] [--json metrics.json]");
     }
@@ -848,8 +944,16 @@ main(int argc, char** argv) {
     reject_alias(json, ref);
     reject_alias(json, pcm);
     reject_alias(out, json);
+    reject_alias(params, frames);
+    reject_alias(params, ref);
+    reject_alias(params, out);
+    reject_alias(params, json);
     DecodeStats stats = {0};
-    Signal decoded = pcm ? read_reference(pcm) : decode(codec, frames, seed, &stats);
+    FILE* pf = params ? open_file(params, "w") : NULL;
+    Signal decoded = pcm ? read_reference(pcm) : decode(codec, frames, seed, &stats, pf);
+    if (pf && (ferror(pf) || fclose(pf))) {
+        fail("parameter dump write failed");
+    }
     Signal reference = ref ? read_reference(ref) : (Signal){0};
     measure(&decoded, ref ? &reference : NULL, lag, have_lag);
     metric_valid("float_nonfinite_samples", (double)stats.nonfinite, !pcm);

@@ -25,6 +25,7 @@
 #include "mbe_compiler.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
+#include "mbe_tone.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -188,11 +189,6 @@ ambe2400_decode_tone_index(const char* ambe_d) {
     tone_index |= ambe_d[10] << 1;
     tone_index |= ambe_d[11];
 
-#ifdef AMBE_DEBUG
-    int tone_volume = (ambe_d[12] << 7) | (ambe_d[13] << 6) | (ambe_d[14] << 5) | (ambe_d[15] << 4) | (ambe_d[16] << 3)
-                      | (ambe_d[44] << 2) | (ambe_d[45] << 1) | ambe_d[17];
-    (void)tone_volume;
-#endif
     return tone_index;
 }
 
@@ -216,6 +212,13 @@ ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L
     if ((tone_index >= 5) && (tone_index <= 122)) {
         return tone_index;
     }
+    /* Dual tones with a nonzero volume. Volume 0 with index 128 is this
+     * library's encoder's silence frame, which resets both sides. */
+    float freq1, freq2;
+    if ((tone_index >= 128) && mbe_tone_dstar_volume(ambe_d) != 0
+        && mbe_tone_lookup_dstar_freqs(tone_index, &freq1, &freq2)) {
+        return tone_index;
+    }
 
     if (!((tone_index >= 128) && (tone_index <= 163))) {
 #ifdef AMBE_DEBUG
@@ -232,9 +235,9 @@ ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L
 
 static void
 ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
-    *f0 = exp2f(-4.311767578125f - (2.1336e-2f * ((float)b0 + 0.5f)));
+    *f0 = mbe_ambe2400_f0(b0);
     cur_mp->w0 = *f0 * (float)2 * M_PI;
-    *L = AmbePlusLtable[b0];
+    *L = mbe_ambe2400_harmonic_count(*f0);
     cur_mp->L = *L;
 }
 
@@ -471,7 +474,7 @@ mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, c
         }
         Sum43 = Sum43 + ambe2400_interpolate_prediction(deltal[l], prev_mp->log2Ml[intkl[l]], prev_mp->log2Ml[upper]);
     }
-    Sum43 = (((float)0.65 / (float)cur_mp->L) * Sum43);
+    Sum43 = ((MBE_AMBE2400_PREDICTION_RHO / (float)cur_mp->L) * Sum43);
 #ifdef AMBE_DEBUG
     fprintf(stderr, "\n");
     fprintf(stderr, "Sum43: %f\n", Sum43);
@@ -489,8 +492,8 @@ mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, c
         if (upper > MBE_MAX_HARMONIC_BANDS) {
             upper = MBE_MAX_HARMONIC_BANDS;
         }
-        float c1 = ((float)0.65 * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-        float c2 = ((float)0.65 * deltal[l] * prev_mp->log2Ml[upper]);
+        float c1 = (MBE_AMBE2400_PREDICTION_RHO * ((float)1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
+        float c2 = (MBE_AMBE2400_PREDICTION_RHO * deltal[l] * prev_mp->log2Ml[upper]);
         cur_mp->log2Ml[l] = ambe2400_reconstruct_log2Ml(Tl[l], c1, c2, Sum43, BigGamma);
         if (cur_mp->Vl[l] == 1) {
             cur_mp->Ml[l] = exp2f(cur_mp->log2Ml[l]);
@@ -671,7 +674,7 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
 
 static int
 ambe2400_is_accepted_tone(int bad, int c0_errors, int total_errors) {
-    return bad >= 5 && bad <= 122 && c0_errors < 2 && total_errors < 3;
+    return ((bad >= 5 && bad <= 122) || (bad >= 128 && bad <= 147)) && c0_errors < 2 && total_errors < 3;
 }
 
 static void
@@ -708,7 +711,7 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
                           mbe_parms* prev_mp_enhanced) {
     if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
         mbe_moveMbeParms(cur_mp, prev_mp);
-        float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp);
+        float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
         mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         return;

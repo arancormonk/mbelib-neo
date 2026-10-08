@@ -188,7 +188,7 @@ Use `mbe_process*Data*` when you already have unpacked parameter bits.
 IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400/IMBE 4400 layout; synthesize converted data with the IMBE 4400 data APIs, passing along the decode's `mbe_process_result` so its C0/C4 context and `MBE_PROCESS_FLAG_PROVOICE` (ProVoice mute noise) apply.
 
 - `mbe_ambe2400EncoderAlloc()` creates a caller-owned encoder context and FFT plan; `mbe_ambe2400EncoderReset(enc)` restarts its analysis state, and `mbe_ambe2400EncoderFree(enc)` releases it.
-- `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables); interoperability with DVSI hardware has not been verified.
+- `mbe_encodeAmbe2400Parms(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 float PCM samples into 49 AMBE 2400 parameter bits. It is bit-compatible with this library's `mbe_decodeAmbe2400Parms()`/`mbe_processAmbe3600x2400*()` path and follows the D-STAR AMBE bit layout (interleave, scrambler and Golay parity cross-checked against the MMDVM tables). Its analysis follows the method of TIA-102.BABA chapter 5, and the spectral reconstruction it targets matches DVSI's AMBE-3000 D-STAR test vectors; on-air interoperability has not been verified.
 - `mbe_encodeAmbe2400ParmsShort(enc, samples, ambe_d, cur_mp, prev_mp)` encodes 160 signed 16-bit PCM samples into 49 AMBE 2400 parameter bits.
 - `mbe_encodeAmbe3600x2400Frame()` adds FEC and interleaving to 49 parameter bits, producing `char ambe_fr[4][24]`.
 - `mbe_encodeDStarDVData()` packs a frame into nine D-STAR DV data bytes in air order, LSB first, without the sync word.
@@ -196,7 +196,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 
 ### Encoder Workflow
 
-- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail.
+- Encoder state: use one `mbe_ambe2400_encoder` context per stream, with any number of contexts per thread; concurrent use of the same context requires external synchronization. Initialize with `mbe_ambe2400EncoderAlloc()` plus `mbe_initMbeParms()`, advance prediction with `mbe_moveMbeParms(cur_mp, prev_mp)` between frames, and restart with `mbe_ambe2400EncoderReset()` plus `mbe_initMbeParms()`. Encoding never allocates and does not modify `prev_mp`. State equivalence is with the `mbe_processAmbe2400*` path, which resets on silence. The analysis delay is about 10 ms; feed one final zero frame to flush the tail. An input AGC normalizes the talker's level over about a second, adapting on voiced frames only.
 
 ### Stateful Decode Workflow
 
@@ -218,6 +218,7 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 - The `short` entry points write 16-bit PCM with soft clipping (~95% full-scale).
 - The `*f` entry points return mbelib’s historical float scale (not normalized `[-1, +1]`). `mbe_floattoshort()` applies the same `* 7.0` scaling and clipping used by the `short` APIs.
 - To feed a normalized float pipeline, scale each float sample by `(7.0f / 32768.0f)` (range is approximately `[-0.95, +0.95]` after soft clipping).
+- Decoded speech comes out at the level of the original speech, the same level DVSI's AMBE-3000 decoders produce on identical bits. Releases up to 2.2.x played speech about 17 dB louder and soft-clipped 5–7% of the samples of normally recorded speech; adjust any downstream gain that compensated for that.
 
 ## Windows (MSVC) Quickstart
 
@@ -292,13 +293,15 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 - **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum), replacing earlier JMBE parity:
   - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, §4.4.1 eq. 26, §4.4.3 eq. 43). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
   - **Repeats** (§5.6): erasure (b0 120–123), or corrected C0 errors ≥ 4, or C0 ≥ 2 with ≥ 6 total. These criteria apply to every frame, before tone classification. A repeat replays the last synthesized frame unchanged (no re-enhancement or adaptive smoothing) and leaves the history untouched.
-  - **Tones** (§7, §7.3): a frame whose first six bits of u0 equal 63 is a tone frame, whatever its b0 would read as (a single tone can read as silence). An invalid tone index is an erasure (flagged `ERASURE` and `TONE`), and so is a tone frame whose redundant tone fields disagree (JMBE's consistency check; the spec leaves this to the decoder). Tone ID 255 is a zero-amplitude tone.
+  - **Tones** (§7, §7.3): a frame whose first six bits of u0 equal 63 is a tone frame, whatever its b0 would read as (a single tone can read as silence). An invalid tone index is an erasure (flagged `ERASURE` and `TONE`), and so is a tone frame whose redundant tone fields disagree (JMBE's consistency check; the spec leaves this to the decoder). Tone ID 255 is a zero-amplitude tone. Each tone component plays at the §7.2 level, 0.711 dB per AD step from +3.17 dBm0 at AD 127 (at the reference DVSI's decoder uses), and dual tones carry both components at that level. Frequencies are the nominal values of the tone table; DVSI's decoder approximates dual tones as two harmonics of one fundamental, up to 3% off nominal.
   - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
   - **Recovery after mutes and tones**: a mute or a tone frame also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping the speech from before it, and a repeat right after either replays silence. The spec doesn't define the synthesis state across these frames.
 
+- **D-STAR tones**: single tones 5–122 as AMBE+2, DTMF 128–143 (128 + 4 × column + row) and call-progress tones 144–147, at the level the 8-bit tone volume gives on DVSI's decoder. The zero-volume frame this library's encoder sends for silence still decodes as silence and resets both sides.
+
 - **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
-- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] on the synthesized-speech scale (about ±35 in int16 output; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
+- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] at the int16 output (±5/7 in the float output, which is int16 / 7; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
 
 - **Nyquist guard**: the shared synthesizer skips voiced harmonics at or above Nyquist (`l * w0 >= pi`) instead of rendering them as aliases. Decoded models never contain such harmonics; the guard protects caller-supplied models.
 
@@ -354,7 +357,7 @@ tools/bench_compare.sh
 ## Tests and Examples
 
 - Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
-- Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_ambe2450_frame_types` (AMBE 3600x2450 silence, repeat, erasure, tone and mute handling per TIA-102.BABA-1), `test_golden_pcm` (golden hash regression checks, including voice-only AMBE 2450 and D-STAR sequences).
+- Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_ambe2450_frame_types` (AMBE 3600x2450 silence, repeat, erasure, tone and mute handling per TIA-102.BABA-1), `test_tones` (AMBE+2 and D-STAR tone levels and frequencies against the DVSI-calibrated laws), `test_golden_pcm` (golden hash regression checks, including voice-only AMBE 2450 and D-STAR sequences).
 - Example: `examples/print_version.c` shows linking and header usage.
 - WAV round trip: `./build/dev-debug/dstar_encode < input.wav > output.dstar`, then `./build/dev-debug/dstar_decode < output.dstar > output.wav`. These example binaries are not installed. They use binary stdin/stdout, accept no path arguments, and send diagnostics to stderr. The private `.dstar` container is not a D-STAR air-interface stream.
 - When Python 3.7 or newer is available, CTest also checks the D-STAR examples through stdin/stdout pipes, including malformed WAVs, exact silence, and the final flush frame.
