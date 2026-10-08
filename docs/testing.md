@@ -10,6 +10,8 @@ The CTest suite includes:
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
 - AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors; the decoded level follows the input down 40 dB and silent or -70 dBFS input is coded as voice frames that decode near silence (`test_ambe2400_encoder`)
+- AMBE+2 2450 encoder: frame FEC round trips and single-bit correction, steady harmonic signals decoded on pitch, DTMF and single tones sent as tone frames the decoder plays at the input level, silence, short/float parity, invalid input leaving the context unchanged, independent contexts and reset replay (`test_ambe2450_encoder`)
+- IMBE 7200x4400 encoder: the (15,11) Hamming encoder over every data word, frame FEC and modulation round trips with single-bit correction, steady harmonic signals decoded on pitch, decoded level following the input, silence, short/float parity, invalid input, independent contexts and reset replay (`test_imbe7200_encoder`)
 - MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, the FFT autocorrelation against the direct sum, and the voicing thresholds (`test_speech_analysis`)
 - Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven) clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
@@ -519,7 +521,8 @@ amplitude before that factor), plus `gamma`. Dumping does not change the PCM.
 ### Encoder evaluation
 
 `mbe_quality_encode` (built with `MBELIB_BUILD_TOOLS=ON`) encodes 8 kHz s16le
-speech with the D-STAR encoder and writes the 49-bit rows `mbe_quality_eval`
+speech with the D-STAR (`--codec ambe2400`), AMBE+2 (`ambe2450`) or IMBE
+(`imbe7200`) encoder and writes the 49- or 88-bit rows `mbe_quality_eval`
 decodes, so encoder output is scored against the input with the same metrics
 as decoder output. Comparing with DVSI's own encoding of the same input:
 
@@ -533,7 +536,8 @@ build/dev-debug/mbe_quality_eval --codec ambe2400 --frames dvsi.frames --out dvs
 Both bit streams then go through the same decoder, which itself matches DVSI's
 output on DVSI's bits, so the band, LSD and envelope figures compare the
 encoders. One zero flush frame (`--flush-frames`, default 1) covers the
-encoder's analysis delay.
+D-STAR encoder's analysis delay; the AMBE+2 and IMBE encoders default to three
+for their 60 ms look-ahead.
 
 ### Attribution and limitations
 

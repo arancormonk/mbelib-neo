@@ -165,6 +165,24 @@ hamming_encode_data_word(uint32_t data, const int generator[4], const int data_p
     return 0;
 }
 
+void
+mbe_hamming1511_encode(const char in11[11], char out15[15]) {
+    /* Data at positions 14..4, as mbe_hamming1511() reads it back; the four
+     * parity positions 0..3 each sit in exactly one check of the generator. */
+    memset(out15, 0, 15);
+    for (int i = 0; i < 11; ++i) {
+        out15[14 - i] = (char)(in11[i] & 1);
+    }
+    for (int p = 0; p < 16; ++p) {
+        for (int i = 0; i < 4; ++i) {
+            out15[i] = (char)((p >> i) & 1);
+        }
+        if (hamming_syndrome_from_block(hamming_block_from_bits(out15), hammingGenerator) == 0) {
+            return;
+        }
+    }
+}
+
 static int
 hamming1511_soft_common(const mbe_soft_bit* in, char* out, const int generator[4], int variant7100) {
     char hard_out[15];
