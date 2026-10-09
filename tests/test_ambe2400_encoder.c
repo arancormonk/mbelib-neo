@@ -259,7 +259,6 @@ main(int argc, char** argv) {
 #include <stdint.h>
 #include <string.h>
 
-#include "ambe_common.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
 
@@ -692,7 +691,7 @@ test_invalid_samples(mbe_ambe2400_encoder* enc) {
                     char unused[49];
                     mbe_parms before = cur;
                     if (mbe_encodeAmbe2400Parms(enc, bad, unused, &cur, &prev) != MBE_STATUS_INVALID_ARGUMENT
-                        || memcmp(&before, &cur, sizeof(cur)) != 0) {
+                        || !parms_identical(&before, &cur)) {
                         printf("invalid samples: value %zu was not rejected cleanly\n", b);
                         return 1;
                     }
@@ -1119,9 +1118,9 @@ run_fixture(mbe_ambe2400_encoder* enc, struct fixture* fx, int frames, int settl
             return 1;
         }
         if (r == 0 && f >= settle) {
-            int b0 = d[48];
+            int b0 = (unsigned char)d[48];
             for (int i = 0; i < 6; i++) {
-                b0 |= d[i] << (6 - i);
+                b0 |= (int)(unsigned char)d[i] << (6 - i);
             }
             int b1 = (d[38] << 3) | (d[39] << 2) | (d[40] << 1) | d[41];
             int want = ideal_b0(fixture_f0(fx, f));
@@ -1212,15 +1211,15 @@ test_mixed_bands(mbe_ambe2400_encoder* enc) {
 static int
 test_pitch_cases(mbe_ambe2400_encoder* enc) {
     const struct {
-        enum fixture_kind kind;
         double f0;
-        int settle;
         const char* name;
-    } cases[] = {{FIX_VOWEL, 240.0, 3, "240 Hz"},
-                 {FIX_MISSING_F0, 120.0, 3, "missing fundamental"},
-                 {FIX_STRONG_H2, 150.0, 3, "dominant 2nd harmonic"},
-                 {FIX_GLIDE, 100.0, 3, "100-200 Hz glide"},
-                 {FIX_ONSET, 150.0, 43, "onset after noise"}};
+        enum fixture_kind kind;
+        int settle;
+    } cases[] = {{240.0, "240 Hz", FIX_VOWEL, 3},
+                 {120.0, "missing fundamental", FIX_MISSING_F0, 3},
+                 {150.0, "dominant 2nd harmonic", FIX_STRONG_H2, 3},
+                 {100.0, "100-200 Hz glide", FIX_GLIDE, 3},
+                 {150.0, "onset after noise", FIX_ONSET, 43}};
 
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
         struct fixture fx = {.kind = cases[c].kind, .f0 = cases[c].f0, .level = 0.05};
