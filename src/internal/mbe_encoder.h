@@ -69,6 +69,9 @@ int mbe_encoder_frontend_analyze(struct mbe_encoder_frontend* fe, const float sa
  * scales the deviations of a[1..L] from their mean mean_a toward a flat
  * envelope at floor_mean until its energy matches the frame's (a flat envelope
  * is the quietest the floor can play), and returns floor_mean, the new mean.
+ * Energies that could leave the float range (an input level or history far
+ * beyond speech) are compared as log2; every other frame keeps the linear sums
+ * D-STAR's output was calibrated with.
  */
 float mbe_encoder_fit_floor(float* a, int L, float mean_a, float floor_mean);
 

@@ -152,17 +152,57 @@ mbe_encoder_envelope_energy(const float* a, int L, float mean_a, float mean, flo
     return energy;
 }
 
+/* The same energy as log2, summed relative to the envelope's largest term (each
+ * term at most 1, the sum between 1 and L), so it never overflows. */
+static float
+mbe_encoder_envelope_log2_energy(const float* a, int L, float mean_a, float mean, float s) {
+    float top = mean + (s * (a[1] - mean_a));
+    for (int l = 2; l <= L; l++) {
+        top = fmaxf(top, mean + (s * (a[l] - mean_a)));
+    }
+    float sum = 0.0f;
+    for (int l = 1; l <= L; l++) {
+        sum += exp2f(2.0f * ((mean + (s * (a[l] - mean_a))) - top));
+    }
+    /* The largest term is 2^0, so the sum is at least 1. */
+    return (2.0f * top) + log2f(fmaxf(sum, 1.0f));
+}
+
+/* The largest log2 amplitude any envelope of the fit reaches: max a for the
+ * target, floor_mean + s * (a - mean_a) with s in [0, 1] for the floor. */
+static float
+mbe_encoder_envelope_peak(const float* a, int L, float mean_a, float floor_mean) {
+    float a_max = a[1];
+    for (int l = 2; l <= L; l++) {
+        a_max = fmaxf(a_max, a[l]);
+    }
+    return fmaxf(a_max, floor_mean + fmaxf(a_max - mean_a, 0.0f));
+}
+
+/* 56 harmonics at 2^(2 * 60) still sum inside the float range. */
+#define MBE_ENCODER_ENERGY_PEAK_MAX 60.0f
+
+static float
+mbe_encoder_fit_energy(const float* a, int L, float mean_a, float mean, float s, int log2_domain) {
+    return log2_domain ? mbe_encoder_envelope_log2_energy(a, L, mean_a, mean, s)
+                       : mbe_encoder_envelope_energy(a, L, mean_a, mean, s);
+}
+
 float
 mbe_encoder_fit_floor(float* a, int L, float mean_a, float floor_mean) {
-    const float target = mbe_encoder_envelope_energy(a, L, mean_a, mean_a, 1.0f);
+    /* An input level or prediction history far beyond speech could overflow
+     * the energies, which fast-math code must never do; such a frame compares
+     * them as log2. Every other frame takes the linear sums. */
+    const int log2_domain = mbe_encoder_envelope_peak(a, L, mean_a, floor_mean) > MBE_ENCODER_ENERGY_PEAK_MAX;
+    const float target = mbe_encoder_fit_energy(a, L, mean_a, mean_a, 1.0f, log2_domain);
     float lo = 0.0f;
     float hi = 1.0f;
-    if (mbe_encoder_envelope_energy(a, L, mean_a, floor_mean, 0.0f) >= target) {
+    if (mbe_encoder_fit_energy(a, L, mean_a, floor_mean, 0.0f, log2_domain) >= target) {
         hi = 0.0f;
     }
     for (int i = 0; i < 30 && hi > 0.0f; i++) {
         float mid = 0.5f * (lo + hi);
-        if (mbe_encoder_envelope_energy(a, L, mean_a, floor_mean, mid) > target) {
+        if (mbe_encoder_fit_energy(a, L, mean_a, floor_mean, mid, log2_domain) > target) {
             hi = mid;
         } else {
             lo = mid;

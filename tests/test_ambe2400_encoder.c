@@ -253,11 +253,15 @@ main(int argc, char** argv) {
 }
 #else
 
+#ifdef MBELIB_TEST_FENV_OVERFLOW
+#include <fenv.h>
+#endif
 #include <stdint.h>
 #include <string.h>
 
 #include "ambe_common.h"
 #include "mbe_ecc.h"
+#include "mbe_encoder.h"
 
 static int
 float_bits_equal(float a, float b) {
@@ -745,6 +749,79 @@ test_bad_history(mbe_ambe2400_encoder* enc) {
         }
     }
     puts("malformed and overflowing prediction histories are rejected");
+    return 0;
+}
+
+/* The floor fit's envelope energy, in double precision, where none overflows. */
+static double
+ref_envelope_energy(const float* a, int L, double mean_a, double mean, double s) {
+    double energy = 0.0;
+    for (int l = 1; l <= L; l++) {
+        energy += exp2(2.0 * (mean + (s * ((double)a[l] - mean_a))));
+    }
+    return energy;
+}
+
+/* mbe_encoder_fit_floor()'s flattening factor, found in double precision. */
+static double
+ref_fit_floor_factor(const float* a, int L, double mean_a, double floor_mean) {
+    const double target = ref_envelope_energy(a, L, mean_a, mean_a, 1.0);
+    double lo = 0.0;
+    double hi = (ref_envelope_energy(a, L, mean_a, floor_mean, 0.0) >= target) ? 0.0 : 1.0;
+    for (int i = 0; i < 30 && hi > 0.0; i++) {
+        double mid = 0.5 * (lo + hi);
+        if (ref_envelope_energy(a, L, mean_a, floor_mean, mid) > target) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return hi;
+}
+
+/* The floor fit compares envelope energies. A floor far above speech (a
+ * prediction history with gamma 150 puts it 73 log2 steps up) or one harmonic
+ * 90 steps above the rest (an input near the +-2^20 limit) must not overflow
+ * them, which fast-math code may not do, and the fit must still agree with a
+ * double-precision one. The overflow flag is checked only where CMake says it
+ * means something (MBELIB_TEST_FENV_OVERFLOW: an unoptimized IEEE build). */
+static int
+test_fit_floor_range(void) {
+    static const struct {
+        int L;
+        float top, rest, floor_mean;
+    } cases[] = {{14, 5.0f, 1.0f, 73.0f}, {20, 45.0f, -45.0f, 0.0f}, {20, 2.0f, -6.0f, -1.0f}};
+
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        float a[57] = {0};
+        float in[57] = {0};
+        float mean_a = 0.0f;
+        for (int l = 1; l <= cases[k].L; l++) {
+            in[l] = (l == 1) ? cases[k].top : cases[k].rest + (0.25f * (float)(l % 3));
+            a[l] = in[l];
+            mean_a += in[l];
+        }
+        mean_a /= (float)cases[k].L;
+        int overflowed = 0;
+#ifdef MBELIB_TEST_FENV_OVERFLOW
+        feclearexcept(FE_OVERFLOW);
+#endif
+        float mean = mbe_encoder_fit_floor(a, cases[k].L, mean_a, cases[k].floor_mean);
+#ifdef MBELIB_TEST_FENV_OVERFLOW
+        overflowed = fetestexcept(FE_OVERFLOW) != 0;
+#endif
+        double factor = ref_fit_floor_factor(in, cases[k].L, mean_a, cases[k].floor_mean);
+        int bad = overflowed || !float_finite(&mean);
+        for (int l = 1; l <= cases[k].L; l++) {
+            double want = (double)cases[k].floor_mean + (factor * ((double)in[l] - (double)mean_a));
+            bad |= !float_finite(&a[l]) || fabs((double)a[l] - want) > 1e-3 * (1.0 + fabs((double)in[l] - mean_a));
+        }
+        if (bad) {
+            printf("floor fit case %zu: overflow %d, factor %.6f\n", k, overflowed, factor);
+            return 1;
+        }
+    }
+    puts("floor fit: no overflow far beyond speech, agrees with a double-precision fit");
     return 0;
 }
 
@@ -1326,6 +1403,7 @@ main(void) {
     fails += test_invalid_samples(enc);
     fails += test_bad_history(enc);
     fails += test_reachable_history(enc);
+    fails += test_fit_floor_range();
     fails += test_c1_parity();
     fails += test_golay();
     fails += test_frame_roundtrip();

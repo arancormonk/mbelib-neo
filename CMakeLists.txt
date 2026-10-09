@@ -864,6 +864,21 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
+    # The floor-fit overflow-flag check needs an unoptimized IEEE build of the
+    # library and the test, where every floating-point operation runs as
+    # written. Elsewhere the flags carry no guarantee: fast-math, optimization
+    # without FENV_ACCESS (which GCC does not implement), or MSVC, whose
+    # fenv_access is off by default.
+    if(
+        NOT MBELIB_ENABLE_FAST_MATH
+        AND NOT MSVC
+        AND CMAKE_BUILD_TYPE STREQUAL "Debug"
+    )
+        target_compile_definitions(
+            test_ambe2400_encoder
+            PRIVATE MBELIB_TEST_FENV_OVERFLOW=1
+        )
+    endif()
     # The AMBE+2 and IMBE encoder tests drive private quantizer steps and the
     # Hamming encoder, which the shared library does not export.
     foreach(_enc_test test_ambe2450_encoder test_imbe7200_encoder)
