@@ -45,27 +45,36 @@ mbe_encoder_frontend_reset(struct mbe_encoder_frontend* fe) {
 }
 
 /*
- * Every test below compares the magnitude of a float's bit pattern against a
- * bound. Under fast-math the optimizer reads an exponent-mask test (bits &
- * 0x7F800000 == 0x7F800000) as a NaN/Inf class test and folds it away, as
- * Clang does with LTO; range tests against ordinary bounds survive, and they
- * reject NaN and infinity, whose patterns lie above every bound used here.
+ * Every test below reads a float's bit pattern from memory and compares its
+ * magnitude against a bound, which rejects NaN and infinity, whose patterns
+ * lie above every bound used here. Both halves matter under fast-math. Clang
+ * marks a by-value float parameter nofpclass(nan inf), so a test on one may be
+ * folded away (an exponent-mask test, bits & 0x7F800000 == 0x7F800000, is
+ * folded to "finite"), while a load carries no such assumption. And the
+ * optimizer reads an exponent-mask test as a NaN/Inf class test, which a value
+ * computed by fast-math arithmetic is assumed to pass; a range test against an
+ * ordinary bound is left alone.
  */
 #define MBE_ENCODER_LIMIT_BITS     0x49800000u /* 2^20 */
 #define MBE_ENCODER_LOG2_HIGH_BITS 0x42F00000u /* 120 */
 #define MBE_ENCODER_LOG2_LOW_BITS  0x4A800000u /* 2^22 */
 #define MBE_ENCODER_AMPLITUDE_BITS 0x7F000000u /* 2^127 */
 
-static int
-mbe_encoder_magnitude_at_most(float x, uint32_t limit_bits) {
+static uint32_t
+mbe_encoder_bits(const float* x) {
     uint32_t bits;
-    memcpy(&bits, &x, sizeof(bits));
-    return (bits & 0x7FFFFFFFu) <= limit_bits;
+    memcpy(&bits, x, sizeof(bits));
+    return bits;
+}
+
+static int
+mbe_encoder_magnitude_at_most(const float* x, uint32_t limit_bits) {
+    return (mbe_encoder_bits(x) & 0x7FFFFFFFu) <= limit_bits;
 }
 
 /* Finite and within +-2^20. */
 static int
-mbe_encoder_value_valid(float x) {
+mbe_encoder_value_valid(const float* x) {
     return mbe_encoder_magnitude_at_most(x, MBE_ENCODER_LIMIT_BITS);
 }
 
@@ -73,16 +82,15 @@ mbe_encoder_value_valid(float x) {
  * from overflow, and at least -2^22 (a history within +-2^20 gives no less
  * than about -2.1 * 2^20). */
 static int
-mbe_encoder_log2_valid(float x) {
-    uint32_t bits;
-    memcpy(&bits, &x, sizeof(bits));
+mbe_encoder_log2_valid(const float* x) {
+    const uint32_t bits = mbe_encoder_bits(x);
     return (bits & 0x7FFFFFFFu) <= (((bits >> 31) != 0u) ? MBE_ENCODER_LOG2_LOW_BITS : MBE_ENCODER_LOG2_HIGH_BITS);
 }
 
 int
 mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]) {
     for (int i = 0; i < MBE_ENCODER_SAMPLES; i++) {
-        if (!mbe_encoder_value_valid(samples[i])) {
+        if (!mbe_encoder_value_valid(&samples[i])) {
             return 0;
         }
     }
@@ -92,24 +100,26 @@ mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]) {
 int
 mbe_encoder_history_valid(const mbe_parms* prev_mp) {
     for (int l = 0; l <= MBE_MAX_HARMONIC_BANDS; l++) {
-        if (!mbe_encoder_value_valid(prev_mp->log2Ml[l])) {
+        if (!mbe_encoder_value_valid(&prev_mp->log2Ml[l])) {
             return 0;
         }
     }
-    return mbe_encoder_value_valid(prev_mp->gamma);
+    return mbe_encoder_value_valid(&prev_mp->gamma);
 }
 
 /* log2Ml is finite by construction from a validated history, so it is judged
  * first; Ml[l], which overflows exactly when log2Ml[l] is too large, is read
- * only after its log2Ml[l] passed. gamma is left out: it stays within +-2^20
+ * only after its log2Ml[l] passed. That order matters even though the bits
+ * come from memory: the optimizer may forward a value a fast-math decoder just
+ * stored, assumptions included. gamma is left out: it stays within +-2^20
  * from a validated history, and the IMBE decoder does not write it. */
 int
 mbe_encoder_model_valid(const mbe_parms* mp) {
     const int L = mbe_clamp_harmonic_count(mp->L);
-    int ok = mbe_encoder_value_valid(mp->w0);
+    int ok = mbe_encoder_value_valid(&mp->w0);
     for (int l = 1; ok && l <= L; l++) {
-        ok = mbe_encoder_log2_valid(mp->log2Ml[l])
-             && mbe_encoder_magnitude_at_most(mp->Ml[l], MBE_ENCODER_AMPLITUDE_BITS);
+        ok = mbe_encoder_log2_valid(&mp->log2Ml[l])
+             && mbe_encoder_magnitude_at_most(&mp->Ml[l], MBE_ENCODER_AMPLITUDE_BITS);
     }
     return ok;
 }

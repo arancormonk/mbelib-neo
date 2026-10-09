@@ -70,27 +70,24 @@ enc_parms_identical(const mbe_parms* a, const mbe_parms* b) {
     return memcmp(x, y, sizeof(x)) == 0;
 }
 
-/* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. The test
- * is a range test on the bit pattern (at most 2^127), which unlike an
- * exponent-mask test survives fast-math. */
+/* At most 2^127 in magnitude: a range test on the bit pattern read from
+ * memory, which unlike an exponent-mask test or a by-value float survives
+ * fast-math. */
+static inline int
+enc_float_finite(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & 0x7FFFFFFFu) <= 0x7F000000u;
+}
+
+/* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. */
 static inline int
 enc_model_finite(const mbe_parms* mp) {
-    float values[3 + (2 * 56)];
-    int n = 0;
-    values[n++] = mp->w0;
-    values[n++] = mp->gamma;
-    for (int l = 1; l <= mp->L && l <= 56; l++) {
-        values[n++] = mp->log2Ml[l];
-        values[n++] = mp->Ml[l];
+    int ok = enc_float_finite(&mp->w0) && enc_float_finite(&mp->gamma);
+    for (int l = 1; ok && l <= mp->L && l <= 56; l++) {
+        ok = enc_float_finite(&mp->log2Ml[l]) && enc_float_finite(&mp->Ml[l]);
     }
-    for (int i = 0; i < n; i++) {
-        uint32_t bits;
-        memcpy(&bits, &values[i], sizeof(bits));
-        if ((bits & 0x7FFFFFFFu) > 0x7F000000u) {
-            return 0;
-        }
-    }
-    return 1;
+    return ok;
 }
 
 /* Decoded fundamental in Hz. */

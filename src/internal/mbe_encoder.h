@@ -36,8 +36,8 @@ void mbe_encoder_frontend_close(struct mbe_encoder_frontend* fe);
 /* Restore the freshly opened analysis state (the tables are kept). */
 void mbe_encoder_frontend_reset(struct mbe_encoder_frontend* fe);
 
-/* Finite and within +-2^20, checked on the bit pattern so the test survives
- * fast-math. One bad sample would otherwise poison the DC filter and the
+/* Finite and within +-2^20, checked on the bit pattern read from memory so the
+ * test survives fast-math. One bad sample would otherwise poison the DC filter and the
  * analysis history for the rest of the stream. */
 int mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]);
 
