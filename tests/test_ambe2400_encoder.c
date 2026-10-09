@@ -277,11 +277,13 @@ parms_identical(const mbe_parms* a, const mbe_parms* b) {
     return memcmp(x, y, sizeof(x)) == 0;
 }
 
+/* At most 2^127 in magnitude: a range test on the bit pattern, which unlike an
+ * exponent-mask test survives fast-math. */
 static int
 float_finite(float x) {
     uint32_t bits;
     memcpy(&bits, &x, sizeof(bits));
-    return (bits & 0x7F800000u) != 0x7F800000u;
+    return (bits & 0x7FFFFFFFu) <= 0x7F000000u;
 }
 
 /* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. */

@@ -424,10 +424,10 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
  * @param prev_mp Input: previous quantized frame state; never modified. A
  *                state with a log2Ml or gamma that is not finite or lies
- *                beyond +-2^20, or one from which the model would not be
- *                finite (no decoder reaches such a state), returns
- *                MBE_STATUS_INVALID_ARGUMENT and leaves the context and
- *                cur_mp unchanged.
+ *                beyond +-2^20, or one from which the model would approach
+ *                overflow (a log2Ml above 120; decoders stay below 50),
+ *                returns MBE_STATUS_INVALID_ARGUMENT and leaves the context
+ *                and cur_mp unchanged.
  * @return 0, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
@@ -700,9 +700,10 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  *                must not be prev_mp.
  * @param prev_mp Input: previous frame state; never modified. A state with a
  *                log2Ml or gamma that is not finite or lies beyond +-2^20, or
- *                one from which the model would not be finite (no decoder
- *                reaches such a state), returns MBE_STATUS_INVALID_ARGUMENT and
- *                leaves the context and cur_mp unchanged.
+ *                one from which the model would approach overflow (a log2Ml
+ *                above 120, or a non-finite w0 or amplitude; decoders stay
+ *                below 50), returns MBE_STATUS_INVALID_ARGUMENT and leaves the
+ *                context and cur_mp unchanged.
  * @return MBE_AMBE2450_FRAME_VOICE or MBE_AMBE2450_FRAME_TONE, or a negative
  *         `MBE_STATUS_*` code.
  */
@@ -869,9 +870,10 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  *                prev_mp.
  * @param prev_mp Input: previous frame state; never modified. A state with a
  *                log2Ml or gamma that is not finite or lies beyond +-2^20, or
- *                one from which the model would not be finite (no decoder
- *                reaches such a state), returns MBE_STATUS_INVALID_ARGUMENT and
- *                leaves the context and cur_mp unchanged.
+ *                one from which the model would approach overflow (a log2Ml
+ *                above 120; decoders stay below 50), returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context and cur_mp
+ *                unchanged.
  * @return 0, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_encodeImbe4400Parms(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88], mbe_parms* cur_mp,

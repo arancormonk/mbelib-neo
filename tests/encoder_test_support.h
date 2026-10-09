@@ -70,7 +70,9 @@ enc_parms_identical(const mbe_parms* a, const mbe_parms* b) {
     return memcmp(x, y, sizeof(x)) == 0;
 }
 
-/* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. */
+/* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. The test
+ * is a range test on the bit pattern (at most 2^127), which unlike an
+ * exponent-mask test survives fast-math. */
 static inline int
 enc_model_finite(const mbe_parms* mp) {
     float values[3 + (2 * 56)];
@@ -84,7 +86,7 @@ enc_model_finite(const mbe_parms* mp) {
     for (int i = 0; i < n; i++) {
         uint32_t bits;
         memcpy(&bits, &values[i], sizeof(bits));
-        if ((bits & 0x7F800000u) == 0x7F800000u) {
+        if ((bits & 0x7FFFFFFFu) > 0x7F000000u) {
             return 0;
         }
     }

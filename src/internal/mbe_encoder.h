@@ -47,9 +47,10 @@ int mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]);
  * analysis. */
 int mbe_encoder_history_valid(const mbe_parms* prev_mp);
 
-/* The model an encoder returns is finite (w0, gamma, and log2Ml and Ml over
- * its harmonics). Decoders never leave it otherwise from any state they can
- * reach; a crafted history can overflow it, and the encoders reject that. */
+/* The model an encoder returns is finite: w0, and log2Ml (at most 120) and Ml
+ * over its harmonics. Decoders stay far inside that from any state they can
+ * reach (log2Ml below 50); a crafted history can overflow it, and the
+ * encoders reject that. */
 int mbe_encoder_model_valid(const mbe_parms* mp);
 
 /* 16-bit PCM to the float input scale ([-1, 1)). */

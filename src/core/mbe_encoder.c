@@ -44,12 +44,39 @@ mbe_encoder_frontend_reset(struct mbe_encoder_frontend* fe) {
     mbe_analysis_reset(&fe->analysis);
 }
 
-/* Finite and within +-2^20, on the bit pattern so the test survives fast-math. */
+/*
+ * Every test below compares the magnitude of a float's bit pattern against a
+ * bound. Under fast-math the optimizer reads an exponent-mask test (bits &
+ * 0x7F800000 == 0x7F800000) as a NaN/Inf class test and folds it away, as
+ * Clang does with LTO; range tests against ordinary bounds survive, and they
+ * reject NaN and infinity, whose patterns lie above every bound used here.
+ */
+#define MBE_ENCODER_LIMIT_BITS     0x49800000u /* 2^20 */
+#define MBE_ENCODER_LOG2_HIGH_BITS 0x42F00000u /* 120 */
+#define MBE_ENCODER_LOG2_LOW_BITS  0x4A800000u /* 2^22 */
+#define MBE_ENCODER_AMPLITUDE_BITS 0x7F000000u /* 2^127 */
+
 static int
-mbe_encoder_value_valid(float x) {
+mbe_encoder_magnitude_at_most(float x, uint32_t limit_bits) {
     uint32_t bits;
     memcpy(&bits, &x, sizeof(bits));
-    return (bits & 0x7FFFFFFFu) <= 0x49800000u;
+    return (bits & 0x7FFFFFFFu) <= limit_bits;
+}
+
+/* Finite and within +-2^20. */
+static int
+mbe_encoder_value_valid(float x) {
+    return mbe_encoder_magnitude_at_most(x, MBE_ENCODER_LIMIT_BITS);
+}
+
+/* At most 120, so 2^log2Ml times any codec's unvoiced scale (below 1.2) is far
+ * from overflow, and at least -2^22 (a history within +-2^20 gives no less
+ * than about -2.1 * 2^20). */
+static int
+mbe_encoder_log2_valid(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7FFFFFFFu) <= (((bits >> 31) != 0u) ? MBE_ENCODER_LOG2_LOW_BITS : MBE_ENCODER_LOG2_HIGH_BITS);
 }
 
 int
@@ -72,19 +99,17 @@ mbe_encoder_history_valid(const mbe_parms* prev_mp) {
     return mbe_encoder_value_valid(prev_mp->gamma);
 }
 
-static int
-mbe_encoder_finite(float x) {
-    uint32_t bits;
-    memcpy(&bits, &x, sizeof(bits));
-    return (bits & 0x7F800000u) != 0x7F800000u;
-}
-
+/* log2Ml is finite by construction from a validated history, so it is judged
+ * first; Ml[l], which overflows exactly when log2Ml[l] is too large, is read
+ * only after its log2Ml[l] passed. gamma is left out: it stays within +-2^20
+ * from a validated history, and the IMBE decoder does not write it. */
 int
 mbe_encoder_model_valid(const mbe_parms* mp) {
     const int L = mbe_clamp_harmonic_count(mp->L);
-    int ok = mbe_encoder_finite(mp->w0) && mbe_encoder_finite(mp->gamma);
+    int ok = mbe_encoder_value_valid(mp->w0);
     for (int l = 1; ok && l <= L; l++) {
-        ok = mbe_encoder_finite(mp->log2Ml[l]) && mbe_encoder_finite(mp->Ml[l]);
+        ok = mbe_encoder_log2_valid(mp->log2Ml[l])
+             && mbe_encoder_magnitude_at_most(mp->Ml[l], MBE_ENCODER_AMPLITUDE_BITS);
     }
     return ok;
 }
