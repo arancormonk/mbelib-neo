@@ -47,10 +47,11 @@ gets jobs of its own. On Linux the whole suite, quality tools included, also
 runs in `dev-release` builds (fast-math, LTO, SIMD) with x86-64-v3 code
 generation, once with GCC and once with a current Clang from the Arch
 toolchain. Clang folds bit tests on floats it computed (an exponent-mask
-NaN/Inf test once passed overflowed encoder models on macOS this way), and
-with `-Werror` its `-Wnan-infinity-disabled` turns any NaN or infinity test
-left in fast-math code into a build error; the job probes that the compiler
-still enforces it. A third job builds and links everything for x86-64-v4 with
+NaN/Inf test once passed overflowed encoder models on macOS this way) without
+a diagnostic, so only a test that feeds the guard a NaN or infinity catches
+that. With `-Werror`, its `-Wnan-infinity-disabled` does turn `isnan()`,
+`isinf()` and NaN or infinity constants in fast-math code into a build error;
+the job first probes that the compiler still enforces it. A third job builds and links everything for x86-64-v4 with
 GCC and LTO and warnings as errors, since GCC reports some diagnostics only for
 AVX-512 targets at LTO link time; the runner may lack AVX-512, so that build is
 never run. To test for NaN or infinity in fast-math code, compare the

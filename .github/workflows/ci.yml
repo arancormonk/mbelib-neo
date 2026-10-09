@@ -111,12 +111,13 @@ jobs:
   # it folds bit tests on floats it computed or took as arguments (an
   # exponent-mask NaN/Inf test passed overflowed encoder models this way on
   # macOS while Ubuntu's Clang job passed), turns divisions into approximate
-  # reciprocals and reassociates loop sums. With -Werror,
-  # -Wnan-infinity-disabled also makes any NaN or infinity test left in
-  # fast-math code a build error, so a dead guard cannot land. That diagnostic
-  # needs a current Clang (Ubuntu 24.04's default Clang 18 lacks it), hence the
-  # Arch toolchain, and a probe that fails the job if the compiler stops
-  # enforcing it.
+  # reciprocals and reassociates loop sums. Only the tests catch a folded bit
+  # test: Clang compiles it without a word. With -Werror,
+  # -Wnan-infinity-disabled does make isnan(), isinf() and NaN or infinity
+  # constants in fast-math code a build error. That diagnostic needs a current
+  # Clang (Ubuntu 24.04's default Clang 18 lacks it), hence the Arch
+  # toolchain, and a probe that fails the job if the compiler stops enforcing
+  # it.
   optimized-v3-ctest-clang:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: linux • Release • ctest (x86-64-v3, fast-math, clang)
@@ -137,12 +138,19 @@ jobs:
           bash tools/ci_arch_toolchain.sh bash -lc '
             set -euxo pipefail
             clang --version
-            # The job exists to enforce -Wnan-infinity-disabled; fail if this
-            # Clang accepts a NaN test under fast-math instead of passing
-            # without checking.
+            # Fail unless this Clang rejects a NaN test under fast-math, and
+            # rejects it with -Wnan-infinity-disabled: the probe compiles
+            # without fast-math, so no other error can stand in for the
+            # diagnostic.
             printf "int probe(double x) { return __builtin_isnan(x); }\n" > /tmp/nan_probe.c
-            if clang -ffast-math -Werror -c /tmp/nan_probe.c -o /tmp/nan_probe.o; then
+            clang -Werror -c /tmp/nan_probe.c -o /tmp/nan_probe.o
+            if clang -ffast-math -Werror -c /tmp/nan_probe.c -o /tmp/nan_probe.o 2> /tmp/nan_probe.err; then
               echo "::error::this Clang does not diagnose NaN tests under fast-math (-Wnan-infinity-disabled)" >&2
+              exit 1
+            fi
+            if ! grep -F -e "-Wnan-infinity-disabled" /tmp/nan_probe.err; then
+              cat /tmp/nan_probe.err >&2
+              echo "::error::the fast-math NaN probe failed without -Wnan-infinity-disabled" >&2
               exit 1
             fi
             rm -rf build/dev-release
