@@ -80,6 +80,112 @@ jobs:
       - name: Test (dev-release)
         run: ctest --preset dev-release -V
 
+  # dev-release ships fast-math, LTO and SIMD, but the matrix builds it for
+  # baseline x86-64. This runs the whole suite, quality tools included, with
+  # AVX2/FMA code generation as well, so FMA contraction, auto-vectorization and
+  # optimizer-exposed undefined behaviour reach a test before a user.
+  # x86-64-v3 because every hosted x86_64 runner has it; AVX-512 (v4) is not
+  # guaranteed, so the v4 job below only links.
+  optimized-v3-ctest:
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    name: linux • Release • ctest (x86-64-v3, fast-math)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A runner without the ISA would SIGILL in the first test and read as a
+      # test failure; fail here with the reason instead.
+      - name: Require an x86-64-v3 runner
+        run: |
+          set -euo pipefail
+          /lib64/ld-linux-x86-64.so.2 --help | grep -F 'x86-64-v3 (supported'
+      - name: Configure (dev-release, x86-64-v3)
+        run: cmake --preset dev-release -DMBELIB_BUILD_TOOLS=ON -DCMAKE_C_FLAGS=-march=x86-64-v3
+      - name: Build (dev-release, x86-64-v3)
+        run: cmake --build --preset dev-release --parallel
+      - name: Test (dev-release, x86-64-v3)
+        run: ctest --preset dev-release --output-on-failure
+
+  # The same suite built by a current Clang, the macOS toolchain's compiler
+  # family, which treats fast-math more aggressively than GCC or Ubuntu's Clang:
+  # it folds bit tests on floats it computed or took as arguments (an
+  # exponent-mask NaN/Inf test passed overflowed encoder models this way on
+  # macOS while Ubuntu's Clang job passed), turns divisions into approximate
+  # reciprocals and reassociates loop sums. With -Werror,
+  # -Wnan-infinity-disabled also makes any NaN or infinity test left in
+  # fast-math code a build error, so a dead guard cannot land. That diagnostic
+  # needs a current Clang (Ubuntu 24.04's default Clang 18 lacks it), hence the
+  # Arch toolchain, and a probe that fails the job if the compiler stops
+  # enforcing it.
+  optimized-v3-ctest-clang:
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    name: linux • Release • ctest (x86-64-v3, fast-math, clang)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A runner without the ISA would SIGILL in the first test and read as a
+      # test failure; fail here with the reason instead.
+      - name: Require an x86-64-v3 runner
+        run: |
+          set -euo pipefail
+          /lib64/ld-linux-x86-64.so.2 --help | grep -F 'x86-64-v3 (supported'
+      - name: Build and test under Arch Clang (dev-release, x86-64-v3)
+        env:
+          CI_ARCH_EXTRA_PACKAGES: lld
+        run: |
+          bash tools/ci_arch_toolchain.sh bash -lc '
+            set -euxo pipefail
+            clang --version
+            # The job exists to enforce -Wnan-infinity-disabled; fail if this
+            # Clang accepts a NaN test under fast-math instead of passing
+            # without checking.
+            printf "int probe(double x) { return __builtin_isnan(x); }\n" > /tmp/nan_probe.c
+            if clang -ffast-math -Werror -c /tmp/nan_probe.c -o /tmp/nan_probe.o; then
+              echo "::error::this Clang does not diagnose NaN tests under fast-math (-Wnan-infinity-disabled)" >&2
+              exit 1
+            fi
+            rm -rf build/dev-release
+            cmake --preset dev-release -DMBELIB_BUILD_TOOLS=ON \
+              -DCMAKE_C_COMPILER=clang \
+              -DCMAKE_C_FLAGS=-march=x86-64-v3 \
+              -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
+              -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld
+            cmake --build --preset dev-release --parallel
+            ctest --preset dev-release --output-on-failure
+          '
+
+  # GCC emits some diagnostics, -Wstringop-overflow among them, only when the
+  # target has AVX-512, and only while LTO links the whole program (a downstream
+  # AUR build of dsd-neo hit this), so everything is built and linked here with
+  # warnings as errors. The Arch toolchain tracks the GCC release the AUR
+  # package builds with. The runner may lack AVX-512, so nothing it builds is
+  # run.
+  #
+  # These diagnostics are version- and vectorizer-sensitive and the Arch
+  # toolchain upgrades to the rolling GCC (pacman -Syu, whatever the image
+  # pin), so a GCC release can break this job on an unrelated pull request.
+  # Fix the code it flags, or give a false positive the narrowest suppression
+  # with a reason, rather than merging around it.
+  lto-link-v4:
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    name: linux • GCC LTO link (x86-64-v4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build and link under Arch GCC (dev-release, x86-64-v4, never run)
+        run: |
+          bash tools/ci_arch_toolchain.sh bash -lc '
+            set -euxo pipefail
+            gcc --version
+            rm -rf build/dev-release
+            cmake --preset dev-release -DMBELIB_BUILD_TOOLS=ON -DMBELIB_BUILD_BENCHMARKS=ON \
+              -DCMAKE_C_COMPILER=gcc \
+              -DCMAKE_C_FLAGS=-march=x86-64-v4
+            cmake --build --preset dev-release --parallel
+          '
+
   cross-arm32:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
     name: linux • ARM32 Release • FPU=${{ matrix.fpu }} • QEMU tests

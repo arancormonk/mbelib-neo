@@ -45,6 +45,21 @@ static analysis, CodeQL (C/C++, workflows and Python), PR fuzzing, repository
 security guardrails, workflow linting, dependency review, secret scanning, OSV
 scanning, and install/consume checks.
 
+Fast-math changes what the optimizer may assume, so the shipped configuration
+gets jobs of its own. On Linux the whole suite, quality tools included, also
+runs in `dev-release` builds (fast-math, LTO, SIMD) with x86-64-v3 code
+generation, once with GCC and once with a current Clang from the Arch
+toolchain. Clang folds bit tests on floats it computed (an exponent-mask
+NaN/Inf test once passed overflowed encoder models on macOS this way), and
+with `-Werror` its `-Wnan-infinity-disabled` turns any NaN or infinity test
+left in fast-math code into a build error; the job probes that the compiler
+still enforces it. A third job builds and links everything for x86-64-v4 with
+GCC and LTO and warnings as errors, since GCC reports some diagnostics only for
+AVX-512 targets at LTO link time; the runner may lack AVX-512, so that build is
+never run. To test for NaN or infinity in fast-math code, compare the
+magnitude of the bit pattern against a bound, or compile the translation unit
+with IEEE semantics as `mbe_pcm_convert.c` is.
+
 Every required check runs on every pull request. A required check that a path
 filter keeps from starting never reports, so the pull request waits on it
 forever. A job that only matters for some paths therefore runs on every pull
