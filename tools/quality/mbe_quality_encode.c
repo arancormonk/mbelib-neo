@@ -82,15 +82,13 @@ parse_options(int argc, char** argv, struct encode_options* options) {
         }
         *value = argv[i + 1];
     }
+    options->flush_frames = 1; /* covers the encoders' documented 10 ms analysis delay */
     if (slots.codec && strcmp(slots.codec, "ambe2400") == 0) {
         options->codec = CODEC_AMBE2400;
-        options->flush_frames = 1; /* covers the encoder's documented 10 ms analysis delay */
     } else if (slots.codec && strcmp(slots.codec, "ambe2450") == 0) {
         options->codec = CODEC_AMBE2450;
-        options->flush_frames = 3; /* the encoder's two-frame look-ahead, 60 ms */
     } else if (slots.codec && strcmp(slots.codec, "imbe7200") == 0) {
         options->codec = CODEC_IMBE7200;
-        options->flush_frames = 3;
     } else {
         usage(argv[0]);
         return 2;
@@ -117,7 +115,7 @@ write_row(FILE* staged, const char* bits, int count) {
     return 0;
 }
 
-/* One encoder of the selected codec; the AMBE 2400 encoder takes the caller's parameter state. */
+/* One encoder of the selected codec and the caller-owned parameter state all three take. */
 struct encoder {
     enum encode_codec codec;
     mbe_ambe2400_encoder* ambe2400;
@@ -157,13 +155,13 @@ encode_frame(struct encoder* enc, const short pcm[FRAME_SAMPLES], FILE* staged) 
     int ret;
     if (enc->codec == CODEC_AMBE2400) {
         ret = mbe_encodeAmbe2400ParmsShort(enc->ambe2400, pcm, bits, &enc->cur, &enc->prev);
-        mbe_moveMbeParms(&enc->cur, &enc->prev);
     } else if (enc->codec == CODEC_AMBE2450) {
-        ret = mbe_encodeAmbe2450ParmsShort(enc->ambe2450, pcm, bits);
+        ret = mbe_encodeAmbe2450ParmsShort(enc->ambe2450, pcm, bits, &enc->cur, &enc->prev);
     } else {
-        ret = mbe_encodeImbe4400ParmsShort(enc->imbe, pcm, bits);
+        ret = mbe_encodeImbe4400ParmsShort(enc->imbe, pcm, bits, &enc->cur, &enc->prev);
         count = 88;
     }
+    mbe_moveMbeParms(&enc->cur, &enc->prev);
     if (ret < 0) {
         fprintf(stderr, "Encoder rejected a frame.\n");
         return 2;

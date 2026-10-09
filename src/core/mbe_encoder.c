@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+/**
+ * @file
+ * @brief Analysis front end shared by the speech encoders.
+ */
+
+#include "mbe_encoder.h"
+
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "mbe_validation.h"
+
+#define MBE_ENCODER_PCM_SCALE 32768.0f /* analysis runs on the 16-bit scale */
+
+int
+mbe_encoder_frontend_open(struct mbe_encoder_frontend* fe) {
+    fe->fft = mbe_fft_plan_alloc();
+    fe->acf = mbe_acf_plan_alloc();
+    if (fe->fft == NULL || fe->acf == NULL) {
+        mbe_encoder_frontend_close(fe);
+        return -1;
+    }
+    mbe_analysis_init_tables(&fe->tables);
+    mbe_encoder_frontend_reset(fe);
+    return 0;
+}
+
+void
+mbe_encoder_frontend_close(struct mbe_encoder_frontend* fe) {
+    mbe_fft_plan_free(fe->fft);
+    mbe_acf_plan_free(fe->acf);
+    fe->fft = NULL;
+    fe->acf = NULL;
+}
+
+void
+mbe_encoder_frontend_reset(struct mbe_encoder_frontend* fe) {
+    mbe_analysis_reset(&fe->analysis);
+}
+
+/* Finite and within +-2^20, on the bit pattern so the test survives fast-math. */
+static int
+mbe_encoder_value_valid(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7FFFFFFFu) <= 0x49800000u;
+}
+
+int
+mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]) {
+    for (int i = 0; i < MBE_ENCODER_SAMPLES; i++) {
+        if (!mbe_encoder_value_valid(samples[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int
+mbe_encoder_history_valid(const mbe_parms* prev_mp) {
+    for (int l = 0; l <= MBE_MAX_HARMONIC_BANDS; l++) {
+        if (!mbe_encoder_value_valid(prev_mp->log2Ml[l])) {
+            return 0;
+        }
+    }
+    return mbe_encoder_value_valid(prev_mp->gamma);
+}
+
+static int
+mbe_encoder_finite(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7F800000u) != 0x7F800000u;
+}
+
+int
+mbe_encoder_model_valid(const mbe_parms* mp) {
+    const int L = mbe_clamp_harmonic_count(mp->L);
+    int ok = mbe_encoder_finite(mp->w0) && mbe_encoder_finite(mp->gamma);
+    for (int l = 1; ok && l <= L; l++) {
+        ok = mbe_encoder_finite(mp->log2Ml[l]) && mbe_encoder_finite(mp->Ml[l]);
+    }
+    return ok;
+}
+
+void
+mbe_encoder_short_to_float(const short in[MBE_ENCODER_SAMPLES], float out[MBE_ENCODER_SAMPLES]) {
+    for (int i = 0; i < MBE_ENCODER_SAMPLES; i++) {
+        out[i] = (float)in[i] / 32768.0f;
+    }
+}
+
+int
+mbe_encoder_frontend_analyze(struct mbe_encoder_frontend* fe, const float samples[MBE_ENCODER_SAMPLES],
+                             struct mbe_analysis_result* result) {
+    float scaled[MBE_ENCODER_SAMPLES];
+    for (int i = 0; i < MBE_ENCODER_SAMPLES; i++) {
+        scaled[i] = samples[i] * MBE_ENCODER_PCM_SCALE;
+    }
+    mbe_analysis_push(&fe->analysis, scaled);
+    return mbe_analysis_frame(&fe->tables, &fe->analysis, fe->fft, fe->acf, result);
+}
+
+/* Energy of the envelope mean + s * (a - mean_a), in the log2 amplitude domain. */
+static float
+mbe_encoder_envelope_energy(const float* a, int L, float mean_a, float mean, float s) {
+    float energy = 0.0f;
+    for (int l = 1; l <= L; l++) {
+        energy += exp2f(2.0f * (mean + (s * (a[l] - mean_a))));
+    }
+    return energy;
+}
+
+float
+mbe_encoder_fit_floor(float* a, int L, float mean_a, float floor_mean) {
+    const float target = mbe_encoder_envelope_energy(a, L, mean_a, mean_a, 1.0f);
+    float lo = 0.0f;
+    float hi = 1.0f;
+    if (mbe_encoder_envelope_energy(a, L, mean_a, floor_mean, 0.0f) >= target) {
+        hi = 0.0f;
+    }
+    for (int i = 0; i < 30 && hi > 0.0f; i++) {
+        float mid = 0.5f * (lo + hi);
+        if (mbe_encoder_envelope_energy(a, L, mean_a, floor_mean, mid) > target) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    for (int l = 1; l <= L; l++) {
+        a[l] = floor_mean + (hi * (a[l] - mean_a));
+    }
+    return floor_mean;
+}

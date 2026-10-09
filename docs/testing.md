@@ -10,10 +10,11 @@ The CTest suite includes:
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
 - AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors; the decoded level follows the input down 40 dB and silent or -70 dBFS input is coded as voice frames that decode near silence (`test_ambe2400_encoder`)
-- AMBE+2 2450 encoder: frame FEC round trips and single-bit correction, steady harmonic signals decoded on pitch, DTMF and single tones sent as tone frames the decoder plays at the input level, silence, short/float parity, invalid input leaving the context unchanged, independent contexts and reset replay (`test_ambe2450_encoder`)
-- IMBE 7200x4400 encoder: the (15,11) Hamming encoder over every data word, frame FEC and modulation round trips with single-bit correction, steady harmonic signals decoded on pitch, decoded level following the input, silence, short/float parity, invalid input, independent contexts and reset replay (`test_imbe7200_encoder`)
+- AMBE+2 2450 encoder: frame FEC round trips of all 49 bits and single-error correction; decoded frames requantized to the same model (gain, prediction, block DCTs, PRBA and higher-order quantizers, packing); the TIA-102.BABA-1 eq 4 voicing quantizer against an independent evaluation; DTMF, KNOX, call-progress and single tones at several phases sent as tone frames the decoder plays at the input level, the DTMF frequency and twist limits, and voice-tone-voice prediction; plus the checks shared with IMBE below (`test_ambe2450_encoder`)
+- IMBE 7200x4400 encoder: the (15,11) Hamming encoder over every data word, frame FEC round trips of all 88 bits and single-error correction, the alternating synchronization bit, and decoded frames of every harmonic count requantized to identical bits (`test_imbe7200_encoder`)
+- Shared by both (`tests/encoder_test_support.h`): `cur_mp` bit-identical to the decoder chain with `prev_mp` untouched, rejected samples leaving the stream unchanged, prediction boundary taps, 16-bit/float parity, independent contexts and reset replay, noise staying unvoiced, steady vowels from 70 to 310 Hz voiced and on pitch, no octave errors (240 Hz, missing fundamental, strong 2nd harmonic, glide, and 133, 200 and 390 Hz harmonic series), the decoded level following the input down 40 dB, quiet input coded as voice, and a one-frame flush
 - MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, the FFT autocorrelation against the direct sum, and the voicing thresholds (`test_speech_analysis`)
-- Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven) clean up fully; after successful allocation, encoding and reset allocate nothing (`test_ambe2400_encoder_oom`, GNU link wrapping when LTO is disabled)
+- Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven, for the D-STAR, AMBE+2 and IMBE encoders) clean up fully; after successful allocation, encoding (tone frames included) and reset allocate nothing (`test_ambe2400_encoder_oom`, `test_ambe2450_encoder_oom`, `test_imbe7200_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)
@@ -458,16 +459,29 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   and the input on stable voiced frames and reports each against the pitch our
   decoder coded, by f0 band. A decoder that plays sharp or flat shows up as a
   ratio away from 1.
-- **Encoder (D-STAR):** our encoding of the input against DVSI's encoding of
-  it, both decoded by this library: pitch error against the input, octave
-  errors, per-1 kHz-band voicing agreement, the speech metrics against the
-  input, the same metrics of our decoded encoding against DVSI's
-  (`encoder.vs_dvsi_bits.*`, with `encoder.level_gap_db` the unsigned level
-  difference), rail samples beyond DVSI's encoding and the fraction of tone
-  or silence frames. DVSI's encoding is the reference there (its active
-  frames and level); DVSI's encoder delays the speech about 180 samples more
-  than ours, past the evaluator's -160 lag limit, so ours is first delayed by
-  320 samples. It cannot show how DVSI hardware decodes our bits.
+- **Encoder:** our encoding of the input (D-STAR, IMBE and AMBE+2 encoders)
+  against DVSI's encoding of it, both decoded by this library: pitch error
+  against the input, octave errors, per-1 kHz-band voicing agreement, the speech
+  metrics against the input, the same metrics of our decoded encoding against
+  DVSI's (`encoder.vs_dvsi_bits.*`, with `encoder.level_gap_db` the unsigned
+  level difference), rail samples beyond DVSI's encoding and the fraction of
+  tone or silence frames. DVSI's encoding is the reference there (its active
+  frames and level); DVSI's encoders delay the speech about 200 samples more
+  than ours (125 for P25), past the evaluator's -160 lag limit, so ours is
+  first delayed by 320 samples (240 for P25). It cannot show how DVSI hardware
+  decodes our bits. Each encoding's rows are hashed (`rows_sha256`); with
+  `--compare` against a baseline that recorded them, `encoder.rows_changed_vectors`
+  counts the vectors whose encoder bits changed. A build whose
+  `mbe_quality_encode` does not offer a codec skips that encoder, so this
+  script can score a baseline built from an older checkout.
+- **Encoder tones (rate 33):** our encoding of each tone vector against DVSI's
+  bits, frame by frame at the best frame shift: the share of DVSI's tone frames
+  we send with the same tone index (`tone.encoder_agreement`), the share of
+  frames we send as a tone where DVSI sends voice (`tone.encoder_extra_rate`)
+  and the mean AD difference where both agree (`tone.encoder_level_error_ad`).
+  The tones group reports the worst vector of each and, for these, also the
+  mean over vectors (`_mean`), since DVSI itself is inconsistent on its
+  deliberately malformed tone vectors (`cpvbad`, `dtmfvbad`).
 - Every comparison must find an alignment inside the evaluator's lag search.
   A decoder comparison without one (a silent decode, or a lag at a limit)
   fails the run. An encoding without one (one that is mostly silence frames,
@@ -495,7 +509,8 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   measured for a vector in only one of the two runs.
 
 `mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
-`decoded` (the frame's own model from the public `mbe_decode*Parms` decoder,
+`bits` (the frame's parameter bits after FEC), `decoded` (the frame's own
+model from the public `mbe_decode*Parms` decoder,
 with its status), `history` (the prediction state after the frame) and `synth`
 (the enhanced model synthesized). Each holds `w0` (radians per sample), `L` and
 per-band `Vl`, `Ml` (linear amplitude as synthesized; for AMBE unvoiced bands
@@ -520,8 +535,7 @@ build/dev-debug/mbe_quality_eval --codec ambe2400 --frames dvsi.frames --out dvs
 Both bit streams then go through the same decoder, which itself matches DVSI's
 output on DVSI's bits, so the band, LSD and envelope figures compare the
 encoders. One zero flush frame (`--flush-frames`, default 1) covers the
-D-STAR encoder's analysis delay; the AMBE+2 and IMBE encoders default to three
-for their 60 ms look-ahead.
+encoders' analysis delay.
 
 ### Attribution and limitations
 

@@ -7,9 +7,10 @@ For every speech vector of the D-STAR, P25 and AMBE+2 (rate 33) sets this decode
 DVSI's bits with mbe_quality_eval and measures, against the original input speech,
 both our output and DVSI's own decoded output; it also compares our output with
 DVSI's directly. A harmonic-peak pitch estimator checks that our decoded pitch
-matches DVSI's and the input's on the same frames. For D-STAR it also encodes the
-input with this library's encoder and compares pitch, voicing and spectral error
-with DVSI's encoding.
+matches DVSI's and the input's on the same frames. It also encodes the input with
+this library's encoder for each mode and compares pitch, voicing and spectral error
+with DVSI's encoding, and for the rate-33 tone vectors compares the encoder's tone
+frames with DVSI's.
 
 The vectors are fetched locally with fetch_dvsi_vectors.py and must never be
 committed or redistributed. This tool writes only aggregate numbers and per-run
@@ -19,10 +20,13 @@ Needs NumPy for the pitch measurements.
 """
 
 import argparse
+import functools
+import hashlib
 import importlib.util
 import json
 import math
 import random
+import re
 import shutil
 import statistics
 import struct
@@ -58,9 +62,10 @@ BAND_KEYS = tuple(
     for band in ("0_250", "0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
 )
 SPEECH_KEYS = ("level_offset_db", "lsd_db", "env_corr", "crest_delta_db", "pcm_rail_samples") + BAND_KEYS
-# DVSI's encoder delays the speech about 180 samples more than ours, past the evaluator's -160-sample
-# lag search, so our decoded encoding is delayed by this much before DVSI's is used as its reference.
-ENCODER_COMPARE_DELAY = 320
+# DVSI's encoders delay the speech more than ours (about 200 samples more in D-STAR and rate 33, 125 in
+# P25), past the evaluator's -160-sample lag search, so our decoded encoding is delayed by this much
+# before DVSI's is used as its reference.
+ENCODER_COMPARE_DELAY = {"dstar": 320, "r33": 320, "p25": 240}
 F0_BANDS = ((0.0, 100.0), (100.0, 150.0), (150.0, 200.0), (200.0, 300.0), (300.0, 1000.0))
 # MBE_PROCESS_FLAG_TONE, _ERASURE, _REPEAT, _MUTE and _SILENCE: frames not synthesized from their own voice model.
 FLAG_SKIP = 0x0010 | 0x0020 | 0x0040 | 0x0080 | 0x0100
@@ -373,6 +378,19 @@ def run(command):
     return result
 
 
+def usage_codecs(usage):
+    """The codecs a tool's usage line offers after --codec."""
+    match = re.search(r"--codec (\S+)", usage)
+    return frozenset(match.group(1).split("|")) if match else frozenset()
+
+
+@functools.lru_cache(maxsize=None)
+def encoder_codecs(tools):
+    """Codecs the build's mbe_quality_encode can encode, so an older build still scores what it has."""
+    result = subprocess.run([str(tools / "mbe_quality_encode")], capture_output=True, text=True, check=False)
+    return usage_codecs(result.stderr + result.stdout)
+
+
 def read_pcm(path):
     """int16 samples of a raw s16le file or a 16-bit mono WAV."""
     import numpy as np
@@ -450,20 +468,22 @@ def score_vector(tools, vectors, mode, name, work, encoder):
     }
     result["pitch"] = {source: summarize_ratios(values) for source, values in pairs.items()}
     result["pitch_pairs"] = pairs
-    if encoder and mode == "dstar":
-        result["encoder"] = score_encoder(tools, speech, base, records, ours, speech_samples)
+    if encoder and codec in encoder_codecs(tools):
+        result["encoder"] = score_encoder(tools, mode, speech, base, records, ours, speech_samples)
     return result
 
 
 def tone_frame_rate(records):
     """Fraction of frames decoded as tone or silence frames rather than voice."""
-    return sum(1 for record in records if record["flags"] & 0x0010) / len(records) if records else None
+    tone_or_silence = 0x0010 | 0x0100  # MBE_PROCESS_FLAG_TONE, MBE_PROCESS_FLAG_SILENCE
+    return sum(1 for record in records if record["flags"] & tone_or_silence) / len(records) if records else None
 
 
-def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
-    """Our D-STAR encoding of the input against DVSI's, both decoded by this library."""
-    run([tools / "mbe_quality_encode", "--codec", "ambe2400", "--in", speech, "--out", f"{base}_enc.rows"])
-    run([tools / "mbe_quality_eval", "--codec", "ambe2400", "--frames", f"{base}_enc.rows",
+def score_encoder(tools, mode, speech, base, dvsi_records, dvsi_eval, speech_samples):
+    """Our encoding of the input against DVSI's, both decoded by this library."""
+    codec = MODES[mode]
+    run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
+    run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows",
          "--out", f"{base}_enc.wav", "--ref", speech, "--json", f"{base}_enc.json",
          "--params", f"{base}_enc.jsonl"])
     encoded = load_json(f"{base}_enc.json")
@@ -471,11 +491,12 @@ def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
         # Our encoding cannot be aligned with the input (say, it is mostly silence frames), so nothing
         # measured through that alignment is scored. The count still reaches the summary and the gates.
         print(f"warning: {base.name}_enc: no usable alignment with the input; not scored", file=sys.stderr)
-        return {"alignment_failures": [f"{base.name}_enc"]}
+        return {"alignment_failures": [f"{base.name}_enc"],
+                "rows_sha256": hashlib.sha256(Path(f"{base}_enc.rows").read_bytes()).hexdigest()}
     # Both encodings through the same decoder: what remains is the encoders' difference, measured with
     # DVSI's encoding as the reference (its active frames, its level).
     delayed = Path(f"{base}_enc_delayed.raw")
-    write_delayed(delayed, read_pcm(f"{base}_enc.wav"), ENCODER_COMPARE_DELAY)
+    write_delayed(delayed, read_pcm(f"{base}_enc.wav"), ENCODER_COMPARE_DELAY[mode])
     run([tools / "mbe_quality_eval", "--decoded", delayed, "--ref", f"{base}_ours.wav",
          "--json", f"{base}_enc_vs_dvsi.json"])
     failures = []
@@ -494,6 +515,7 @@ def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
     dvsi_pairs = pitch_ratios(dvsi_records, speech_samples, dvsi_eval["lag_samples"])
     frame_offset = round((encoded["lag_samples"] - dvsi_eval["lag_samples"]) / FRAME)
     return {
+        "rows_sha256": hashlib.sha256(Path(f"{base}_enc.rows").read_bytes()).hexdigest(),
         "speech": {key: encoded.get(key) for key in SPEECH_KEYS},
         "vs_dvsi_bits": {key: versus.get(key) for key in SPEECH_KEYS},
         "rail_excess_samples": max(0, (encoded.get("pcm_rail_samples") or 0) - (dvsi_eval.get("pcm_rail_samples") or 0)),
@@ -511,8 +533,47 @@ def score_encoder(tools, speech, base, dvsi_records, dvsi_eval, speech_samples):
     }
 
 
-def score_tone_vector(tools, vectors, mode, name, work):
-    """Our decode of DVSI's bits for a tone vector against DVSI's decoded output."""
+def tone_fields(bits):
+    """(tone index, AD) of an AMBE+2 tone frame's parameter bits (TIA-102.BABA-1 Table 10), else None."""
+    if len(bits) != 49 or bits[:6] != "111111":
+        return None
+    return int(bits[12:20], 2), (int(bits[6:12], 2) << 1) | int(bits[44])
+
+
+def encoder_tone_agreement(encoded, reference, max_shift=3):
+    """Our encoder's tone frames against DVSI's, at the frame shift where the most agree.
+
+    Returns the fraction of DVSI's tone frames we send as the same tone, the fraction of all compared
+    frames we send as a tone where DVSI sends voice, and the mean absolute AD difference where the
+    tones agree. When DVSI sends no tone frame only the second is defined.
+    """
+    ours = [tone_fields(record.get("bits", "")) for record in encoded]
+    theirs = [tone_fields(record.get("bits", "")) for record in reference]
+    tone_frames = [index for index, value in enumerate(theirs) if value is not None]
+    if not tone_frames:
+        compared = min(len(ours), len(theirs))
+        return {"encoder_extra_rate": (sum(1 for value in ours[:compared] if value) / compared) if compared else None}
+
+    def mine(index, shift):
+        return ours[index + shift] if 0 <= index + shift < len(ours) else None
+
+    def agreeing(shift):
+        return [index for index in tone_frames if mine(index, shift) and mine(index, shift)[0] == theirs[index][0]]
+
+    shift = max(range(-max_shift, max_shift + 1), key=lambda candidate: (len(agreeing(candidate)), -abs(candidate)))
+    compared = [index for index in range(len(theirs)) if 0 <= index + shift < len(ours)]
+    extra = [index for index in compared if theirs[index] is None and mine(index, shift)]
+    same = agreeing(shift)
+    return {
+        "encoder_agreement": len(same) / len(tone_frames),
+        "encoder_extra_rate": len(extra) / len(compared) if compared else 0.0,
+        "encoder_level_error_ad": mean([abs(mine(index, shift)[1] - theirs[index][1]) for index in same]),
+    }
+
+
+def score_tone_vector(tools, vectors, mode, name, work, encoder=False):
+    """Our decode of DVSI's bits for a tone vector against DVSI's decoded output, and for rate 33 our
+    encoding of the input against DVSI's."""
     codec = MODES[mode]
     base = work / f"{mode}_{name}"
     dvsi_pcm = Path(f"{base}_dvsi.raw")
@@ -529,6 +590,13 @@ def score_tone_vector(tools, vectors, mode, name, work):
     metrics["tone_frames"] = sum(1 for record in records if record["flags"] & 0x0010)
     metrics["frames"] = len(records)
     metrics["alignment_corr"] = versus.get("alignment_corr")
+    if encoder and mode == "r33" and codec in encoder_codecs(tools):
+        speech = work / f"{name}_input.raw"
+        shutil.copyfile(vectors / f"{name}.pcm", speech)
+        run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
+        run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows", "--out", f"{base}_enc.wav",
+             "--params", f"{base}_enc.jsonl"])
+        metrics.update(encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records) or {})
     return {"mode": mode, "name": name, "partition": "tones", "tone": metrics}
 
 
@@ -597,11 +665,15 @@ def aggregate(results):
             entry = {"vectors": [result["name"] for result in group],
                      "mean": {key: mean([flat.get(key) for flat in flats]) for key in keys}}
             if partition == "tones":
-                # The worst tone vector decides: errors take the maximum, agreement the minimum.
+                # The worst tone vector decides: errors take the maximum, agreement the minimum. The
+                # encoder's tone metrics also get their mean over vectors, since the vectors of
+                # deliberately malformed tones are ones DVSI itself is inconsistent on.
                 for key in keys:
                     values = [flat[key] for flat in flats if flat.get(key) is not None]
-                    pick = min if key == "tone.detector_agreement" else max
+                    pick = min if key.endswith("agreement") else max
                     entry["mean"][key] = pick(values) if values else None
+                    if key.startswith("tone.encoder_"):
+                        entry["mean"][f"{key}_mean"] = mean(values)
                 summary[f"{mode}/{partition}"] = entry
                 continue
             for source in ("ours", "dvsi", "input"):
@@ -627,6 +699,30 @@ def pcm_changes(candidate, baseline):
         before, now = result["ours"].get("pcm_fnv1a"), after.get(key)
         counts[result["mode"]] = counts.get(result["mode"], 0) + (before is None or now is None or before != now)
     return counts
+
+
+def encoder_row_changes(candidate, baseline):
+    """Per mode, the baseline's encoded vectors whose encoder bits differ in the candidate.
+
+    Only modes whose baseline recorded encoder-row hashes are counted; there a vector the candidate
+    did not encode, or encoded without a hash, counts as changed.
+    """
+    after = {(r["mode"], r["name"]): (r.get("encoder") or {}).get("rows_sha256") for r in candidate["vectors"]}
+    counts = {}
+    for result in baseline["vectors"]:
+        before = (result.get("encoder") or {}).get("rows_sha256")
+        if before is None:
+            continue
+        now = after.get((result["mode"], result["name"]))
+        counts[result["mode"]] = counts.get(result["mode"], 0) + (now is None or now != before)
+    return counts
+
+
+def add_encoder_row_changes(summary, candidate, baseline):
+    """Expose encoder_row_changes() as encoder.rows_changed_vectors in every speech group of each mode."""
+    for mode, count in encoder_row_changes(candidate, baseline).items():
+        for group in [key for key in summary if key.startswith(f"{mode}/") and not key.endswith("/tones")]:
+            summary[group]["mean"]["encoder.rows_changed_vectors"] = count
 
 
 def add_pcm_changes(summary, candidate, baseline):
@@ -784,7 +880,7 @@ def main():
     parser.add_argument("--modes", default=",".join(MODES))
     parser.add_argument("--partitions", default="development,validation",
                         help="comma list; include 'final' only once per change set")
-    parser.add_argument("--no-encoder", action="store_true", help="skip the D-STAR encoder comparison")
+    parser.add_argument("--no-encoder", action="store_true", help="skip the encoder comparisons")
     parser.add_argument("--compare", type=Path, help="baseline scoreboard.json for paired deltas")
     parser.add_argument("--gates", help="gate set from dvsi_gates.json to evaluate against --compare")
     args = parser.parse_args()
@@ -806,7 +902,7 @@ def main():
                     print(f"skip {mode}/{name}: not fetched", file=sys.stderr)
                     continue
                 if partition == "tones":
-                    results.append(score_tone_vector(args.tools, vectors, mode, name, work))
+                    results.append(score_tone_vector(args.tools, vectors, mode, name, work, not args.no_encoder))
                 else:
                     results.append(score_vector(args.tools, vectors, mode, name, work, not args.no_encoder))
                 print(f"scored {mode}/{name}", file=sys.stderr)
@@ -816,6 +912,7 @@ def main():
         baseline = load_json(args.compare)
         report["comparison"] = compare(report, baseline)
         add_pcm_changes(summary, report, baseline)
+        add_encoder_row_changes(summary, report, baseline)
     (args.out / "scoreboard.json").write_text(json.dumps(report, indent=1) + "\n")
     (args.out / "scoreboard.md").write_text(markdown(summary) + "\n")
     print(markdown(summary))

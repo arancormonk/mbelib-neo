@@ -1,42 +1,33 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C) 2026 Rhizomatica
- * Author: Rafael Diniz <rafael@rhizomatica.org>
- *
- * Based on Bruce Perens' ham_digital_modes
- * (https://github.com/BrucePerens/hams_open).
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
  */
 
 /**
  * @file
- * @brief Encoder-side tone detection (private API).
+ * @brief Tone detection for the AMBE+2 encoder's tone frames (private API).
  *
- * C port of ham_digital_modes' float tone_detect.rs: recognizes a DTMF digit
- * or a single sustained tone in one 20 ms frame, matched by its author to the
- * AMBE-3000 chip's own detector, so an encoder can send a tone frame instead
- * of coding the tone as speech.
+ * Recognizes the tones TIA-102.BABA-1 Table 9 can carry in one 20 ms span:
+ * single tones (index 5..122, f = 31.25 Hz * index), DTMF, KNOX and
+ * call-progress dual tones.
  */
 #ifndef MBELIB_NEO_INTERNAL_MBE_TONE_DETECT_H
 #define MBELIB_NEO_INTERNAL_MBE_TONE_DETECT_H
 
-#define MBE_TONE_DETECT_FRAME 160
+#include "mbe_unvoiced_fft.h"
 
-enum mbe_tone_detect_kind {
-    MBE_TONE_DETECT_NONE = 0,
-    MBE_TONE_DETECT_DTMF,   /* row 0-3 (697..941 Hz), column 0-3 (1209..1633 Hz) */
-    MBE_TONE_DETECT_SINGLE, /* index = round(f / 31.25 Hz) */
-};
+#define MBE_TONE_SPAN 160
 
 struct mbe_tone_detection {
-    enum mbe_tone_detect_kind kind;
-    int row;
-    int col;
-    int index;
-    double hz;
-    double amplitude; /* per-tone peak amplitude, 16-bit scale */
+    int id;          /* Table 9 tone index */
+    float amplitude; /* peak amplitude per component (16-bit scale); a pair gives the geometric mean */
 };
 
-/* Detect a tone in one frame on the 16-bit scale; returns the detection kind. */
-enum mbe_tone_detect_kind mbe_tone_detect(const double frame[MBE_TONE_DETECT_FRAME], struct mbe_tone_detection* out);
+/*
+ * Look for a tone in span (MBE_TONE_SPAN DC-filtered samples on the 16-bit
+ * scale). Returns 1 with *out filled, 0 when the span is not a supported
+ * tone, or a negative MBE_STATUS_* value from the FFT.
+ */
+int mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_tone_detection* out);
 
 #endif /* MBELIB_NEO_INTERNAL_MBE_TONE_DETECT_H */

@@ -1,66 +1,71 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C) 2026 Rhizomatica
- * Author: Rafael Diniz <rafael@rhizomatica.org>
- *
- * Based on Bruce Perens' ham_digital_modes
- * (https://github.com/BrucePerens/hams_open).
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
  */
 
 /**
  * @file
  * @brief IMBE 7200x4400 (P25 Phase 1 full rate) speech encoder.
  *
- * C port of ham_digital_modes' float TIA-102.BABA encoder
- * (tia_102_baba/encoder.rs, mod.rs, prediction.rs, quantize.rs and
- * parameter_encoding.rs):
+ * Quantizes the speech model of mbe_speech_analysis.c as TIA-102.BABA chapter
+ * 6 describes (equation numbers below refer to it), against the tables
+ * mbe_decodeImbe4400Parms() dequantizes with:
  *
- *  - Analysis (mbe_frame_analysis.c): pitch tracking and refinement, V/UV
- *    bands and spectral amplitudes at the refined fundamental (5.1-5.3).
- *  - b0 (eq 45), b1 from the band decisions, then the amplitude residual of
- *    eq 54 against the decoder's previous amplitudes, split into the Annex J
- *    blocks, block DCT (eq 60), gain vector DCT (eq 61) and the scalar
- *    quantizers of eq 62-64 (Annex E-G tables).
- *  - Bits are laid out with this library's bit order table, so
- *    mbe_decodeImbe4400Parms() reads them back exactly, and the prediction
- *    history is advanced by decoding each emitted frame with it.
+ *  - b0 from the refined fundamental (eq 45); L and K as the decoder derives
+ *    them from b0 (eqs 46-48), which equal the analysis' (eqs 31, 34).
+ *  - b1 from the band V/UV decisions of 5.2 (eq 49).
+ *  - Spectral amplitudes by the estimator of each band's decision (5.3, eqs 43
+ *    and 44), then the prediction residual (eqs 52-55), six block DCTs and
+ *    the gain vector (eqs 58-61), and the quantizers of eqs 62-64.
+ *  - The synchronization bit of 6.5 (eq 80).
  *
- * Deviation from the reference: the prediction follows this library's
- * decoder, which reads log2 M_0(-1) as log2 M_1(-1) where eq 56 has 0.
+ * A frame whose mean log2 amplitude lies below the gain table's lowest level
+ * is flattened toward that level (mbe_encoder_fit_floor()), as D-STAR's are;
+ * quantizing it as is would play a quiet tone tens of dB too loud.
+ *
+ * The prediction is the decoder's, which reads log2 M_0(-1) as log2 M_1(-1)
+ * where eq 56 sets M_0(-1) = 1. DVSI's decoder predicts the same way: decoding
+ * DVSI's P25 test vectors with eq 56 plays 0-250 Hz about 0.8 dB further from
+ * DVSI's output on every development and validation vector. The encoder
+ * predicts as the decoders it is heard through do.
  */
 
 #include <math.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "imbe4400_internal.h"
 #include "imbe7200x4400_const.h"
 #include "mbe_ecc.h"
-#include "mbe_frame_analysis.h"
+#include "mbe_encoder.h"
+#include "mbe_speech_analysis.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
-#define IMBE4400_ENC_SAMPLES   160
-#define IMBE4400_ENC_PCM_SCALE 32768.0 /* analysis runs on the 16-bit scale */
+#define IMBE_ENC_MAX_B0    207 /* 6.1: b0 208..255 are not voice frames */
+
+/*
+ * Level: IMBE_ENC_MAG_SCALE scales the analysis amplitudes so the decoded
+ * level matches DVSI's encoding of the same input, both decoded by this
+ * library: the median, over DVSI's P25 development vectors, of the level that
+ * puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR).
+ */
+#define IMBE_ENC_MAG_SCALE 1.06f
 
 struct mbe_imbe4400_encoder {
-    struct mbe_fa_tables tables;
-    struct mbe_fa_state analysis;
-    struct mbe_fa_voicing_state voicing;
-    struct mbe_fa_result frame;
-    mbe_parms prev; /* the decoder's prediction history */
+    struct mbe_encoder_frontend fe;
+    unsigned char bands_prev[MBE_ANALYSIS_BANDS]; /* previous frame's band decisions, eq 37 */
+    int sync;                                     /* this frame's synchronization bit, eq 80 */
 };
 
 void
 mbe_imbe4400EncoderReset(mbe_imbe4400_encoder* enc) {
-    mbe_parms cur;
-    mbe_parms prev_enhanced;
-
     if (enc == NULL) {
         return;
     }
-    mbe_fa_reset(&enc->analysis);
-    mbe_fa_voicing_reset(&enc->voicing);
-    mbe_initMbeParms(&cur, &enc->prev, &prev_enhanced);
+    mbe_encoder_frontend_reset(&enc->fe);
+    memset(enc->bands_prev, 0, sizeof(enc->bands_prev));
+    enc->sync = 0;
 }
 
 mbe_imbe4400_encoder*
@@ -69,30 +74,54 @@ mbe_imbe4400EncoderAlloc(void) {
     if (enc == NULL) {
         return NULL;
     }
-    mbe_fa_init_tables(&enc->tables);
+    if (mbe_encoder_frontend_open(&enc->fe) != 0) {
+        free(enc);
+        return NULL;
+    }
     mbe_imbe4400EncoderReset(enc);
     return enc;
 }
 
 void
 mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc) {
-    free(enc);
+    if (enc != NULL) {
+        mbe_encoder_frontend_close(&enc->fe);
+        free(enc);
+    }
 }
 
-/* Frames emitted before the first analysed frame are encoded as silent
- * input: a zero spectrum, the standard's initial pitch period of 100 samples,
- * and a pitch error of 1 (no periodicity). */
+/* One frame's quantizer values and workspace. */
+struct imbe_enc_frame {
+    int L;
+    int K;
+    int b[58];      /* b0..b(L+1) */
+    float logm[57]; /* log2 M_l */
+    float Tl[57];   /* prediction residual, eq 54 */
+    float C[7][11]; /* block DCT coefficients C[i][k], eq 60 */
+    float G[7];     /* transformed gain vector, eq 61 */
+};
+
+/* eq 45 for the refined fundamental f0 (cycles per sample), within 6.1's range. */
+static int
+imbe_enc_pitch(float f0) {
+    long b0 = lround(floor((2.0 / (double)f0) - 39.0)); /* 4 pi / w0 with w0 = 2 pi f0 */
+    return (int)((b0 < 0) ? 0 : ((b0 > IMBE_ENC_MAX_B0) ? IMBE_ENC_MAX_B0 : b0));
+}
+
+/* b0, and L and K as the decoder derives them (eqs 46-48); every voice code
+ * 0..207 gives L 9..56. */
 static void
-imbe4400_enc_quiet_frame(struct mbe_fa_result* frame) {
-    memset(frame, 0, sizeof(*frame));
-    frame->initial_pitch = 100.0;
-    frame->omega0_hat = 2.0 * M_PI / 100.0;
-    frame->initial_pitch_error = 1.0;
+imbe_enc_set_pitch(struct imbe_enc_frame* q, int b0) {
+    q->b[0] = (b0 < 0) ? 0 : ((b0 > IMBE_ENC_MAX_B0) ? IMBE_ENC_MAX_B0 : b0);
+    float w0 = (float)(4 * M_PI) / ((float)q->b[0] + 39.5f);
+    int L = (int)(0.9254 * (int)((M_PI / w0) + 0.25));
+    q->L = (L < 9) ? 9 : ((L > 56) ? 56 : L);
+    q->K = (q->L < 37) ? (q->L + 2) / 3 : 12;
 }
 
-/* Eq 55, in the decoder's float arithmetic. */
+/* eq 55, as the decoder evaluates it. */
 static float
-imbe4400_enc_rho(int L) {
+imbe_enc_rho(int L) {
     if (L <= 15) {
         return 0.4f;
     }
@@ -102,253 +131,213 @@ imbe4400_enc_rho(int L) {
     return 0.7f;
 }
 
-/* The decoder's previous log2Ml: index 0 is read as index 1, and harmonics
- * past the previous frame's last hold its value (eq 57). */
-static double
-imbe4400_enc_prev_log2(const mbe_parms* prev, int prev_l, int j) {
-    if (j < 1) {
-        j = 1;
+/* eqs 52-54 against the decoder's previous log2 amplitudes, with its edge
+ * values (log2 M_0(-1) = log2 M_1(-1), eq 57 above the previous L). */
+static void
+imbe_enc_residual(struct imbe_enc_frame* q, const mbe_parms* prev_mp) {
+    const int prev_L = mbe_clamp_harmonic_count(prev_mp->L);
+    const float rho = imbe_enc_rho(q->L);
+    float prev[57];
+    float interp[57];
+    memcpy(prev, prev_mp->log2Ml, sizeof(prev));
+    for (int l = prev_L + 1; l <= q->L; l++) {
+        prev[l] = prev[prev_L];
     }
-    if (j > prev_l) {
-        j = prev_l;
+    prev[0] = prev[1];
+
+    float sum = 0.0f;
+    for (int l = 1; l <= q->L; l++) {
+        float flokl = ((float)prev_L / (float)q->L) * (float)l;
+        int intkl = (int)flokl;
+        float deltal = flokl - (float)intkl;
+        int upper = (intkl + 1 > MBE_MAX_HARMONIC_BANDS) ? MBE_MAX_HARMONIC_BANDS : intkl + 1;
+        interp[l] = ((1.0f - deltal) * prev[intkl]) + (deltal * prev[upper]);
+        sum += interp[l];
     }
-    if (j > 56) {
-        j = 56;
+    sum *= rho / (float)q->L;
+    for (int l = 1; l <= q->L; l++) {
+        q->Tl[l] = q->logm[l] - (rho * interp[l]) + sum;
     }
-    return (double)prev->log2Ml[j];
 }
 
-/* Eq 62-64: uniform quantizer of `bits` bits and step `step`, saturating. */
+/* eqs 58-61: the six block DCTs, Annex J block lengths, and the 6-point DCT
+ * of their first coefficients. */
+static void
+imbe_enc_transform(struct imbe_enc_frame* q) {
+    const int L9 = q->L - 9;
+    int l = 1;
+    for (int i = 1; i <= 6; i++) {
+        const int J = ImbeJi[L9][i - 1];
+        for (int k = 1; k <= J; k++) {
+            double sum = 0.0;
+            for (int j = 1; j <= J; j++) {
+                sum += (double)q->Tl[l + j - 1] * cos(M_PI * (double)(k - 1) * ((double)j - 0.5) / (double)J);
+            }
+            q->C[i][k] = (float)(sum / (double)J);
+        }
+        l += J;
+    }
+    for (int m = 1; m <= 6; m++) {
+        double sum = 0.0;
+        for (int i = 1; i <= 6; i++) {
+            sum += (double)q->C[i][1] * cos(M_PI * (double)(m - 1) * ((double)i - 0.5) / 6.0);
+        }
+        q->G[m] = (float)(sum / 6.0);
+    }
+}
+
+/* eqs 62-63: a uniform quantizer of `bits` bits and step `step`, whose cells
+ * the decoder reconstructs at step * (b - 2^(bits-1) + 0.5). */
 static int
-imbe4400_enc_uniform(double value, int bits, double step) {
-    int64_t half = (int64_t)1 << (bits - 1);
-    int64_t idx = (int64_t)floor(value / step);
-    if (idx < -half) {
+imbe_enc_uniform(float value, int bits, float step) {
+    const long half = 1L << (bits - 1);
+    double cell = floor((double)value / (double)step);
+    if (cell < (double)-half) {
         return 0;
     }
-    if (idx >= half) {
-        return (int)(((int64_t)1 << bits) - 1);
+    if (cell >= (double)half) {
+        return (int)((2 * half) - 1);
     }
-    return (int)(idx + half);
+    return (int)((long)cell + half);
 }
 
-/* Eq 52-54: the residual of log2 m[1..L] against the decoder's prediction. */
+/* 6.3.1 and 6.3.2: b2 (Annex E), b3..b7 (Annex F) and b8..b(L+1) (Annex G),
+ * in the order [C(1,2), ..., C(1,J1), ..., C(6,2), ..., C(6,J6)] of eq 64. */
 static void
-imbe4400_enc_residual(int L, const double* m, const mbe_parms* prev, double residual[57]) {
-    double interp[57];
-    double sum77 = 0.0;
-    double rho = (double)imbe4400_enc_rho(L);
-    int prev_l = prev->L;
-    if (prev_l < 1) {
-        prev_l = 1;
-    }
-    if (prev_l > 56) {
-        prev_l = 56;
-    }
-    for (int l = 1; l <= L; l++) {
-        float flokl = ((float)prev_l / (float)L) * (float)l;
-        int intkl = (int)flokl;
-        double delta = (double)(flokl - (float)intkl);
-        interp[l] = ((1.0 - delta) * imbe4400_enc_prev_log2(prev, prev_l, intkl))
-                    + (delta * imbe4400_enc_prev_log2(prev, prev_l, intkl + 1));
-        sum77 += interp[l];
-    }
-    sum77 *= rho / (double)L;
-    for (int l = 1; l <= L; l++) {
-        residual[l] = log2(m[l]) - (rho * interp[l]) + sum77;
-    }
-}
-
-/* Split the residual into the Annex J blocks and apply the DCT to each
- * (eq 58-60); the gain vector is the DCT of the six block means (eq 61). */
-static void
-imbe4400_enc_transform(int L, const double residual[57], double dct[6][10], double g[7]) {
-    const int L9 = L - 9;
-    int offset = 1;
-    for (int i = 0; i < 6; i++) {
-        int j_len = ImbeJi[L9][i];
-        for (int k = 1; k <= j_len; k++) {
-            double sum = 0.0;
-            for (int j = 1; j <= j_len; j++) {
-                sum += residual[offset + j - 1] * cos(M_PI * ((double)k - 1.0) * ((double)j - 0.5) / (double)j_len);
-            }
-            dct[i][k - 1] = sum / (double)j_len;
-        }
-        offset += j_len;
-    }
-    for (int mm = 0; mm < 6; mm++) {
-        double sum = 0.0;
-        for (int i = 0; i < 6; i++) {
-            sum += dct[i][0] * cos(M_PI * (double)mm * ((double)(i + 1) - 0.5) / 6.0);
-        }
-        g[mm + 1] = sum / 6.0;
-    }
-}
-
-/* Eq 62-64: b2 (Annex E), b3..b7 (Annex F) and b8..b(L+1), the higher-order
- * coefficients block by block (Annex G). */
-static void
-imbe4400_enc_quantize_transform(int L, const double dct[6][10], const double g[7], int bvals[58]) {
-    const int L9 = L - 9;
-    int b2 = 0;
+imbe_enc_quantize(struct imbe_enc_frame* q) {
+    const int L9 = q->L - 9;
+    int best = 0;
     for (int i = 1; i < 64; i++) {
-        if (fabs((double)B2[i] - g[1]) < fabs((double)B2[b2] - g[1])) {
-            b2 = i;
+        if (fabsf(B2[i] - q->G[1]) < fabsf(B2[best] - q->G[1])) {
+            best = i;
         }
     }
-    bvals[2] = b2;
-    for (int mm = 2; mm <= 6; mm++) {
-        int bits = (int)ba[L9][mm - 2][0];
-        double step = (double)ba[L9][mm - 2][1];
-        bvals[mm + 1] = imbe4400_enc_uniform(g[mm], bits, step);
+    q->b[2] = best;
+    for (int m = 3; m <= 7; m++) {
+        q->b[m] = imbe_enc_uniform(q->G[m - 1], (int)ba[L9][m - 3][0], ba[L9][m - 3][1]);
     }
-    int pos = 8;
-    for (int i = 0; i < 6; i++) {
-        for (int k = 2; k <= ImbeJi[L9][i]; k++) {
-            int bits = hoba[L9][pos - 8];
-            double step = (bits > 0) ? (double)quantstep[bits - 1] * (double)standdev[k - 2] : 0.0;
-            bvals[pos] = (bits > 0) ? imbe4400_enc_uniform(dct[i][k - 1], bits, step) : 0;
-            pos++;
+    int m = 8;
+    for (int i = 1; i <= 6; i++) {
+        for (int k = 2; k <= ImbeJi[L9][i - 1]; k++, m++) {
+            int bits = hoba[L9][m - 8];
+            q->b[m] = (bits > 0) ? imbe_enc_uniform(q->C[i][k], bits, quantstep[bits - 1] * standdev[k - 2]) : 0;
         }
     }
 }
 
-/* Quantize L amplitudes m[1..L] into b2..b(L+1) of bvals, against the
- * decoder's previous frame. */
+/* The 88 bits in the order mbe_decodeImbe4400Parms() reads them: b0 at 0..5
+ * and 85..86, the bit order table for 6..84, and the synchronization bit. */
 static void
-imbe4400_enc_quantize_amplitudes(int L, const double* m, const mbe_parms* prev, int bvals[58]) {
-    double residual[57] = {0};
-    double dct[6][10] = {{0}};
-    double g[7] = {0};
-    if (L < 9 || L > 56) {
-        return;
-    }
-    imbe4400_enc_residual(L, m, prev, residual);
-    imbe4400_enc_transform(L, residual, dct, g);
-    imbe4400_enc_quantize_transform(L, (const double (*)[10])dct, g, bvals);
-}
-
-/* Lay b0..b(L+1) out as mbe_decodeImbe4400Parms() reads them. */
-static void
-imbe4400_enc_pack(int L, const int bvals[58], char imbe_d[88]) {
-    const int L9 = L - 9;
-    static const int b0_indices[8] = {0, 1, 2, 3, 4, 5, 85, 86};
-
-    memset(imbe_d, 0, 88);
-    if (L9 < 0 || L9 > 47) {
-        return;
-    }
+imbe_enc_pack(const struct imbe_enc_frame* q, int sync, char imbe_d[88]) {
+    static const int b0_positions[8] = {0, 1, 2, 3, 4, 5, 85, 86};
+    const int L9 = q->L - 9;
     for (int i = 0; i < 8; i++) {
-        imbe_d[b0_indices[i]] = (char)((bvals[0] >> (7 - i)) & 1);
+        imbe_d[b0_positions[i]] = (char)((q->b[0] >> (7 - i)) & 1);
     }
     for (int i = 6; i < 85; i++) {
-        int param = bo[L9][i - 6][0];
-        int bit = bo[L9][i - 6][1];
-        imbe_d[i] = (char)((bvals[param] >> bit) & 1);
+        imbe_d[i] = (char)((q->b[bo[L9][i - 6][0]] >> bo[L9][i - 6][1]) & 1);
     }
+    imbe_d[87] = (char)sync;
+}
+
+void
+mbe_imbe4400_quantize_amplitudes(int b0, const unsigned char bands[12], const float logm[57], const mbe_parms* prev_mp,
+                                 int sync, char imbe_d[88]) {
+    struct imbe_enc_frame q;
+    memset(&q, 0, sizeof(q));
+    imbe_enc_set_pitch(&q, b0);
+    for (int k = 1; k <= q.K; k++) {
+        q.b[1] |= bands[k - 1] << (q.K - k); /* eq 49 */
+    }
+    memcpy(q.logm, logm, sizeof(q.logm));
+    imbe_enc_residual(&q, prev_mp);
+    imbe_enc_transform(&q);
+    imbe_enc_quantize(&q);
+    imbe_enc_pack(&q, sync, imbe_d);
 }
 
 static int
-imbe4400_encode(mbe_imbe4400_encoder* enc, const double input[IMBE4400_ENC_SAMPLES], char imbe_d[88]) {
-    struct mbe_fa_voicing_state scratch;
-    struct mbe_fa_voicing_state* voicing = &enc->voicing;
-    const struct mbe_fa_result* a = &enc->frame;
-    unsigned char bands[MBE_FA_MAX_BANDS];
-    double amplitudes[57];
-    int bvals[58] = {0};
+imbe_encode(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88], mbe_parms* cur_mp,
+            const mbe_parms* prev_mp) {
+    struct mbe_analysis_result res;
+    int status = mbe_encoder_frontend_analyze(&enc->fe, samples, &res);
+    if (status < 0) {
+        return status;
+    }
+    struct imbe_enc_frame q;
+    unsigned char bands[MBE_ANALYSIS_BANDS];
+    float logm[57] = {0};
+    memset(&q, 0, sizeof(q));
+    imbe_enc_set_pitch(&q, imbe_enc_pitch(res.f0));
+    mbe_analysis_band_voicing(&res, q.L, enc->bands_prev, bands);
+    float mean = 0.0f;
+    for (int l = 1; l <= q.L; l++) {
+        int voiced = bands[mbe_analysis_band_of(l) - 1];
+        float m = IMBE_ENC_MAG_SCALE * (voiced ? res.voiced_magnitude[l] : res.noise_magnitude[l]);
+        logm[l] = log2f(m + 1e-12f);
+        mean += logm[l];
+    }
+    /* G1 (eq 61) carries the mean log2 amplitude, and the gain table's lowest
+     * level is the floor under it. */
+    mean /= (float)q.L;
+    if (mean < B2[0]) {
+        (void)mbe_encoder_fit_floor(logm, q.L, mean, B2[0]);
+    }
+    mbe_imbe4400_quantize_amplitudes(q.b[0], bands, logm, prev_mp, enc->sync, imbe_d);
 
-    if (!mbe_fa_push(&enc->tables, &enc->analysis, input, &enc->frame)) {
-        /* While the look-ahead buffer is filling, a copy of the voicing state
-         * is used, so that only analysed frames update the original. */
-        imbe4400_enc_quiet_frame(&enc->frame);
-        scratch = enc->voicing;
-        voicing = &scratch;
+    /* The decoder's update, on a private copy of the caller's history. */
+    mbe_parms history = *prev_mp;
+    status = mbe_decodeImbe4400Parms(imbe_d, cur_mp, &history);
+    if (status != 0) {
+        return (status < 0) ? status : MBE_STATUS_INVALID_ARGUMENT;
     }
-
-    double omega0 = a->omega0_hat;
-    int L = mbe_fa_harmonics_count(omega0);
-    if (L < 9 || L > 56) {
-        return MBE_STATUS_INVALID_ARGUMENT; /* not reached: the refined pitch range limits L to 9..56 */
+    if (!mbe_encoder_model_valid(cur_mp)) {
+        return MBE_STATUS_INVALID_ARGUMENT;
     }
-    int k_hat = mbe_fa_determine_voicing(&enc->tables, &a->sw, omega0, a->initial_pitch_error, voicing, bands);
-    mbe_fa_spectral_amplitudes(&enc->tables, &a->sw, L, k_hat, omega0, bands, amplitudes);
-    /* The logarithm of a zero amplitude (digital silence) is undefined, so
-     * amplitudes are floored at one 16-bit PCM step, as in OP25's
-     * imbe_vocoder. */
-    for (int l = 1; l <= L; l++) {
-        amplitudes[l] = fmax(amplitudes[l], 1.0);
-    }
-
-    /* Eq 45: b0, the fundamental; eq 46 maps it back to the same L. */
-    bvals[0] = (int)floor((4.0 * M_PI / omega0) - 39.0 + 1e-9);
-    /* b1: band 1 in the most significant bit. */
-    for (int k = 1; k <= k_hat; k++) {
-        if (bands[k - 1]) {
-            bvals[1] |= 1 << (k_hat - k);
-        }
-    }
-    imbe4400_enc_quantize_amplitudes(L, amplitudes, &enc->prev, bvals);
-    imbe4400_enc_pack(L, bvals, imbe_d);
-
-    /* Update the prediction history by decoding the emitted frame, exactly as
-     * the receiving decoder will. */
-    mbe_parms cur = enc->prev;
-    if (mbe_decodeImbe4400Parms(imbe_d, &cur, &enc->prev) == 0) {
-        mbe_moveMbeParms(&cur, &enc->prev);
-    }
+    memcpy(enc->bands_prev, bands, sizeof(enc->bands_prev));
+    enc->sync ^= 1;
     return 0;
 }
 
-/* Accept only finite samples of magnitude at most 2^20 (bit pattern
- * 0x49800000). The test inspects the IEEE 754 bit pattern rather than using
- * isfinite() or comparisons, because the library may be compiled with
- * MBELIB_ENABLE_FAST_MATH (-ffast-math, /fp:fast), under which the compiler
- * is permitted to assume that no value is NaN or infinite and may remove such
- * checks. */
-static int
-imbe4400_enc_samples_valid(const float* samples) {
-    for (int i = 0; i < IMBE4400_ENC_SAMPLES; i++) {
-        uint32_t bits;
-        memcpy(&bits, &samples[i], sizeof(bits));
-        if ((bits & 0x7FFFFFFFu) > 0x49800000u) {
-            return 0;
-        }
+int
+mbe_encodeImbe4400Parms(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88], mbe_parms* cur_mp,
+                        const mbe_parms* prev_mp) {
+    if (enc == NULL || samples == NULL || imbe_d == NULL || cur_mp == NULL || prev_mp == NULL || cur_mp == prev_mp
+        || !mbe_encoder_samples_valid(samples) || !mbe_encoder_history_valid(prev_mp)) {
+        return MBE_STATUS_INVALID_ARGUMENT;
     }
-    return 1;
+    /* A frame that fails (a history whose model would overflow) leaves no trace. */
+    const struct mbe_analysis_state saved = enc->fe.analysis;
+    mbe_parms out = *cur_mp;
+    int status = imbe_encode(enc, samples, imbe_d, &out, prev_mp);
+    if (status < 0) {
+        enc->fe.analysis = saved;
+        return status;
+    }
+    *cur_mp = out;
+    return 0;
 }
 
 int
-mbe_encodeImbe4400Parms(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88]) {
-    double input[IMBE4400_ENC_SAMPLES];
+mbe_encodeImbe4400ParmsShort(mbe_imbe4400_encoder* enc, const short* samples, char imbe_d[88], mbe_parms* cur_mp,
+                             const mbe_parms* prev_mp) {
+    float float_buf[MBE_ENCODER_SAMPLES];
 
-    if (enc == NULL || samples == NULL || imbe_d == NULL || !imbe4400_enc_samples_valid(samples)) {
+    if (samples == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    for (int i = 0; i < IMBE4400_ENC_SAMPLES; i++) {
-        input[i] = (double)samples[i] * IMBE4400_ENC_PCM_SCALE;
-    }
-    return imbe4400_encode(enc, input, imbe_d);
+    mbe_encoder_short_to_float(samples, float_buf);
+    return mbe_encodeImbe4400Parms(enc, float_buf, imbe_d, cur_mp, prev_mp);
 }
 
-int
-mbe_encodeImbe4400ParmsShort(mbe_imbe4400_encoder* enc, const short* samples, char imbe_d[88]) {
-    double input[IMBE4400_ENC_SAMPLES];
-
-    if (enc == NULL || samples == NULL || imbe_d == NULL) {
-        return MBE_STATUS_INVALID_ARGUMENT;
-    }
-    for (int i = 0; i < IMBE4400_ENC_SAMPLES; i++) {
-        input[i] = (double)samples[i];
-    }
-    return imbe4400_encode(enc, input, imbe_d);
-}
-
+/* Chapter 7: u0..u3 (12 bits each) as (23,12) Golay codes, u4..u6 (11 bits
+ * each) as (15,11) Hamming codes and u7 (7 bits) unprotected, then vectors
+ * 1..6 modulated by the sequence seeded from u0 (eqs 84-94), as
+ * mbe_demodulateImbe7200x4400Data() removes it. */
 int
 mbe_encodeImbe7200x4400Frame(const char imbe_d[88], char imbe_fr[8][23]) {
-    char data[12];
-    char cw[23];
     unsigned short pr[115];
-    unsigned short foo = 0;
+    unsigned short seed = 0;
 
     if (imbe_d == NULL || imbe_fr == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
@@ -358,38 +347,29 @@ mbe_encodeImbe7200x4400Frame(const char imbe_d[88], char imbe_fr[8][23]) {
             return MBE_STATUS_INVALID_BITS;
         }
     }
+    char d[88];
+    memcpy(d, imbe_d, sizeof(d)); /* the caller's bits may share the frame's memory */
     memset(imbe_fr, 0, 8 * sizeof(imbe_fr[0]));
-
-    /* Eq 81-83: u0..u3 as (23,12) Golay, u4..u6 as (15,11) Hamming, u7 raw. */
     for (int i = 0; i < 4; i++) {
-        memcpy(data, imbe_d + ((size_t)12 * (size_t)i), 12);
-        mbe_golay2312_encode(data, cw);
-        memcpy(imbe_fr[i], cw, 23);
+        mbe_golay2312_encode(d + ((size_t)12 * (size_t)i), imbe_fr[i]);
     }
     for (int i = 0; i < 3; i++) {
-        mbe_hamming1511_encode(imbe_d + 48 + ((size_t)11 * (size_t)i), cw);
-        memcpy(imbe_fr[4 + i], cw, 15);
+        mbe_hamming1511_encode(d + 48 + ((size_t)11 * (size_t)i), imbe_fr[4 + i]);
     }
     for (int j = 0; j < 7; j++) {
-        imbe_fr[7][6 - j] = imbe_d[81 + j];
+        imbe_fr[7][6 - j] = d[81 + j];
     }
 
-    /* Eq 84-94: modulate vectors 1-6 with the sequence seeded from u0. */
-    for (int i = 22; i >= 11; i--) {
-        foo = (unsigned short)((foo << 1) | (unsigned short)(imbe_fr[0][i] & 1));
+    for (int j = 22; j >= 11; j--) {
+        seed = (unsigned short)((seed << 1) | (unsigned short)imbe_fr[0][j]);
     }
-    pr[0] = (unsigned short)(16 * foo);
+    pr[0] = (unsigned short)(16 * seed);
     for (int i = 1; i < 115; i++) {
-        pr[i] = (unsigned short)(((173u * pr[i - 1]) + 13849u) & 0xFFFFu);
+        pr[i] = (unsigned short)((173u * pr[i - 1] + 13849u) & 0xFFFFu);
     }
     int k = 1;
-    for (int i = 1; i < 4; i++) {
-        for (int j = 22; j >= 0; j--) {
-            imbe_fr[i][j] = (char)(imbe_fr[i][j] ^ (pr[k++] >> 15));
-        }
-    }
-    for (int i = 4; i < 7; i++) {
-        for (int j = 14; j >= 0; j--) {
+    for (int i = 1; i < 7; i++) {
+        for (int j = (i < 4) ? 22 : 14; j >= 0; j--) {
             imbe_fr[i][j] = (char)(imbe_fr[i][j] ^ (pr[k++] >> 15));
         }
     }

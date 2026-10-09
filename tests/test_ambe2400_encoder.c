@@ -9,6 +9,8 @@
 #include "mbelib-neo/mbelib.h"
 
 #ifdef MBE_ENCODER_TEST_OOM
+#include <string.h>
+
 /* GNU link wrapping covers eleven allocation points: the context, the
  * project-owned synthesis FFT plan and its buffers, and the autocorrelation
  * plan and its buffers. These failures return NULL. Allocation failures inside
@@ -94,11 +96,102 @@ encoder_track_free(void* ptr) {
     encoder_real_free(ptr);
 }
 
+/* The three encoders share the analysis front end and its allocations. */
+struct oom_codec {
+    const char* name;
+    void* (*alloc)(void);
+    void (*reset)(void* enc);
+    void (*release)(void* enc);
+    int (*encode)(void* enc, const float* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev);
+    int (*encode_short)(void* enc, const short* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev);
+};
+
+static void*
+dstar_alloc(void) {
+    return mbe_ambe2400EncoderAlloc();
+}
+
+static void
+dstar_reset(void* enc) {
+    mbe_ambe2400EncoderReset(enc);
+}
+
+static void
+dstar_release(void* enc) {
+    mbe_ambe2400EncoderFree(enc);
+}
+
 static int
-check_no_encode_allocations(mbe_ambe2400_encoder* enc) {
+dstar_encode(void* enc, const float* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2400Parms(enc, pcm, bits, cur, prev);
+}
+
+static int
+dstar_encode_short(void* enc, const short* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2400ParmsShort(enc, pcm, bits, cur, prev);
+}
+
+static void*
+ambe2450_alloc(void) {
+    return mbe_ambe2450EncoderAlloc();
+}
+
+static void
+ambe2450_reset(void* enc) {
+    mbe_ambe2450EncoderReset(enc);
+}
+
+static void
+ambe2450_release(void* enc) {
+    mbe_ambe2450EncoderFree(enc);
+}
+
+static int
+ambe2450_encode(void* enc, const float* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2450Parms(enc, pcm, bits, cur, prev);
+}
+
+static int
+ambe2450_encode_short(void* enc, const short* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2450ParmsShort(enc, pcm, bits, cur, prev);
+}
+
+static void*
+imbe_alloc(void) {
+    return mbe_imbe4400EncoderAlloc();
+}
+
+static void
+imbe_reset(void* enc) {
+    mbe_imbe4400EncoderReset(enc);
+}
+
+static void
+imbe_release(void* enc) {
+    mbe_imbe4400EncoderFree(enc);
+}
+
+static int
+imbe_encode(void* enc, const float* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeImbe4400Parms(enc, pcm, bits, cur, prev);
+}
+
+static int
+imbe_encode_short(void* enc, const short* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeImbe4400ParmsShort(enc, pcm, bits, cur, prev);
+}
+
+static const struct oom_codec oom_codecs[] = {
+    {"ambe2400", dstar_alloc, dstar_reset, dstar_release, dstar_encode, dstar_encode_short},
+    {"ambe2450", ambe2450_alloc, ambe2450_reset, ambe2450_release, ambe2450_encode, ambe2450_encode_short},
+    {"imbe4400", imbe_alloc, imbe_reset, imbe_release, imbe_encode, imbe_encode_short},
+};
+
+static int
+check_no_encode_allocations(const struct oom_codec* codec, void* enc) {
     mbe_parms cur, prev, enhanced;
     float pcm[160];
-    char bits[49];
+    char bits[88];
     mbe_initMbeParms(&cur, &prev, &enhanced);
     int before = allocation_count;
     int heap_before = heap_allocation_count;
@@ -106,49 +199,56 @@ check_no_encode_allocations(mbe_ambe2400_encoder* enc) {
     for (int frame = 0; frame < 12; frame++) {
         for (int i = 0; i < 160; i++) {
             pcm[i] = frame < 6 ? 0.01f * sinf(0.1f * (float)i) : 0.0f;
+            pcm[i] += (frame >= 8 && frame < 10) ? 0.1f * sinf(0.55f * (float)i) : 0.0f; /* a tone frame */
         }
-        if (mbe_encodeAmbe2400Parms(enc, pcm, bits, &cur, &prev) < 0 || allocation_count != before
+        if (codec->encode(enc, pcm, bits, &cur, &prev) < 0 || allocation_count != before
             || heap_allocation_count != heap_before) {
             return 1;
         }
         mbe_moveMbeParms(&cur, &prev);
     }
-    mbe_ambe2400EncoderReset(enc);
+    codec->reset(enc);
     short shorts[160] = {0};
-    return mbe_encodeAmbe2400ParmsShort(enc, shorts, bits, &cur, &prev) < 0 || allocation_count != before
+    return codec->encode_short(enc, shorts, bits, &cur, &prev) < 0 || allocation_count != before
            || heap_allocation_count != heap_before;
 }
 
+/* Usage: test_ambe2400_encoder_oom ALLOCATION [ambe2400|ambe2450|imbe4400] */
 int
 main(int argc, char** argv) {
+    const struct oom_codec* codec = &oom_codecs[0];
     fail_at = 0;
-    for (const char* p = argc == 2 ? argv[1] : ""; *p != '\0' && fail_at <= ENCODER_ALLOCATIONS; p++) {
+    for (const char* p = argc >= 2 ? argv[1] : ""; *p != '\0' && fail_at <= ENCODER_ALLOCATIONS; p++) {
         fail_at = *p >= '0' && *p <= '9' ? (fail_at * 10) + (*p - '0') : ENCODER_ALLOCATIONS + 1;
     }
-    if (fail_at < 1 || fail_at > ENCODER_ALLOCATIONS) {
+    for (size_t i = 0; argc == 3 && i < sizeof(oom_codecs) / sizeof(oom_codecs[0]); i++) {
+        codec = strcmp(argv[2], oom_codecs[i].name) == 0 ? &oom_codecs[i] : codec;
+    }
+    if (fail_at < 1 || fail_at > ENCODER_ALLOCATIONS || argc > 3 || (argc == 3 && strcmp(argv[2], codec->name) != 0)) {
         return 1;
     }
-    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+    void* enc = codec->alloc();
     if (enc != NULL || allocation_count < fail_at || live_allocations != 0 || live_calloc_count() != 0) {
-        (void)fprintf(stderr, "failed allocation %d: calls=%d live=%d callocs=%d\n", fail_at, allocation_count,
-                      live_allocations, live_calloc_count());
-        mbe_ambe2400EncoderFree(enc);
+        (void)fprintf(stderr, "%s: failed allocation %d: calls=%d live=%d callocs=%d\n", codec->name, fail_at,
+                      allocation_count, live_allocations, live_calloc_count());
+        codec->release(enc);
         return 1;
     }
     fail_at = 0;
     allocation_count = 0;
-    enc = mbe_ambe2400EncoderAlloc();
+    enc = codec->alloc();
     if (enc == NULL || allocation_count != ENCODER_ALLOCATIONS) {
-        (void)fprintf(stderr, "encoder allocation points: %d, want %d\n", allocation_count, ENCODER_ALLOCATIONS);
-        mbe_ambe2400EncoderFree(enc);
+        (void)fprintf(stderr, "%s: encoder allocation points: %d, want %d\n", codec->name, allocation_count,
+                      ENCODER_ALLOCATIONS);
+        codec->release(enc);
         return 1;
     }
-    int failed = check_no_encode_allocations(enc);
-    mbe_ambe2400EncoderFree(enc);
+    int failed = check_no_encode_allocations(codec, enc);
+    codec->release(enc);
     if (failed || live_allocations != 0 || live_calloc_count() != 0) {
         return 1;
     }
-    (void)puts("allocation failure: NULL, no leaks; retry, reset and encoding: no allocations");
+    (void)printf("%s allocation failure: NULL, no leaks; retry, reset and encoding: no allocations\n", codec->name);
     return 0;
 }
 #else
@@ -165,6 +265,33 @@ float_bits_equal(float a, float b) {
     memcpy(&a_bits, &a, sizeof(a_bits));
     memcpy(&b_bits, &b, sizeof(b_bits));
     return a_bits == b_bits;
+}
+
+/* Bitwise identity of two parameter sets, compared as bytes. */
+static int
+parms_identical(const mbe_parms* a, const mbe_parms* b) {
+    unsigned char x[sizeof(mbe_parms)];
+    unsigned char y[sizeof(mbe_parms)];
+    memcpy(x, a, sizeof(x));
+    memcpy(y, b, sizeof(y));
+    return memcmp(x, y, sizeof(x)) == 0;
+}
+
+static int
+float_finite(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7F800000u) != 0x7F800000u;
+}
+
+/* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. */
+static int
+model_finite(const mbe_parms* mp) {
+    int ok = float_finite(mp->w0) && float_finite(mp->gamma) && mp->L >= 1 && mp->L <= 56;
+    for (int l = 1; ok && l <= mp->L; l++) {
+        ok = float_finite(mp->log2Ml[l]) && float_finite(mp->Ml[l]);
+    }
+    return ok;
 }
 
 static uint32_t rng = 0xC0FFEE;
@@ -576,6 +703,84 @@ test_invalid_samples(mbe_ambe2400_encoder* enc) {
         }
     }
     puts("non-finite and out-of-range samples are rejected without touching state");
+    return 0;
+}
+
+/* A prediction history with a non-finite or out-of-range log2Ml or gamma, or
+ * one from which the model would overflow, is rejected with cur_mp untouched. */
+static int
+test_bad_history(mbe_ambe2400_encoder* enc) {
+    float pcm[160] = {0};
+    char d[49];
+    for (int k = 0; k < 5; k++) {
+        mbe_parms cur, prev, enhanced;
+        mbe_ambe2400EncoderReset(enc);
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        const mbe_parms before = cur;
+        if (k == 0) {
+            prev.log2Ml[3] = NAN;
+        } else if (k == 1) {
+            prev.log2Ml[0] = INFINITY;
+        } else if (k == 2) {
+            prev.gamma = -3e9f;
+        } else if (k == 3) {
+            /* Finite, but the prediction overflows: log2 +1000 over the lower
+             * half of the harmonics and -1000 over the rest. */
+            for (int l = 0; l <= 56; l++) {
+                prev.log2Ml[l] = (2 * l <= prev.L) ? 1000.0f : -1000.0f;
+            }
+        } else {
+            prev.gamma = 1000.0f; /* likewise through the gain */
+        }
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev) != MBE_STATUS_INVALID_ARGUMENT) {
+            printf("bad history case %d was not rejected\n", k);
+            return 1;
+        }
+        if (!parms_identical(&cur, &before)) {
+            printf("bad history case %d changed cur_mp\n", k);
+            return 1;
+        }
+    }
+    puts("malformed and overflowing prediction histories are rejected");
+    return 0;
+}
+
+/* The decoder's own highest states encode. The frame b0..b8 = {118, 0, 63, 511,
+ * 123, 13, 0, 0, 0} takes log2Ml[1] past 48 by its 19th repeat and to 48.6 by
+ * its 200th; a bound on the history any tighter than the overflow itself
+ * would refuse it. */
+static int
+test_reachable_history(mbe_ambe2400_encoder* enc) {
+    static const char frame[] = "1110111111111111111110110010000000000000001111110";
+    const int repeats[] = {19, 200};
+    for (size_t r = 0; r < sizeof(repeats) / sizeof(repeats[0]); r++) {
+        mbe_parms cur, prev, enhanced;
+        char d[49];
+        for (int i = 0; i < 49; i++) {
+            d[i] = (char)(frame[i] - '0');
+        }
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int f = 0; f < repeats[r]; f++) {
+            if (mbe_decodeAmbe2400Parms(d, &cur, &prev) != 0) {
+                return 1;
+            }
+            mbe_moveMbeParms(&cur, &prev);
+        }
+        if (prev.log2Ml[1] <= 48.0f) {
+            printf("reachable history: log2Ml[1] %.4f after %d repeats\n", (double)prev.log2Ml[1], repeats[r]);
+            return 1;
+        }
+        float pcm[160];
+        for (int i = 0; i < 160; i++) {
+            pcm[i] = 0.9f * sinf((float)(2.0 * M_PI * 150.0 * i / 8000.0));
+        }
+        mbe_ambe2400EncoderReset(enc);
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev) != 0 || !model_finite(&cur)) {
+            printf("reachable history after %d repeats was rejected\n", repeats[r]);
+            return 1;
+        }
+    }
+    puts("the decoder's highest states (log2Ml past 48) encode");
     return 0;
 }
 
@@ -1116,6 +1321,8 @@ main(void) {
     int fails = 0;
     fails += test_invalid_arguments(enc);
     fails += test_invalid_samples(enc);
+    fails += test_bad_history(enc);
+    fails += test_reachable_history(enc);
     fails += test_c1_parity();
     fails += test_golay();
     fails += test_frame_roundtrip();

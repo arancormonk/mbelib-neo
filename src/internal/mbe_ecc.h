@@ -28,13 +28,13 @@
 void mbe_golay2312_encode(const char in12[12], char out23[23]);
 
 /**
- * @brief Encode an 11-bit data word into a (15,11) Hamming codeword
- *        (standard IMBE generator).
+ * @brief Encode 11 data bits into a (15,11) Hamming codeword with the IMBE
+ *        7200x4400 generator.
  *
- * Data bits occupy codeword positions 4..14 (MSB at 14), parity bits
- * positions 0..3. This is the exact inverse of mbe_hamming1511().
+ * The data occupy codeword positions 14..4 (in11[0] at 14) and the parity
+ * bits positions 3..0, so mbe_hamming1511() returns in11 unchanged.
  *
- * @param in11  Input data bits (11), in[0] = MSB.
+ * @param in11  Input data bits (11).
  * @param out15 Output codeword bits (15).
  */
 void mbe_hamming1511_encode(const char in11[11], char out15[15]);
