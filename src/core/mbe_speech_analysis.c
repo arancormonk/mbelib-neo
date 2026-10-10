@@ -39,6 +39,7 @@
  *    see mbe_analysis_column_threshold() and mbe_analysis_band_voicing().
  */
 #include "mbe_speech_analysis.h"
+#include "mbe_analysis_kernels.h"
 
 #include <math.h>
 #include <string.h>
@@ -208,28 +209,41 @@ pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_anal
     return mbe_acf_compute(acf, w->u, span, w->r, MBE_ANALYSIS_PITCH_HALF + 1); /* eq (7) */
 }
 
-static float
-interpolated_r(const struct pitch_work* w, float t) {
-    int base = (int)t;
-    float frac = t - (float)base;
-    if (base >= MBE_ANALYSIS_PITCH_HALF + 1) {
-        return 0.0f;
+/* Pitch candidates in one group share their autocorrelation span. The grid
+ * is in half samples, so quotient/remainder below select eq (8)'s bins exactly.
+ * All taps lie at or below 150; the +1 interpolation tap fits r[151]. */
+static void
+pitch_error_group(const struct mbe_analysis_tables* t, struct pitch_work* w, float energy, int lo, int hi, int span) {
+    float sums[MBE_ANALYSIS_PITCH_COUNT];
+    for (int i = lo; i < hi; ++i) {
+        sums[i] = w->r[0];
     }
-    return ((1.0f - frac) * w->r[base]) + (frac * w->r[base + 1]); /* eq (8) */
+    for (int n = 1; n <= span; ++n) {
+        for (int i = lo; i < hi; ++i) {
+            int twice = n * (40 + i);
+            int base = twice / 2;
+            float frac = 0.5f * (float)(twice % 2);
+            sums[i] += 2.0f * (((1.0f - frac) * w->r[base]) + (frac * w->r[base + 1]));
+        }
+    }
+    for (int i = lo; i < hi; ++i) {
+        float p = pitch_of(i);
+        float denominator = energy * (1.0f - p * t->w_i4_sum);
+        w->error[i] = denominator > 1e-6f ? (energy - p * sums[i]) / denominator : 1.0f;
+    }
 }
 
 static void
 pitch_errors(const struct mbe_analysis_tables* t, struct pitch_work* w, float energy) {
-    for (int i = 0; i < MBE_ANALYSIS_PITCH_COUNT; ++i) {
-        float p = pitch_of(i);
-        int span = (int)((float)MBE_ANALYSIS_PITCH_HALF / p);
-        float sum = w->r[0];
-        for (int n = 1; n <= span; ++n) {
-            sum += 2.0f * interpolated_r(w, (float)n * p); /* r(-t) = r(t) */
+    int lo = 0;
+    while (lo < MBE_ANALYSIS_PITCH_COUNT) {
+        int span = 300 / (40 + lo);
+        int hi = 300 / span - 40 + 1;
+        if (hi > MBE_ANALYSIS_PITCH_COUNT) {
+            hi = MBE_ANALYSIS_PITCH_COUNT;
         }
-        float denominator = energy * (1.0f - (p * t->w_i4_sum));
-        /* eq (5); window effects can make it slightly negative, as in the standard. */
-        w->error[i] = (denominator > 1e-6f) ? (energy - (p * sum)) / denominator : 1.0f;
+        pitch_error_group(t, w, energy, lo, hi, span);
+        lo = hi;
     }
 }
 
@@ -338,13 +352,6 @@ analysis_spectrum(const struct mbe_analysis_tables* t, const struct mbe_analysis
     return 0;
 }
 
-static float
-window_at(const struct mbe_analysis_tables* t, float offset_bins) {
-    int i =
-        (int)lrintf(offset_bins * (float)MBE_ANALYSIS_WTAB_STEPS) + (MBE_ANALYSIS_WTAB_BINS * MBE_ANALYSIS_WTAB_STEPS);
-    return (i < 0 || i >= MBE_ANALYSIS_WTAB_LEN) ? 0.0f : t->w_r_dtft[i];
-}
-
 /* Bins one harmonic band can span: refinement goes down to a pitch of
  * PITCH_MIN - 9/8, where f0 is 13.6 bins, so a band covers at most 14 bins. */
 #define BAND_BINS_MAX 16
@@ -359,23 +366,68 @@ struct band_fit {
     float w[BAND_BINS_MAX]; /* W_R at each fitted bin */
 };
 
+/* Fused reduction for short bands, whose horizontal SIMD sums cost more
+ * than the multiplications. The caller has bounded the table slice. */
+static void
+fit_band_short(const float* window, const struct spectrum* sp, int lo, int n, struct band_fit* fit, float sums[4]) {
+    for (int k = 0; k < n; ++k) {
+        float w = window[(size_t)k * MBE_ANALYSIS_WTAB_STEPS];
+        float re = sp->re[lo + k], im = sp->im[lo + k];
+        fit->w[k] = w;
+        sums[0] += re * w;
+        sums[1] += im * w;
+        sums[2] += w * w;
+        sums[3] += re * re + im * im;
+    }
+}
+
+/* Rare edge bands can run outside the sampled window transform. */
+static void
+fit_band_edge(const struct mbe_analysis_tables* t, const struct spectrum* sp, int lo, int index, struct band_fit* fit,
+              float sums[4]) {
+    for (int k = 0; k < fit->bins; ++k, index += MBE_ANALYSIS_WTAB_STEPS) {
+        fit->w[k] = index >= 0 && index < MBE_ANALYSIS_WTAB_LEN ? t->w_r_dtft[index] : 0.0f;
+    }
+    if (fit->bins > 0) {
+        mbe_analysis_band_sums(sp->re + lo, sp->im + lo, fit->w, fit->bins, sums);
+    }
+}
+
 /* Least-squares fit of one harmonic over bins [lo, hi). */
 static void
 fit_band(const struct mbe_analysis_tables* t, const struct spectrum* sp, float centre, int lo, int hi,
          struct band_fit* fit) {
-    float c_re = 0.0f;
-    float c_im = 0.0f;
-    float q = 0.0f;
-    float energy = 0.0f;
-    fit->bins = 0;
-    for (int m = lo; m < hi && m <= ANALYSIS_BINS && fit->bins < BAND_BINS_MAX; ++m) {
-        float w = window_at(t, (float)m - centre);
-        fit->w[fit->bins++] = w;
-        c_re += sp->re[m] * w;
-        c_im += sp->im[m] * w;
-        q += w * w;
-        energy += (sp->re[m] * sp->re[m]) + (sp->im[m] * sp->im[m]);
+    /* Clip once, before any loads. A harmonic entirely above Nyquist is empty. */
+    if (hi > ANALYSIS_BINS + 1) {
+        hi = ANALYSIS_BINS + 1;
     }
+    int n = hi > lo ? hi - lo : 0;
+    if (n > BAND_BINS_MAX) {
+        n = BAND_BINS_MAX;
+    }
+    fit->bins = n;
+    /* Integer-bin offsets advance the DTFT table by exactly 64 entries.
+     * Round only the first index; adding 64 preserves half-way tie parity. */
+    int index = (int)lrintf(((float)lo - centre) * (float)MBE_ANALYSIS_WTAB_STEPS)
+                + MBE_ANALYSIS_WTAB_BINS * MBE_ANALYSIS_WTAB_STEPS;
+    float sums[4] = {0};
+    if (index >= 0 && index < MBE_ANALYSIS_WTAB_LEN
+        && n <= 1 + (MBE_ANALYSIS_WTAB_LEN - 1 - index) / MBE_ANALYSIS_WTAB_STEPS) {
+        /* Most speech bands have fewer than eight bins. Fuse their table
+         * loads and reductions; wider bands amortize SIMD horizontal sums. */
+        if (n < 8) {
+            fit_band_short(t->w_r_dtft + index, sp, lo, n, fit, sums);
+        } else {
+            for (int k = 0; k < n; ++k) {
+                fit->w[k] = t->w_r_dtft[index + k * MBE_ANALYSIS_WTAB_STEPS];
+            }
+            mbe_analysis_band_sums(sp->re + lo, sp->im + lo, fit->w, n, sums);
+        }
+    } else {
+        fit_band_edge(t, sp, lo, index, fit, sums);
+    }
+
+    float c_re = sums[0], c_im = sums[1], q = sums[2], energy = sums[3];
     fit->energy = energy;
     fit->window_energy = q;
     fit->a_re = (q > 0.0f) ? c_re / q : 0.0f;
@@ -413,16 +465,16 @@ refinement_error(const struct mbe_analysis_tables* t, const struct spectrum* sp,
         }
         struct band_fit fit;
         fit_band(t, sp, (float)l * f0_bins, lo, hi, &fit);
-        /* The fit's window samples cover bins lo .. lo + bins - 1. */
-        for (int k = 0; k < fit.bins && k < BAND_BINS_MAX && lo + k <= upper; ++k) {
-            const int m = lo + k;
-            if (m < first) {
-                continue;
-            }
-            float w = fit.w[k];
-            float dr = sp->re[m] - (fit.a_re * w);
-            float di = sp->im[m] - (fit.a_im * w);
-            total += (dr * dr) + (di * di);
+        /* Clip the residual subrange once; the kernel needs no per-bin
+         * conditionals and never reads beyond the fitted window or spectrum. */
+        int begin = first > lo ? first - lo : 0;
+        int end = upper - lo + 1;
+        if (end > fit.bins) {
+            end = fit.bins;
+        }
+        if (begin < end) {
+            total += mbe_analysis_residual(sp->re + lo + begin, sp->im + lo + begin, fit.w + begin, end - begin,
+                                           fit.a_re, fit.a_im);
         }
     }
     return total;
