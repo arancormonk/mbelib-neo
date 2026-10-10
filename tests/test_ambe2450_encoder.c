@@ -569,6 +569,7 @@ main(void) {
     fails += test_voice_tone_voice(enc);
     fails += test_tone_bad_history(enc);
     fails += enc_test_call_progress(&ambe2450_codec, enc, 160);
+    fails += enc_test_tone_hold(&ambe2450_codec, enc);
     mbe_ambe2450EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

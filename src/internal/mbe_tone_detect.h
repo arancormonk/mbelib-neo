@@ -42,10 +42,15 @@ int mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct m
  * it is detected and for up to MBE_TONE_CP_HOLD frames after, as its latest
  * detection. DVSI starts one frame earlier, which needs a detection in the
  * partly filled first span. A DTMF, KNOX or single tone is sent from its first
- * detection and ends that hold.
+ * detection, ends that hold, and is sent for MBE_TONE_HOLD frame after its last
+ * detection, as DVSI's encoders send the frame in which such a tone ends or
+ * changes to another tone: on DVSI's D-STAR tone vectors that frame repeats the
+ * previous tone frame (145 of 149 such frames on alltone and alert are
+ * bit-identical to it).
  */
 #define MBE_TONE_CP_CONFIRM 3
 #define MBE_TONE_CP_HOLD    2
+#define MBE_TONE_HOLD       1
 
 /** Per-stream call-progress timing state. */
 struct mbe_tone_tracker {
@@ -53,7 +58,7 @@ struct mbe_tone_tracker {
     int run;                        /* consecutive frames it has been detected in, at most MBE_TONE_CP_CONFIRM */
     int hold;                       /* frames last may still be sent without a detection */
     int sending;                    /* last is being sent */
-    struct mbe_tone_detection last; /* latest detection of the call-progress tone sent */
+    struct mbe_tone_detection last; /* latest detection of the tone being sent */
 };
 
 void mbe_tone_tracker_reset(struct mbe_tone_tracker* tracker);

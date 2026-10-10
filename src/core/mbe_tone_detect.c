@@ -466,6 +466,9 @@ mbe_tone_track(struct mbe_tone_tracker* tracker, mbe_fft_plan* fft, const float 
     }
     if (status > 0 && tone.id < TONE_FIRST_CALL_PROGRESS) {
         mbe_tone_tracker_reset(tracker);
+        tracker->sending = 1;
+        tracker->hold = MBE_TONE_HOLD;
+        tracker->last = tone;
         *out = tone;
         return 1;
     }

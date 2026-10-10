@@ -922,6 +922,62 @@ enc_test_call_progress(const struct enc_codec* c, void* enc, int dial) {
     return 0;
 }
 
+/*
+ * A DTMF, KNOX or single tone is sent for one frame after its last detection,
+ * as DVSI's encoders send the frame in which such a tone ends or changes: a
+ * 1 kHz tone (index 32) detected through frame 8 is sent through frame 9, the
+ * last frame bit-identical to the one before it, and voice after; the same
+ * tone changing directly to 1.5 kHz (index 48) gives no voice frame between
+ * the two tones, and the 1.5 kHz tone, detected through frame 17, is sent
+ * through frame 18.
+ */
+static inline int
+enc_test_tone_hold(const struct enc_codec* c, void* enc) {
+    enum { FRAMES = 30 };
+
+    static char bits[FRAMES][88];
+    int ids[FRAMES];
+    for (int pass = 0; pass < 2; pass++) {
+        mbe_parms cur, prev, enhanced;
+        c->reset(enc);
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int f = 0; f < FRAMES; f++) {
+            float pcm[160];
+            for (int i = 0; i < 160; i++) {
+                int n = (f * 160) + i;
+                double hz = (n < 1450) ? 1000.0 : ((pass == 1 && n < 2900) ? 1500.0 : 0.0);
+                pcm[i] = (hz > 0.0) ? (float)(0.2 * sin(2.0 * M_PI * hz * (double)n / 8000.0)) : 0.0f;
+            }
+            if (c->encode(enc, pcm, bits[f], &cur, &prev) < 0) {
+                return 1;
+            }
+            ids[f] = c->tone_id(bits[f]);
+            mbe_moveMbeParms(&cur, &prev);
+        }
+        int last = -1;
+        int first_second = -1;
+        int last_first = -1;
+        for (int f = 0; f < FRAMES; f++) {
+            last = (ids[f] >= 0) ? f : last;
+            last_first = (ids[f] == 32) ? f : last_first;
+            first_second = (first_second < 0 && ids[f] == 48) ? f : first_second;
+        }
+        /* Detected through frame 8 (1 kHz) or 17 (1.5 kHz); the hold sends one more. */
+        int ok = last >= 1 && memcmp(bits[last], bits[last - 1], (size_t)c->bits) == 0;
+        ok = ok && last_first == 9 && last == ((pass == 0) ? 9 : 18);
+        if (pass == 1) {
+            ok = ok && first_second == 10;
+        }
+        if (!ok) {
+            printf("%s tone hold (%s): last tone frame %d (id %d), 1 kHz until %d, 1.5 kHz from %d\n", c->name,
+                   pass ? "change" : "end", last, (last >= 0) ? ids[last] : -1, last_first, first_second);
+            return 1;
+        }
+    }
+    printf("%s tone hold: a tone's last frame repeats it, and a change of tone has no voice gap\n", c->name);
+    return 0;
+}
+
 static inline int
 enc_run_common(const struct enc_codec* c, void* enc) {
     int fails = 0;
