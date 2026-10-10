@@ -262,9 +262,6 @@ main(int argc, char** argv) {
         return 1;
     }
 #endif
-    if (o.repeats < 1 || o.runs < 1 || o.runs > MAX_RUNS) {
-        return 2;
-    }
     struct frame* frames;
     size_t count;
     if (load_frames(&o, &frames, &count)) {
@@ -272,15 +269,8 @@ main(int argc, char** argv) {
         free(frames);
         return 1;
     }
-    if (count == 0u) {
-        free(frames);
-        return 1;
-    }
+    /* parse_options bounds repeats and runs, and load_frames rejects empty input. */
     double frames_per_run = (double)count * (double)o.repeats;
-    if (frames_per_run <= 0.0) {
-        free(frames);
-        return 2;
-    }
     struct stream s;
     int status = stream_alloc(&s, &o);
     double times[MAX_RUNS];
