@@ -485,5 +485,167 @@
         "value": 0
       }
     ]
+  },
+  "ambe2450-imbe-encoders": {
+    "description": "AMBE+2 and IMBE encoders: our encoding, decoded by this library, keeps DVSI's level, fits the input at least as well as DVSI's own encoding, stays on pitch and voices like DVSI, sends no tone frames for speech, and clips no more than a few samples where the input itself reaches the rails (t03, t04); the decoders and the D-STAR encoder are untouched (D-STAR's encoded bits identical, so the baseline must record encoder-row hashes).",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.alignment_failures",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "max",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.silence_frame_rate",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "max",
+        "value": 5.5
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.env_corr",
+        "rule": "min",
+        "value": 0.9
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.pitch_cents_median",
+        "rule": "max",
+        "value": 10.0
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.octave_error_rate",
+        "rule": "max",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.voicing_agreement_mean",
+        "rule": "min",
+        "value": 0.8
+      },
+      {
+        "mode": [
+          "r33",
+          "p25"
+        ],
+        "metric": "encoder.rail_excess_samples",
+        "rule": "max",
+        "value": 2.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.lsd_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.env_corr",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.pitch_cents_median",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.voicing_agreement_mean",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "ambe2450-encoder-tones": {
+    "description": "AMBE+2 encoder tone frames: the tone indices and levels DVSI's encoder sends for its tone vectors, and few tone frames where DVSI sends voice.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_agreement_mean",
+        "rule": "min",
+        "value": 0.95
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_extra_rate_mean",
+        "rule": "max",
+        "value": 0.02
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad_mean",
+        "rule": "max",
+        "value": 0.25
+      }
+    ]
   }
 }

@@ -327,7 +327,8 @@ put_model(FILE* f, const mbe_parms* mp, const int* status) {
     fputc('}', f);
 }
 
-/* One --params record. "decoded" re-runs the codec's public parameter decoder
+/* One --params record. "bits" are the frame's parameter bits after FEC;
+ * "decoded" re-runs the codec's public parameter decoder
  * on copies of the state before this frame, so it is the frame's own model
  * even when the process path does not commit it; "history" is the prediction
  * state and "synth" the synthesized (enhanced) model after the frame. */
@@ -344,7 +345,11 @@ put_params(FILE* f, size_t frame, int imbe, int ambe2450, const char* data, cons
     } else {
         status = mbe_decodeAmbe2400Parms(data, &dcur, &dprev);
     }
-    fprintf(f, "{\"f\":%zu,\"flags\":%u,\"errors\":%d,\"decoded\":", frame, result->flags, result->total_errors);
+    fprintf(f, "{\"f\":%zu,\"flags\":%u,\"errors\":%d,\"bits\":\"", frame, result->flags, result->total_errors);
+    for (int i = 0; i < (imbe ? 88 : 49); ++i) {
+        fputc('0' + (data[i] & 1), f);
+    }
+    fputs("\",\"decoded\":", f);
     put_model(f, &dcur, &status);
     fputs(",\"history\":", f);
     put_model(f, prev, NULL);

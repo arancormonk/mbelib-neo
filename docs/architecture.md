@@ -23,7 +23,17 @@ the library.
 - `src/core/`: shared synthesis, parameter, adaptive, and unvoiced FFT logic.
 - `src/ecc/`: error-correction helpers and constants.
 - `src/ambe/`: AMBE frame and data processing.
-- `src/ambe/ambe3600x2400_enc.c`: AMBE 2400 speech analysis and encoding.
+- `src/core/mbe_speech_analysis.c`, `src/core/mbe_encoder.c`: the speech
+  analysis (TIA-102.BABA chapter 5 method) and the input front end shared by
+  every encoder.
+- `src/ambe/ambe_encoder.c`: spectral amplitude quantization and frame FEC
+  shared by the two AMBE encoders.
+- `src/ambe/ambe3600x2400_enc.c`: D-STAR voicing, pitch law and bit layout.
+- `src/ambe/ambe3600x2450_enc.c`: AMBE+2 2450 quantization (TIA-102.BABA-1
+  clause 4) and tone frames.
+- `src/core/mbe_tone_detect.c`: tone detection for AMBE+2 tone frames.
+- `src/imbe/imbe7200x4400_enc.c`: IMBE 4400 quantization (TIA-102.BABA
+  chapter 6) and 7200x4400 frame encoding.
 - `src/ambe/dstar_frame.c`: D-STAR DV air-interface byte mapping.
 - `src/imbe/`: IMBE frame and data processing.
 - `src/internal/`: private headers shared by implementation units.

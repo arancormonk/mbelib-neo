@@ -165,6 +165,32 @@ hamming_encode_data_word(uint32_t data, const int generator[4], const int data_p
     return 0;
 }
 
+/* Even parity of the bits set in v. */
+static int
+bit_parity(uint32_t v) {
+    v ^= v >> 8;
+    v ^= v >> 4;
+    v ^= v >> 2;
+    v ^= v >> 1;
+    return (int)(v & 1u);
+}
+
+void
+mbe_hamming1511_encode(const char in11[11], char out15[15]) {
+    /* mbe_hamming1511() returns the data at positions 14..4, most significant
+     * first. Generator row r checks data bits and exactly one parity
+     * position, 3 - r (its low nibble is 8, 4, 2, 1), so each parity bit is the
+     * parity of its row's data bits. */
+    memset(out15, 0, 15);
+    for (int i = 0; i < 11; ++i) {
+        out15[14 - i] = (char)(in11[i] & 1);
+    }
+    const uint32_t data = hamming_block_from_bits(out15);
+    for (int r = 0; r < 4; ++r) {
+        out15[3 - r] = (char)bit_parity(data & (uint32_t)hammingGenerator[r] & 0x7FF0u);
+    }
+}
+
 static int
 hamming1511_soft_common(const mbe_soft_bit* in, char* out, const int generator[4], int variant7100) {
     char hard_out[15];

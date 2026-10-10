@@ -185,6 +185,8 @@ def check_encoder_metrics(board):
     assert not passed and any("unpaired" in line and "v2" in line for line in lines), lines
     tone, voice = {"flags": 0x0010}, {"flags": 0x0002}
     assert board.tone_frame_rate([tone, voice, voice, voice]) == 0.25
+    silence = record(150.0, flags=0x0100)
+    assert board.tone_frame_rate([silence, tone, voice, voice]) == 0.5
     assert board.tone_frame_rate([]) is None
 
 
@@ -308,6 +310,53 @@ def check_review_regressions(board):
     assert board.quartiles([1.0, 2.0, 3.0, 4.0, 5.0]) == (2.0, 4.0)
 
 
+def tone_bits(tone_id, ad):
+    """A TIA-102.BABA-1 Table 10 tone frame's 49 parameter bits."""
+    bits = "111111" + format(ad >> 1, "06b") + format(tone_id, "08b") * 4 + str(ad & 1) + "0000"
+    assert len(bits) == 49
+    return bits
+
+
+def check_encoder_tones(board):
+    assert board.tone_fields(tone_bits(129, 101)) == (129, 101)
+    assert board.tone_fields("0" * 49) is None and board.tone_fields("1" * 88) is None
+    assert set(board.ENCODER_COMPARE_DELAY) == set(board.MODES)
+    voice = {"bits": "0" * 49}
+
+    def frames(spec):
+        return [voice if entry is None else {"bits": tone_bits(*entry)} for entry in spec]
+
+    dvsi = frames([None, (129, 100), (129, 100), (129, 100), (129, 101), None, None, None, None, None])
+    # One frame later: three of DVSI's four tone frames agree (one sent as another tone), one level a
+    # step off, and one tone frame where DVSI sends voice.
+    ours = frames([None, None, (129, 100), (129, 101), (130, 100), (129, 101), None, (129, 99), None, None])
+    metrics = board.encoder_tone_agreement(ours, dvsi)
+    assert metrics["encoder_agreement"] == 0.75, metrics
+    assert abs(metrics["encoder_extra_rate"] - 1 / 9) < 1e-9, metrics
+    assert abs(metrics["encoder_level_error_ad"] - 1 / 3) < 1e-9, metrics
+    assert board.encoder_tone_agreement(ours, frames([None] * 10)) == {"encoder_extra_rate": 0.5}
+    # The encoders a build offers, from its usage line.
+    assert board.usage_codecs("Usage: x --codec ambe2400|ambe2450|imbe7200 --in A") == {"ambe2400", "ambe2450", "imbe7200"}
+    assert board.usage_codecs("Usage: x --codec ambe2400 --in A") == {"ambe2400"}
+    assert board.usage_codecs("no usage") == frozenset()
+    # Encoder-row identity: counted only where the baseline recorded hashes.
+    def encoded(name, digest, mode="dstar"):
+        return {"mode": mode, "name": name, "encoder": {"rows_sha256": digest}}
+    base = {"vectors": [encoded("t03", "a"), encoded("t04", "b"), {"mode": "p25", "name": "t03", "encoder": {}}]}
+    same = {"vectors": [encoded("t03", "a"), encoded("t04", "b")]}
+    changed = {"vectors": [encoded("t03", "a"), encoded("t04", "c")]}
+    missing = {"vectors": [encoded("t03", "a")]}
+    assert board.encoder_row_changes(same, base) == {"dstar": 0}
+    assert board.encoder_row_changes(changed, base) == {"dstar": 1}
+    assert board.encoder_row_changes(missing, base) == {"dstar": 1}
+    summary = board.aggregate([
+        {"mode": "r33", "name": "dtmf", "partition": "tones", "tone": {"encoder_agreement": 0.98}},
+        {"mode": "r33", "name": "alltone", "partition": "tones", "tone": {"encoder_agreement": 0.9}},
+    ])
+    assert summary["r33/tones"]["mean"]["tone.encoder_agreement"] == 0.9, summary
+    assert abs(summary["r33/tones"]["mean"]["tone.encoder_agreement_mean"] - 0.94) < 1e-9, summary
+
+
 def main():
     board = load_scoreboard()
     check_configuration(board)
@@ -315,6 +364,7 @@ def main():
     check_gates(board)
     check_encoder_metrics(board)
     check_tone_aggregation(board)
+    check_encoder_tones(board)
     if importlib.util.find_spec("numpy") is None:
         print("NumPy not available: pitch checks skipped")
         return SKIP
