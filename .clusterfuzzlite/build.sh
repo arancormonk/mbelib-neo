@@ -38,6 +38,7 @@ sources=(
   src/ambe/ambe3600x2450_enc.c
   src/ambe/ambe_common.c
   src/ambe/ambe_encoder.c
+  src/ecc/ecc_soft.c
   src/ecc/ecc.c
   src/ecc/ecc_const.c
   src/imbe/imbe7100x4400.c

@@ -156,8 +156,121 @@ correction_mask_from_generator(int syndrome, const int generator[4]) {
 /**
  * @brief Test entry: exercises Hamming and Golay decoders.
  */
+/* Independent exhaustive oracle: reconstruct candidates with the original
+ * parity search, and score each bit individually. Deliberately shares neither
+ * tables nor scoring/tie-ranking machinery with the optimized decoder. */
+static char reference_words[3][4096][23];
+
+static void
+init_reference_words(void) {
+    const int positions[2][11] = {{2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14}, {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}};
+    for (unsigned d = 0; d < 4096u; ++d) {
+        unsigned ecc = 0;
+        for (int i = 0; i < 12; ++i) {
+            if ((d >> (11 - i)) & 1u) {
+                ecc ^= (unsigned)golayGenerator[i];
+            }
+        }
+        unsigned word = (d << 11) | ecc;
+        for (int i = 0; i < 23; ++i) {
+            reference_words[0][d][i] = (char)((word >> i) & 1u);
+        }
+    }
+    for (int variant = 0; variant < 2; ++variant) {
+        for (unsigned d = 0; d < 2048u; ++d) {
+            char data[11];
+            for (int i = 0; i < 11; ++i) {
+                data[i] = (char)((d >> i) & 1u);
+            }
+            int ok = encode_hamming15_with_generator(variant ? imbe7100x4400hammingGenerator : hammingGenerator,
+                                                     positions[variant], data, reference_words[variant + 1][d]);
+            assert(ok);
+        }
+    }
+}
+
+static int
+reference_soft(const mbe_soft_bit* in, char* out, int variant) {
+    int width = variant == 0 ? 23 : 15;
+    int first = variant == 0 ? 11 : 0;
+    int count = variant == 0 ? 4096 : 2048;
+    char hard_in[23], hard[23];
+    for (int i = 0; i < width; ++i) {
+        hard_in[i] = (char)in[i].bit;
+    }
+    if (variant == 0) {
+        (void)mbe_golay2312(hard_in, hard);
+    } else if (variant == 1) {
+        (void)mbe_hamming1511(hard_in, hard);
+    } else {
+        (void)mbe_7100x4400hamming1511(hard_in, hard);
+    }
+    int best_score = 100000, best_diffs = 100, best_hard = 0;
+    for (int d = 0; d < count; ++d) {
+        const char* row = reference_words[variant][d];
+        int score = 0, diffs = 0, matches = 1;
+        for (int i = 0; i < width; ++i) {
+            score += row[i] != hard_in[i] ? in[i].reliability : 0;
+            if (i >= first) {
+                diffs += row[i] != hard_in[i];
+                matches &= row[i] == hard[i];
+            }
+        }
+        if (score < best_score || (score == best_score && matches > best_hard)
+            || (score == best_score && matches == best_hard && diffs < best_diffs)) {
+            memcpy(out, row, (size_t)width);
+            best_score = score;
+            best_diffs = diffs;
+            best_hard = matches;
+        }
+    }
+    for (int i = 0; i < first; ++i) {
+        out[i] = hard_in[i];
+    }
+    return best_diffs;
+}
+
+static void
+test_soft_differential(void) {
+    int (*const decode[3])(const mbe_soft_bit*, char*) = {mbe_golay2312Soft, mbe_hamming1511Soft,
+                                                          mbe_7100x4400hamming1511Soft};
+    unsigned rng = 0x873fa11u;
+    init_reference_words();
+    for (int variant = 0; variant < 3; ++variant) {
+        int width = variant == 0 ? 23 : 15;
+        for (int trial = 0; trial < 512; ++trial) {
+            mbe_soft_bit soft[23];
+            for (int i = 0; i < width; ++i) {
+                rng = rng * 1664525u + 1013904223u;
+                soft[i].bit = (unsigned char)(rng >> 31);
+                switch (trial % 5) {
+                    case 0: soft[i].reliability = 0; break;
+                    case 1: soft[i].reliability = 255; break;
+                    case 2: soft[i].reliability = (unsigned char)((rng >> 16) & 1u); break;
+                    case 3: soft[i].reliability = i == trial % width ? 255 : 0; break;
+                    default: soft[i].reliability = (unsigned char)(rng >> 16); break;
+                }
+            }
+            char expected[23], actual[23];
+            int errors = reference_soft(soft, expected, variant);
+            assert(decode[variant](soft, actual) == errors);
+            assert(memcmp(actual, expected, (size_t)width) == 0);
+        }
+        /* Every clean candidate, including the entire generated codebook. */
+        int count = variant == 0 ? 4096 : 2048;
+        for (int d = 0; d < count; ++d) {
+            mbe_soft_bit soft[23];
+            char actual[23];
+            assert(mbe_softBitsFromHard(reference_words[variant][d], soft, (size_t)width, 255) == 0);
+            assert(decode[variant](soft, actual) == 0);
+            assert(memcmp(actual, reference_words[variant][d], (size_t)width) == 0);
+        }
+    }
+}
+
 int
 main(void) {
+    test_soft_differential();
     setvbuf(stderr, NULL, _IONBF, 0);
 
     // Hamming (15,11): fixed-point and data invariance under single-bit errors

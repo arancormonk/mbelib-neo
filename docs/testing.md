@@ -161,6 +161,13 @@ is a separate compile target; portable SIMD builds still require only SSE2 on
 x86 and use NEON only when enabled by the existing target selection. Native ARM
 measurements are required before claiming NEON performance improvements.
 
+The soft ECC tables are immutable and preserve the original enumeration order.
+Regenerate them with Python 3.10+ using `python3 tools/gen_ecc_codebooks.py >
+src/internal/mbe_ecc_codebooks.h`. SIMD tables use 192 KiB of read-only byte masks;
+scalar builds use 32 KiB of packed words and per-call byte cost tables. There is
+no lazy initialization or shared mutable state. `test_ecc` checks every clean
+codeword plus exhaustive reference searches with tied and mixed confidences.
+
 ## Speech Quality Evaluation
 
 Developer-only tooling; no new library runtime dependency. CI builds the two
