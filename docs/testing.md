@@ -191,7 +191,10 @@ fast-math too; SIMD recurrence batching permits bounded PCM rounding
 differences and has separate Debug goldens. Each SIMD interpolation lane
 seeds from the phase's own cosine and sine, rotated by its offset in double,
 so caller-supplied phases far beyond the decoder's range, up to near the
-largest float, follow the exact phase. Phase and RNG updates stay outside
+largest float, follow the exact phase. Fast-math builds rely on their math
+library for that, which need not reduce huge cos/sin arguments exactly, so
+the test holds them to the exact phase up to 65,536 radians and beyond that
+to a finite, bounded waveform. Phase and RNG updates stay outside
 these kernels. Tone refinement
 trials remain sequential and double precision; ARM32 uses scalar tone fitting.
 Speech analysis sums stay scalar and in order, since vector partial sums

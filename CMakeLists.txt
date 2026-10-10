@@ -1449,6 +1449,13 @@ if(MBELIB_BUILD_TESTS)
             PRIVATE MBELIB_ENABLE_SIMD=1
         )
     endif()
+    # A fast-math library need not reduce huge cos/sin arguments exactly.
+    if(MBELIB_ENABLE_FAST_MATH)
+        target_compile_definitions(
+            test_simd_numerics
+            PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
+        )
+    endif()
     if(_SAN_CFLAGS)
         target_compile_options(test_simd_numerics PRIVATE ${_SAN_CFLAGS})
     endif()
