@@ -422,7 +422,12 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  *                MBE_STATUS_INVALID_ARGUMENT and leaves the context unchanged.
  * @param ambe_d  Output parameter bits (49). ambe_d[24] is the spare bit.
  * @param cur_mp  Output: quantized (decoder-equivalent) parameters.
- * @param prev_mp Input: previous quantized frame state; never modified.
+ * @param prev_mp Input: previous quantized frame state; never modified. A
+ *                state with a log2Ml or gamma that is not finite or lies
+ *                beyond +-2^20, or one from which the model would approach
+ *                overflow (a log2Ml above 120; decoders stay below 50),
+ *                returns MBE_STATUS_INVALID_ARGUMENT and leaves the context
+ *                and cur_mp unchanged.
  * @return 0, or a negative `MBE_STATUS_*` code.
  */
 MBE_API int mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
@@ -629,6 +634,101 @@ MBE_API int mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_resul
                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
+/* === AMBE+2 3600x2450 (DMR, NXDN, YSF, P25 Phase 2) encoding === */
+
+/**
+ * @brief Caller-owned AMBE+2 2450 analysis state.
+ *
+ * Use one context per stream. A context is not thread-safe for concurrent use;
+ * any number of independent contexts may be used in one thread.
+ */
+typedef struct mbe_ambe2450_encoder mbe_ambe2450_encoder;
+
+/**
+ * @brief Allocate a fresh encoder context, including its FFT plans.
+ *
+ * Encoding never allocates. As for mbe_ambe2400EncoderAlloc(), allocation
+ * failures inside the vendored pffft setup are not recoverable.
+ *
+ * @return Owned context, or NULL when the context or its plan buffers cannot
+ * be allocated.
+ * @see mbe_ambe2450EncoderFree
+ */
+MBE_API mbe_ambe2450_encoder* mbe_ambe2450EncoderAlloc(void);
+
+/**
+ * @brief Restore freshly allocated analysis state, retaining the FFT plans.
+ * @param enc Context to reset; NULL is accepted.
+ * @see mbe_encodeAmbe2450Parms for resetting the caller's prediction state.
+ */
+MBE_API void mbe_ambe2450EncoderReset(mbe_ambe2450_encoder* enc);
+
+/** @brief Free an encoder context and its FFT plans; NULL is accepted. */
+MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
+
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of float PCM into AMBE+2 2450
+ *        parameter bits.
+ *
+ * Quantizes as TIA-102.BABA-1 clause 4 describes, against the tables
+ * mbe_decodeAmbe2450Parms() dequantizes with; as in the D-STAR encoder, a
+ * frame quieter than the lowest gain step can play is flattened toward that
+ * step's level rather than played louder. DTMF, KNOX, call-progress and
+ * single tones (TIA-102.BABA-1 Table 9) are sent as tone frames (7.2). Like
+ * DVSI's encoder it never sends silence or erasure frames: quiet input is
+ * coded as low-level voice.
+ *
+ * The state contract is the D-STAR encoder's: initialize with
+ * mbe_ambe2450EncoderAlloc() and mbe_initMbeParms(), and after every frame
+ * call mbe_moveMbeParms(cur_mp, prev_mp). For a voice frame cur_mp is what
+ * mbe_decodeAmbe2450Parms() decodes from ambe_d given prev_mp. A tone frame
+ * leaves the decoder's prediction history unchanged (TIA-102.BABA-1 4.3), so
+ * cur_mp is then a copy of prev_mp: a snapshot of the history, not a model of
+ * the tone. To hear what was sent, run the emitted bits through
+ * mbe_processAmbe2450Data() with a separate decoder state. To restart a
+ * stream, call mbe_ambe2450EncoderReset() and mbe_initMbeParms().
+ *
+ * The timing is the D-STAR encoder's: parameters lag audio by about 10 ms,
+ * and a final frame of zeros flushes the tail.
+ *
+ * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
+ * @param samples Input PCM floats (160), nominal range [-1, 1]. A frame with a
+ *                non-finite sample or one beyond +-2^20 returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context unchanged.
+ * @param ambe_d  Output parameter bits (49).
+ * @param cur_mp  Output: the decoder's parameters for this frame (see above);
+ *                must not be prev_mp.
+ * @param prev_mp Input: previous frame state; never modified. A state with a
+ *                log2Ml or gamma that is not finite or lies beyond +-2^20, or
+ *                one from which the model would approach overflow (a log2Ml
+ *                above 120, or a non-finite w0 or amplitude; decoders stay
+ *                below 50), returns MBE_STATUS_INVALID_ARGUMENT and leaves the
+ *                context and cur_mp unchanged.
+ * @return MBE_AMBE2450_FRAME_VOICE or MBE_AMBE2450_FRAME_TONE, or a negative
+ *         `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeAmbe2450Parms(mbe_ambe2450_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
+                                    const mbe_parms* prev_mp);
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into AMBE+2 2450
+ *        parameter bits.
+ * @see mbe_encodeAmbe2450Parms for details.
+ */
+MBE_API int mbe_encodeAmbe2450ParmsShort(mbe_ambe2450_encoder* enc, const short* samples, char ambe_d[49],
+                                         mbe_parms* cur_mp, const mbe_parms* prev_mp);
+/**
+ * @brief Encode 49 AMBE+2 2450 parameter bits into a 72-bit AMBE 3600x2450
+ *        frame (TIA-102.BABA-1 5.2-5.3: Golay codes and the modulation of
+ *        C1), in the plane layout mbe_decodeAmbe3600x2450Frame() reads.
+ *
+ * All 49 bits round-trip through mbe_decodeAmbe3600x2450Frame().
+ *
+ * @param ambe_d  Input parameter bits (49).
+ * @param ambe_fr Output frame as 4x24 bitplanes.
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeAmbe3600x2450Frame(const char ambe_d[49], char ambe_fr[4][24]);
+
 /* Prototypes from imbe7200x4400.c */
 /** @brief Print IMBE 4400 parameter bits to stderr (debug). */
 MBE_API void mbe_dumpImbe4400Data(const char* imbe_d);
@@ -707,6 +807,98 @@ MBE_API int mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_resu
 MBE_API int mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
+
+/* === IMBE 7200x4400 (P25 Phase 1 full rate) encoding === */
+
+/**
+ * @brief Caller-owned IMBE 4400 analysis state.
+ *
+ * Use one context per stream. A context is not thread-safe for concurrent use;
+ * any number of independent contexts may be used in one thread.
+ */
+typedef struct mbe_imbe4400_encoder mbe_imbe4400_encoder;
+
+/**
+ * @brief Allocate a fresh encoder context, including its FFT plans.
+ *
+ * Encoding never allocates. As for mbe_ambe2400EncoderAlloc(), allocation
+ * failures inside the vendored pffft setup are not recoverable.
+ *
+ * @return Owned context, or NULL when the context or its plan buffers cannot
+ * be allocated.
+ * @see mbe_imbe4400EncoderFree
+ */
+MBE_API mbe_imbe4400_encoder* mbe_imbe4400EncoderAlloc(void);
+
+/**
+ * @brief Restore freshly allocated analysis state, retaining the FFT plans;
+ *        the next frame's synchronization bit is 0 again.
+ * @param enc Context to reset; NULL is accepted.
+ * @see mbe_encodeImbe4400Parms for resetting the caller's prediction state.
+ */
+MBE_API void mbe_imbe4400EncoderReset(mbe_imbe4400_encoder* enc);
+
+/** @brief Free an encoder context and its FFT plans; NULL is accepted. */
+MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
+
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of float PCM into IMBE 4400
+ *        parameter bits.
+ *
+ * Quantizes as TIA-102.BABA chapter 6 describes, against the tables
+ * mbe_decodeImbe4400Parms() dequantizes with; as in the D-STAR encoder, a
+ * frame quieter than the lowest gain level can play is flattened toward that
+ * level rather than played louder. imbe_d[87] is the
+ * synchronization bit of 6.5: 0 in the first frame after allocation or reset,
+ * then alternating. Every frame is a voice frame.
+ *
+ * The state contract is the D-STAR encoder's: initialize with
+ * mbe_imbe4400EncoderAlloc() and mbe_initMbeParms(), and after every frame
+ * call mbe_moveMbeParms(cur_mp, prev_mp); cur_mp is what
+ * mbe_decodeImbe4400Parms() decodes from imbe_d given prev_mp. To restart a
+ * stream, call mbe_imbe4400EncoderReset() and mbe_initMbeParms().
+ *
+ * The timing is the D-STAR encoder's: parameters lag audio by about 10 ms,
+ * and a final frame of zeros flushes the tail.
+ *
+ * @param enc     Caller-owned context; NULL returns MBE_STATUS_INVALID_ARGUMENT.
+ * @param samples Input PCM floats (160), nominal range [-1, 1]. A frame with a
+ *                non-finite sample or one beyond +-2^20 returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context unchanged.
+ * @param imbe_d  Output parameter bits (88).
+ * @param cur_mp  Output: the decoder's parameters for this frame; must not be
+ *                prev_mp.
+ * @param prev_mp Input: previous frame state; never modified. A state with a
+ *                log2Ml or gamma that is not finite or lies beyond +-2^20, or
+ *                one from which the model would approach overflow (a log2Ml
+ *                above 120; decoders stay below 50), returns
+ *                MBE_STATUS_INVALID_ARGUMENT and leaves the context and cur_mp
+ *                unchanged.
+ * @return 0, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeImbe4400Parms(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88], mbe_parms* cur_mp,
+                                    const mbe_parms* prev_mp);
+/**
+ * @brief Encode 160 samples (20 ms, 8 kHz) of 16-bit PCM into IMBE 4400
+ *        parameter bits.
+ * @see mbe_encodeImbe4400Parms for details.
+ */
+MBE_API int mbe_encodeImbe4400ParmsShort(mbe_imbe4400_encoder* enc, const short* samples, char imbe_d[88],
+                                         mbe_parms* cur_mp, const mbe_parms* prev_mp);
+/**
+ * @brief Encode 88 IMBE 4400 parameter bits into a 144-bit IMBE 7200x4400
+ *        frame (TIA-102.BABA chapter 7: four (23,12) Golay and three (15,11)
+ *        Hamming codes, seven unprotected bits, and the modulation of
+ *        vectors 1-6), in the plane layout mbe_decodeImbe7200x4400Frame()
+ *        reads. Cells past each vector's length are 0.
+ *
+ * All 88 bits round-trip through mbe_decodeImbe7200x4400Frame().
+ *
+ * @param imbe_d  Input parameter bits (88).
+ * @param imbe_fr Output frame as 8x23 bitplanes.
+ * @return 0 on success, or a negative `MBE_STATUS_*` code.
+ */
+MBE_API int mbe_encodeImbe7200x4400Frame(const char imbe_d[88], char imbe_fr[8][23]);
 
 /* Prototypes from imbe7100x4400.c */
 /** @brief Print IMBE 7100x4400 parameter bits to stderr (debug). */

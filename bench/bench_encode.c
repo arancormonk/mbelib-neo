@@ -5,11 +5,12 @@
 
 /**
  * @file
- * @brief Micro-benchmark for the AMBE 3600x2400 (D-STAR) encoder.
+ * @brief Micro-benchmark for the D-STAR, AMBE+2 and IMBE encoders.
  *
  * Encodes a deterministic speech-like signal (a harmonic series whose pitch
  * glides between 90 and 260 Hz, with a slowly varying spectral tilt and some
- * noise) and reports CPU time per 20 ms frame across repeated runs.
+ * noise) with each encoder and reports CPU time per 20 ms frame across
+ * repeated runs.
  */
 
 #include <math.h>
@@ -64,12 +65,81 @@ compare(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
-int
-main(void) {
-    make_signal();
-    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+/* The three encoders behind one signature. */
+struct bench_codec {
+    const char* name;
+    int bits;
+    void* (*alloc)(void);
+    void (*reset)(void* enc);
+    void (*release)(void* enc);
+    int (*encode)(void* enc, const short* frame, char* bits, mbe_parms* cur, const mbe_parms* prev);
+};
+
+static void*
+dstar_alloc(void) {
+    return mbe_ambe2400EncoderAlloc();
+}
+
+static void
+dstar_reset(void* enc) {
+    mbe_ambe2400EncoderReset(enc);
+}
+
+static void
+dstar_release(void* enc) {
+    mbe_ambe2400EncoderFree(enc);
+}
+
+static int
+dstar_encode(void* enc, const short* frame, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2400ParmsShort(enc, frame, bits, cur, prev);
+}
+
+static void*
+ambe2450_alloc(void) {
+    return mbe_ambe2450EncoderAlloc();
+}
+
+static void
+ambe2450_reset(void* enc) {
+    mbe_ambe2450EncoderReset(enc);
+}
+
+static void
+ambe2450_release(void* enc) {
+    mbe_ambe2450EncoderFree(enc);
+}
+
+static int
+ambe2450_encode(void* enc, const short* frame, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2450ParmsShort(enc, frame, bits, cur, prev);
+}
+
+static void*
+imbe_alloc(void) {
+    return mbe_imbe4400EncoderAlloc();
+}
+
+static void
+imbe_reset(void* enc) {
+    mbe_imbe4400EncoderReset(enc);
+}
+
+static void
+imbe_release(void* enc) {
+    mbe_imbe4400EncoderFree(enc);
+}
+
+static int
+imbe_encode(void* enc, const short* frame, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeImbe4400ParmsShort(enc, frame, bits, cur, prev);
+}
+
+static int
+bench(const struct bench_codec* codec) {
+    void* enc = codec->alloc();
     if (!enc) {
-        (void)fprintf(stderr, "encoder allocation failed\n");
+        (void)fprintf(stderr, "%s: encoder allocation failed\n", codec->name);
         return 1;
     }
     double per_frame[RUNS];
@@ -77,25 +147,41 @@ main(void) {
     for (int r = 0; r < RUNS; ++r) {
         mbe_parms cur, prev, enhanced;
         mbe_initMbeParms(&cur, &prev, &enhanced);
-        mbe_ambe2400EncoderReset(enc);
-        char bits[49];
+        codec->reset(enc);
+        char bits[88];
         double t0 = secs();
         for (int f = 0; f < FRAMES; ++f) {
-            if (mbe_encodeAmbe2400ParmsShort(enc, pcm + (size_t)f * 160u, bits, &cur, &prev) < 0) {
-                (void)fprintf(stderr, "encode failed at frame %d\n", f);
-                mbe_ambe2400EncoderFree(enc);
+            if (codec->encode(enc, pcm + (size_t)f * 160u, bits, &cur, &prev) < 0) {
+                (void)fprintf(stderr, "%s: encode failed at frame %d\n", codec->name, f);
+                codec->release(enc);
                 return 1;
             }
             mbe_moveMbeParms(&cur, &prev);
-            for (int i = 0; i < 49; ++i) {
+            for (int i = 0; i < codec->bits; ++i) {
                 checksum = (checksum * 31u) + (unsigned)bits[i];
             }
         }
         per_frame[r] = (secs() - t0) / FRAMES * 1e6;
     }
-    mbe_ambe2400EncoderFree(enc);
+    codec->release(enc);
     qsort(per_frame, RUNS, sizeof(per_frame[0]), compare);
-    printf("encode: median %.2f us/frame (min %.2f, max %.2f) over %d runs of %d frames, checksum %08x\n",
-           per_frame[RUNS / 2], per_frame[0], per_frame[RUNS - 1], RUNS, FRAMES, checksum);
+    printf("encode %-8s: median %.2f us/frame (min %.2f, max %.2f) over %d runs of %d frames, checksum %08x\n",
+           codec->name, per_frame[RUNS / 2], per_frame[0], per_frame[RUNS - 1], RUNS, FRAMES, checksum);
+    return 0;
+}
+
+int
+main(void) {
+    static const struct bench_codec codecs[] = {
+        {"ambe2400", 49, dstar_alloc, dstar_reset, dstar_release, dstar_encode},
+        {"ambe2450", 49, ambe2450_alloc, ambe2450_reset, ambe2450_release, ambe2450_encode},
+        {"imbe4400", 88, imbe_alloc, imbe_reset, imbe_release, imbe_encode},
+    };
+    make_signal();
+    for (size_t i = 0; i < sizeof(codecs) / sizeof(codecs[0]); ++i) {
+        if (bench(&codecs[i]) != 0) {
+            return 1;
+        }
+    }
     return 0;
 }

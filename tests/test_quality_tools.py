@@ -84,7 +84,8 @@ def verify(evaluator, reframer, root):
                 result = run(evaluator, "--codec", codec, "--frames", frames, "--out", wav, success=False)
                 assert b"length/codec mismatch" in result.stderr
 
-    # Per-frame model dump: decoded, prediction-history and synthesized records.
+    # Per-frame model dump: parameter bits, decoded, prediction-history and
+    # synthesized records.
     params = root / "params.jsonl"
     for codec, width in (("imbe7200", 88), ("imbe7200", 184), ("ambe2450", 49), ("ambe2400", 49), ("ambe2400", 96)):
         frames.write_text(("0" * width + "\n") * 3)
@@ -96,7 +97,9 @@ def verify(evaluator, reframer, root):
         records = [json.loads(line) for line in params.read_text().splitlines()]
         assert [record["f"] for record in records] == [0, 1, 2], records
         for record in records:
-            assert set(record) == {"f", "flags", "errors", "decoded", "history", "synth"}, record
+            assert set(record) == {"f", "flags", "errors", "bits", "decoded", "history", "synth"}, record
+            assert len(record["bits"]) == (88 if codec.startswith("imbe") else 49), record
+            assert set(record["bits"]) <= {"0", "1"}, record
             for key in ("history", "synth"):
                 model = record[key]
                 assert 9 <= model["L"] <= 56 and model["w0"] > 0, record

@@ -16,7 +16,10 @@
  *    tracking, eqs (10)-(12), sub-multiple checks, eqs (18)-(20), and the
  *    decision rules, eqs (21)-(23).
  *  - Pitch refinement to a quarter sample, eqs (24)-(28).
- *  - Per-harmonic fit error and the energy factor M(xi), eqs (35)-(42).
+ *  - Per-harmonic fit error and the energy factor M(xi), eqs (35)-(42), and the
+ *    three-harmonic band V/UV decisions of 5.2.
+ *  - The voiced and unvoiced spectral amplitudes of eqs (43) and (44) next to
+ *    the voicing-independent one.
  *
  * The analysis windows are generated rather than copied: the standard's
  * Annex B and C tables are Kaiser windows (beta 5.25 over +-150 samples and
@@ -32,8 +35,8 @@
  *  - The pitch range is extended from 21-122 to 20-128 to cover D-STAR's.
  *  - Magnitudes use the voicing-independent estimate of US 5,701,390
  *    (eqs 3-4, expired), which the AMBE decoders' unvoiced scaling expects.
- *  - The periodicity gate of eq (37) is 0.4 and covers every column; see
- *    mbe_analysis_column_threshold().
+ *  - The periodicity gate of eq (37) is 0.4 and covers every column and band;
+ *    see mbe_analysis_column_threshold() and mbe_analysis_band_voicing().
  */
 #include "mbe_speech_analysis.h"
 
@@ -350,6 +353,7 @@ struct band_fit {
     float a_re; /* A_l of eq (28) */
     float a_im;
     float energy;           /* sum |S|^2 over the band */
+    float window_energy;    /* sum W_R^2 over the band */
     float error;            /* sum |S - A W|^2 over the band */
     int bins;               /* bins fitted, from lo */
     float w[BAND_BINS_MAX]; /* W_R at each fitted bin */
@@ -373,6 +377,7 @@ fit_band(const struct mbe_analysis_tables* t, const struct spectrum* sp, float c
         energy += (sp->re[m] * sp->re[m]) + (sp->im[m] * sp->im[m]);
     }
     fit->energy = energy;
+    fit->window_energy = q;
     fit->a_re = (q > 0.0f) ? c_re / q : 0.0f;
     fit->a_im = (q > 0.0f) ? c_im / q : 0.0f;
     float explained = (q > 0.0f) ? ((c_re * c_re) + (c_im * c_im)) / q : 0.0f;
@@ -545,9 +550,16 @@ harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp
             struct band_fit fit;
             fit_band(t, sp, centre, lo, hi, &fit);
             r->fit_error[l] = (fit.energy > 0.0f) ? fit.error / fit.energy : 1.0f;
+            r->fit_energy[l] = fit.energy;
+            /* eq (43): band energy relative to the window's over the same bins. */
+            r->voiced_magnitude[l] = (fit.window_energy > 0.0f) ? sqrtf(fit.energy / fit.window_energy) : 0.0f;
+            /* eq (44): mean band energy per bin, scaled by 1 / sum w_R. */
+            r->noise_magnitude[l] = (fit.bins > 0) ? sqrtf(fit.energy / (float)fit.bins) / t->w_r_sum : 0.0f;
             r->harmonics = l;
         } else {
             r->fit_error[l] = 1.0f;
+            r->voiced_magnitude[l] = r->voiced_magnitude[l - 1];
+            r->noise_magnitude[l] = r->noise_magnitude[l - 1];
         }
     }
 }
@@ -621,6 +633,14 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     return 0;
 }
 
+/* Theta of eq (37) for 1-based band k at fundamental w0 (radians per sample)
+ * and energy factor M(xi), before the periodicity gate. */
+static float
+voicing_threshold(int prev_voiced, int k, float w0, float factor) {
+    float base = prev_voiced ? 0.5625f : 0.45f;
+    return base * (1.0f - (0.3096f * (float)(k - 1) * w0)) * factor;
+}
+
 float
 mbe_analysis_column_threshold(const struct mbe_analysis_state* state, const struct mbe_analysis_result* result,
                               int column) {
@@ -634,8 +654,37 @@ mbe_analysis_column_threshold(const struct mbe_analysis_state* state, const stru
     if (result->pitch_error > VOICING_ERROR_MAX) {
         return 0.0f;
     }
-    float base = state->columns_prev[column - 1] ? 0.5625f : 0.45f;
-    return base * (1.0f - (0.3096f * (float)(column - 1) * 0.1309f)) * result->energy_factor;
+    return voicing_threshold(state->columns_prev[column - 1], column, 0.1309f, result->energy_factor);
+}
+
+int
+mbe_analysis_band_voicing(const struct mbe_analysis_result* result, int L, const unsigned char prev[MBE_ANALYSIS_BANDS],
+                          unsigned char bands[MBE_ANALYSIS_BANDS]) {
+    float error[MBE_ANALYSIS_BANDS + 1] = {0};
+    float energy[MBE_ANALYSIS_BANDS + 1] = {0};
+    if (L < 1) {
+        L = 1;
+    }
+    if (L > MBE_ANALYSIS_HARMONICS) {
+        L = MBE_ANALYSIS_HARMONICS;
+    }
+    const int K = mbe_analysis_band_of(L); /* eq (34) */
+    for (int l = 1; l <= L && l <= result->harmonics; l++) {
+        int k = mbe_analysis_band_of(l);
+        energy[k] += result->fit_energy[l];
+        error[k] += result->fit_error[l] * result->fit_energy[l];
+    }
+    const float w0 = 2.0f * (float)M_PI * result->f0;
+    for (int k = 1; k <= MBE_ANALYSIS_BANDS; k++) {
+        float theta = 0.0f;
+        /* The gate of mbe_analysis_column_threshold(); see the header. */
+        if (k <= K && result->pitch_error <= VOICING_ERROR_MAX) {
+            theta = voicing_threshold(prev[k - 1], k, w0, result->energy_factor);
+        }
+        /* eqs (35)-(36); an empty band is unvoiced. */
+        bands[k - 1] = (unsigned char)(energy[k] > 0.0f && error[k] < theta * energy[k]);
+    }
+    return K;
 }
 
 void

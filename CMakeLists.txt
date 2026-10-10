@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.3.0 LANGUAGES C)
+project(mbelib-neo VERSION 2.4.0 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -255,15 +255,20 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2400_enc.c
     src/ambe/dstar_frame.c
     src/ambe/ambe3600x2450.c
+    src/ambe/ambe3600x2450_enc.c
     src/ambe/ambe_common.c
+    src/ambe/ambe_encoder.c
     src/ecc/ecc.c
     src/ecc/ecc_const.c
     src/imbe/imbe7100x4400.c
     src/imbe/imbe7200x4400.c
+    src/imbe/imbe7200x4400_enc.c
     src/core/mbelib.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
+    src/core/mbe_encoder.c
     src/core/mbe_speech_analysis.c
+    src/core/mbe_tone_detect.c
     src/core/mbe_unvoiced_fft.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
@@ -859,7 +864,48 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_ambe2400_encoder COMMAND test_ambe2400_encoder)
-    # Exercise every partial plan allocation and retry with GNU link wrapping.
+    # The floor-fit overflow-flag check needs an unoptimized IEEE build of the
+    # library and the test, where every floating-point operation runs as
+    # written. Elsewhere the flags carry no guarantee: fast-math, optimization
+    # without FENV_ACCESS (which GCC does not implement), or MSVC, whose
+    # fenv_access is off by default.
+    if(
+        NOT MBELIB_ENABLE_FAST_MATH
+        AND NOT MSVC
+        AND CMAKE_BUILD_TYPE STREQUAL "Debug"
+    )
+        target_compile_definitions(
+            test_ambe2400_encoder
+            PRIVATE MBELIB_TEST_FENV_OVERFLOW=1
+        )
+    endif()
+    # The AMBE+2 and IMBE encoder tests drive private quantizer steps and the
+    # Hamming encoder, which the shared library does not export.
+    foreach(_enc_test test_ambe2450_encoder test_imbe7200_encoder)
+        add_executable(${_enc_test} tests/${_enc_test}.c)
+        target_link_libraries(${_enc_test} PRIVATE mbe-static)
+        if(NOTONES)
+            target_compile_definitions(
+                ${_enc_test}
+                PRIVATE MBELIB_TEST_NOTONES=1
+            )
+        endif()
+        target_include_directories(
+            ${_enc_test}
+            PRIVATE
+                "${PROJECT_SOURCE_DIR}/include"
+                "${PROJECT_SOURCE_DIR}/src/internal"
+        )
+        if(_SAN_CFLAGS)
+            target_compile_options(${_enc_test} PRIVATE ${_SAN_CFLAGS})
+        endif()
+        if(_SAN_LDFLAGS)
+            target_link_options(${_enc_test} BEFORE PRIVATE ${_SAN_LDFLAGS})
+        endif()
+        add_test(NAME ${_enc_test} COMMAND ${_enc_test})
+    endforeach()
+    # Exercise every partial plan allocation and retry with GNU link wrapping,
+    # for each encoder (they share the analysis front end).
     # LTO can resolve allocator calls before the linker can wrap them.
     if(
         CMAKE_SYSTEM_NAME STREQUAL "Linux"
@@ -911,6 +957,14 @@ if(MBELIB_BUILD_TESTS)
             add_test(
                 NAME test_ambe2400_encoder_oom_${allocation}
                 COMMAND test_ambe2400_encoder_oom ${allocation}
+            )
+            add_test(
+                NAME test_ambe2450_encoder_oom_${allocation}
+                COMMAND test_ambe2400_encoder_oom ${allocation} ambe2450
+            )
+            add_test(
+                NAME test_imbe7200_encoder_oom_${allocation}
+                COMMAND test_ambe2400_encoder_oom ${allocation} imbe4400
             )
         endforeach()
     endif()
@@ -1364,6 +1418,8 @@ if(MBELIB_BUILD_TESTS)
         test_api
         test_ecc
         test_ambe2400_encoder
+        test_ambe2450_encoder
+        test_imbe7200_encoder
         test_speech_analysis
         test_noise_determinism
         test_params
