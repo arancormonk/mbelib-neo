@@ -153,12 +153,10 @@ correction_mask_from_generator(int syndrome, const int generator[4]) {
     return 0;
 }
 
-/**
- * @brief Test entry: exercises Hamming and Golay decoders.
- */
-/* Independent exhaustive oracle: reconstruct candidates with the original
- * parity search, and score each bit individually. Deliberately shares neither
- * tables nor scoring/tie-ranking machinery with the optimized decoder. */
+/* Independent oracle that scores every codeword: reconstruct candidates with
+ * the original parity search, and score each bit individually. Deliberately
+ * shares neither tables nor scoring/tie-ranking machinery with the optimized
+ * decoder. */
 static char reference_words[3][4096][23];
 
 static void
@@ -238,16 +236,20 @@ test_soft_differential(void) {
     init_reference_words();
     for (int variant = 0; variant < 3; ++variant) {
         int width = variant == 0 ? 23 : 15;
-        for (int trial = 0; trial < 512; ++trial) {
+        for (int trial = 0; trial < 1024; ++trial) {
             mbe_soft_bit soft[23];
             for (int i = 0; i < width; ++i) {
                 rng = rng * 1664525u + 1013904223u;
                 soft[i].bit = (unsigned char)(rng >> 31);
-                switch (trial % 5) {
+                switch (trial % 7) {
                     case 0: soft[i].reliability = 0; break;
                     case 1: soft[i].reliability = 255; break;
                     case 2: soft[i].reliability = (unsigned char)((rng >> 16) & 1u); break;
                     case 3: soft[i].reliability = i == trial % width ? 255 : 0; break;
+                    /* Small weights tie many candidates at the search's cost bound. */
+                    case 4: soft[i].reliability = (unsigned char)((rng >> 16) & 3u); break;
+                    /* Mostly confident words with a few weak bits prune hardest. */
+                    case 5: soft[i].reliability = i % 4 == trial % 4 ? (unsigned char)((rng >> 16) & 15u) : 255; break;
                     default: soft[i].reliability = (unsigned char)(rng >> 16); break;
                 }
             }
@@ -268,6 +270,9 @@ test_soft_differential(void) {
     }
 }
 
+/**
+ * @brief Test entry: exercises Hamming and Golay decoders.
+ */
 int
 main(void) {
     test_soft_differential();
