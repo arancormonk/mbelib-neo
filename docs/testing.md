@@ -9,7 +9,7 @@ The CTest suite includes:
 
 - API/version/result helper checks
 - ECC tests for hard and soft Golay/Hamming paths
-- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors; the decoded level follows the input down 40 dB and silent or -70 dBFS input is coded as voice frames that decode near silence (`test_ambe2400_encoder`)
+- AMBE 2400 encoder round trips, exact `log2Ml` parity, pitch endpoints, independent contexts and reset replay in one thread, plus behaviour on synthetic speech: noise of any colour and level stays unvoiced, steady vowels from 70 to 310 Hz are voiced and on pitch, harmonics below 2 kHz with noise above voice only the lower bits, and 240 Hz, missing-fundamental, strong-second-harmonic, glide and onset cases show no octave errors; the decoded level follows the input down 40 dB and silent or -70 dBFS input is coded as voice frames that decode near silence; the 16 DTMF digits, the call-progress tones and single tones at several phases are sent as tone frames in DVSI's layout with the index the decoder plays at their frequencies, decode within 0.5 dB of the input level and leave the prediction history unchanged, KNOX tones stay voice, voice-tone-voice prediction stays with the decoder's, and a malformed history is rejected on a tone frame without touching state (`test_ambe2400_encoder`)
 - AMBE+2 2450 encoder: frame FEC round trips of all 49 bits and single-error correction; decoded frames requantized to the same model (gain, prediction, block DCTs, PRBA and higher-order quantizers, packing); the TIA-102.BABA-1 eq 4 voicing quantizer against an independent evaluation; DTMF, KNOX, call-progress and single tones at several phases sent as tone frames the decoder plays at the input level, the DTMF frequency and twist limits, and voice-tone-voice prediction; plus the checks shared with IMBE below (`test_ambe2450_encoder`)
 - IMBE 7200x4400 encoder: the (15,11) Hamming encoder over every data word, frame FEC round trips of all 88 bits and single-error correction, the alternating synchronization bit, and decoded frames of every harmonic count requantized to identical bits (`test_imbe7200_encoder`)
 - Shared by both (`tests/encoder_test_support.h`): `cur_mp` bit-identical to the decoder chain with `prev_mp` untouched, rejected samples leaving the stream unchanged, prediction boundary taps, 16-bit/float parity, independent contexts and reset replay, noise staying unvoiced, steady vowels from 70 to 310 Hz voiced and on pitch, no octave errors (240 Hz, missing fundamental, strong 2nd harmonic, glide, and 133, 200 and 390 Hz harmonic series), the decoded level following the input down 40 dB, quiet input coded as voice, and a one-frame flush
@@ -490,11 +490,13 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   counts the vectors whose encoder bits changed. A build whose
   `mbe_quality_encode` does not offer a codec skips that encoder, so this
   script can score a baseline built from an older checkout.
-- **Encoder tones (rate 33):** our encoding of each tone vector against DVSI's
-  bits, frame by frame at the best frame shift: the share of DVSI's tone frames
-  we send with the same tone index (`tone.encoder_agreement`), the share of
-  frames we send as a tone where DVSI sends voice (`tone.encoder_extra_rate`)
-  and the mean AD difference where both agree (`tone.encoder_level_error_ad`).
+- **Encoder tones (rate 33 and D-STAR):** our encoding of each tone vector
+  against DVSI's bits, frame by frame at the best frame shift: the share of
+  DVSI's tone frames we send with the same tone index
+  (`tone.encoder_agreement`), the share of frames we send as a tone where DVSI
+  sends voice (`tone.encoder_extra_rate`) and the mean level difference where
+  both agree, in AD steps for rate 33 (`tone.encoder_level_error_ad`) and in
+  steps of D-STAR's 8-bit volume (`tone.encoder_level_error_volume`).
   The tones group reports the worst vector of each and, for these, also the
   mean over vectors (`_mean`), since DVSI itself is inconsistent on its
   deliberately malformed tone vectors (`cpvbad`, `dtmfvbad`).
