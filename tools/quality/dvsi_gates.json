@@ -775,5 +775,78 @@
         "worst": 0.0
       }
     ]
+  },
+  "tone-edges": {
+    "description": "DTMF, KNOX and single tones sent for the frames whose span they fill at least 45% wherever they start within the detector's blocks, and where one changes directly to another, the frame holding both carrying the newer tone if it is a DTMF or KNOX tone filling the span's newest half, else the older if it fills the oldest half, as DVSI's encoders send them: agreement with DVSI's tone frames rises in both encoders, tone frames where DVSI sends voice stay rare, levels hold, and both decoders' tone output is unchanged.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement_mean",
+        "rule": "min",
+        "value": 0.975
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "max",
+        "value": 0.03
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate_mean",
+        "rule": "max",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad_mean",
+        "rule": "max",
+        "value": 0.25
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume_mean",
+        "rule": "max",
+        "value": 0.25
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
   }
 }

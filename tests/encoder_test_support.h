@@ -922,6 +922,113 @@ enc_test_call_progress(const struct enc_codec* c, void* enc, int dial) {
     return 0;
 }
 
+/* Encode `frames` frames of tone a over stream samples [on, change), then tone
+ * b over [change, off), silent elsewhere; a tone is {low Hz or 0 for a single
+ * tone, high Hz, peak per component}. ids[f] is the tone index frame f
+ * carries, or -1. */
+static inline int
+enc_tone_run(const struct enc_codec* c, void* enc, const double a[3], const double b[3], int on, int change, int off,
+             int frames, int ids[]) {
+    mbe_parms cur, prev, enhanced;
+    c->reset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < frames; f++) {
+        float pcm[160];
+        char bits[88];
+        for (int i = 0; i < 160; i++) {
+            int n = (f * 160) + i;
+            const double* tone = (n < change) ? a : b;
+            double t = (double)n / 8000.0;
+            double v = ((tone[0] > 0.0) ? sin(2.0 * M_PI * tone[0] * t) : 0.0) + sin(2.0 * M_PI * tone[1] * t);
+            pcm[i] = (n >= on && n < off) ? (float)(tone[2] * v) : 0.0f;
+        }
+        if (c->encode(enc, pcm, bits, &cur, &prev) < 0) {
+            return 1;
+        }
+        ids[f] = c->tone_id(bits);
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    return 0;
+}
+
+/* Whether ids are voice, then DTMF 5 (index 133), then `next`, then voice,
+ * with none of them skipped and nothing else. */
+static inline int
+enc_tone_sequence_ok(const int ids[], int frames, int next) {
+    int seen = 0;
+    for (int f = 0; f < frames; f++) {
+        int phase = (ids[f] == 133) ? 1 : ((ids[f] == next) ? 2 : ((ids[f] < 0 && seen > 0) ? 3 : 0));
+        if ((ids[f] >= 0 && phase == 0) || (phase != seen && phase != seen + 1)) {
+            return 0;
+        }
+        seen = phase;
+    }
+    return seen == 3;
+}
+
+/*
+ * Tone edges (mbe_tone_track()): a 60 ms DTMF 5 (index 133) or 1 kHz tone
+ * (index 32) is sent for three or four frames, those whose span it fills at
+ * least 45%, wherever it starts within the detector's 20-sample blocks, and is
+ * not held after it ends. DTMF 5 changing directly to DTMF 9 (index digit9)
+ * leaves no voice frame between the two wherever the change falls, at a level
+ * well above the detector's floor and at one just above it (a 34 peak per
+ * component on the 16-bit scale, below the floor for half a span).
+ */
+static inline int
+enc_test_tone_edges(const struct enc_codec* c, void* enc, int digit9) {
+    enum { FRAMES = 24 };
+
+    static const double tones[2][3] = {{770.0, 1336.0, 0.1}, {0.0, 1000.0, 0.1}};
+    static const int tone_ids[2] = {133, 32};
+    int ids[FRAMES];
+    for (int t = 0; t < 2; t++) {
+        for (int start = 640; start < 800; start += 5) {
+            if (enc_tone_run(c, enc, tones[t], tones[t], start, start + 480, start + 480, FRAMES, ids) != 0) {
+                return 1;
+            }
+            int sent = 0;
+            int first = -1;
+            int last = -1;
+            for (int f = 0; f < FRAMES; f++) {
+                sent += (ids[f] >= 0);
+                first = (first < 0 && ids[f] >= 0) ? f : first;
+                last = (ids[f] >= 0) ? f : last;
+            }
+            int ok = sent >= 3 && sent <= 4 && last - first + 1 == sent;
+            for (int f = first; ok && f <= last; f++) {
+                ok = ids[f] == tone_ids[t];
+            }
+            if (!ok) {
+                printf("%s tone edges: a 60 ms tone %d from sample %d sent as %d frames %d..%d\n", c->name, tone_ids[t],
+                       start, sent, first, last);
+                return 1;
+            }
+        }
+    }
+    for (int quiet = 0; quiet < 2; quiet++) {
+        const double peak = quiet ? 34.0 / 32768.0 : 0.1;
+        const double five[3] = {770.0, 1336.0, peak};
+        const double nine[3] = {852.0, 1477.0, peak};
+        for (int change = 1600; change < 1760; change += 10) {
+            if (enc_tone_run(c, enc, five, nine, 640, change, change + 960, FRAMES, ids) != 0) {
+                return 1;
+            }
+            if (!enc_tone_sequence_ok(ids, FRAMES, digit9)) {
+                printf("%s tone edges: DTMF 5 changing to DTMF 9 at sample %d (peak %.4g): frame tones", c->name,
+                       change, peak);
+                for (int f = 0; f < FRAMES; f++) {
+                    printf(" %d", ids[f]);
+                }
+                printf("\n");
+                return 1;
+            }
+        }
+    }
+    printf("%s tone edges: 60 ms tones sent for 3-4 frames at any alignment; no voice frame at a change\n", c->name);
+    return 0;
+}
+
 static inline int
 enc_run_common(const struct enc_codec* c, void* enc) {
     int fails = 0;

@@ -552,6 +552,11 @@ def dstar_tone_fields(bits):
     return (DSTAR_TONE_HIGH_BITS[int(bits[6:9], 2)] << 5) | low, int("".join(bits[i] for i in DSTAR_TONE_VOLUME_BITS), 2)
 
 
+# DVSI's encoders run about a frame behind ours (on every speech vector our frame f lines up with DVSI's
+# f + 1), so where several frame shifts match DVSI's tone frames equally well, the tone comparison takes
+# the one nearest this. A tone that starts with the vector otherwise shows a tone frame where DVSI sends
+# voice at the vector's first frame.
+ENCODER_TONE_SHIFT = -1
 # Per mode with tone frames from our encoder: how to read one, and the name of its level-step error.
 ENCODER_TONE_FIELDS = {
     "r33": (tone_fields, "encoder_level_error_ad"),
@@ -560,7 +565,8 @@ ENCODER_TONE_FIELDS = {
 
 
 def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
-    """Our encoder's tone frames against DVSI's, at the frame shift where the most agree.
+    """Our encoder's tone frames against DVSI's, at the frame shift where the most agree (of equals, the
+    one nearest ENCODER_TONE_SHIFT).
 
     Returns the fraction of DVSI's tone frames we send as the same tone, the fraction of all compared
     frames we send as a tone where DVSI sends voice, and the mean absolute level difference, in the
@@ -581,7 +587,8 @@ def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
     def agreeing(shift):
         return [index for index in tone_frames if mine(index, shift) and mine(index, shift)[0] == theirs[index][0]]
 
-    shift = max(range(-max_shift, max_shift + 1), key=lambda candidate: (len(agreeing(candidate)), -abs(candidate)))
+    shift = max(range(-max_shift, max_shift + 1),
+                key=lambda candidate: (len(agreeing(candidate)), -abs(candidate - ENCODER_TONE_SHIFT)))
     compared = [index for index in range(len(theirs)) if 0 <= index + shift < len(ours)]
     extra = [index for index in compared if theirs[index] is None and mine(index, shift)]
     same = agreeing(shift)

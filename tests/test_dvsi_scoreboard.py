@@ -374,6 +374,12 @@ def check_encoder_tones(board):
     assert abs(metrics["encoder_extra_rate"] - 1 / 9) < 1e-9, metrics
     assert abs(metrics["encoder_level_error_ad"] - 1 / 3) < 1e-9, metrics
     assert board.encoder_tone_agreement(ours, frames([None] * 10)) == {"encoder_extra_rate": 0.5}
+    # A tone from the vector's start: shifts 0 and -1 agree equally, and -1, where DVSI's encoder sits,
+    # leaves no tone frame where DVSI sends voice.
+    dvsi = frames([None] + [(129, 100)] * 9)
+    ours = frames([(129, 100)] * 10)
+    metrics = board.encoder_tone_agreement(ours, dvsi)
+    assert metrics["encoder_agreement"] == 1.0 and metrics["encoder_extra_rate"] == 0.0, metrics
     # The encoders a build offers, from its usage line.
     assert board.usage_codecs("Usage: x --codec ambe2400|ambe2450|imbe7200 --in A") == {"ambe2400", "ambe2450", "imbe7200"}
     assert board.usage_codecs("Usage: x --codec ambe2400 --in A") == {"ambe2400"}
