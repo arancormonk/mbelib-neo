@@ -9,9 +9,10 @@
 
 #define FRAME MBE_VOICED_FRAME
 #define WIDTH MBE_VF_WIDTH
-#if FRAME % WIDTH != 0
-#error "voiced kernels process whole vectors of one frame"
-#endif
+/* The kernels process whole vectors of one frame. The compiler checks this,
+ * not the preprocessor, so analyzers that try configurations without a
+ * vector width can still parse the file. */
+typedef char mbe_voiced_whole_vectors[(FRAME % WIDTH == 0) ? 1 : -1];
 
 struct voiced_oscillator {
     mbe_vf c, s, cd, sd;
