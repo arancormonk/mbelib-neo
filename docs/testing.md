@@ -168,6 +168,16 @@ scalar builds use 32 KiB of packed words and per-call byte cost tables. There is
 no lazy initialization or shared mutable state. `test_ecc` checks every clean
 codeword plus exhaustive reference searches with tied and mixed confidences.
 
+`test_simd_numerics` compares tone fits to direct trigonometric projection and
+an independent solver (relative tolerance 1e-9), band reductions to double
+precision (1e-6 of input energy), and voiced output to the scalar formulas
+(absolute tolerances 3e-5 for unit-scale windowed components and 2e-4 for
+interpolation). It exercises unaligned inputs and scalar tails. Scalar voiced
+synthesis retains its arithmetic; SIMD recurrence batching permits bounded PCM
+rounding differences and has separate Debug goldens. Phase and RNG updates stay
+outside these kernels. Tone refinement trials remain sequential and double
+precision; ARM32 uses scalar tone fitting.
+
 ## Speech Quality Evaluation
 
 Developer-only tooling; no new library runtime dependency. CI builds the two

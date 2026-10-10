@@ -45,6 +45,7 @@ sources=(
   src/imbe/imbe7200x4400.c
   src/imbe/imbe7200x4400_enc.c
   src/core/mbelib.c
+  src/core/mbe_voiced.c
   src/core/mbe_pcm_convert.c
   src/core/mbe_adaptive.c
   src/core/mbe_encoder.c

@@ -265,6 +265,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/imbe/imbe7200x4400.c
     src/imbe/imbe7200x4400_enc.c
     src/core/mbelib.c
+    src/core/mbe_voiced.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
     src/core/mbe_encoder.c
@@ -1423,6 +1424,20 @@ if(MBELIB_BUILD_TESTS)
         unset(_mbelib_bash_version)
     endif()
 
+    add_executable(test_simd_numerics tests/test_simd_numerics.c)
+    target_link_libraries(test_simd_numerics PRIVATE mbe-static)
+    target_include_directories(
+        test_simd_numerics
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_simd_numerics PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_simd_numerics BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_simd_numerics COMMAND test_simd_numerics)
+
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
@@ -1430,6 +1445,7 @@ if(MBELIB_BUILD_TESTS)
         test_ambe2450_encoder
         test_imbe7200_encoder
         test_speech_analysis
+        test_simd_numerics
         test_noise_determinism
         test_params
         test_frame_paths
