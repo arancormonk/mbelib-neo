@@ -38,6 +38,7 @@
 #include "imbe7200x4400_const.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
+#include "mbe_math.h"
 #include "mbe_speech_analysis.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
@@ -147,7 +148,7 @@ imbe_enc_residual(struct imbe_enc_frame* q, const mbe_parms* prev_mp) {
 
     float sum = 0.0f;
     for (int l = 1; l <= q->L; l++) {
-        float flokl = ((float)prev_L / (float)q->L) * (float)l;
+        float flokl = mbe_prediction_position(prev_L, q->L, l);
         int intkl = (int)flokl;
         float deltal = flokl - (float)intkl;
         int upper = (intkl + 1 > MBE_MAX_HARMONIC_BANDS) ? MBE_MAX_HARMONIC_BANDS : intkl + 1;

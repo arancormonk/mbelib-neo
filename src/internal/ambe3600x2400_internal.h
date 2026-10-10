@@ -15,6 +15,7 @@
 
 #include <math.h>
 
+#include "mbe_math.h"
 #include "mbelib-neo/mbelib.h"
 
 /*
@@ -122,7 +123,7 @@ void mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_
  * order before fast-math/LTO transforms its surrounding loops. */
 static inline float
 ambe2400_prediction_position(int prev_L, int L, int l) {
-    return ((float)prev_L / (float)L) * (float)l;
+    return mbe_prediction_position(prev_L, L, l);
 }
 
 static inline float
