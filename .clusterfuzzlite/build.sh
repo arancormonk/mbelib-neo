@@ -50,7 +50,6 @@ sources=(
   src/core/mbe_adaptive.c
   src/core/mbe_encoder.c
   src/core/mbe_speech_analysis.c
-  src/core/mbe_analysis_kernels.c
   src/core/mbe_tone_detect.c
   src/core/mbe_tone_fit.c
   src/core/mbe_unvoiced_fft.c

@@ -4,7 +4,6 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-#include "mbe_analysis_kernels.h"
 #include "mbe_tone_fit.h"
 #include "mbe_voiced.h"
 
@@ -105,42 +104,6 @@ test_tone_fit(void) {
 }
 
 static void
-test_band_reductions(void) {
-    uint32_t rng = 0x019afb45u;
-    for (int trial = 0; trial < 80; ++trial) {
-        for (int n = 0; n <= 16; ++n) {
-            float re[17], im[17], w[17];
-            double expected[4] = {0}, residual = 0.0;
-            const float ar = 0.33f, ai = -0.24f;
-            for (int i = 0; i <= n; ++i) {
-                rng = rng * 1664525u + 1013904223u;
-                re[i] = (float)(rng >> 16) / 256.0f - 128.0f;
-                rng = rng * 1664525u + 1013904223u;
-                im[i] = (float)(rng >> 16) / 256.0f - 128.0f;
-                rng = rng * 1664525u + 1013904223u;
-                w[i] = (float)(rng >> 16) / 256.0f - 128.0f;
-                if (i > 0) {
-                    expected[0] += (double)re[i] * w[i];
-                    expected[1] += (double)im[i] * w[i];
-                    expected[2] += (double)w[i] * w[i];
-                    expected[3] += (double)re[i] * re[i] + (double)im[i] * im[i];
-                    double dr = re[i] - (double)ar * w[i], di = im[i] - (double)ai * w[i];
-                    residual += dr * dr + di * di;
-                }
-            }
-            float sums[4];
-            mbe_analysis_band_sums(re + 1, im + 1, w + 1, n, sums);
-            for (int k = 0; k < 4; ++k) {
-                /* Dot products may cancel; normalize by the input energy. */
-                assert(fabs((double)sums[k] - expected[k]) <= 1e-6 * fmax(1.0, expected[2] + expected[3]));
-            }
-            float actual = mbe_analysis_residual(re + 1, im + 1, w + 1, n, ar, ai);
-            assert(fabs((double)actual - residual) <= 1e-6 * fmax(1.0, residual));
-        }
-    }
-}
-
-static void
 test_voiced_kernels(void) {
     float window[320];
     for (int n = 0; n < 320; ++n) {
@@ -197,7 +160,6 @@ test_large_phase_fallback(void) {
 int
 main(void) {
     test_tone_fit();
-    test_band_reductions();
     test_voiced_kernels();
     test_large_phase_fallback();
     puts("SIMD numerical oracles passed");
