@@ -5,7 +5,7 @@
 
 /**
  * @file
- * @brief Tone detection for the AMBE+2 encoder's tone frames (private API).
+ * @brief Tone detection for the AMBE+2 and D-STAR encoders' tone frames (private API).
  *
  * Recognizes the tones TIA-102.BABA-1 Table 9 can carry in one 20 ms span:
  * single tones (index 5..122, f = 31.25 Hz * index), DTMF, KNOX and
@@ -16,7 +16,12 @@
 
 #include "mbe_unvoiced_fft.h"
 
-#define MBE_TONE_SPAN 160
+#define MBE_TONE_SPAN   160
+
+/* The encoders centre the span this many samples after the voice analysis,
+ * which aligns their decisions at a tone's start and end with DVSI's. DVSI's
+ * D-STAR and rate-33 encoders make the same decisions frame for frame. */
+#define MBE_TONE_OFFSET 16
 
 struct mbe_tone_detection {
     int id;          /* Table 9 tone index */

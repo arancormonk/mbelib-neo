@@ -52,10 +52,6 @@
  */
 #define AMBE2450_ENC_MAG_SCALE 1.08f
 
-/* The tone span is centred this many samples after the voice analysis, which
- * aligns its decisions at a tone's start and end with DVSI's. */
-#define AMBE2450_TONE_OFFSET   16
-
 struct mbe_ambe2450_encoder {
     struct mbe_encoder_frontend fe;
     unsigned char bands_prev[MBE_ANALYSIS_BANDS]; /* last voice frame's band decisions, eq 37 */
@@ -274,8 +270,7 @@ ambe2450_encode(mbe_ambe2450_encoder* enc, const float* samples, char ambe_d[49]
         return status;
     }
     struct mbe_tone_detection tone;
-    status =
-        mbe_tone_detect(enc->fe.fft, mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, AMBE2450_TONE_OFFSET), &tone);
+    status = mbe_tone_detect(enc->fe.fft, mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, MBE_TONE_OFFSET), &tone);
     if (status < 0) {
         return status;
     }

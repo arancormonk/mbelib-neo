@@ -37,10 +37,14 @@
  *    QUANTIZED values, mirroring the decoder state so the encoder and
  *    decoder never drift apart.
  *
- * Every frame is a voice frame, as from DVSI's encoder: quiet and silent
- * input is coded as low-level voice rather than as a silence frame, and the
- * decoded level follows the input level (there is no AGC). Tone (DTMF)
- * encoding is not supported.
+ * As from DVSI's encoder, quiet and silent input is coded as low-level voice
+ * rather than as a silence frame, and the decoded level follows the input
+ * level (there is no AGC). DTMF, call-progress and single tones are sent as
+ * tone frames (b0 126) in the layout DVSI's encoder uses. On every DTMF,
+ * single, alert and call-progress vector, DVSI's D-STAR encoder sends a tone
+ * frame exactly where its rate-33 encoder does, with the same tone, and sends
+ * KNOX tones as voice; so the AMBE+2 encoder's detector (mbe_tone_detect.c)
+ * decides here too.
  */
 
 #include <math.h>
@@ -52,6 +56,8 @@
 #include "ambe_encoder.h"
 #include "mbe_encoder.h"
 #include "mbe_speech_analysis.h"
+#include "mbe_tone.h"
+#include "mbe_tone_detect.h"
 #include "mbelib-neo/mbelib.h"
 
 /*
@@ -283,22 +289,17 @@ ambe2400_enc_fill_parms(const struct ambe_enc_frame* q, mbe_parms* cur_mp) {
     cur_mp->gamma = q->gamma_q;
 }
 
-/* Analyze and quantize a voice frame, reconstruct its predictor state, and
- * pack 49 bits. */
+/* Quantize an analysed voice frame, reconstruct its predictor state, and pack
+ * 49 bits. */
 static int
-ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
-                      const mbe_parms* prev_mp) {
-    struct mbe_analysis_result res;
-    int status = mbe_encoder_frontend_analyze(&enc->fe, samples, &res);
-    if (status < 0) {
-        return status;
-    }
+ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const struct mbe_analysis_result* res, char ambe_d[49],
+                      mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     struct ambe_enc_frame q = {0};
     unsigned char columns[MBE_ANALYSIS_COLUMNS];
     q.cache = mbe_ambe2400_get_dct_cache();
-    ambe2400_enc_quantize_pitch(&q, res.f0);
-    ambe2400_enc_voicing(&q, &enc->fe.analysis, &res, columns);
-    ambe2400_enc_magnitudes(&q, &res);
+    ambe2400_enc_quantize_pitch(&q, res->f0);
+    ambe2400_enc_voicing(&q, &enc->fe.analysis, res, columns);
+    ambe2400_enc_magnitudes(&q, res);
     ambe_enc_quantize_gain(&q, &ambe2400_enc_tables, prev_mp);
     ambe_enc_prediction(&q, &ambe2400_enc_tables, prev_mp);
     ambe_enc_quantize_residual(&q, &ambe2400_enc_tables);
@@ -316,6 +317,95 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const float* samples, char ambe
     return 0;
 }
 
+/*
+ * The D-STAR index of a TIA-102.BABA-1 Table 9 tone: the index of the same
+ * frequencies under mbe_tone_lookup_dstar_freqs() (single tones keep theirs,
+ * DTMF 128 + 4 * column + row, call progress 144..147), or -1 for a KNOX
+ * tone, which DVSI's D-STAR encoder sends as voice.
+ */
+static int
+ambe2400_enc_tone_index(int tone_id) {
+    float f1, f2;
+    if (tone_id <= 122) {
+        return tone_id;
+    }
+    if (!mbe_tone_lookup_freqs(tone_id, &f1, &f2)) {
+        return -1;
+    }
+    for (int index = 128; index <= 147; index++) {
+        float g1, g2;
+        if (mbe_tone_lookup_dstar_freqs(index, &g1, &g2) && fabsf(fminf(f1, f2) - fminf(g1, g2)) < 0.5f
+            && fabsf(fmaxf(f1, f2) - fmaxf(g1, g2)) < 0.5f) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+/* The 8-bit volume for a component amplitude (peak, 16-bit scale), from the
+ * inverse of the level law the decoder plays D-STAR tone frames with
+ * (mbe_tone_dstar_level_db). DVSI's encoder sends half a step more: on its
+ * D-STAR tone vectors this rounding gives DVSI's volume on 88% of the tone
+ * frames both send and is within one step on 97%. At least 1: volume 0 with
+ * index 128 is the silence frame. */
+static int
+ambe2400_enc_tone_volume(float amplitude) {
+    double rms_db = 20.0 * log10(fmax((double)amplitude, 1e-3) / (M_SQRT2 * 32768.0));
+    long volume = lround(255.5 + ((rms_db - MBE_TONE_DSTAR_DB_AT_VOL255) / MBE_TONE_DSTAR_DB_PER_STEP));
+    return (int)((volume < 1) ? 1 : ((volume > 255) ? 255 : volume));
+}
+
+/* b0 126 (bits 0..5 set, bit 48 clear), the tone index and the volume, every
+ * other bit zero, as from DVSI's encoder. */
+static void
+ambe2400_enc_pack_tone(int index, int volume, char ambe_d[49]) {
+    memset(ambe_d, 0, 49);
+    for (int i = 0; i < 6; i++) {
+        ambe_d[i] = 1;
+    }
+    mbe_ambe2400_set_tone_index(ambe_d, index);
+    mbe_tone_dstar_set_volume(ambe_d, volume);
+}
+
+/* Pack a tone frame for a tone D-STAR can carry. Returns 1 for a tone frame,
+ * 0 for voice, or a negative MBE_STATUS_* value from the FFT. */
+static int
+ambe2400_encode_tone(mbe_ambe2400_encoder* enc, char ambe_d[49]) {
+    struct mbe_tone_detection tone;
+    int status =
+        mbe_tone_detect(enc->fe.fft, mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, MBE_TONE_OFFSET), &tone);
+    if (status <= 0) {
+        return status;
+    }
+    int index = ambe2400_enc_tone_index(tone.id);
+    if (index < 0) {
+        return 0;
+    }
+    ambe2400_enc_pack_tone(index, ambe2400_enc_tone_volume(tone.amplitude), ambe_d);
+    return 1;
+}
+
+static int
+ambe2400_encode(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
+                const mbe_parms* prev_mp) {
+    struct mbe_analysis_result res;
+    int status = mbe_encoder_frontend_analyze(&enc->fe, samples, &res);
+    if (status < 0) {
+        return status;
+    }
+    status = ambe2400_encode_tone(enc, ambe_d);
+    if (status < 0) {
+        return status;
+    }
+    if (status > 0) {
+        /* The decoder keeps its prediction history across a tone frame;
+         * cur_mp mirrors that. */
+        *cur_mp = *prev_mp;
+        return mbe_encoder_model_valid(cur_mp) ? 0 : MBE_STATUS_INVALID_ARGUMENT;
+    }
+    return ambe2400_encode_voice(enc, &res, ambe_d, cur_mp, prev_mp);
+}
+
 int
 mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char ambe_d[49], mbe_parms* cur_mp,
                         const mbe_parms* prev_mp) {
@@ -326,7 +416,7 @@ mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char am
     /* A frame that fails (a history whose model would overflow) leaves no trace. */
     const struct mbe_analysis_state saved = enc->fe.analysis;
     mbe_parms out = *cur_mp;
-    int status = ambe2400_encode_voice(enc, samples, ambe_d, &out, prev_mp);
+    int status = ambe2400_encode(enc, samples, ambe_d, &out, prev_mp);
     if (status < 0) {
         enc->fe.analysis = saved;
         return status;

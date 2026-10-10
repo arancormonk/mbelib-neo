@@ -398,18 +398,22 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * (interleave, scrambler and Golay parity cross-checked against the MMDVM
  * tables). The spectral reconstruction it targets matches DVSI's AMBE-3000
  * D-STAR test vectors; on-air interoperability has not been verified.
- * Every frame is a voice frame, as from DVSI's encoder: quiet and silent
- * input is coded as low-level voice, and the decoded level follows the input
- * level (there is no AGC). Earlier versions normalized the level and sent
- * the AMBE silence frame (b0 127, tone index 128) for quiet input; this
- * library's decoders play that frame as comfort noise and reset.
+ * As from DVSI's encoder, quiet and silent input is coded as low-level voice,
+ * and the decoded level follows the input level (there is no AGC). Earlier
+ * versions normalized the level and sent the AMBE silence frame (b0 127, tone
+ * index 128) for quiet input; this library's decoders play that frame as
+ * comfort noise and reset. DTMF, call-progress and single tones are sent as
+ * D-STAR tone frames (b0 126, with the tone index and 8-bit volume the decoder
+ * plays), where DVSI's encoder sends them; KNOX tones, which D-STAR cannot
+ * carry, are coded as voice.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
  * frames. prev_mp is read-only. To restart a stream, call
  * mbe_ambe2400EncoderReset() and mbe_initMbeParms().
  * State equivalence holds with both the mbe_processAmbe2400* path and a bare
- * mbe_decodeAmbe2400Parms() chain.
+ * mbe_decodeAmbe2400Parms() chain. A tone frame leaves the decoder's
+ * prediction history unchanged, so cur_mp is then a copy of prev_mp.
  *
  * The analysis is centred one sample before the frame: parameters lag audio
  * by about 10 ms. The pitch analysis spans the whole frame, while the spectral

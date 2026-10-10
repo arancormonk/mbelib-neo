@@ -172,26 +172,6 @@ ambe2400_decode_b0(const char* ambe_d) {
     return b0;
 }
 
-static int
-ambe2400_decode_tone_index(const char* ambe_d) {
-    static const int t7tab[8] = {1, 0, 0, 0, 0, 1, 1, 1};
-    static const int t6tab[8] = {0, 0, 0, 1, 1, 1, 1, 0};
-    static const int t5tab[8] = {0, 0, 1, 0, 1, 1, 0, 1};
-    int def = (ambe_d[6] << 2) | (ambe_d[7] << 1) | ambe_d[8];
-
-    int tone_index = 0;
-    tone_index |= t7tab[def] << 7;
-    tone_index |= t6tab[def] << 6;
-    tone_index |= t5tab[def] << 5;
-    tone_index |= ambe_d[9] << 4;
-    tone_index |= ambe_d[42] << 3;
-    tone_index |= ambe_d[43] << 2;
-    tone_index |= ambe_d[10] << 1;
-    tone_index |= ambe_d[11];
-
-    return tone_index;
-}
-
 static void
 ambe2400_set_silence_model(mbe_parms* cur_mp, int* L) {
     cur_mp->w0 = MBE_AMBE_SILENCE_W0;
@@ -208,7 +188,7 @@ ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L
         return 0;
     }
 
-    int tone_index = ambe2400_decode_tone_index(ambe_d);
+    int tone_index = mbe_ambe2400_tone_index(ambe_d);
     if ((tone_index >= 5) && (tone_index <= 122)) {
         return tone_index;
     }

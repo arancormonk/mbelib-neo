@@ -9,8 +9,8 @@ both our output and DVSI's own decoded output; it also compares our output with
 DVSI's directly. A harmonic-peak pitch estimator checks that our decoded pitch
 matches DVSI's and the input's on the same frames. It also encodes the input with
 this library's encoder for each mode and compares pitch, voicing and spectral error
-with DVSI's encoding, and for the rate-33 tone vectors compares the encoder's tone
-frames with DVSI's.
+with DVSI's encoding, and for the rate-33 and D-STAR tone vectors compares the
+encoder's tone frames with DVSI's.
 
 The vectors are fetched locally with fetch_dvsi_vectors.py and must never be
 committed or redistributed. This tool writes only aggregate numbers and per-run
@@ -540,15 +540,36 @@ def tone_fields(bits):
     return int(bits[12:20], 2), (int(bits[6:12], 2) << 1) | int(bits[44])
 
 
-def encoder_tone_agreement(encoded, reference, max_shift=3):
+DSTAR_TONE_HIGH_BITS = (4, 0, 1, 2, 3, 7, 6, 5)  # the index's top three bits, by the selector in bits 6..8
+DSTAR_TONE_VOLUME_BITS = (12, 13, 14, 15, 16, 44, 45, 17)  # most significant first
+
+
+def dstar_tone_fields(bits):
+    """(tone index, volume) of a D-STAR tone frame's parameter bits (b0 126 or 127), else None."""
+    if len(bits) != 49 or bits[:6] != "111111":
+        return None
+    low = int(bits[9] + bits[42] + bits[43] + bits[10] + bits[11], 2)
+    return (DSTAR_TONE_HIGH_BITS[int(bits[6:9], 2)] << 5) | low, int("".join(bits[i] for i in DSTAR_TONE_VOLUME_BITS), 2)
+
+
+# Per mode with tone frames from our encoder: how to read one, and the name of its level-step error.
+ENCODER_TONE_FIELDS = {
+    "r33": (tone_fields, "encoder_level_error_ad"),
+    "dstar": (dstar_tone_fields, "encoder_level_error_volume"),
+}
+
+
+def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
     """Our encoder's tone frames against DVSI's, at the frame shift where the most agree.
 
     Returns the fraction of DVSI's tone frames we send as the same tone, the fraction of all compared
-    frames we send as a tone where DVSI sends voice, and the mean absolute AD difference where the
-    tones agree. When DVSI sends no tone frame only the second is defined.
+    frames we send as a tone where DVSI sends voice, and the mean absolute level difference, in the
+    mode's level steps (AD, or D-STAR's volume), where the tones agree. When DVSI sends no tone frame
+    only the second is defined.
     """
-    ours = [tone_fields(record.get("bits", "")) for record in encoded]
-    theirs = [tone_fields(record.get("bits", "")) for record in reference]
+    fields, level_key = ENCODER_TONE_FIELDS[mode]
+    ours = [fields(record.get("bits", "")) for record in encoded]
+    theirs = [fields(record.get("bits", "")) for record in reference]
     tone_frames = [index for index, value in enumerate(theirs) if value is not None]
     if not tone_frames:
         compared = min(len(ours), len(theirs))
@@ -567,13 +588,13 @@ def encoder_tone_agreement(encoded, reference, max_shift=3):
     return {
         "encoder_agreement": len(same) / len(tone_frames),
         "encoder_extra_rate": len(extra) / len(compared) if compared else 0.0,
-        "encoder_level_error_ad": mean([abs(mine(index, shift)[1] - theirs[index][1]) for index in same]),
+        level_key: mean([abs(mine(index, shift)[1] - theirs[index][1]) for index in same]),
     }
 
 
 def score_tone_vector(tools, vectors, mode, name, work, encoder=False):
-    """Our decode of DVSI's bits for a tone vector against DVSI's decoded output, and for rate 33 our
-    encoding of the input against DVSI's."""
+    """Our decode of DVSI's bits for a tone vector against DVSI's decoded output, and for rate 33 and
+    D-STAR our encoding of the input against DVSI's."""
     codec = MODES[mode]
     base = work / f"{mode}_{name}"
     dvsi_pcm = Path(f"{base}_dvsi.raw")
@@ -590,13 +611,13 @@ def score_tone_vector(tools, vectors, mode, name, work, encoder=False):
     metrics["tone_frames"] = sum(1 for record in records if record["flags"] & 0x0010)
     metrics["frames"] = len(records)
     metrics["alignment_corr"] = versus.get("alignment_corr")
-    if encoder and mode == "r33" and codec in encoder_codecs(tools):
+    if encoder and mode in ENCODER_TONE_FIELDS and codec in encoder_codecs(tools):
         speech = work / f"{name}_input.raw"
         shutil.copyfile(vectors / f"{name}.pcm", speech)
         run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
         run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows", "--out", f"{base}_enc.wav",
              "--params", f"{base}_enc.jsonl"])
-        metrics.update(encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records) or {})
+        metrics.update(encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records, mode=mode) or {})
     return {"mode": mode, "name": name, "partition": "tones", "tone": metrics}
 
 
