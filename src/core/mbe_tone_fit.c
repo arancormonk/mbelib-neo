@@ -4,10 +4,6 @@
 #include "mbe_simd.h"
 #include "mbe_tone_fit.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 /* Solve the symmetric positive definite system a x = b of order n <= 4 by
  * Cholesky factorization; returns 0 when a is not positive definite. */
 static int
@@ -59,7 +55,7 @@ struct tone_oscillator {
 
 static struct tone_oscillator
 tone_oscillator_init(double hz) {
-    double w = 2.0 * M_PI * hz / 8000.0;
+    double w = 2.0 * M_PI * hz / MBE_TONE_FS;
     double cw = cos(w), sw = sin(w);
     double c[MBE_VD_WIDTH], s[MBE_VD_WIDTH];
     double cc = 1.0, ss = 0.0;

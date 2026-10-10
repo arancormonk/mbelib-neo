@@ -46,7 +46,6 @@
 #include "mbe_tone.h"
 #include "mbe_tone_fit.h"
 
-#define TONE_FS                   8000.0
 #define TONE_BLOCK                20
 #define TONE_BLOCKS               (MBE_TONE_SPAN / TONE_BLOCK)
 #define TONE_MIN_ACTIVE           72    /* 45% of the span */
@@ -223,7 +222,7 @@ static double
 tone_peak_hz(const double power[TONE_BINS], int m) {
     double den = power[m - 1] - (2.0 * power[m]) + power[m + 1];
     double offset = (den != 0.0) ? 0.5 * (power[m - 1] - power[m + 1]) / den : 0.0;
-    return ((double)m + offset) * TONE_FS / (double)MBE_FFT_SIZE;
+    return ((double)m + offset) * MBE_TONE_FS / (double)MBE_FFT_SIZE;
 }
 
 /* The two largest peaks of the Hann-windowed power spectrum, interpolated,
@@ -286,7 +285,7 @@ tone_pair_from_predictor(const struct tone_span* s, double hz[2]) {
         if (fabs(r[k]) > 2.0) {
             return 0;
         }
-        hz[k] = acos(0.5 * r[k]) * TONE_FS / (2.0 * M_PI);
+        hz[k] = acos(0.5 * r[k]) * MBE_TONE_FS / (2.0 * M_PI);
     }
     return 1;
 }
