@@ -36,14 +36,15 @@ void mbe_encoder_frontend_close(struct mbe_encoder_frontend* fe);
 /* Restore the freshly opened analysis state (the tables are kept). */
 void mbe_encoder_frontend_reset(struct mbe_encoder_frontend* fe);
 
-/* Whether every sample is finite and of magnitude at most 2^20. The test
- * compares the IEEE 754 bit pattern, read from memory, against that bound
- * rather than using isfinite() or floating-point comparisons, because the
- * library may be compiled with MBELIB_ENABLE_FAST_MATH (-ffast-math,
- * /fp:fast), under which the compiler may assume that no value is NaN or
- * infinite and remove such tests (see mbe_encoder.c). A single invalid sample
- * would otherwise corrupt the DC filter and the analysis history for the
- * remainder of the stream. */
+/* Whether every sample is finite and of magnitude at most 2^20. The library
+ * may be compiled with MBELIB_ENABLE_FAST_MATH (-ffast-math, /fp:fast), under
+ * which the compiler may assume that no value is NaN or infinite: isfinite()
+ * may fold to true, and a floating-point range comparison may accept NaN or
+ * infinity. The test therefore compares each sample's IEEE 754 bit pattern,
+ * read from memory with the sign bit cleared, against that of 2^20;
+ * mbe_encoder.c explains why both the load and the magnitude bound matter. A
+ * single invalid sample could otherwise corrupt the DC filter and the analysis
+ * history for the remainder of the stream. */
 int mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]);
 
 /* The prediction history the encoders read from the caller's prev_mp
