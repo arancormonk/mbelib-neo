@@ -116,6 +116,18 @@ if(MBELIB_ENABLE_WARNINGS)
     endif()
 endif()
 
+# Debug builds round every multiply and add separately, in the library and in
+# the tests and tools that build its golden fixtures, so the exact golden PCM
+# hashes hold for every compiler: Clang fuses a * b + c into an FMA by default,
+# even at -O0, wherever the target has FMA (x86-64-v3, AArch64), while GCC
+# contracts only when optimizing.
+if(
+    CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+    AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+)
+    add_compile_options($<$<CONFIG:Debug>:-ffp-contract=off>)
+endif()
+
 set(_mbelib_release_like_config
     "$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>"
 )
