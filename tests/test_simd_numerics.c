@@ -146,16 +146,9 @@ test_voiced_kernels(void) {
 /* Caller-supplied phases far beyond the decoder's range, up to near the
  * largest float. Each lane's seed rotates the phase's own cosine and sine by
  * its offset, so the output follows the exact phase; the oracle does the same
- * in double, since phase + offset would round the offset away. A fast-math
- * library build need not reduce huge cos/sin arguments exactly, so there
- * phases beyond LARGE_PHASE_EXACT only have to give a finite waveform within
- * its amplitude; any departure from the exact phase is still reported. */
-#if defined(MBELIB_TEST_LIBRARY_FAST_MATH)
-#define LARGE_PHASE_EXACT 65536.0
-#else
-#define LARGE_PHASE_EXACT HUGE_VAL
-#endif
-
+ * in double, since phase + offset would round the offset away. The library
+ * compiles these kernels with IEEE semantics in fast-math builds too, so the
+ * check holds there as well. */
 static void
 test_large_phases(void) {
     const float phases[] = {-2048.0f, 511.9f, 512.1f, 65536.0f, 0x1p52f, -3.0e38f};
@@ -163,7 +156,6 @@ test_large_phases(void) {
         for (int chirp = 0; chirp < 2; ++chirp) {
             const float delta = chirp ? 0.009f : 0.0f;
             const int harmonic = 3;
-            const int exact = fabs((double)phases[k]) <= LARGE_PHASE_EXACT;
             float out[160] = {0};
             mbe_voiced_interpolated(out, phases[k], 0.5f, 1.0f, 0.125f, delta, harmonic);
             const double pc = cos((double)phases[k]), ps = sin((double)phases[k]);
@@ -183,10 +175,10 @@ test_large_phases(void) {
             }
             if (!(worst <= 2e-4)) {
                 /* stderr is unbuffered, so the report survives the assertion's abort. */
-                fprintf(stderr, "large phase %g, pitch delta %g: largest error %g at sample %d%s\n", (double)phases[k],
-                        (double)delta, worst, worst_n, exact ? "" : " (fast-math library: not required)");
+                fprintf(stderr, "large phase %g, pitch delta %g: largest error %g at sample %d\n", (double)phases[k],
+                        (double)delta, worst, worst_n);
             }
-            assert(!exact || worst <= 2e-4);
+            assert(worst <= 2e-4);
         }
     }
 }

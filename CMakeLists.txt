@@ -565,9 +565,14 @@ endif()
 # target options on Makefile/Ninja command lines; the Visual Studio generator
 # maps /fp:precise to the per-file floating-point model instead. The unit also
 # refuses to compile under fast-math (see src/core/mbe_pcm_convert.c).
+# The SIMD voiced kernels seed their oscillators from cos and sin of
+# caller-supplied phases of any size; a fast-math math library need not reduce
+# huge arguments exactly (MSVC /fp:fast returned values off the unit circle),
+# and the kernels themselves are explicit vector code.
 if(_mbelib_ieee_math_options)
     set_source_files_properties(
         src/core/mbe_pcm_convert.c
+        src/core/mbe_voiced.c
         PROPERTIES COMPILE_OPTIONS "${_mbelib_ieee_math_options}"
     )
 endif()
@@ -1447,13 +1452,6 @@ if(MBELIB_BUILD_TESTS)
         target_compile_definitions(
             test_simd_numerics
             PRIVATE MBELIB_ENABLE_SIMD=1
-        )
-    endif()
-    # A fast-math library need not reduce huge cos/sin arguments exactly.
-    if(MBELIB_ENABLE_FAST_MATH)
-        target_compile_definitions(
-            test_simd_numerics
-            PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
         )
     endif()
     if(_SAN_CFLAGS)
