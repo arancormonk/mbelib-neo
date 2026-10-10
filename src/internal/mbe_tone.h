@@ -76,13 +76,25 @@ mbe_tone_lookup_dstar_freqs(int tone_id, float* freq1, float* freq2) {
 
 /* D-STAR 8-bit tone volume: bits 12..16, 44, 45, 17 from most to least significant. */
 static inline int
+mbe_tone_dstar_volume_bit(int i) {
+    static const unsigned char order[8] = {12, 13, 14, 15, 16, 44, 45, 17};
+    return order[i & 7];
+}
+
+static inline int
 mbe_tone_dstar_volume(const char* ambe_d) {
-    static const int order[8] = {12, 13, 14, 15, 16, 44, 45, 17};
     int volume = 0;
     for (int i = 0; i < 8; i++) {
-        volume = (volume << 1) | (ambe_d[order[i]] & 1);
+        volume = (volume << 1) | (ambe_d[mbe_tone_dstar_volume_bit(i)] & 1);
     }
     return volume;
+}
+
+static inline void
+mbe_tone_dstar_set_volume(char* ambe_d, int volume) {
+    for (int i = 0; i < 8; i++) {
+        ambe_d[mbe_tone_dstar_volume_bit(i)] = (char)((volume >> (7 - i)) & 1);
+    }
 }
 
 /*

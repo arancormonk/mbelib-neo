@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* AMBE 3600x2400 encoder tests: frame FEC, DV byte packing, Golay, and
- * encoder->decoder parameter-state parity. */
+/* AMBE 3600x2400 encoder tests: frame FEC, DV byte packing, Golay,
+ * encoder->decoder parameter-state parity, and tone frames. */
 #include <math.h>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -259,8 +259,10 @@ main(int argc, char** argv) {
 #include <stdint.h>
 #include <string.h>
 
+#include "ambe3600x2400_internal.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
+#include "mbe_tone.h"
 
 static int
 float_bits_equal(float a, float b) {
@@ -298,6 +300,16 @@ model_finite(const mbe_parms* mp) {
         ok = float_finite(&mp->log2Ml[l]) && float_finite(&mp->Ml[l]);
     }
     return ok;
+}
+
+/* b0 as the decoder reads it: bits 0..5, then bit 48. */
+static int
+b0_of(const char d[49]) {
+    int b0 = (unsigned char)d[48];
+    for (int i = 0; i < 6; i++) {
+        b0 |= (int)d[i] << (6 - i);
+    }
+    return b0;
 }
 
 static uint32_t rng = 0xC0FFEE;
@@ -858,6 +870,10 @@ test_reachable_history(mbe_ambe2400_encoder* enc) {
             printf("reachable history after %d repeats was rejected\n", repeats[r]);
             return 1;
         }
+        if (b0_of(d) >= 120) {
+            printf("reachable history: b0 %d is not a voice frame\n", b0_of(d));
+            return 1;
+        }
     }
     puts("the decoder's highest states (log2Ml past 48) encode");
     return 0;
@@ -963,21 +979,20 @@ test_pitch_endpoint(mbe_ambe2400_encoder* enc, int period, int expected_b0) {
     char d[49];
     float pcm[160];
     mbe_initMbeParms(&c, &p, &h);
-    /* A long steady run, so period 20 exposes the old interior-minimum fallback. */
+    /* A long steady run, so period 20 exposes the old interior-minimum fallback.
+     * The second harmonic keeps a 400 Hz fundamental from being a single tone. */
     for (int frame = 0; frame < 200; frame++) {
         for (int i = 0; i < 160; i++) {
             int phase = (frame * 160 + i) % period;
-            pcm[i] = 0.1f * sinf((float)(2.0 * M_PI * phase / period));
+            double x = 2.0 * M_PI * phase / period;
+            pcm[i] = (float)(0.1 * (sin(x) + (0.5 * sin(2.0 * x))));
         }
         if (mbe_encodeAmbe2400Parms(enc, pcm, d, &c, &p) != 0) {
             return 1;
         }
         mbe_moveMbeParms(&c, &p);
     }
-    int b0 = (unsigned char)d[48];
-    for (int i = 0; i < 6; i++) {
-        b0 |= (int)d[i] << (6 - i);
-    }
+    int b0 = b0_of(d);
     printf("pitch period %d: b0=%d (expected %d)\n", period, b0, expected_b0);
     return b0 != expected_b0;
 }
@@ -1336,6 +1351,308 @@ test_quiet_input(mbe_ambe2400_encoder* enc) {
     return peak > 64.0;
 }
 
+/* Every tone index is written with the selector (bits 6..8) the decoder's
+ * original tables map to its three high bits, its low five bits at 9, 42, 43,
+ * 10 and 11 and nothing else, and reads back; likewise every volume at bits
+ * 12..16, 44, 45 and 17. */
+static int
+test_tone_layout(void) {
+    static const int t7[8] = {1, 0, 0, 0, 0, 1, 1, 1};
+    static const int t6[8] = {0, 0, 0, 1, 1, 1, 1, 0};
+    static const int t5[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+    static const int low[5] = {9, 42, 43, 10, 11};
+    static const int volume_bits[8] = {12, 13, 14, 15, 16, 44, 45, 17};
+    for (int value = 0; value < 256; value++) {
+        char d[49] = {0};
+        char v[49] = {0};
+        mbe_ambe2400_set_tone_index(d, value);
+        int selector = (d[6] << 2) | (d[7] << 1) | d[8];
+        int ok = ((t7[selector] << 2) | (t6[selector] << 1) | t5[selector]) == (value >> 5)
+                 && mbe_ambe2400_tone_index(d) == value;
+        for (int k = 0; k < 5; k++) {
+            ok = ok && d[low[k]] == ((value >> (4 - k)) & 1);
+        }
+        mbe_tone_dstar_set_volume(v, value);
+        ok = ok && mbe_tone_dstar_volume(v) == value;
+        for (int k = 0; k < 8; k++) {
+            ok = ok && v[volume_bits[k]] == ((value >> (7 - k)) & 1);
+        }
+        for (int i = 0; i < 49; i++) {
+            int index_bit = (i >= 6 && i <= 11) || i == 42 || i == 43;
+            int volume_bit = (i >= 12 && i <= 17) || i == 44 || i == 45;
+            ok = ok && (index_bit || d[i] == 0) && (volume_bit || v[i] == 0);
+        }
+        if (!ok) {
+            printf("tone layout: value %d written wrongly\n", value);
+            return 1;
+        }
+    }
+    puts("D-STAR tone frame layout: every index and volume in the decoder's bits");
+    return 0;
+}
+
+struct tone_case {
+    double f1, f2; /* Hz; f2 0 for a single tone */
+    int index;     /* D-STAR tone index, or -1 for voice */
+    const char* name;
+};
+
+/* A frame-aligned tone, continuous over frames, at the given phase. */
+static void
+tone_frame(float pcm[160], int frame, const struct tone_case* t, double amplitude, double phase) {
+    for (int i = 0; i < 160; i++) {
+        double n = (double)((frame * 160) + i);
+        double v = sin((2.0 * M_PI * t->f1 * n / 8000.0) + phase);
+        if (t->f2 > 0.0) {
+            v += sin((2.0 * M_PI * t->f2 * n / 8000.0) + (2.0 * phase));
+        }
+        pcm[i] = (float)(amplitude * v);
+    }
+}
+
+/* A tone frame as DVSI's encoder sends it: b0 126, and nothing outside the
+ * index (6..11, 42, 43) and volume (12..17, 44, 45) fields; the decoder plays
+ * index within half a single-tone step (31.25 Hz) of the case's frequencies. */
+static int
+tone_frame_ok(const char d[49], int index, const struct tone_case* t) {
+    float g1, g2;
+    if (b0_of(d) != 126 || !mbe_tone_lookup_dstar_freqs(index, &g1, &g2)) {
+        return 0;
+    }
+    for (int i = 18; i < 49; i++) {
+        if (d[i] != 0 && (i < 42 || i > 45)) {
+            return 0;
+        }
+    }
+    double f2 = (t->f2 > 0.0) ? t->f2 : t->f1;
+    return fabs(fmin(t->f1, f2) - fmin((double)g1, (double)g2)) < 15.625
+           && fabs(fmax(t->f1, f2) - fmax((double)g1, (double)g2)) < 15.625;
+}
+
+/*
+ * Encode 25 frames of a tone; every frame after the first two must be a tone
+ * frame with the case's index, cur_mp a copy of prev_mp, and the decoder must
+ * play it at the input level. Returns the decoded level (dB on the 16-bit
+ * scale) of frames 5 on.
+ */
+static int
+run_tone(mbe_ambe2400_encoder* enc, const struct tone_case* t, double amplitude, double phase, double* level_db) {
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    double sum = 0.0;
+    int n = 0;
+    mbe_ambe2400EncoderReset(enc);
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    for (int frame = 0; frame < 25; frame++) {
+        float pcm[160], out[160];
+        char d[49];
+        mbe_process_result result;
+        tone_frame(pcm, frame, t, amplitude, phase);
+        mbe_initProcessResult(&result);
+        ec.gamma = (float)(-1 - frame); /* a tone frame returns prev_mp whole, not cur_mp */
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &ec, &ep) != 0
+            || mbe_processAmbe2400Dataf(out, &result, d, &dc, &dp, &dh) < 0) {
+            return 1;
+        }
+        mbe_parms scratch_cur = dc;
+        mbe_parms scratch_prev = dp;
+        int index = mbe_decodeAmbe2400Parms(d, &scratch_cur, &scratch_prev);
+        if (frame >= 2) {
+            if (index != t->index || !tone_frame_ok(d, index, t) || !parms_identical(&ec, &ep)
+                || !(result.flags & MBE_PROCESS_FLAG_TONE)) {
+                printf("  %s at phase %.2f: frame %d is b0 %d, index %d\n", t->name, phase, frame, b0_of(d), index);
+                return 1;
+            }
+            for (int i = 0; frame >= 5 && i < 160; i++) {
+                double x = 7.0 * (double)out[i];
+                sum += x * x;
+                n++;
+            }
+        }
+        mbe_moveMbeParms(&ec, &ep);
+    }
+    *level_db = 10.0 * log10((sum / n) + 1e-30);
+    return 0;
+}
+
+/* DTMF (all 16 digits), call-progress and single tones at several phases
+ * become tone frames with the decoder's index for their frequencies, which the
+ * decoder plays at the input's per-component level within 0.5 dB. */
+static int
+test_tones(mbe_ambe2400_encoder* enc) {
+    static const double rows[4] = {697, 770, 852, 941};
+    static const double columns[4] = {1209, 1336, 1477, 1633};
+    static const struct tone_case others[] = {
+        {350, 440, 144, "dial"},    {440, 480, 145, "ringback"},         {480, 620, 146, "busy"},
+        {350, 490, 147, "350+490"}, {156.25, 0, 5, "156.25 Hz"},         {406.25, 0, 13, "406.25 Hz"},
+        {1000, 0, 32, "1000 Hz"},   {1014, 0, 32, "1014 Hz (off grid)"}, {2000, 0, 64, "2000 Hz"},
+        {3500, 0, 112, "3500 Hz"},
+    };
+    struct tone_case cases[16 + (sizeof(others) / sizeof(others[0]))];
+    for (int k = 0; k < 16; k++) {
+        cases[k] = (struct tone_case){rows[k & 3], columns[k >> 2], 128 + k, "DTMF"};
+    }
+    for (size_t k = 0; k < sizeof(others) / sizeof(others[0]); k++) {
+        cases[16 + k] = others[k];
+    }
+    double worst = 0.0;
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        for (int p = 0; p < 4; p++) {
+            const double amplitude = 3000.0 / 32768.0;
+            double level_db;
+            if (run_tone(enc, &cases[k], amplitude, 0.7 * p, &level_db) != 0) {
+                return 1;
+            }
+#ifdef MBELIB_TEST_NOTONES
+            if (level_db > 0.0) {
+                printf("  %s: NOTONES output not silent\n", cases[k].name);
+                return 1;
+            }
+#else
+            double components = (cases[k].f2 > 0.0) ? 2.0 : 1.0;
+            double error = level_db - (10.0 * log10(components * 3000.0 * 3000.0 / 2.0));
+            worst = fmax(worst, fabs(error));
+            if (fabs(error) > 0.5) {
+                printf("  %s (index %d): decoded %.2f dB from the input\n", cases[k].name, cases[k].index, error);
+                return 1;
+            }
+#endif
+        }
+    }
+#ifdef MBELIB_TEST_NOTONES
+    (void)worst;
+    puts("D-STAR tones: DTMF, call progress and single tones sent as tone frames, played silent (NOTONES)");
+#else
+    printf("D-STAR tones: DTMF, call progress and single tones sent as tone frames, decoded within %.2f dB\n", worst);
+#endif
+    return 0;
+}
+
+/* KNOX tones have no D-STAR index; DVSI's D-STAR encoder sends them as voice. */
+static int
+test_knox_voice(mbe_ambe2400_encoder* enc) {
+    static const struct tone_case cases[] = {{606, 1052, -1, "KNOX 1"}, {820, 1279, -1, "KNOX #"}};
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        mbe_parms ec, ep, eh;
+        mbe_ambe2400EncoderReset(enc);
+        mbe_initMbeParms(&ec, &ep, &eh);
+        for (int frame = 0; frame < 20; frame++) {
+            float pcm[160];
+            char d[49];
+            tone_frame(pcm, frame, &cases[k], 0.1, 0.3);
+            if (mbe_encodeAmbe2400Parms(enc, pcm, d, &ec, &ep) != 0 || b0_of(d) >= 120) {
+                printf("  %s: frame %d is b0 %d\n", cases[k].name, frame, b0_of(d));
+                return 1;
+            }
+            mbe_moveMbeParms(&ec, &ep);
+        }
+    }
+    puts("D-STAR tones: KNOX tones are coded as voice");
+    return 0;
+}
+
+/* Voice, then a tone, then voice again: the voice after the tone predicts from
+ * the voice before it, exactly as the decoder does. */
+static int
+test_voice_tone_voice(mbe_ambe2400_encoder* enc) {
+    static const struct tone_case dtmf = {770, 1336, 133, "DTMF 5"};
+    static short speech[40 * 160];
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    int tones = 0;
+    gen_signal(speech, 40 * 160);
+    mbe_ambe2400EncoderReset(enc);
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    for (int frame = 0; frame < 40; frame++) {
+        float pcm[160];
+        char d[49];
+        if (frame >= 15 && frame < 25) {
+            tone_frame(pcm, frame, &dtmf, 0.1, 0.3);
+        } else {
+            for (int i = 0; i < 160; i++) {
+                pcm[i] = (float)speech[(frame * 160) + i] / 32768.0f;
+            }
+        }
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &ec, &ep) != 0) {
+            return 1;
+        }
+        int kind = mbe_decodeAmbe2400Parms(d, &dc, &dp);
+        tones += (kind == dtmf.index);
+        if (kind == 0) {
+            for (int l = 1; l <= dc.L; l++) {
+                if (!float_bits_equal(dc.log2Ml[l], ec.log2Ml[l])) {
+                    printf("voice-tone-voice: frame %d diverged from the decoder\n", frame);
+                    return 1;
+                }
+            }
+            mbe_moveMbeParms(&dc, &dp);
+        } else if (kind != dtmf.index) {
+            printf("voice-tone-voice: frame %d decoded as %d\n", frame, kind);
+            return 1;
+        }
+        mbe_moveMbeParms(&ec, &ep);
+    }
+    if (tones < 8) {
+        printf("voice-tone-voice: %d tone frames\n", tones);
+        return 1;
+    }
+    puts("D-STAR voice-tone-voice: prediction stays with the decoder's");
+    return 0;
+}
+
+/* A tone frame returns the history as its model, so a history whose model is
+ * not finite (w0 or an amplitude) is rejected there too, with cur_mp and the
+ * stream untouched. The rejected frame is louder than the one retried, so an
+ * analysis it left behind would change the stream. */
+static int
+test_tone_bad_history(mbe_ambe2400_encoder* enc) {
+    static const struct tone_case tone = {1000, 0, 32, "1000 Hz"};
+    for (int b = 0; b < 3; b++) {
+        char reference[12][49];
+        char observed[12][49];
+        for (int pass = 0; pass < 2; pass++) {
+            mbe_parms cur, prev, enhanced;
+            mbe_ambe2400EncoderReset(enc);
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            for (int f = 0; f < 12; f++) {
+                float pcm[160];
+                tone_frame(pcm, f, &tone, 0.1, 0.0);
+                if (pass == 1 && f == 6) {
+                    mbe_parms bad = prev;
+                    const mbe_parms before = cur;
+                    char unused[49];
+                    float louder[160];
+                    tone_frame(louder, f, &tone, 0.11, 0.0);
+                    if (b == 0) {
+                        bad.w0 = NAN;
+                    } else if (b == 1) {
+                        bad.Ml[1] = INFINITY;
+                    } else {
+                        bad.log2Ml[2] = -INFINITY;
+                    }
+                    if (mbe_encodeAmbe2400Parms(enc, louder, unused, &cur, &bad) != MBE_STATUS_INVALID_ARGUMENT
+                        || !parms_identical(&cur, &before)) {
+                        printf("tone bad history %d was not rejected cleanly\n", b);
+                        return 1;
+                    }
+                }
+                char* d = (pass == 0) ? reference[f] : observed[f];
+                if (mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev) != 0 || (f >= 2 && b0_of(d) != 126)) {
+                    printf("tone bad history %d: frame %d failed\n", b, f);
+                    return 1;
+                }
+                mbe_moveMbeParms(&cur, &prev);
+            }
+        }
+        if (memcmp(reference, observed, sizeof(reference)) != 0) {
+            printf("tone bad history %d changed the stream\n", b);
+            return 1;
+        }
+    }
+    puts("D-STAR tones: a history with a non-finite model is rejected without touching state");
+    return 0;
+}
+
 /* Compare interleaved streams with standalone replays, then replay after reset.
  * The sequence exercises pitch, voicing, PCM history and silent input. */
 static int
@@ -1423,6 +1740,11 @@ main(void) {
     fails += test_level_follows_input(enc);
     fails += test_quiet_tone_level(enc);
     fails += test_quiet_input(enc);
+    fails += test_tone_layout();
+    fails += test_tones(enc);
+    fails += test_knox_voice(enc);
+    fails += test_voice_tone_voice(enc);
+    fails += test_tone_bad_history(enc);
     mbe_ambe2400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

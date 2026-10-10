@@ -5,7 +5,7 @@
 
 /**
  * @file
- * @brief Tone detection for the AMBE+2 encoder's tone frames.
+ * @brief Tone detection for the AMBE+2 and D-STAR encoders' tone frames.
  *
  * TIA-102.BABA-1 7.1 leaves the method open. This one works on one 20 ms span:
  *

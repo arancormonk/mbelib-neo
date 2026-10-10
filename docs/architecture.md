@@ -28,10 +28,12 @@ the library.
   every encoder.
 - `src/ambe/ambe_encoder.c`: spectral amplitude quantization and frame FEC
   shared by the two AMBE encoders.
-- `src/ambe/ambe3600x2400_enc.c`: D-STAR voicing, pitch law and bit layout.
+- `src/ambe/ambe3600x2400_enc.c`: D-STAR voicing, pitch law, bit layout and
+  tone frames.
 - `src/ambe/ambe3600x2450_enc.c`: AMBE+2 2450 quantization (TIA-102.BABA-1
   clause 4) and tone frames.
-- `src/core/mbe_tone_detect.c`: tone detection for AMBE+2 tone frames.
+- `src/core/mbe_tone_detect.c`: tone detection for AMBE+2 and D-STAR tone
+  frames.
 - `src/imbe/imbe7200x4400_enc.c`: IMBE 4400 quantization (TIA-102.BABA
   chapter 6) and 7200x4400 frame encoding.
 - `src/ambe/dstar_frame.c`: D-STAR DV air-interface byte mapping.

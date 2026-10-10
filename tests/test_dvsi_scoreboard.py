@@ -117,6 +117,13 @@ def check_gates(board):
         {"mode": "dstar", "metric": "ours.lsd_db", "rule": "abs_delta_max", "value": 0.0}]}
     assert board.check_gates(absolute, {}, board.compare(baseline, baseline))[0]
     assert not board.check_gates(absolute, {}, board.compare(better, baseline))[0]
+    # Per-vector changes that cancel in the mean pass on the mean alone; "worst" catches them.
+    cancelling = {"vectors": [vector(n, "validation", 7.0 + (0.5 if i == 0 else -0.5 if i == 1 else 0.0), 0.88)
+                              for i, n in enumerate(names)]}
+    assert board.check_gates(absolute, {}, board.compare(cancelling, baseline))[0]
+    absolute["checks"][0]["worst"] = 0.0
+    assert not board.check_gates(absolute, {}, board.compare(cancelling, baseline))[0]
+    assert board.check_gates(absolute, {}, board.compare(baseline, baseline))[0]
 
 
 def check_encoder_metrics(board):
@@ -317,6 +324,38 @@ def tone_bits(tone_id, ad):
     return bits
 
 
+def dstar_tone_bits(index, volume):
+    """A D-STAR tone frame's 49 parameter bits: b0 126, the index's top three bits by the selector in
+    bits 6..8, its low five at 9, 42, 43, 10 and 11, and the volume at 12..16, 44, 45 and 17."""
+    selector = {4: 0, 0: 1, 1: 2, 2: 3, 3: 4, 7: 5, 6: 6, 5: 7}[index >> 5]
+    bits = ["1"] * 6 + ["0"] * 43
+    for position, value in zip((6, 7, 8), format(selector, "03b")):
+        bits[position] = value
+    for position, value in zip((9, 42, 43, 10, 11), format(index & 31, "05b")):
+        bits[position] = value
+    for position, value in zip((12, 13, 14, 15, 16, 44, 45, 17), format(volume, "08b")):
+        bits[position] = value
+    return "".join(bits)
+
+
+def check_dstar_encoder_tones(board):
+    for index, volume in ((133, 203), (32, 1), (147, 255), (5, 128), (128, 77)):
+        assert board.dstar_tone_fields(dstar_tone_bits(index, volume)) == (index, volume), (index, volume)
+    assert board.dstar_tone_fields("0" * 49) is None and board.dstar_tone_fields("1" * 88) is None
+    voice = {"bits": "0" * 49}
+
+    def frames(spec):
+        return [voice if entry is None else {"bits": dstar_tone_bits(*entry)} for entry in spec]
+
+    dvsi = frames([None, (133, 200), (133, 200), (133, 201), None, None])
+    ours = frames([None, (133, 201), (133, 200), (133, 201), None, (32, 180)])
+    metrics = board.encoder_tone_agreement(ours, dvsi, mode="dstar")
+    assert metrics["encoder_agreement"] == 1.0, metrics
+    assert abs(metrics["encoder_extra_rate"] - 1 / 6) < 1e-9, metrics
+    assert abs(metrics["encoder_level_error_volume"] - 1 / 3) < 1e-9, metrics
+    assert "encoder_level_error_ad" not in metrics, metrics
+
+
 def check_encoder_tones(board):
     assert board.tone_fields(tone_bits(129, 101)) == (129, 101)
     assert board.tone_fields("0" * 49) is None and board.tone_fields("1" * 88) is None
@@ -365,6 +404,7 @@ def main():
     check_encoder_metrics(board)
     check_tone_aggregation(board)
     check_encoder_tones(board)
+    check_dstar_encoder_tones(board)
     if importlib.util.find_spec("numpy") is None:
         print("NumPy not available: pitch checks skipped")
         return SKIP

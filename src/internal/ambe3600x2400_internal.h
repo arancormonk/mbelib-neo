@@ -61,6 +61,42 @@ mbe_ambe2400_harmonic_count(float f0) {
     return (L < 9) ? 9 : ((L > 56) ? 56 : L);
 }
 
+/*
+ * Tone frame (b0 126) index: bits 6..8 select its three most significant bits
+ * through this table, and its five low bits sit at 9, 42, 43, 10 and 11. The
+ * decoder reads and the encoder writes the index with these.
+ */
+static inline int
+mbe_ambe2400_tone_high_bits(int selector) {
+    static const unsigned char high[8] = {4, 0, 1, 2, 3, 7, 6, 5};
+    return high[selector & 7];
+}
+
+static inline int
+mbe_ambe2400_tone_index(const char* ambe_d) {
+    int selector = (ambe_d[6] << 2) | (ambe_d[7] << 1) | ambe_d[8];
+    return (mbe_ambe2400_tone_high_bits(selector) << 5) | (ambe_d[9] << 4) | (ambe_d[42] << 3) | (ambe_d[43] << 2)
+           | (ambe_d[10] << 1) | ambe_d[11];
+}
+
+/* Write index 0..255 into a tone frame; every selector maps to a distinct
+ * value, so each index has exactly one. */
+static inline void
+mbe_ambe2400_set_tone_index(char* ambe_d, int index) {
+    int selector = 0;
+    while (selector < 7 && mbe_ambe2400_tone_high_bits(selector) != ((index >> 5) & 7)) {
+        selector++;
+    }
+    ambe_d[6] = (char)((selector >> 2) & 1);
+    ambe_d[7] = (char)((selector >> 1) & 1);
+    ambe_d[8] = (char)(selector & 1);
+    ambe_d[9] = (char)((index >> 4) & 1);
+    ambe_d[42] = (char)((index >> 3) & 1);
+    ambe_d[43] = (char)((index >> 2) & 1);
+    ambe_d[10] = (char)((index >> 1) & 1);
+    ambe_d[11] = (char)(index & 1);
+}
+
 struct ambe_dct_cache {
     int inited;
     float ri_cos[9][9];         /* [m][i] for m=1..8, i=1..8 (index 0 unused) */

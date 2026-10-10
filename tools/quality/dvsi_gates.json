@@ -647,5 +647,70 @@
         "value": 0.25
       }
     ]
+  },
+  "dstar-encoder-tones": {
+    "description": "D-STAR encoder tone frames: the tone indices and volumes DVSI's encoder sends for its D-STAR tone vectors, and few tone frames where DVSI sends voice (KNOX tones among them); the AMBE+2 encoder's tone frames and both decoders' tone output unchanged.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_agreement_mean",
+        "rule": "min",
+        "value": 0.95
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_extra_rate_mean",
+        "rule": "max",
+        "value": 0.02
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume_mean",
+        "rule": "max",
+        "value": 0.25
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
   }
 }

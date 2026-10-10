@@ -847,6 +847,12 @@ if(MBELIB_BUILD_TESTS)
     add_executable(test_ambe2400_encoder tests/test_ambe2400_encoder.c)
     # The private Golay encoder is hidden in the shared library.
     target_link_libraries(test_ambe2400_encoder PRIVATE mbe-static)
+    if(NOTONES)
+        target_compile_definitions(
+            test_ambe2400_encoder
+            PRIVATE MBELIB_TEST_NOTONES=1
+        )
+    endif()
     target_include_directories(
         test_ambe2400_encoder
         PRIVATE
