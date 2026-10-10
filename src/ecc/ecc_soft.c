@@ -20,7 +20,8 @@
 #if defined(MBE_ECC_VECTOR)
 typedef uint8_t mbe_ecc_word23[32];
 typedef uint8_t mbe_ecc_word15[16];
-#define MBE_ECC_MASK(v, b) ((uint8_t)(0u - (((v) >> (b)) & 1u)))
+/* Keep constant initializers in byte range; MSVC diagnoses narrowing UINT_MAX. */
+#define MBE_ECC_MASK(v, b) ((uint8_t)((((v) >> (b)) & 1u) * UINT8_MAX))
 #define MBE_ECC_LOW(v)                                                                                                 \
     MBE_ECC_MASK(v, 0), MBE_ECC_MASK(v, 1), MBE_ECC_MASK(v, 2), MBE_ECC_MASK(v, 3), MBE_ECC_MASK(v, 4),                \
         MBE_ECC_MASK(v, 5), MBE_ECC_MASK(v, 6), MBE_ECC_MASK(v, 7), MBE_ECC_MASK(v, 8), MBE_ECC_MASK(v, 9),            \
