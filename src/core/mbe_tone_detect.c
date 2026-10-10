@@ -12,7 +12,9 @@
  *  - The tone must cover at least 45% of the span: 20-sample blocks within
  *    -10 dB of the strongest one mark the active part, which carries the
  *    rest of the test. DVSI's AMBE-3000 sends tone frames from about the
- *    same coverage at a tone's start and end.
+ *    same coverage at a tone's start and end. The part is trimmed to the
+ *    samples the tone plays in, since a tone that starts or stops inside a
+ *    block leaves silent samples there that a steady fit cannot explain.
  *  - A Hann-windowed spectrum must put most of its energy in two peaks, which
  *    rejects most speech cheaply and seeds the frequencies.
  *  - One or two sinusoids are fitted jointly by least squares (the projection
@@ -31,15 +33,15 @@
  *    active part, so a span counts toward a call-progress tone only when the
  *    tone fills it (see mbe_tone_track()).
  *
- * The thresholds come from DVSI's rate-33 tone vectors, where the tone indices
- * match DVSI's on 95% of DVSI's tone frames, and its speech vectors, where
- * DVSI sends no tone frames and neither does this detector.
+ * The thresholds come from DVSI's rate-33 tone vectors, where the encoders
+ * send DVSI's tone index on 98% of DVSI's tone frames, and its speech vectors,
+ * where DVSI sends no tone frames and neither does this detector.
  */
 
 #include "mbe_tone_detect.h"
 
 #include <math.h>
-#include <stddef.h>
+#include <string.h>
 
 #include "mbe_tone.h"
 
@@ -49,6 +51,7 @@
 #define TONE_MIN_ACTIVE           72    /* 45% of the span */
 #define TONE_FLOOR_AMPLITUDE      40.0  /* peak, 16-bit scale */
 #define TONE_ACTIVE_RATIO         0.1   /* block energy relative to the strongest block */
+#define TONE_EDGE_RATIO           0.1   /* edge sample magnitude relative to the active part's largest */
 #define TONE_PEAK_SHARE           0.6   /* energy within two bins of the two largest peaks */
 #define TONE_PURITY_SINGLE_LOW    0.997 /* index below 13 (400 Hz) */
 #define TONE_PURITY_SINGLE        0.98
@@ -192,8 +195,30 @@ tone_refine(const struct tone_span* s, struct tone_fit* fit) {
     }
 }
 
+/* Samples [*lo, *hi) of active blocks first..last, less the samples of the
+ * first and last block before the tone starts or after it ends: those below
+ * TONE_EDGE_RATIO of the largest. A steady fit cannot explain them, so a tone
+ * that starts or stops inside a block would otherwise fail its purity test. */
+static void
+tone_trim_edges(const float span[MBE_TONE_SPAN], int first, int last, int* lo, int* hi) {
+    double top = 0.0;
+    *lo = first * TONE_BLOCK;
+    *hi = (last + 1) * TONE_BLOCK;
+    for (int i = *lo; i < *hi; i++) {
+        top = fmax(top, fabs((double)span[i]));
+    }
+    const double edge = TONE_EDGE_RATIO * top;
+    while (*lo < (first + 1) * TONE_BLOCK && fabs((double)span[*lo]) < edge) {
+        (*lo)++;
+    }
+    while (*hi > last * TONE_BLOCK && fabs((double)span[*hi - 1]) < edge) {
+        (*hi)--;
+    }
+}
+
 /* The active part of the span: from the first to the last 20-sample block
- * within TONE_ACTIVE_RATIO of the strongest. Returns 0 if it is too short. */
+ * within TONE_ACTIVE_RATIO of the strongest, trimmed to the samples the tone
+ * plays in. Returns 0 if it is too short. */
 static int
 tone_active_span(const float span[MBE_TONE_SPAN], struct tone_span* s) {
     double block[TONE_BLOCKS] = {0};
@@ -205,19 +230,23 @@ tone_active_span(const float span[MBE_TONE_SPAN], struct tone_span* s) {
         }
         peak = fmax(peak, block[b]);
     }
-    int first = TONE_BLOCKS;
-    int last = -1;
-    for (int b = 0; b < TONE_BLOCKS; b++) {
-        if (block[b] >= TONE_ACTIVE_RATIO * peak) {
-            first = (b < first) ? b : first;
-            last = b;
-        }
+    /* The strongest block always qualifies, so first <= last. */
+    int first = 0;
+    while (first < TONE_BLOCKS - 1 && block[first] < TONE_ACTIVE_RATIO * peak) {
+        first++;
     }
-    s->x = span + ((size_t)first * TONE_BLOCK);
-    s->n = (last + 1 - first) * TONE_BLOCK;
+    int last = TONE_BLOCKS - 1;
+    while (last > first && block[last] < TONE_ACTIVE_RATIO * peak) {
+        last--;
+    }
+    int lo = 0;
+    int hi = 0;
+    tone_trim_edges(span, first, last, &lo, &hi);
+    s->x = span + lo;
+    s->n = hi - lo;
     s->energy = 0.0;
-    for (int b = first; b <= last; b++) {
-        s->energy += block[b];
+    for (int i = lo; i < hi; i++) {
+        s->energy += (double)span[i] * (double)span[i];
     }
     return s->n >= TONE_MIN_ACTIVE && s->energy > 0.0;
 }
@@ -403,8 +432,10 @@ tone_fit_pair(const struct tone_span* s, const double peaks[2], int peak_count, 
     }
 }
 
-int
-mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_tone_detection* out) {
+/* mbe_tone_detect() for a span whose signal is `samples` long, the rest zero:
+ * the level floor applies to those samples. */
+static int
+tone_detect_part(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], int samples, struct mbe_tone_detection* out) {
     struct tone_span s;
     double peaks[2] = {0.0, 0.0};
     double share = 0.0;
@@ -412,7 +443,7 @@ mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_t
     for (int i = 0; i < MBE_TONE_SPAN; i++) {
         energy += (double)span[i] * (double)span[i];
     }
-    if (energy < MBE_TONE_SPAN * TONE_FLOOR_AMPLITUDE * TONE_FLOOR_AMPLITUDE / 2.0 || !tone_active_span(span, &s)) {
+    if (energy < samples * TONE_FLOOR_AMPLITUDE * TONE_FLOOR_AMPLITUDE / 2.0 || !tone_active_span(span, &s)) {
         return 0;
     }
     int peak_count = tone_peaks(fft, span, peaks, &share);
@@ -446,6 +477,41 @@ mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_t
     return 1;
 }
 
+int
+mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_tone_detection* out) {
+    return tone_detect_part(fft, span, MBE_TONE_SPAN, out);
+}
+
+/* A tone in the newest or the oldest half of span alone, as mbe_tone_detect(). */
+static int
+tone_detect_half(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], int newest, struct mbe_tone_detection* out) {
+    float half[MBE_TONE_SPAN] = {0.0f};
+    const size_t start = newest ? (size_t)(MBE_TONE_SPAN / 2) : 0;
+    memcpy(half + start, span + start, (size_t)(MBE_TONE_SPAN / 2) * sizeof(float));
+    return tone_detect_part(fft, half, MBE_TONE_SPAN / 2, out);
+}
+
+/* The tone in span after a frame with DTMF, KNOX or single tone previous (-1
+ * for none), as mbe_tone_detect(). Where one tone changes directly to another
+ * the span holds both and fits neither, and DVSI's encoders send the newer one
+ * if it fills about half of the span, else the older. So a span without a tone
+ * carries a DTMF or KNOX tone that fills its newest half, or else the previous
+ * tone if that fills the oldest half. Not a single tone in the newest half:
+ * 80 samples of voiced speech can pass for one. */
+static int
+tone_detect_after(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], int previous, struct mbe_tone_detection* out) {
+    int status = mbe_tone_detect(fft, span, out);
+    if (status != 0 || previous < 0) {
+        return status;
+    }
+    status = tone_detect_half(fft, span, 1, out);
+    if (status < 0 || (status > 0 && out->id >= TONE_FIRST_DUAL && out->id < TONE_FIRST_CALL_PROGRESS)) {
+        return status;
+    }
+    status = tone_detect_half(fft, span, 0, out);
+    return (status > 0 && out->id != previous) ? 0 : status;
+}
+
 void
 mbe_tone_tracker_reset(struct mbe_tone_tracker* tracker) {
     tracker->run_id = -1;
@@ -454,24 +520,24 @@ mbe_tone_tracker_reset(struct mbe_tone_tracker* tracker) {
     tracker->sending = 0;
     tracker->last.id = -1;
     tracker->last.amplitude = 0.0f;
+    tracker->tone_id = -1;
 }
 
 int
 mbe_tone_track(struct mbe_tone_tracker* tracker, mbe_fft_plan* fft, const float span[MBE_TONE_SPAN],
                struct mbe_tone_detection* out) {
     struct mbe_tone_detection tone;
-    int status = mbe_tone_detect(fft, span, &tone);
+    int status = tone_detect_after(fft, span, tracker->tone_id, &tone);
     if (status < 0) {
         return status;
     }
     if (status > 0 && tone.id < TONE_FIRST_CALL_PROGRESS) {
         mbe_tone_tracker_reset(tracker);
-        tracker->sending = 1;
-        tracker->hold = MBE_TONE_HOLD;
-        tracker->last = tone;
+        tracker->tone_id = tone.id;
         *out = tone;
         return 1;
     }
+    tracker->tone_id = -1;
     if (status == 0) {
         tracker->run_id = -1;
         tracker->run = 0;

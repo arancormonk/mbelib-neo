@@ -408,9 +408,11 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * it has filled three consecutive 20 ms analysis spans (an 80 ms tone always
  * does; DVSI starts one frame earlier) and for up to two frames after it ends,
  * which a stream that ends with the tone only gets if it encodes them. A DTMF
- * or single tone is sent from its first detection and for one frame after
- * its last, as DVSI's encoder sends the frame in which such a tone ends or
- * changes. KNOX tones, which D-STAR cannot carry, are coded as voice.
+ * or single tone is sent for the frames whose analysis span it fills at least
+ * 45%; where one changes directly to another, the frame whose span holds both
+ * carries the newer tone if it is a DTMF tone filling the span's newest half,
+ * else the older tone if it fills the oldest half, as DVSI's encoder sends
+ * them. KNOX tones, which D-STAR cannot carry, are coded as voice.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
@@ -686,10 +688,12 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  * single tones (TIA-102.BABA-1 Table 9) are sent as tone frames (7.2), timed
  * as in the D-STAR encoder: a call-progress tone once it has filled three
  * consecutive analysis spans and for up to two frames after it ends, and a
- * DTMF, KNOX or single tone from its first detection and for one frame after
- * its last. Like
- * DVSI's encoder it never sends silence or erasure frames: quiet input is
- * coded as low-level voice.
+ * DTMF, KNOX or single tone for the frames whose span it fills at least 45%.
+ * Where one changes directly to another, the frame whose span holds both
+ * carries the newer tone if it is a DTMF or KNOX tone filling the span's
+ * newest half, else the older tone if it fills the oldest half. Like DVSI's
+ * encoder it never sends silence or erasure frames: quiet input is coded as
+ * low-level voice.
  *
  * The state contract is the D-STAR encoder's: initialize with
  * mbe_ambe2450EncoderAlloc() and mbe_initMbeParms(), and after every frame

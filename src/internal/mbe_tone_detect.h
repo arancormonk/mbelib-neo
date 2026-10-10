@@ -36,29 +36,29 @@ struct mbe_tone_detection {
 int mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_tone_detection* out);
 
 /*
- * Call-progress timing, approximating DVSI's encoders: a call-progress tone is
+ * Tone timing, approximating DVSI's encoders: a call-progress tone is
  * sent once it has filled MBE_TONE_CP_CONFIRM consecutive spans (60 ms, which
  * an 80 ms tone always does; DVSI sends none for 40-45 ms bursts), then while
  * it is detected and for up to MBE_TONE_CP_HOLD frames after, as its latest
  * detection. DVSI starts one frame earlier, which needs a detection in the
  * partly filled first span. A DTMF, KNOX or single tone is sent from its first
- * detection, ends that hold, and is sent for MBE_TONE_HOLD frame after its last
- * detection, as DVSI's encoders send the frame in which such a tone ends or
- * changes to another tone: on DVSI's D-STAR tone vectors that frame repeats the
- * previous tone frame (145 of 149 such frames on alltone and alert are
- * bit-identical to it).
+ * detection and ends that hold, and is not held itself: DVSI's encoders send
+ * one for the frames whose span it fills at least 45%, as the detector does.
+ * Where one changes directly to another, the span holding both carries the
+ * newer if it is a DTMF or KNOX tone that fills the newest half of the span,
+ * else the older if it fills the oldest half, as DVSI's encoders send them.
  */
 #define MBE_TONE_CP_CONFIRM 3
 #define MBE_TONE_CP_HOLD    2
-#define MBE_TONE_HOLD       1
 
-/** Per-stream call-progress timing state. */
+/** Per-stream tone timing state. */
 struct mbe_tone_tracker {
     int run_id;                     /* call-progress tone detected in the last frame, or -1 */
     int run;                        /* consecutive frames it has been detected in, at most MBE_TONE_CP_CONFIRM */
     int hold;                       /* frames last may still be sent without a detection */
     int sending;                    /* last is being sent */
-    struct mbe_tone_detection last; /* latest detection of the tone being sent */
+    struct mbe_tone_detection last; /* latest detection of the call-progress tone sent */
+    int tone_id;                    /* DTMF, KNOX or single tone returned for the last frame, or -1 */
 };
 
 void mbe_tone_tracker_reset(struct mbe_tone_tracker* tracker);
