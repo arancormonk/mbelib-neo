@@ -120,6 +120,85 @@ frame decode paths and parameter synthesis paths. The fuzzers run on pull
 requests that change the library, its headers, the fuzz harnesses or the fuzz
 build (`fuzz_targets` in `tools/ci_changed_files.sh`).
 
+## SIMD and replay benchmarks
+
+Build the opt-in benchmarks with the library configuration being measured:
+
+```sh
+cmake --preset dev-release -DMBELIB_BUILD_BENCHMARKS=ON
+cmake --build --preset dev-release -j
+build/dev-release/bench_synth
+build/dev-release/bench_synth steady mixed
+build/dev-release/bench_synth gradual voiced
+build/dev-release/bench_synth jump voiced
+build/dev-release/bench_replay encode ambe2400 3 7 < speech.raw
+build/dev-release/bench_replay hard ambe2450 3 7 < ambe2450.frames
+build/dev-release/bench_replay soft imbe7200 3 7 mixed < imbe7200.frames
+```
+
+`bench_synth [legacy|steady|gradual|jump] [mixed|voiced]` defaults to legacy
+mixed, the original workload, unchanged: w0 jumps between 0.09 and 0.11 at a
+fixed L = 40 (harmonics above Nyquist are skipped by the synthesizer), with no
+warm-up and state carried across runs. The quality A/B runner times
+`bench_synth` without arguments against older builds, so that default must stay
+the same work. In the other workloads every model keeps its harmonics below
+Nyquist: steady and gradual pitch exercise interpolated low harmonics, jumps
+exercise windowed synthesis, and each of ten measured runs starts with the same
+state after one untimed warm-up. Every workload prints the `avg:` line the A/B
+runner reads.
+
+`bench_replay encode|hard|soft ambe2400|ambe2450|imbe7200|imbe7100
+[repeats=1] [runs=7] [uniform|mixed]` loads standard input into memory, then
+allocates the encoder and warms up before timing. Encoding takes mono 8 kHz s16le PCM, zero pads
+a partial last frame and rejects partial samples; ProVoice has no encoder.
+Decoding takes one rectangular, row-major bit row per line: 96 bits for AMBE,
+184 for P25 or 168 for ProVoice, as written by `mbe_quality_reframe` (parameter
+rows are not accepted). Soft replay uses confidence 255 or a reproducible mix
+of all 256 confidence values, including zero. Use channel-error fixtures to
+measure noisy decoding. Inputs are capped at 65,536 frames.
+
+The replay benchmark reports median CPU microseconds per 20 ms frame, excludes
+loading, allocation and stream resets, and checks a checksum against its warm-up
+on every run. Repeats concatenate the input within a run; each run resets the
+encoder, parameter triplet and RNG. Checksumming is included in the timing.
+Pin runs to one CPU when possible and alternate matched baseline/candidate
+builds. Compare identical compiler, fast-math and LTO settings. `-march=x86-64-v3`
+is a separate compile target; portable SIMD builds still require only SSE2 on
+x86 and use NEON only when enabled by the existing target selection. Native ARM
+measurements are required before claiming NEON performance improvements.
+
+The soft ECC codebooks are immutable 32-bit codewords (32 KiB in all) in the
+original enumeration order, with the codeword bit of each data bit. Regenerate
+them with Python 3.10+ using `python3 tools/gen_ecc_codebooks.py >
+src/internal/mbe_ecc_codebooks.h`. Each decode builds small cost tables on the
+stack (data bits by enumeration index, parity bits by value) and starts from
+the cost of the codeword carrying the hard decision's data bits; it skips only
+codewords that cost more, so the result is exactly that of a full scan, ties
+included. Every build uses the same scalar search, with no lazy initialization
+or shared mutable state. `test_ecc` checks every clean codeword, then compares
+1024 pseudo-random inputs per code against an independent oracle that scores
+every codeword, with zero, full, binary, single-bit, small tied, mostly
+confident and random confidences.
+
+`test_simd_numerics` compares tone fits to direct trigonometric projection and
+an independent solver (relative tolerance 1e-9), and, where the target has
+vector voiced kernels, voiced output to the scalar formulas (absolute
+tolerances 3e-5 for unit-scale windowed components and 2e-4 for
+interpolation). It exercises unaligned inputs and scalar tails. Targets
+without vector kernels compile the historical voiced loops in `mbelib.c`
+unchanged, so their PCM stays bit-identical, under x87 excess precision and
+fast-math too; SIMD recurrence batching permits bounded PCM rounding
+differences and has separate Debug goldens. Each SIMD interpolation lane
+seeds from the phase's own cosine and sine, rotated by its offset in double,
+so caller-supplied phases far beyond the decoder's range, up to near the
+largest float, follow the exact phase. `mbe_voiced.c` is compiled with IEEE
+semantics even in fast-math builds, as `mbe_pcm_convert.c` is, since a
+fast-math math library need not reduce huge cos/sin arguments exactly. Phase and RNG updates stay outside
+these kernels. Tone refinement
+trials remain sequential and double precision; ARM32 uses scalar tone fitting.
+Speech analysis sums stay scalar and in order, since vector partial sums
+would change the encoders' bit streams.
+
 ## Speech Quality Evaluation
 
 Developer-only tooling; no new library runtime dependency. CI builds the two

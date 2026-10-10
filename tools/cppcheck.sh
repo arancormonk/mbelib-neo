@@ -31,7 +31,8 @@ Arguments:
 
 Environment:
   CPPCHECK_BUILD_DIR   Build/cache directory used by cppcheck
-                       for cross-translation-unit state (default: .cppcheck-build).
+                       for cross-translation-unit state (default: .cppcheck-build;
+                       --strict defaults to a fresh temporary directory).
 USAGE
 }
 
@@ -74,6 +75,14 @@ cppcheck --version
 
 # Detect number of CPU cores for parallel analysis
 NPROC=$(nproc 2> /dev/null || sysctl -n hw.ncpu 2> /dev/null || echo 4)
+# Strict runs (pre-push, preflight, CI) analyze from scratch, as CI does:
+# cppcheck 2.22 does not report some preprocessor errors, such as an #if it
+# cannot evaluate, when it reuses a file's cached analysis, so a strict run on
+# the persistent cache can pass code that CI rejects.
+if [[ $STRICT -eq 1 && -z "${CPPCHECK_BUILD_DIR:-}" ]]; then
+  CPPCHECK_BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mbelib-cppcheck.XXXXXX")
+  trap 'rm -rf "$CPPCHECK_BUILD_DIR"' EXIT
+fi
 CPPCHECK_BUILD_DIR="${CPPCHECK_BUILD_DIR:-.cppcheck-build}"
 mkdir -p "$CPPCHECK_BUILD_DIR"
 

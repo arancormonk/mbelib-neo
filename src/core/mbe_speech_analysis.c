@@ -47,8 +47,10 @@
 
 #define ANALYSIS_FFT       256
 #define ANALYSIS_BINS      128 /* ANALYSIS_FFT / 2 */
-#define PITCH_MIN          20.0f
-#define PITCH_STEP         0.5f
+#define PITCH_GRID         2   /* candidates per sample of pitch */
+#define PITCH_MIN_GRID     40  /* PITCH_MIN in grid steps */
+#define PITCH_MIN          ((float)PITCH_MIN_GRID / (float)PITCH_GRID)
+#define PITCH_STEP         (1.0f / (float)PITCH_GRID)
 #define LPF_CUTOFF         0.1757 /* cycles per sample (about 1.4 kHz) */
 #define LPF_BETA           4.18
 #define W_I_BETA           5.25
@@ -208,28 +210,48 @@ pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_anal
     return mbe_acf_compute(acf, w->u, span, w->r, MBE_ANALYSIS_PITCH_HALF + 1); /* eq (7) */
 }
 
-static float
-interpolated_r(const struct pitch_work* w, float t) {
-    int base = (int)t;
-    float frac = t - (float)base;
-    if (base >= MBE_ANALYSIS_PITCH_HALF + 1) {
-        return 0.0f;
+/* Candidate i's pitch is (PITCH_MIN_GRID + i) / PITCH_GRID samples, so
+ * quotient and remainder below select eq (8)'s bins and fraction exactly. */
+#define PITCH_SPAN_GRID (MBE_ANALYSIS_PITCH_HALF * PITCH_GRID) /* r's last lag, in grid steps */
+
+/* Pitch candidates in one group share their autocorrelation span, the n with
+ * n * pitch <= MBE_ANALYSIS_PITCH_HALF. Every tap is then at or below r[HALF]
+ * and the +1 interpolation tap at or below r[HALF + 1]. */
+static void
+pitch_error_group(const struct mbe_analysis_tables* t, struct pitch_work* w, float energy, int lo, int hi, int span) {
+    float sums[MBE_ANALYSIS_PITCH_COUNT];
+    for (int i = lo; i < hi; ++i) {
+        sums[i] = w->r[0];
     }
-    return ((1.0f - frac) * w->r[base]) + (frac * w->r[base + 1]); /* eq (8) */
+    for (int n = 1; n <= span; ++n) {
+        for (int i = lo; i < hi; ++i) {
+            int lag = n * (PITCH_MIN_GRID + i); /* n * pitch_of(i), in grid steps */
+            int base = lag / PITCH_GRID;
+            float frac = (float)(lag % PITCH_GRID) / (float)PITCH_GRID;
+            sums[i] += 2.0f * (((1.0f - frac) * w->r[base]) + (frac * w->r[base + 1])); /* r(-t) = r(t) */
+        }
+    }
+    for (int i = lo; i < hi; ++i) {
+        float p = pitch_of(i);
+        float denominator = energy * (1.0f - (p * t->w_i4_sum));
+        /* eq (5); window effects can make it slightly negative, as in the standard. */
+        w->error[i] = (denominator > 1e-6f) ? (energy - (p * sums[i])) / denominator : 1.0f;
+    }
 }
 
 static void
 pitch_errors(const struct mbe_analysis_tables* t, struct pitch_work* w, float energy) {
-    for (int i = 0; i < MBE_ANALYSIS_PITCH_COUNT; ++i) {
-        float p = pitch_of(i);
-        int span = (int)((float)MBE_ANALYSIS_PITCH_HALF / p);
-        float sum = w->r[0];
-        for (int n = 1; n <= span; ++n) {
-            sum += 2.0f * interpolated_r(w, (float)n * p); /* r(-t) = r(t) */
+    int lo = 0;
+    while (lo < MBE_ANALYSIS_PITCH_COUNT) {
+        /* span = floor(HALF / pitch); the group ends at the last candidate
+         * with the same span, so no candidate's taps pass r[HALF + 1]. */
+        int span = PITCH_SPAN_GRID / (PITCH_MIN_GRID + lo);
+        int hi = (span > 0) ? (PITCH_SPAN_GRID / span) - PITCH_MIN_GRID + 1 : MBE_ANALYSIS_PITCH_COUNT;
+        if (hi > MBE_ANALYSIS_PITCH_COUNT) {
+            hi = MBE_ANALYSIS_PITCH_COUNT;
         }
-        float denominator = energy * (1.0f - (p * t->w_i4_sum));
-        /* eq (5); window effects can make it slightly negative, as in the standard. */
-        w->error[i] = (denominator > 1e-6f) ? (energy - (p * sum)) / denominator : 1.0f;
+        pitch_error_group(t, w, energy, lo, hi, span);
+        lo = hi;
     }
 }
 

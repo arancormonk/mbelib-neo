@@ -38,17 +38,20 @@ sources=(
   src/ambe/ambe3600x2450_enc.c
   src/ambe/ambe_common.c
   src/ambe/ambe_encoder.c
+  src/ecc/ecc_soft.c
   src/ecc/ecc.c
   src/ecc/ecc_const.c
   src/imbe/imbe7100x4400.c
   src/imbe/imbe7200x4400.c
   src/imbe/imbe7200x4400_enc.c
   src/core/mbelib.c
+  src/core/mbe_voiced.c
   src/core/mbe_pcm_convert.c
   src/core/mbe_adaptive.c
   src/core/mbe_encoder.c
   src/core/mbe_speech_analysis.c
   src/core/mbe_tone_detect.c
+  src/core/mbe_tone_fit.c
   src/core/mbe_unvoiced_fft.c
   src/external/pffft/pffft.c
   src/external/pffft/fftpack.c

@@ -116,6 +116,18 @@ if(MBELIB_ENABLE_WARNINGS)
     endif()
 endif()
 
+# Debug builds round every multiply and add separately, in the library and in
+# the tests and tools that build its golden fixtures, so the exact golden PCM
+# hashes hold for every compiler: Clang fuses a * b + c into an FMA by default,
+# even at -O0, wherever the target has FMA (x86-64-v3, AArch64), while GCC
+# contracts only when optimizing.
+if(
+    CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+    AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+)
+    add_compile_options($<$<CONFIG:Debug>:-ffp-contract=off>)
+endif()
+
 set(_mbelib_release_like_config
     "$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>"
 )
@@ -258,17 +270,20 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2450_enc.c
     src/ambe/ambe_common.c
     src/ambe/ambe_encoder.c
+    src/ecc/ecc_soft.c
     src/ecc/ecc.c
     src/ecc/ecc_const.c
     src/imbe/imbe7100x4400.c
     src/imbe/imbe7200x4400.c
     src/imbe/imbe7200x4400_enc.c
     src/core/mbelib.c
+    src/core/mbe_voiced.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
     src/core/mbe_encoder.c
     src/core/mbe_speech_analysis.c
     src/core/mbe_tone_detect.c
+    src/core/mbe_tone_fit.c
     src/core/mbe_unvoiced_fft.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
@@ -550,9 +565,14 @@ endif()
 # target options on Makefile/Ninja command lines; the Visual Studio generator
 # maps /fp:precise to the per-file floating-point model instead. The unit also
 # refuses to compile under fast-math (see src/core/mbe_pcm_convert.c).
+# The SIMD voiced kernels seed their oscillators from cos and sin of
+# caller-supplied phases of any size; a fast-math math library need not reduce
+# huge arguments exactly (MSVC /fp:fast returned values off the unit circle),
+# and the kernels themselves are explicit vector code.
 if(_mbelib_ieee_math_options)
     set_source_files_properties(
         src/core/mbe_pcm_convert.c
+        src/core/mbe_voiced.c
         PROPERTIES COMPILE_OPTIONS "${_mbelib_ieee_math_options}"
     )
 endif()
@@ -1420,6 +1440,28 @@ if(MBELIB_BUILD_TESTS)
         unset(_mbelib_bash_version)
     endif()
 
+    add_executable(test_simd_numerics tests/test_simd_numerics.c)
+    target_link_libraries(test_simd_numerics PRIVATE mbe-static)
+    target_include_directories(
+        test_simd_numerics
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    # Select the same private kernels as the library; a target the test sees
+    # without vectors (e.g. 32-bit x86 without SSE2 flags) skips their checks.
+    if(MBELIB_ENABLE_SIMD)
+        target_compile_definitions(
+            test_simd_numerics
+            PRIVATE MBELIB_ENABLE_SIMD=1
+        )
+    endif()
+    if(_SAN_CFLAGS)
+        target_compile_options(test_simd_numerics PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_simd_numerics BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_simd_numerics COMMAND test_simd_numerics)
+
     set(_MBELIB_TEST_TARGETS
         test_api
         test_ecc
@@ -1427,6 +1469,7 @@ if(MBELIB_BUILD_TESTS)
         test_ambe2450_encoder
         test_imbe7200_encoder
         test_speech_analysis
+        test_simd_numerics
         test_noise_determinism
         test_params
         test_frame_paths
@@ -1485,6 +1528,19 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(bench_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_executable(bench_replay bench/bench_replay.c)
+    target_link_libraries(bench_replay PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_replay)
+    target_include_directories(
+        bench_replay
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(bench_replay PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(bench_replay BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_executable(bench_unvoiced bench/bench_unvoiced.c)
     target_link_libraries(bench_unvoiced PRIVATE ${MBELIB_EXEC_LINK_TGT})
