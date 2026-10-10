@@ -260,9 +260,11 @@ main(int argc, char** argv) {
 #include <string.h>
 
 #include "ambe3600x2400_internal.h"
+#include "encoder_test_support.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
 #include "mbe_tone.h"
+#include "mbe_tone_detect.h"
 
 static int
 float_bits_equal(float a, float b) {
@@ -870,7 +872,7 @@ test_reachable_history(mbe_ambe2400_encoder* enc) {
             printf("reachable history after %d repeats was rejected\n", repeats[r]);
             return 1;
         }
-        if (b0_of(d) >= 120) {
+        if (b0_of(d) >= 126) {
             printf("reachable history: b0 %d is not a voice frame\n", b0_of(d));
             return 1;
         }
@@ -1351,6 +1353,65 @@ test_quiet_input(mbe_ambe2400_encoder* enc) {
     return peak > 64.0;
 }
 
+static void*
+dstar_codec_alloc(void) {
+    return mbe_ambe2400EncoderAlloc();
+}
+
+static void
+dstar_codec_reset(void* enc) {
+    mbe_ambe2400EncoderReset(enc);
+}
+
+static void
+dstar_codec_release(void* enc) {
+    mbe_ambe2400EncoderFree(enc);
+}
+
+static int
+dstar_codec_encode(void* enc, const float* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2400Parms(enc, pcm, bits, cur, prev);
+}
+
+static int
+dstar_codec_encode_short(void* enc, const short* pcm, char* bits, mbe_parms* cur, const mbe_parms* prev) {
+    return mbe_encodeAmbe2400ParmsShort(enc, pcm, bits, cur, prev);
+}
+
+static int
+dstar_codec_decode(const char* bits, mbe_parms* cur, mbe_parms* prev) {
+    return mbe_decodeAmbe2400Parms(bits, cur, prev);
+}
+
+static int
+dstar_codec_process(float* out, mbe_process_result* result, const char* bits, mbe_parms* cur, mbe_parms* prev,
+                    mbe_parms* enhanced) {
+    return mbe_processAmbe2400Dataf(out, result, bits, cur, prev, enhanced);
+}
+
+/* The tone index a tone frame (b0 126) carries. */
+static int
+dstar_codec_tone_id(const char* bits) {
+    return (b0_of(bits) == 126) ? mbe_ambe2400_tone_index(bits) : -1;
+}
+
+/* The D-STAR encoder for the shared checks of encoder_test_support.h. It
+ * returns 0 for tone frames too, so tone_id tells them apart. */
+static const struct enc_codec dstar_codec = {
+    "D-STAR",
+    49,
+    -1,
+    dstar_codec_alloc,
+    dstar_codec_reset,
+    dstar_codec_release,
+    dstar_codec_encode,
+    dstar_codec_encode_short,
+    dstar_codec_decode,
+    dstar_codec_process,
+    "1110111111111111111110110010000000000000001111110",
+    dstar_codec_tone_id,
+};
+
 /* Every tone index is written with the selector (bits 6..8) the decoder's
  * original tables map to its three high bits, its low five bits at 9, 42, 43,
  * 10 and 11 and nothing else, and reads back; likewise every volume at bits
@@ -1432,8 +1493,9 @@ tone_frame_ok(const char d[49], int index, const struct tone_case* t) {
 /*
  * Encode 25 frames of a tone; every frame after the first two must be a tone
  * frame with the case's index, cur_mp a copy of prev_mp, and the decoder must
- * play it at the input level. Returns the decoded level (dB on the 16-bit
- * scale) of frames 5 on.
+ * play it at the input level. A call-progress tone fills the span from frame
+ * 1, so it is voice until it has filled MBE_TONE_CP_CONFIRM of them. Returns
+ * the decoded level (dB on the 16-bit scale) of frames 5 on.
  */
 static int
 run_tone(mbe_ambe2400_encoder* enc, const struct tone_case* t, double amplitude, double phase, double* level_db) {
@@ -1457,7 +1519,13 @@ run_tone(mbe_ambe2400_encoder* enc, const struct tone_case* t, double amplitude,
         mbe_parms scratch_cur = dc;
         mbe_parms scratch_prev = dp;
         int index = mbe_decodeAmbe2400Parms(d, &scratch_cur, &scratch_prev);
-        if (frame >= 2) {
+        const int call_progress = t->index >= 144 && t->index <= 147;
+        const int first = call_progress ? MBE_TONE_CP_CONFIRM : 2;
+        if (frame < first && call_progress && b0_of(d) >= 126) {
+            printf("  %s at phase %.2f: frame %d is b0 %d before confirmation\n", t->name, phase, frame, b0_of(d));
+            return 1;
+        }
+        if (frame >= first) {
             if (index != t->index || !tone_frame_ok(d, index, t) || !parms_identical(&ec, &ep)
                 || !(result.flags & MBE_PROCESS_FLAG_TONE)) {
                 printf("  %s at phase %.2f: frame %d is b0 %d, index %d\n", t->name, phase, frame, b0_of(d), index);
@@ -1540,7 +1608,7 @@ test_knox_voice(mbe_ambe2400_encoder* enc) {
             float pcm[160];
             char d[49];
             tone_frame(pcm, frame, &cases[k], 0.1, 0.3);
-            if (mbe_encodeAmbe2400Parms(enc, pcm, d, &ec, &ep) != 0 || b0_of(d) >= 120) {
+            if (mbe_encodeAmbe2400Parms(enc, pcm, d, &ec, &ep) != 0 || b0_of(d) >= 126) {
                 printf("  %s: frame %d is b0 %d\n", cases[k].name, frame, b0_of(d));
                 return 1;
             }
@@ -1745,6 +1813,7 @@ main(void) {
     fails += test_knox_voice(enc);
     fails += test_voice_tone_voice(enc);
     fails += test_tone_bad_history(enc);
+    fails += enc_test_call_progress(&dstar_codec, enc, 144);
     mbe_ambe2400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

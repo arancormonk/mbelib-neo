@@ -404,8 +404,11 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * index 128) for quiet input; this library's decoders play that frame as
  * comfort noise and reset. DTMF, call-progress and single tones are sent as
  * D-STAR tone frames (b0 126, with the tone index and 8-bit volume the decoder
- * plays), where DVSI's encoder sends them; KNOX tones, which D-STAR cannot
- * carry, are coded as voice.
+ * plays), where DVSI's encoder sends them. A call-progress tone is sent once
+ * it has filled three consecutive 20 ms analysis spans (an 80 ms tone always
+ * does; DVSI starts one frame earlier) and for up to two frames after it ends,
+ * which a stream that ends with the tone only gets if it encodes them. KNOX
+ * tones, which D-STAR cannot carry, are coded as voice.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
@@ -678,7 +681,9 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  * mbe_decodeAmbe2450Parms() dequantizes with; as in the D-STAR encoder, a
  * frame quieter than the lowest gain step can play is flattened toward that
  * step's level rather than played louder. DTMF, KNOX, call-progress and
- * single tones (TIA-102.BABA-1 Table 9) are sent as tone frames (7.2). Like
+ * single tones (TIA-102.BABA-1 Table 9) are sent as tone frames (7.2), timed
+ * as in the D-STAR encoder: a call-progress tone once it has filled three
+ * consecutive analysis spans and for up to two frames after it ends. Like
  * DVSI's encoder it never sends silence or erasure frames: quiet input is
  * coded as low-level voice.
  *

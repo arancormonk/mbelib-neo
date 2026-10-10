@@ -35,4 +35,35 @@ struct mbe_tone_detection {
  */
 int mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_tone_detection* out);
 
+/*
+ * Call-progress timing, approximating DVSI's encoders: a call-progress tone is
+ * sent once it has filled MBE_TONE_CP_CONFIRM consecutive spans (60 ms, which
+ * an 80 ms tone always does; DVSI sends none for 40-45 ms bursts), then while
+ * it is detected and for up to MBE_TONE_CP_HOLD frames after, as its latest
+ * detection. DVSI starts one frame earlier, which needs a detection in the
+ * partly filled first span. A DTMF, KNOX or single tone is sent from its first
+ * detection and ends that hold.
+ */
+#define MBE_TONE_CP_CONFIRM 3
+#define MBE_TONE_CP_HOLD    2
+
+/** Per-stream call-progress timing state. */
+struct mbe_tone_tracker {
+    int run_id;                     /* call-progress tone detected in the last frame, or -1 */
+    int run;                        /* consecutive frames it has been detected in, at most MBE_TONE_CP_CONFIRM */
+    int hold;                       /* frames last may still be sent without a detection */
+    int sending;                    /* last is being sent */
+    struct mbe_tone_detection last; /* latest detection of the call-progress tone sent */
+};
+
+void mbe_tone_tracker_reset(struct mbe_tone_tracker* tracker);
+
+/*
+ * Detect a tone in span (as mbe_tone_detect()) and decide what this frame
+ * sends. Returns 1 with *out filled, 0 for voice, or a negative MBE_STATUS_*
+ * value from the FFT, which leaves the tracker unchanged.
+ */
+int mbe_tone_track(struct mbe_tone_tracker* tracker, mbe_fft_plan* fft, const float span[MBE_TONE_SPAN],
+                   struct mbe_tone_detection* out);
+
 #endif /* MBELIB_NEO_INTERNAL_MBE_TONE_DETECT_H */

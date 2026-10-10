@@ -55,6 +55,7 @@
 struct mbe_ambe2450_encoder {
     struct mbe_encoder_frontend fe;
     unsigned char bands_prev[MBE_ANALYSIS_BANDS]; /* last voice frame's band decisions, eq 37 */
+    struct mbe_tone_tracker tones;
 };
 
 static const struct ambe_enc_tables ambe2450_enc_tables = {
@@ -77,6 +78,7 @@ mbe_ambe2450EncoderReset(mbe_ambe2450_encoder* enc) {
     }
     mbe_encoder_frontend_reset(&enc->fe);
     memset(enc->bands_prev, 0, sizeof(enc->bands_prev));
+    mbe_tone_tracker_reset(&enc->tones);
 }
 
 mbe_ambe2450_encoder*
@@ -270,7 +272,8 @@ ambe2450_encode(mbe_ambe2450_encoder* enc, const float* samples, char ambe_d[49]
         return status;
     }
     struct mbe_tone_detection tone;
-    status = mbe_tone_detect(enc->fe.fft, mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, MBE_TONE_OFFSET), &tone);
+    status = mbe_tone_track(&enc->tones, enc->fe.fft,
+                            mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, MBE_TONE_OFFSET), &tone);
     if (status < 0) {
         return status;
     }
@@ -293,10 +296,12 @@ mbe_encodeAmbe2450Parms(mbe_ambe2450_encoder* enc, const float* samples, char am
     }
     /* A frame that fails (a history whose model would overflow) leaves no trace. */
     const struct mbe_analysis_state saved = enc->fe.analysis;
+    const struct mbe_tone_tracker saved_tones = enc->tones;
     mbe_parms out = *cur_mp;
     int status = ambe2450_encode(enc, samples, ambe_d, &out, prev_mp);
     if (status < 0) {
         enc->fe.analysis = saved;
+        enc->tones = saved_tones;
         return status;
     }
     *cur_mp = out;

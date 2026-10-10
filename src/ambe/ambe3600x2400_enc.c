@@ -76,6 +76,7 @@
  * are computed once at allocation and kept across resets. */
 struct mbe_ambe2400_encoder {
     struct mbe_encoder_frontend fe;
+    struct mbe_tone_tracker tones;
 };
 
 static const struct ambe_enc_tables ambe2400_enc_tables = {
@@ -97,6 +98,7 @@ mbe_ambe2400EncoderReset(mbe_ambe2400_encoder* enc) {
         return;
     }
     mbe_encoder_frontend_reset(&enc->fe);
+    mbe_tone_tracker_reset(&enc->tones);
 }
 
 mbe_ambe2400_encoder*
@@ -109,6 +111,7 @@ mbe_ambe2400EncoderAlloc(void) {
         free(enc);
         return NULL;
     }
+    mbe_tone_tracker_reset(&enc->tones);
     return enc;
 }
 
@@ -372,8 +375,8 @@ ambe2400_enc_pack_tone(int index, int volume, char ambe_d[49]) {
 static int
 ambe2400_encode_tone(mbe_ambe2400_encoder* enc, char ambe_d[49]) {
     struct mbe_tone_detection tone;
-    int status =
-        mbe_tone_detect(enc->fe.fft, mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, MBE_TONE_OFFSET), &tone);
+    int status = mbe_tone_track(&enc->tones, enc->fe.fft,
+                                mbe_analysis_span(&enc->fe.analysis, MBE_TONE_SPAN, MBE_TONE_OFFSET), &tone);
     if (status <= 0) {
         return status;
     }
@@ -415,10 +418,12 @@ mbe_encodeAmbe2400Parms(mbe_ambe2400_encoder* enc, const float* samples, char am
     }
     /* A frame that fails (a history whose model would overflow) leaves no trace. */
     const struct mbe_analysis_state saved = enc->fe.analysis;
+    const struct mbe_tone_tracker saved_tones = enc->tones;
     mbe_parms out = *cur_mp;
     int status = ambe2400_encode(enc, samples, ambe_d, &out, prev_mp);
     if (status < 0) {
         enc->fe.analysis = saved;
+        enc->tones = saved_tones;
         return status;
     }
     *cur_mp = out;

@@ -712,5 +712,68 @@
         "worst": 0.0
       }
     ]
+  },
+  "call-progress-timing": {
+    "description": "Call-progress tones sent once they fill three spans and held two frames after, as DVSI's encoders send them: no vector gets many tone frames where DVSI sends voice (the 40-45 ms bursts of cpvbad got 45 frames), agreement with DVSI's tone frames does not fall, levels hold, and both decoders' tone output is unchanged.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "max",
+        "value": 0.03
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "no_increase"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad_mean",
+        "rule": "max",
+        "value": 0.25
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume_mean",
+        "rule": "max",
+        "value": 0.25
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
   }
 }
