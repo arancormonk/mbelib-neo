@@ -197,6 +197,95 @@ mbe_xorshift32(void) {
     return mbe_rng_state;
 }
 
+#if !defined(MBE_VOICED_KERNELS)
+/*
+ * Targets without vector voiced kernels keep the historical voiced synthesis
+ * unchanged: these helpers and the render loops below are the original scalar
+ * code, so its rounding points and expression shapes, and thus its PCM, stay
+ * the same under x87 excess precision and fast-math reassociation too.
+ */
+static inline void
+mbe_fill_voiced_cos_block4(float* restrict cblk, float* restrict c, float* restrict s, float sd, float cd) {
+    float cc = *c;
+    float ss = *s;
+
+    for (int k = 0; k < 4; ++k) {
+        cblk[k] = cc;
+        float cpn = (cc * cd) - (ss * sd);
+        float spn = (ss * cd) + (cc * sd);
+        cc = cpn;
+        ss = spn;
+    }
+
+    *c = cc;
+    *s = ss;
+}
+
+/**
+ * @brief Add four voiced samples to the output using oscillator recurrence.
+ *
+ * Generates four consecutive cosine samples from the current oscillator state,
+ * multiplies by window `W[0..3]` and gain `gain`, and accumulates into
+ * `Ss[0..3]`. `gain` already includes the JMBE `2.0f` voiced multiplier.
+ *
+ * @param Ss Output sample pointer (adds to Ss[0..3]).
+ * @param W  Window values for these four samples.
+ * @param gain Voiced gain for this band/component, including the `2.0f` factor.
+ * @param c  In/out cosine register.
+ * @param s  In/out sine register.
+ * @param sd sin(Δθ) per step.
+ * @param cd cos(Δθ) per step.
+ */
+/** @internal @ingroup mbe_internal */
+static inline void
+mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float gain, float* restrict c, float* restrict s,
+                      float sd, float cd) {
+    float cblk[4];
+    mbe_fill_voiced_cos_block4(cblk, c, s, sd, cd);
+
+    Ss[0] += gain * W[0] * cblk[0];
+    Ss[1] += gain * W[1] * cblk[1];
+    Ss[2] += gain * W[2] * cblk[2];
+    Ss[3] += gain * W[3] * cblk[3];
+}
+
+/**
+ * @brief Add previous/current voiced contributions in one 4-sample block.
+ *
+ * This preserves the historical add order (`prev`, then `cur`) while avoiding
+ * a second load/store of the output buffer when both voiced components are
+ * active for the same harmonic.
+ */
+typedef struct mbe_voiced_block_component {
+    const float* W;
+    float gain;
+    float* c;
+    float* s;
+    float sd;
+    float cd;
+} mbe_voiced_block_component;
+
+/** @internal @ingroup mbe_internal */
+static inline void
+mbe_add_voiced_dual_block4(float* restrict Ss, const mbe_voiced_block_component* restrict prev,
+                           const mbe_voiced_block_component* restrict cur) {
+    float prev_cblk[4];
+    float cur_cblk[4];
+
+    mbe_fill_voiced_cos_block4(prev_cblk, prev->c, prev->s, prev->sd, prev->cd);
+    mbe_fill_voiced_cos_block4(cur_cblk, cur->c, cur->s, cur->sd, cur->cd);
+
+    Ss[0] += prev->gain * prev->W[0] * prev_cblk[0];
+    Ss[1] += prev->gain * prev->W[1] * prev_cblk[1];
+    Ss[2] += prev->gain * prev->W[2] * prev_cblk[2];
+    Ss[3] += prev->gain * prev->W[3] * prev_cblk[3];
+    Ss[0] += cur->gain * cur->W[0] * cur_cblk[0];
+    Ss[1] += cur->gain * cur->W[1] * cur_cblk[1];
+    Ss[2] += cur->gain * cur->W[2] * cur_cblk[2];
+    Ss[3] += cur->gain * cur->W[3] * cur_cblk[3];
+}
+#endif
+
 /** @} */ /* end of mbe_internal */
 
 const char*
@@ -914,6 +1003,7 @@ mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N) {
     }
 }
 
+#if defined(MBE_VOICED_KERNELS)
 static void
 mbe_render_voiced_interpolated(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N,
                                float cw0, float pw0, float pw0l) {
@@ -930,6 +1020,75 @@ mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_p
     const struct mbe_voiced_component cur = {cur_mp->PHIl[l] - cw0l * (float)N, cw0l, 2.0f * cur_mp->Ml[l], cur_voiced};
     mbe_voiced_windowed(aout_buf, Ws, &prev, &cur);
 }
+
+#else
+static void
+mbe_render_voiced_interpolated(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N,
+                               float cw0, float pw0, float pw0l) {
+    float* Ss = aout_buf;
+    float deltaphil = cur_mp->PHIl[l] - prev_mp->PHIl[l] - (((pw0 + cw0) * (float)(l * N)) / 2.0f);
+    float deltawl = (1.0f / (float)N)
+                    * (deltaphil - (2.0f * (float)M_PI * floorf((deltaphil + (float)M_PI) / (2.0f * (float)M_PI))));
+
+    for (int n = 0; n < N; n++) {
+        float thetaln =
+            prev_mp->PHIl[l] + ((pw0l + deltawl) * (float)n) + (((cw0 - pw0) * (float)(l * n * n)) / (float)(2 * N));
+        float aln = prev_mp->Ml[l] + (((float)n / (float)N) * (cur_mp->Ml[l] - prev_mp->Ml[l]));
+        *Ss += 2.0f * aln * cosf(thetaln);
+        Ss++;
+    }
+}
+
+static void
+mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N, float cw0l,
+                           float pw0l, int cur_voiced, int prev_voiced) {
+    float* Ss = aout_buf;
+
+    if (prev_voiced && cur_voiced) {
+        const float gain_prev = 2.0f * prev_mp->Ml[l];
+        float sd_prev, cd_prev;
+        mbe_sincosf(pw0l, &sd_prev, &cd_prev);
+        float s_prev, c_prev;
+        mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
+
+        const float gain_cur = 2.0f * cur_mp->Ml[l];
+        float sd_cur, cd_cur;
+        mbe_sincosf(cw0l, &sd_cur, &cd_cur);
+        float s_cur, c_cur;
+        mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
+
+        for (int n = 0; n < N; n += 4) {
+            const mbe_voiced_block_component prev_component = {Ws + n + N, gain_prev, &c_prev,
+                                                               &s_prev,    sd_prev,   cd_prev};
+            const mbe_voiced_block_component cur_component = {Ws + n, gain_cur, &c_cur, &s_cur, sd_cur, cd_cur};
+            mbe_add_voiced_dual_block4(Ss, &prev_component, &cur_component);
+            Ss += 4;
+        }
+    } else if (prev_voiced) {
+        const float gain_prev = 2.0f * prev_mp->Ml[l];
+        float sd_prev, cd_prev;
+        mbe_sincosf(pw0l, &sd_prev, &cd_prev);
+        float s_prev, c_prev;
+        mbe_sincosf(prev_mp->PHIl[l], &s_prev, &c_prev);
+
+        for (int n = 0; n < N; n += 4) {
+            mbe_add_voiced_block4(Ss, Ws + n + N, gain_prev, &c_prev, &s_prev, sd_prev, cd_prev);
+            Ss += 4;
+        }
+    } else if (cur_voiced) {
+        const float gain_cur = 2.0f * cur_mp->Ml[l];
+        float sd_cur, cd_cur;
+        mbe_sincosf(cw0l, &sd_cur, &cd_cur);
+        float s_cur, c_cur;
+        mbe_sincosf(cur_mp->PHIl[l] - (cw0l * (float)N), &s_cur, &c_cur);
+
+        for (int n = 0; n < N; n += 4) {
+            mbe_add_voiced_block4(Ss, Ws + n, gain_cur, &c_cur, &s_cur, sd_cur, cd_cur);
+            Ss += 4;
+        }
+    }
+}
+#endif
 
 static void
 mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int maxl, int N) {
@@ -967,7 +1126,9 @@ static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
                          float pre_enh_rm0, enum mbe_mute_noise mute_noise) {
 
-    const int N = 160;
+    /* One frame length for the phase arithmetic, the window Ws and the
+     * voiced kernels, which process exactly MBE_VOICED_FRAME samples. */
+    const int N = MBE_VOICED_FRAME;
 
     if (MBE_UNLIKELY(!aout_buf)) {
         return;

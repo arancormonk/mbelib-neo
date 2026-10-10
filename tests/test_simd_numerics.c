@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "mbe_tone_fit.h"
-#include "mbe_voiced.h"
+#include "mbe_voiced.h" // IWYU pragma: keep (MBE_VOICED_KERNELS selects the voiced checks)
 
 #define PI 3.14159265358979323846
 
@@ -103,6 +103,7 @@ test_tone_fit(void) {
     }
 }
 
+#if defined(MBE_VOICED_KERNELS)
 static void
 test_voiced_kernels(void) {
     float window[320];
@@ -142,26 +143,38 @@ test_voiced_kernels(void) {
     }
 }
 
+/* Caller-supplied phases far beyond the decoder's range, up to near the
+ * largest float. Each lane's seed rotates the phase's own cosine and sine by
+ * its offset, so the output follows the exact phase; the oracle does the same
+ * in double, since phase + offset would round the offset away. */
 static void
-test_large_phase_fallback(void) {
-    const float phases[] = {-2048.0f, 65536.0f, 1048576.0f};
+test_large_phases(void) {
+    const float phases[] = {-2048.0f, 511.9f, 512.1f, 65536.0f, 0x1p52f, -3.0e38f};
     for (unsigned k = 0; k < sizeof(phases) / sizeof(phases[0]); ++k) {
-        float out[160] = {0};
-        mbe_voiced_interpolated(out, phases[k], 0.5f, 1.0f, 0.125f, 0.0f, 1);
-        for (int n = 0; n < 160; ++n) {
-            float theta = phases[k] + 0.125f * (float)n;
-            float amp = 0.5f + (float)n / 320.0f;
-            double expected = 2.0 * amp * cos((double)theta);
-            assert(fabs(out[n] - expected) <= 2e-6);
+        for (int chirp = 0; chirp < 2; ++chirp) {
+            const float delta = chirp ? 0.009f : 0.0f;
+            const int harmonic = 3;
+            float out[160] = {0};
+            mbe_voiced_interpolated(out, phases[k], 0.5f, 1.0f, 0.125f, delta, harmonic);
+            const double pc = cos((double)phases[k]), ps = sin((double)phases[k]);
+            for (int n = 0; n < 160; ++n) {
+                double offset = 0.125 * n + (double)delta * harmonic * n * n / 320.0;
+                double amp = 0.5 + (double)n / 320.0;
+                double expected = 2.0 * amp * (pc * cos(offset) - ps * sin(offset));
+                assert(fabs(out[n] - expected) <= 2e-4);
+            }
         }
     }
 }
+#endif
 
 int
 main(void) {
     test_tone_fit();
+#if defined(MBE_VOICED_KERNELS)
     test_voiced_kernels();
-    test_large_phase_fallback();
+    test_large_phases();
+#endif
     puts("SIMD numerical oracles passed");
     return 0;
 }

@@ -1429,6 +1429,14 @@ if(MBELIB_BUILD_TESTS)
         test_simd_numerics
         PRIVATE "${PROJECT_SOURCE_DIR}/src/internal"
     )
+    # Select the same private kernels as the library; a target the test sees
+    # without vectors (e.g. 32-bit x86 without SSE2 flags) skips their checks.
+    if(MBELIB_ENABLE_SIMD)
+        target_compile_definitions(
+            test_simd_numerics
+            PRIVATE MBELIB_ENABLE_SIMD=1
+        )
+    endif()
     if(_SAN_CFLAGS)
         target_compile_options(test_simd_numerics PRIVATE ${_SAN_CFLAGS})
     endif()
