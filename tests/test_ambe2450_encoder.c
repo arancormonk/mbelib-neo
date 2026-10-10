@@ -12,6 +12,7 @@
 #include "ambe_encoder.h"
 #include "encoder_test_support.h"
 #include "mbe_speech_analysis.h"
+#include "mbe_tone_detect.h"
 #include "mbelib-neo/mbelib.h"
 
 static void*
@@ -50,6 +51,19 @@ codec_process(float* out, mbe_process_result* result, const char* bits, mbe_parm
     return mbe_processAmbe2450Dataf(out, result, bits, cur, prev, enhanced);
 }
 
+/* The Table 9 index a tone frame carries (7.2 Table 10, bits 12..19). */
+static int
+codec_tone_id(const char* bits) {
+    int id = 0;
+    if (mbe_classifyAmbe2450Frame(bits) != MBE_AMBE2450_FRAME_TONE) {
+        return -1;
+    }
+    for (int i = 12; i < 20; i++) {
+        id = (id << 1) | bits[i];
+    }
+    return id;
+}
+
 /* Repeated, this voice frame takes the decoder's log2Ml to 32.3, about the
  * highest a search over repeated frames found. */
 static const struct enc_codec ambe2450_codec = {
@@ -64,6 +78,7 @@ static const struct enc_codec ambe2450_codec = {
     codec_decode,
     codec_process,
     "1100100011111110000110100000010101001100010110110",
+    codec_tone_id,
 };
 
 static void
@@ -273,7 +288,9 @@ tone_id_of(const char d[49]) {
 /*
  * Encode 25 frames of a tone; every frame after the first two must be a tone
  * frame with the right index and a self-consistent Table 10 layout, cur_mp a
- * copy of prev_mp, and the decoder must play it at about the input level.
+ * copy of prev_mp, and the decoder must play it at about the input level. A
+ * call-progress tone fills the span from frame 1, so it is voice until it has
+ * filled MBE_TONE_CP_CONFIRM of them.
  */
 static int
 run_tone(void* enc, const struct tone_case* t, double amplitude, double phase, double* level_db) {
@@ -293,7 +310,12 @@ run_tone(void* enc, const struct tone_case* t, double amplitude, double phase, d
         if (mbe_processAmbe2450Dataf(out, &result, d, &dc, &dp, &dh) < 0) {
             return 1;
         }
-        if (frame >= 2) {
+        const int first = (t->id >= 160) ? MBE_TONE_CP_CONFIRM : 2;
+        if (frame < first && t->id >= 160 && r != MBE_AMBE2450_FRAME_VOICE) {
+            printf("  %s at phase %.2f: frame %d returned %d before confirmation\n", t->name, phase, frame, r);
+            return 1;
+        }
+        if (frame >= first) {
             if (r != MBE_AMBE2450_FRAME_TONE || tone_id_of(d) != t->id || !enc_parms_identical(&ec, &ep)
                 || mbe_classifyAmbe2450Frame(d) != MBE_AMBE2450_FRAME_TONE || !(result.flags & MBE_PROCESS_FLAG_TONE)) {
                 printf("  %s at phase %.2f: frame %d returned %d, id %d\n", t->name, phase, frame, r, tone_id_of(d));
@@ -438,7 +460,8 @@ test_voice_tone_voice(void* enc) {
 
 /* A tone frame returns the history as its model, so a history whose model is
  * not finite (w0 or an amplitude) is rejected there too, with cur_mp and the
- * stream untouched. */
+ * stream untouched. The rejected frame is louder than the one retried, so an
+ * analysis it left behind would change the stream. */
 static int
 test_tone_bad_history(void* enc) {
     static const struct tone_case tone = {1000, 0, 32, "1000 Hz"};
@@ -456,6 +479,8 @@ test_tone_bad_history(void* enc) {
                     mbe_parms bad = prev;
                     const mbe_parms before = cur;
                     char unused[49];
+                    float louder[160];
+                    tone_frame(louder, f, &tone, 0.11, 0.0);
                     if (b == 0) {
                         bad.w0 = NAN;
                     } else if (b == 1) {
@@ -463,7 +488,7 @@ test_tone_bad_history(void* enc) {
                     } else {
                         bad.log2Ml[2] = -INFINITY;
                     }
-                    if (mbe_encodeAmbe2450Parms(enc, pcm, unused, &cur, &bad) != MBE_STATUS_INVALID_ARGUMENT
+                    if (mbe_encodeAmbe2450Parms(enc, louder, unused, &cur, &bad) != MBE_STATUS_INVALID_ARGUMENT
                         || !enc_parms_identical(&cur, &before)) {
                         printf("tone bad history %d was not rejected cleanly\n", b);
                         return 1;
@@ -543,6 +568,7 @@ main(void) {
     fails += test_tone_limits(enc);
     fails += test_voice_tone_voice(enc);
     fails += test_tone_bad_history(enc);
+    fails += enc_test_call_progress(&ambe2450_codec, enc, 160);
     mbe_ambe2450EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

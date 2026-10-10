@@ -31,7 +31,8 @@ struct enc_codec {
     int (*decode)(const char* bits, mbe_parms* cur, mbe_parms* prev);
     int (*process)(float* out, mbe_process_result* result, const char* bits, mbe_parms* cur, mbe_parms* prev,
                    mbe_parms* enhanced);
-    const char* peak_frame; /* parameter bits ('0'/'1') whose repetition takes the decoder's log2Ml highest */
+    const char* peak_frame;           /* parameter bits ('0'/'1') whose repetition takes the decoder's log2Ml highest */
+    int (*tone_id)(const char* bits); /* the tone index a tone frame carries, else -1; NULL without tone frames */
 };
 
 static uint32_t enc_rng = 0x2450u;
@@ -780,6 +781,145 @@ enc_test_flush(const struct enc_codec* c, void* enc) {
     }
     printf("%s flush: model energy before the burst %.3g, after one zero frame %.3g\n", c->name, energy[9], energy[11]);
     return energy[11] < 100.0 * (energy[9] + 1e-6);
+}
+
+/* A frame of a dial tone (350 + 440 Hz) of the given peak per component over
+ * stream samples [on, off), silent elsewhere; then from samples at and after
+ * dtmf_on, DTMF 5 (770 + 1336 Hz) at the same level. */
+static inline void
+enc_dial_frame(float pcm[160], int frame, int on, int off, int dtmf_on, double peak) {
+    for (int i = 0; i < 160; i++) {
+        int n = (frame * 160) + i;
+        double t = (double)n / 8000.0;
+        double v = 0.0;
+        if (n >= on && n < off) {
+            v = sin(2.0 * M_PI * 350.0 * t) + sin(2.0 * M_PI * 440.0 * t);
+        } else if (dtmf_on >= 0 && n >= dtmf_on) {
+            v = sin(2.0 * M_PI * 770.0 * t) + sin(2.0 * M_PI * 1336.0 * t);
+        }
+        pcm[i] = (float)(peak * v);
+    }
+}
+
+/* Encode `frames` frames of enc_dial_frame() input; ids[f] is the tone index
+ * frame f carries, or -1. If bad_at >= 0, a louder copy of that frame is first
+ * offered with a finite history whose model overflows (log2 +1000 over the
+ * lower half of the harmonics, -1000 above), which voice and tone frames alike
+ * reject after their analysis. */
+static inline int
+enc_dial_run(const struct enc_codec* c, void* enc, int on, int off, int dtmf_on, int frames, int bad_at, int ids[],
+             char bits[][88]) {
+    mbe_parms cur, prev, enhanced;
+    c->reset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < frames; f++) {
+        float pcm[160];
+        if (f == bad_at) {
+            mbe_parms bad = prev;
+            const mbe_parms before = cur;
+            enc_dial_frame(pcm, f, on, off, dtmf_on, 0.11);
+            for (int l = 0; l <= 56; l++) {
+                bad.log2Ml[l] = (2 * l <= bad.L) ? 1000.0f : -1000.0f;
+            }
+            if (c->encode(enc, pcm, bits[f], &cur, &bad) != MBE_STATUS_INVALID_ARGUMENT
+                || !enc_parms_identical(&cur, &before)) {
+                printf("%s call progress: the bad history at frame %d was not rejected cleanly\n", c->name, f);
+                return 1;
+            }
+        }
+        enc_dial_frame(pcm, f, on, off, dtmf_on, 0.1);
+        if (c->encode(enc, pcm, bits[f], &cur, &prev) < 0) {
+            return 1;
+        }
+        ids[f] = c->tone_id(bits[f]);
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    return 0;
+}
+
+/*
+ * Call-progress timing (mbe_tone_track()): a dial tone (Table 9 index 160,
+ * D-STAR 144, passed as dial) is sent once it has filled three spans and held
+ * two frames after. 45 ms bursts never are, at any alignment; an 80 ms tone is
+ * sent for frames 7..9; a frame rejected during confirmation leaves the
+ * stream unchanged; a 20 ms dropout is bridged; DTMF 5 (index 133 in both
+ * codecs) that follows is sent from its first detection.
+ */
+static inline int
+enc_test_call_progress(const struct enc_codec* c, void* enc, int dial) {
+    enum { FRAMES = 40 };
+
+    int ids[FRAMES];
+    int again[FRAMES];
+    static char bits[FRAMES][88];
+    static char replay[FRAMES][88];
+    for (int shift = 0; shift < 160; shift += 20) {
+        if (enc_dial_run(c, enc, 800 + shift, 1160 + shift, -1, 14, -1, ids, bits) != 0) {
+            return 1;
+        }
+        for (int f = 0; f < 14; f++) {
+            if (ids[f] >= 0) {
+                printf("%s call progress: a 45 ms burst (shift %d) sent tone %d at frame %d\n", c->name, shift, ids[f],
+                       f);
+                return 1;
+            }
+        }
+    }
+    if (enc_dial_run(c, enc, 640, 1280, -1, 14, -1, ids, bits) != 0
+        || enc_dial_run(c, enc, 640, 1280, -1, 14, 6, again, replay) != 0) {
+        return 1;
+    }
+    for (int f = 0; f < 14; f++) {
+        if (ids[f] != ((f >= 7 && f <= 9) ? dial : -1) || memcmp(bits[f], replay[f], (size_t)c->bits) != 0) {
+            printf("%s call progress: 80 ms tone frame %d carries %d, replay %s\n", c->name, f, ids[f],
+                   memcmp(bits[f], replay[f], (size_t)c->bits) ? "differs" : "matches");
+            return 1;
+        }
+    }
+    {
+        /* A dial tone over frames 0..29 with frame 15 (2400..2559) silent. */
+        int dropout[34];
+        static char dropout_bits[34][88];
+        mbe_parms cur, prev, enhanced;
+        c->reset(enc);
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int f = 0; f < 34; f++) {
+            float pcm[160];
+            enc_dial_frame(pcm, f, 0, 4800, -1, 0.1);
+            for (int i = 0; i < 160; i++) {
+                int n = (f * 160) + i;
+                pcm[i] = (n >= 2400 && n < 2560) ? 0.0f : pcm[i];
+            }
+            if (c->encode(enc, pcm, dropout_bits[f], &cur, &prev) < 0) {
+                return 1;
+            }
+            dropout[f] = c->tone_id(dropout_bits[f]);
+            mbe_moveMbeParms(&cur, &prev);
+            if (dropout[f] != ((f >= 3 && f <= 31) ? dial : -1)) {
+                printf("%s call progress: with a 20 ms dropout, frame %d carries %d\n", c->name, f, dropout[f]);
+                return 1;
+            }
+        }
+    }
+    if (enc_dial_run(c, enc, 0, 3200, 3200, FRAMES, -1, ids, bits) != 0) {
+        return 1;
+    }
+    int first_dtmf = -1;
+    for (int f = 0; f < FRAMES; f++) {
+        if (first_dtmf < 0 && ids[f] == 133) {
+            first_dtmf = f;
+        }
+        if (first_dtmf >= 0 && ids[f] != 133) {
+            printf("%s call progress: frame %d after DTMF carries %d\n", c->name, f, ids[f]);
+            return 1;
+        }
+    }
+    if (first_dtmf < 20 || first_dtmf > 21) {
+        printf("%s call progress: DTMF after the dial tone first sent at frame %d\n", c->name, first_dtmf);
+        return 1;
+    }
+    printf("%s call progress: sent after three spans and held two frames; 45 ms bursts are voice\n", c->name);
+    return 0;
 }
 
 static inline int

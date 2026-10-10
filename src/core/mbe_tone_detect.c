@@ -27,9 +27,12 @@
  *    call-progress pair within 15% (DVSI sends 340 + 550 Hz as 350 + 490 Hz).
  *  - The level of a pair is the mean of its components' levels in dB, which
  *    is how DVSI's AD follows twisted DTMF.
+ *  - A call-progress pair must also explain the whole span, not just its
+ *    active part, so a span counts toward a call-progress tone only when the
+ *    tone fills it (see mbe_tone_track()).
  *
  * The thresholds come from DVSI's rate-33 tone vectors, where the tone indices
- * match DVSI's on 94% of DVSI's tone frames, and its speech vectors, where
+ * match DVSI's on 95% of DVSI's tone frames, and its speech vectors, where
  * DVSI sends no tone frames and neither does this detector.
  */
 
@@ -430,7 +433,63 @@ mbe_tone_detect(mbe_fft_plan* fft, const float span[MBE_TONE_SPAN], struct mbe_t
     if (id < 0) {
         return 0;
     }
+    if (id >= TONE_FIRST_CALL_PROGRESS) {
+        struct tone_span whole = {span, MBE_TONE_SPAN, energy};
+        struct tone_fit fit = pair;
+        tone_project(&whole, &fit);
+        if (!(fit.explained >= TONE_PURITY_CALL_PROGRESS * energy)) {
+            return 0;
+        }
+    }
     out->id = id;
     out->amplitude = (float)sqrt(pair.amplitude[0] * pair.amplitude[1]);
     return 1;
+}
+
+void
+mbe_tone_tracker_reset(struct mbe_tone_tracker* tracker) {
+    tracker->run_id = -1;
+    tracker->run = 0;
+    tracker->hold = 0;
+    tracker->sending = 0;
+    tracker->last.id = -1;
+    tracker->last.amplitude = 0.0f;
+}
+
+int
+mbe_tone_track(struct mbe_tone_tracker* tracker, mbe_fft_plan* fft, const float span[MBE_TONE_SPAN],
+               struct mbe_tone_detection* out) {
+    struct mbe_tone_detection tone;
+    int status = mbe_tone_detect(fft, span, &tone);
+    if (status < 0) {
+        return status;
+    }
+    if (status > 0 && tone.id < TONE_FIRST_CALL_PROGRESS) {
+        mbe_tone_tracker_reset(tracker);
+        *out = tone;
+        return 1;
+    }
+    if (status == 0) {
+        tracker->run_id = -1;
+        tracker->run = 0;
+    } else if (tone.id != tracker->run_id) {
+        tracker->run_id = tone.id;
+        tracker->run = 1;
+    } else if (tracker->run < MBE_TONE_CP_CONFIRM) {
+        tracker->run++;
+    }
+    if (status > 0 && ((tracker->sending && tone.id == tracker->last.id) || tracker->run >= MBE_TONE_CP_CONFIRM)) {
+        tracker->sending = 1;
+        tracker->hold = MBE_TONE_CP_HOLD;
+        tracker->last = tone;
+        *out = tone;
+        return 1;
+    }
+    if (tracker->sending && tracker->hold > 0) {
+        tracker->hold--;
+        *out = tracker->last;
+        return 1;
+    }
+    tracker->sending = 0;
+    return 0;
 }

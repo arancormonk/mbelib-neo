@@ -65,6 +65,7 @@ static const struct enc_codec imbe_codec = {
     codec_decode,
     codec_process,
     "0100101111111111111111111100111111111110010000111101001001111111111111110101100001001011",
+    NULL,
 };
 
 /* Every data word encodes to a codeword the decoder accepts unchanged, and
