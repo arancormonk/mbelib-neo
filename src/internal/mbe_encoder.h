@@ -36,9 +36,14 @@ void mbe_encoder_frontend_close(struct mbe_encoder_frontend* fe);
 /* Restore the freshly opened analysis state (the tables are kept). */
 void mbe_encoder_frontend_reset(struct mbe_encoder_frontend* fe);
 
-/* Finite and within +-2^20, checked on the bit pattern read from memory so the
- * test survives fast-math. One bad sample would otherwise poison the DC filter and the
- * analysis history for the rest of the stream. */
+/* Whether every sample is finite and of magnitude at most 2^20. The test
+ * compares the IEEE 754 bit pattern, read from memory, against that bound
+ * rather than using isfinite() or floating-point comparisons, because the
+ * library may be compiled with MBELIB_ENABLE_FAST_MATH (-ffast-math,
+ * /fp:fast), under which the compiler may assume that no value is NaN or
+ * infinite and remove such tests (see mbe_encoder.c). A single invalid sample
+ * would otherwise corrupt the DC filter and the analysis history for the
+ * remainder of the stream. */
 int mbe_encoder_samples_valid(const float samples[MBE_ENCODER_SAMPLES]);
 
 /* The prediction history the encoders read from the caller's prev_mp
