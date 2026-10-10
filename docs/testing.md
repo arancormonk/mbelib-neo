@@ -120,6 +120,47 @@ frame decode paths and parameter synthesis paths. The fuzzers run on pull
 requests that change the library, its headers, the fuzz harnesses or the fuzz
 build (`fuzz_targets` in `tools/ci_changed_files.sh`).
 
+## SIMD and replay benchmarks
+
+Build the opt-in benchmarks with the library configuration being measured:
+
+```sh
+cmake --preset dev-release -DMBELIB_BUILD_BENCHMARKS=ON
+cmake --build --preset dev-release -j
+build/dev-release/bench_synth steady mixed
+build/dev-release/bench_synth gradual voiced
+build/dev-release/bench_synth jump voiced
+build/dev-release/bench_replay encode ambe2400 3 7 < speech.raw
+build/dev-release/bench_replay hard ambe2450 3 7 < ambe2450.frames
+build/dev-release/bench_replay soft imbe7200 3 7 mixed < imbe7200.frames
+```
+
+`bench_synth [steady|gradual|jump] [mixed|voiced]` defaults to steady mixed
+speech. Every model keeps its harmonics below Nyquist. Steady and gradual
+pitch exercise interpolated low harmonics; jumps exercise windowed synthesis.
+Each of ten measured runs starts with the same state after one untimed warm-up.
+The existing `avg:` output remains available to the quality A/B runner.
+
+`bench_replay encode|hard|soft ambe2400|ambe2450|imbe7200|imbe7100
+[repeats=1] [runs=7] [uniform|mixed]` loads standard input into memory, then
+allocates the encoder and warms up before timing. Encoding takes mono 8 kHz s16le PCM, zero pads
+a partial last frame and rejects partial samples; ProVoice has no encoder.
+Decoding takes one rectangular, row-major bit row per line: 96 bits for AMBE,
+184 for P25 or 168 for ProVoice, as written by `mbe_quality_reframe` (parameter
+rows are not accepted). Soft replay uses confidence 255 or a reproducible mix
+of all 256 confidence values, including zero. Use channel-error fixtures to
+measure noisy decoding. Inputs are capped at 65,536 frames.
+
+The replay benchmark reports median CPU microseconds per 20 ms frame, excludes
+loading, allocation and stream resets, and checks a checksum against its warm-up
+on every run. Repeats concatenate the input within a run; each run resets the
+encoder, parameter triplet and RNG. Checksumming is included in the timing.
+Pin runs to one CPU when possible and alternate matched baseline/candidate
+builds. Compare identical compiler, fast-math and LTO settings. `-march=x86-64-v3`
+is a separate compile target; portable SIMD builds still require only SSE2 on
+x86 and use NEON only when enabled by the existing target selection. Native ARM
+measurements are required before claiming NEON performance improvements.
+
 ## Speech Quality Evaluation
 
 Developer-only tooling; no new library runtime dependency. CI builds the two
