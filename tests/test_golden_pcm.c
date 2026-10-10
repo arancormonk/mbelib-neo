@@ -8,6 +8,7 @@
  * @brief Golden hash tests for deterministic synthesis and conversion.
  */
 
+#include <float.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,14 +18,23 @@
 #include "mbelib-neo/mbelib.h"
 
 /*
+ * Exact float hashes assume each float operation rounds to float, as SSE
+ * arithmetic does. 32-bit x86 builds with x87 math evaluate in extended
+ * precision (FLT_EVAL_METHOD 2) and cannot reproduce them; they still check
+ * the int16 hash, determinism and the sanity bounds.
+ */
+#if defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER) && defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == 0
+#define GOLDEN_FLOAT_EXACT 1
+#endif
+
+/*
  * Error-free voice-only AMBE sequences (tests/golden_sequences.h). Exact hashes
  * are enforced only for x86-64 Debug builds outside MSVC: rounding differences
  * accumulate over 24 frames, so other targets check determinism and energy.
  * Regenerate with gen_golden (scalar: dev-debug; SIMD: Debug with
  * -DMBELIB_ENABLE_SIMD=ON).
  */
-#if defined(MBE_ARCH_X86_64) && defined(MBELIB_TEST_STRICT_FLOAT) && defined(MBELIB_TEST_STRICT_INT16)                 \
-    && !defined(_MSC_VER)
+#if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
 #ifdef MBELIB_TEST_BUILD_SIMD
 #define GOLDEN_AMBE2450_F32 0x2145823Du
@@ -107,7 +117,7 @@ main(void) {
      */
     /* Regenerated harmonic phase, the shared spec-exact WOLA window, and an
      * in-band fixture (golden_fill_single_frame: L * w0 < pi). */
-#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(GOLDEN_FLOAT_EXACT)
     const uint32_t X86_F32_FNV1A_SCALAR = 0x3A84EEF4u;
 #ifdef MBELIB_TEST_BUILD_SIMD
     const uint32_t X86_F32_FNV1A_SIMD = 0xDCDA0EE0u;
@@ -156,7 +166,7 @@ main(void) {
      * or when explicitly requested, enforce exact float hash. Otherwise, use
      * sanity bounds for float but always enforce exact int16 hash.
      */
-#if defined(MBELIB_TEST_STRICT_FLOAT) && !defined(_MSC_VER)
+#if defined(GOLDEN_FLOAT_EXACT)
     uint32_t x86_expected_f32 = X86_F32_FNV1A_SCALAR;
 #ifdef MBELIB_TEST_BUILD_SIMD
     x86_expected_f32 = X86_F32_FNV1A_SIMD;
