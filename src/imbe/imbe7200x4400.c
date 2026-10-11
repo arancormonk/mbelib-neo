@@ -23,6 +23,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_bitpack.h"
 #include "mbe_compiler.h"
+#include "mbe_math.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_validation.h"
@@ -301,7 +302,7 @@ imbe_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const flo
 
     float Sum77 = 0;
     for (int l = 1; l <= cur_L; l++) {
-        flokl[l] = ((float)prev_L / (float)cur_L) * (float)l;
+        flokl[l] = mbe_prediction_position(prev_L, cur_L, l);
         intkl[l] = (int)flokl[l];
         if (intkl[l] < 0) {
             intkl[l] = 0;

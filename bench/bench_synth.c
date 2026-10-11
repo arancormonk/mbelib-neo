@@ -11,8 +11,8 @@
  * and reports elapsed CPU time across several repeated runs.
  */
 
+#include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -31,7 +31,23 @@ secs(void) {
  * @brief Benchmark entry: runs repeated synthesis loops and prints timing.
  */
 int
-main(void) {
+main(int argc, char** argv) {
+    const char* workload = argc > 1 ? argv[1] : "legacy";
+    const char* voicing = argc > 2 ? argv[2] : "mixed";
+    if (argc > 3
+        || (strcmp(workload, "legacy") != 0 && strcmp(workload, "steady") != 0 && strcmp(workload, "gradual") != 0
+            && strcmp(workload, "jump") != 0)
+        || (strcmp(voicing, "mixed") != 0 && strcmp(voicing, "voiced") != 0)) {
+        fprintf(stderr, "Usage: %s [legacy|steady|gradual|jump] [mixed|voiced]\n", argv[0]);
+        return 2;
+    }
+    /* The default is the original workload, unchanged: w0 jumps between 0.09
+     * and 0.11 at a fixed L = 40, no warm-up, state carried across runs. The
+     * quality A/B runner times it without arguments against older builds. */
+    const int legacy = strcmp(workload, "legacy") == 0;
+    const int jump = strcmp(workload, "jump") == 0;
+    const int gradual = strcmp(workload, "gradual") == 0;
+    const int voiced = strcmp(voicing, "voiced") == 0;
     const int iters = 2000; // frames per run
     const int runs = 10;    // repeats
     float out[160];
@@ -41,8 +57,8 @@ main(void) {
     mbe_initMbeParms(&cur, &prev, &prev_enh);
 
     // Create a moderately voiced/unvoiced mix
-    cur.w0 = 0.09378f; // ~8k/ (something reasonable)
-    cur.L = 40;        // harmonics
+    cur.w0 = legacy ? 0.09378f : 0.10f;
+    cur.L = legacy ? 40 : (int)(0.9254f * 3.14159265f / cur.w0);
     for (int l = 1; l <= cur.L; ++l) {
         cur.Vl[l] = (l % 3) != 0;       // mix of voiced/unvoiced
         cur.Ml[l] = 0.05f + 0.002f * l; // gentle slope
@@ -53,19 +69,37 @@ main(void) {
     prev = cur; // start with same state
 
     double total = 0.0, best = 1e9, worst = 0.0;
-    for (int r = 0; r < runs; ++r) {
+    const mbe_parms initial = cur;
+    printf("synth %s %s\n", workload, voicing);
+    /* Other workloads start every run from the same state, after a complete
+     * untimed pass that also allocates the thread-local FFT plan. */
+    for (int r = legacy ? 0 : -1; r < runs; ++r) {
+        if (!legacy) {
+            cur = initial;
+            prev = initial;
+            mbe_setThreadRngSeed(0x123456u);
+        }
         double t0 = secs();
         for (int i = 0; i < iters; ++i) {
-            // Oscillate some parameters to exercise both paths
-            cur.w0 = (i & 1) ? 0.09f : 0.11f;
+            if (jump || legacy) {
+                cur.w0 = (i & 1) ? 0.09f : 0.11f;
+            } else if (gradual) {
+                cur.w0 = 0.10f + 0.01f * sinf((float)i * 0.02f);
+            }
+            if (!legacy) {
+                cur.L = (int)(0.9254f * 3.14159265f / cur.w0);
+            }
             for (int l = 1; l <= cur.L; ++l) {
-                cur.Vl[l] = ((i + l) % 5) ? 1 : 0;
+                cur.Vl[l] = voiced || ((i + l) % 5) != 0;
                 cur.Ml[l] = 0.04f + 0.003f * (float)((i + l) % 7);
             }
             mbe_synthesizeSpeechf(out, &cur, &prev);
             mbe_moveMbeParms(&cur, &prev);
         }
         double dt = secs() - t0;
+        if (r < 0) {
+            continue;
+        }
         total += dt;
         if (dt < best) {
             best = dt;

@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "mbe_compiler.h"
+#include "mbe_voiced.h"
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(MBE_SIMD_TARGET_SSE2)
 #include <emmintrin.h>
@@ -196,11 +197,12 @@ mbe_xorshift32(void) {
     return mbe_rng_state;
 }
 
+#if !defined(MBE_VOICED_KERNELS)
 /*
- * Voiced-path helpers keep the oscillator recurrence scalar so the synthesis
- * order matches the historical implementation, then apply SIMD only to the
- * output accumulation. The paired helper lets the common prev+cur voiced case
- * touch the output buffer once per 4-sample block instead of twice.
+ * Targets without vector voiced kernels keep the historical voiced synthesis
+ * unchanged: these helpers and the render loops below are the original scalar
+ * code, so its rounding points and expression shapes, and thus its PCM, stay
+ * the same under x87 excess precision and fast-math reassociation too.
  */
 static inline void
 mbe_fill_voiced_cos_block4(float* restrict cblk, float* restrict c, float* restrict s, float sd, float cd) {
@@ -241,26 +243,10 @@ mbe_add_voiced_block4(float* restrict Ss, const float* restrict W, float gain, f
     float cblk[4];
     mbe_fill_voiced_cos_block4(cblk, c, s, sd, cd);
 
-#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
-    __m128 vC = _mm_loadu_ps(cblk);
-    __m128 vW = _mm_loadu_ps(W);
-    __m128 vA = _mm_set1_ps(gain);
-    __m128 vS = _mm_loadu_ps(Ss);
-    vS = _mm_add_ps(vS, _mm_mul_ps(_mm_mul_ps(vC, vW), vA));
-    _mm_storeu_ps(Ss, vS);
-#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
-    float32x4_t vC = vld1q_f32(cblk);
-    float32x4_t vW = vld1q_f32(W);
-    float32x4_t vA = vdupq_n_f32(gain);
-    float32x4_t vS = vld1q_f32(Ss);
-    vS = vaddq_f32(vS, vmulq_f32(vmulq_f32(vC, vW), vA));
-    vst1q_f32(Ss, vS);
-#else
     Ss[0] += gain * W[0] * cblk[0];
     Ss[1] += gain * W[1] * cblk[1];
     Ss[2] += gain * W[2] * cblk[2];
     Ss[3] += gain * W[3] * cblk[3];
-#endif
 }
 
 /**
@@ -289,21 +275,6 @@ mbe_add_voiced_dual_block4(float* restrict Ss, const mbe_voiced_block_component*
     mbe_fill_voiced_cos_block4(prev_cblk, prev->c, prev->s, prev->sd, prev->cd);
     mbe_fill_voiced_cos_block4(cur_cblk, cur->c, cur->s, cur->sd, cur->cd);
 
-#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
-    __m128 vS = _mm_loadu_ps(Ss);
-    __m128 vPrev = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(prev_cblk), _mm_loadu_ps(prev->W)), _mm_set1_ps(prev->gain));
-    __m128 vCur = _mm_mul_ps(_mm_mul_ps(_mm_loadu_ps(cur_cblk), _mm_loadu_ps(cur->W)), _mm_set1_ps(cur->gain));
-    vS = _mm_add_ps(vS, vPrev);
-    vS = _mm_add_ps(vS, vCur);
-    _mm_storeu_ps(Ss, vS);
-#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
-    float32x4_t vS = vld1q_f32(Ss);
-    float32x4_t vPrev = vmulq_f32(vmulq_f32(vld1q_f32(prev_cblk), vld1q_f32(prev->W)), vdupq_n_f32(prev->gain));
-    float32x4_t vCur = vmulq_f32(vmulq_f32(vld1q_f32(cur_cblk), vld1q_f32(cur->W)), vdupq_n_f32(cur->gain));
-    vS = vaddq_f32(vS, vPrev);
-    vS = vaddq_f32(vS, vCur);
-    vst1q_f32(Ss, vS);
-#else
     Ss[0] += prev->gain * prev->W[0] * prev_cblk[0];
     Ss[1] += prev->gain * prev->W[1] * prev_cblk[1];
     Ss[2] += prev->gain * prev->W[2] * prev_cblk[2];
@@ -312,8 +283,8 @@ mbe_add_voiced_dual_block4(float* restrict Ss, const mbe_voiced_block_component*
     Ss[1] += cur->gain * cur->W[1] * cur_cblk[1];
     Ss[2] += cur->gain * cur->W[2] * cur_cblk[2];
     Ss[3] += cur->gain * cur->W[3] * cur_cblk[3];
-#endif
 }
+#endif
 
 /** @} */ /* end of mbe_internal */
 
@@ -1032,6 +1003,25 @@ mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N) {
     }
 }
 
+#if defined(MBE_VOICED_KERNELS)
+static void
+mbe_render_voiced_interpolated(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N,
+                               float cw0, float pw0, float pw0l) {
+    float deltaphil = cur_mp->PHIl[l] - prev_mp->PHIl[l] - (((pw0 + cw0) * (float)(l * N)) / 2.0f);
+    float deltawl = (1.0f / (float)N)
+                    * (deltaphil - (2.0f * (float)M_PI * floorf((deltaphil + (float)M_PI) / (2.0f * (float)M_PI))));
+    mbe_voiced_interpolated(aout_buf, prev_mp->PHIl[l], prev_mp->Ml[l], cur_mp->Ml[l], pw0l + deltawl, cw0 - pw0, l);
+}
+
+static void
+mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N, float cw0l,
+                           float pw0l, int cur_voiced, int prev_voiced) {
+    const struct mbe_voiced_component prev = {prev_mp->PHIl[l], pw0l, 2.0f * prev_mp->Ml[l], prev_voiced};
+    const struct mbe_voiced_component cur = {cur_mp->PHIl[l] - cw0l * (float)N, cw0l, 2.0f * cur_mp->Ml[l], cur_voiced};
+    mbe_voiced_windowed(aout_buf, Ws, &prev, &cur);
+}
+
+#else
 static void
 mbe_render_voiced_interpolated(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N,
                                float cw0, float pw0, float pw0l) {
@@ -1098,6 +1088,7 @@ mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_p
         }
     }
 }
+#endif
 
 static void
 mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int maxl, int N) {
@@ -1135,7 +1126,9 @@ static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
                          float pre_enh_rm0, enum mbe_mute_noise mute_noise) {
 
-    const int N = 160;
+    /* One frame length for the phase arithmetic, the window Ws and the
+     * voiced kernels, which process exactly MBE_VOICED_FRAME samples. */
+    const int N = MBE_VOICED_FRAME;
 
     if (MBE_UNLIKELY(!aout_buf)) {
         return;

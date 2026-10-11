@@ -44,8 +44,8 @@
 #include <string.h>
 
 #include "mbe_tone.h"
+#include "mbe_tone_fit.h"
 
-#define TONE_FS                   8000.0
 #define TONE_BLOCK                20
 #define TONE_BLOCKS               (MBE_TONE_SPAN / TONE_BLOCK)
 #define TONE_MIN_ACTIVE           72    /* 45% of the span */
@@ -85,92 +85,10 @@ struct tone_fit {
     double explained;
 };
 
-/* Solve the symmetric positive definite system a x = b of order n <= 4 by
- * Cholesky factorization; returns 0 when a is not positive definite. */
-static int
-tone_solve(double a[4][4], const double b[4], int n, double x[4]) {
-    double l[4][4] = {{0}};
-    double y[4] = {0};
-    if (n < 1 || n > 4) {
-        return 0;
-    }
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j <= i; j++) {
-            double sum = a[i][j];
-            for (int k = 0; k < j; k++) {
-                sum -= l[i][k] * l[j][k];
-            }
-            if (i == j) {
-                if (sum <= 0.0) {
-                    return 0;
-                }
-                l[i][i] = sqrt(sum);
-            } else {
-                l[i][j] = sum / l[j][j];
-            }
-        }
-    }
-    for (int i = 0; i < n; i++) {
-        double sum = b[i];
-        for (int k = 0; k < i; k++) {
-            sum -= l[i][k] * y[k];
-        }
-        y[i] = sum / l[i][i];
-    }
-    for (int i = n - 1; i >= 0; i--) {
-        double sum = y[i];
-        for (int k = i + 1; k < n; k++) {
-            sum -= l[k][i] * x[k];
-        }
-        x[i] = sum / l[i][i];
-    }
-    return 1;
-}
-
-/* Least-squares fit of fit->count sinusoids at fit->hz: the energy of the
- * projection onto their cosine and sine terms, and each one's amplitude. */
+/* Frequency trials remain sequential; only each projection is batched. */
 static void
 tone_project(const struct tone_span* s, struct tone_fit* fit) {
-    double gram[4][4] = {{0}};
-    double rhs[4] = {0};
-    double coef[4] = {0};
-    double c[2] = {1.0, 1.0}, sn[2] = {0.0, 0.0}, cw[2], sw[2];
-    const int dim = 2 * fit->count;
-    for (int k = 0; k < fit->count; k++) {
-        cw[k] = cos(2.0 * M_PI * fit->hz[k] / TONE_FS);
-        sw[k] = sin(2.0 * M_PI * fit->hz[k] / TONE_FS);
-    }
-    for (int i = 0; i < s->n; i++) {
-        double v[4];
-        for (int k = 0; k < fit->count; k++) {
-            v[(size_t)2 * (size_t)k] = c[k];
-            v[((size_t)2 * (size_t)k) + 1] = sn[k];
-            double next = (c[k] * cw[k]) - (sn[k] * sw[k]);
-            sn[k] = (sn[k] * cw[k]) + (c[k] * sw[k]);
-            c[k] = next;
-        }
-        for (int r = 0; r < dim; r++) {
-            rhs[r] += v[r] * (double)s->x[i];
-            for (int q = 0; q <= r; q++) {
-                gram[r][q] += v[r] * v[q];
-            }
-        }
-    }
-    for (int r = 0; r < dim; r++) {
-        for (int q = r + 1; q < dim; q++) {
-            gram[r][q] = gram[q][r];
-        }
-    }
-    fit->explained = 0.0;
-    if (!tone_solve(gram, rhs, dim, coef)) {
-        return;
-    }
-    for (int r = 0; r < dim; r++) {
-        fit->explained += rhs[r] * coef[r];
-    }
-    for (int k = 0; k < fit->count; k++) {
-        fit->amplitude[k] = hypot(coef[(size_t)2 * (size_t)k], coef[((size_t)2 * (size_t)k) + 1]);
-    }
+    fit->explained = mbe_tone_fit(s->x, s->n, fit->hz, fit->count, fit->amplitude);
 }
 
 /* Coordinate search on each frequency, halving the step, keeping any move
@@ -304,7 +222,7 @@ static double
 tone_peak_hz(const double power[TONE_BINS], int m) {
     double den = power[m - 1] - (2.0 * power[m]) + power[m + 1];
     double offset = (den != 0.0) ? 0.5 * (power[m - 1] - power[m + 1]) / den : 0.0;
-    return ((double)m + offset) * TONE_FS / (double)MBE_FFT_SIZE;
+    return ((double)m + offset) * MBE_TONE_FS / (double)MBE_FFT_SIZE;
 }
 
 /* The two largest peaks of the Hann-windowed power spectrum, interpolated,
@@ -367,7 +285,7 @@ tone_pair_from_predictor(const struct tone_span* s, double hz[2]) {
         if (fabs(r[k]) > 2.0) {
             return 0;
         }
-        hz[k] = acos(0.5 * r[k]) * TONE_FS / (2.0 * M_PI);
+        hz[k] = acos(0.5 * r[k]) * MBE_TONE_FS / (2.0 * M_PI);
     }
     return 1;
 }

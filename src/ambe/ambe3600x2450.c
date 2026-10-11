@@ -22,6 +22,7 @@
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_math.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
@@ -406,7 +407,7 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
 
     float Sum43 = 0;
     for (int l = 1; l <= cur_mp->L; l++) {
-        flokl[l] = ((float)prev_L / (float)cur_mp->L) * (float)l;
+        flokl[l] = mbe_prediction_position(prev_L, cur_mp->L, l);
         intkl[l] = (int)flokl[l];
 #ifdef AMBE_DEBUG
         fprintf(stderr, "flok%i: %f, intk%i: %i ", l, flokl[l], l, intkl[l]);
