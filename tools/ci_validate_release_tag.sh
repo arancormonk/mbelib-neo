@@ -29,6 +29,16 @@ ref="${GITHUB_REF:-}"
 tag="${GITHUB_REF_NAME:-}"
 event="${GITHUB_EVENT_NAME:-}"
 created="${RELEASE_TAG_CREATED:-${GITHUB_EVENT_CREATED:-}}"
+recovery=0
+if [[ -n "${RELEASE_RECOVERY_TAG:-}" || -n "${RELEASE_RECOVERY_RUN_ID:-}" ]]; then
+  if [[ "${event}" != "workflow_dispatch" || ! "${RELEASE_RECOVERY_TAG:-}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ || ! "${RELEASE_RECOVERY_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+    echo "Release recovery requires workflow_dispatch with an existing tag and numeric source run ID." >&2
+    exit 1
+  fi
+  recovery=1
+  tag="${RELEASE_RECOVERY_TAG}"
+  ref="refs/tags/${tag}"
+fi
 
 if [[ "${ref}" != refs/tags/v* ]]; then
   {
@@ -44,14 +54,8 @@ if [[ ! "${tag}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
   exit 1
 fi
 
-if [[ "${event}" != "push" || "${created}" != "true" ]]; then
+if [[ "$recovery" == 0 && ("${event}" != "push" || "${created}" != "true") ]]; then
   echo "Release publishing requires a newly created version tag push; refusing to publish ${tag}." >&2
-  exit 1
-fi
-
-version="${tag#v}"
-if [[ "${version}" != "${project_version}" ]]; then
-  echo "Tag ${tag} does not match project version ${project_version}." >&2
   exit 1
 fi
 
@@ -82,6 +86,17 @@ if [[ "$(git rev-parse --is-shallow-repository 2> /dev/null || echo false)" == "
 fi
 
 tag_commit="$(git rev-parse "refs/tags/${tag}^{commit}")"
+if [[ "$recovery" == 1 ]]; then
+  # The recovery workflow can be newer than the immutable release source.
+  project_version="$(git show "${tag_commit}:CMakeLists.txt" |
+    sed -nE 's/^[[:space:]]*project\([[:space:]]*mbelib-neo[[:space:]]+VERSION[[:space:]]+([0-9]+[.][0-9]+[.][0-9]+).*$/\1/p' |
+    head -n1)"
+fi
+version="${tag#v}"
+if [[ "${version}" != "${project_version}" ]]; then
+  echo "Tag ${tag} does not match project version ${project_version}." >&2
+  exit 1
+fi
 main_commit="$(git rev-parse "${protected_main_ref}^{commit}")"
 if ! git merge-base --is-ancestor "${tag_commit}" "${main_commit}"; then
   echo "Release tag ${tag} target ${tag_commit} is not contained in origin/main ${main_commit}." >&2
@@ -122,7 +137,13 @@ if ! GNUPGHOME="${gnupg_home}" git verify-tag "${tag}" > /dev/null; then
   exit 1
 fi
 
+if [[ "$recovery" == 1 ]]; then
+  RELEASE_TAG="$tag" RELEASE_COMMIT="$tag_commit" python3 "${repo_root}/tools/ci_verify_release_recovery.py"
+fi
+
 {
+  echo "tag=${tag}"
+  echo "commit=${tag_commit}"
   echo "version=${project_version}"
   echo "archive_prefix=mbelib-neo-${project_version}"
 } >> "${GITHUB_OUTPUT:-/dev/null}"
