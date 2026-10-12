@@ -10,6 +10,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import subprocess
+import shutil
 import sys
 import unittest
 from unittest.mock import patch
@@ -57,6 +58,7 @@ class PinTests(unittest.TestCase):
         self.assertIn('-DFETCHCONTENT_FULLY_DISCONNECTED=ON', result)
         self.assertIn('grep -qx "PFFFT_SHA=$_pffft_sha"', result)
 
+    @unittest.skipUnless(sys.platform != "win32" and shutil.which("bash"), "AUR requires a Unix shell")
     def test_aur_transition_and_stale_pin(self):
         pins = metadata.read_pins()
         recipe = ('pkgname=mbelib-neo-git\nsource=()\nsha256sums=()\n'
@@ -81,6 +83,23 @@ class PinTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(b'PFFFT pin changed', result.stderr)
 
+    def test_https_download_rejects_redirects(self):
+        with patch.object(updater.urllib.request, "OpenerDirector") as factory:
+            opener = factory.return_value
+            response = opener.open.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b"archive"
+            sha = "1" * 40
+            self.assertEqual(updater.download_archive(sha), b"archive")
+            opener.open.assert_called_with(
+                f"https://codeload.github.com/arancormonk/pffft/tar.gz/{sha}", timeout=120)
+            opener.add_handler.assert_called_once()
+            handler = opener.add_handler.call_args.args[0]
+            self.assertIsInstance(handler, updater.urllib.request.HTTPSHandler)
+            response.status = 302
+            with self.assertRaisesRegex(OSError, "HTTP 302"):
+                updater.download_archive(sha)
+
     def test_update_and_download_failure(self):
         sha = "1" * 40
         data = io.BytesIO()
@@ -92,14 +111,14 @@ class PinTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             pins = Path(directory) / "pins.env"
             pins.write_text("OTHER=keep\nPFFFT_SHA=" + "0" * 40 + "\nPFFFT_ARCHIVE_SHA256=" + "0" * 64 + "\n")
-            with patch.object(updater.urllib.request, "urlopen", return_value=io.BytesIO(payload)):
+            with patch.object(updater, "download_archive", return_value=payload):
                 updater.update_pins(sha, pins)
             self.assertEqual(metadata.read_pins(pins), {
                 "PFFFT_SHA": sha, "PFFFT_ARCHIVE_SHA256": hashlib.sha256(payload).hexdigest(),
             })
             before = pins.read_bytes()
             self.assertIn(b"OTHER=keep", before)
-            with patch.object(updater.urllib.request, "urlopen", side_effect=OSError("offline")):
+            with patch.object(updater, "download_archive", side_effect=OSError("offline")):
                 with self.assertRaises(OSError):
                     updater.update_pins("2" * 40, pins)
             self.assertEqual(pins.read_bytes(), before)

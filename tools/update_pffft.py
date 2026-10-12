@@ -11,19 +11,27 @@ import re
 import tarfile
 import tempfile
 import urllib.request
+import ssl
 
 PINS = Path(__file__).resolve().with_name("ci-dependency-pins.env")
+
+
+def download_archive(sha):
+    # Only HTTPS is supported: no file:// handler or redirect handler is installed.
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+    url = f"https://codeload.github.com/arancormonk/pffft/tar.gz/{sha}"
+    with opener.open(url, timeout=120) as response:
+        if response.status != 200:
+            raise OSError(f"PFFFT download returned HTTP {response.status}")
+        return response.read()
 
 
 def update_pins(sha, pins=PINS):
     if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
         raise ValueError("PFFFT revision must be a full 40-character commit SHA")
     sha = sha.lower()
-    url = f"https://codeload.github.com/arancormonk/pffft/tar.gz/{sha}"
-    # The host and HTTPS scheme are fixed; the only input is 40 validated hex digits.
-    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    with urllib.request.urlopen(url, timeout=120) as response:
-        archive = response.read()
+    archive = download_archive(sha)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
         for name in ("src/pffft.c", "src/pffft_common.c", "include/pffft/pffft.h", "LICENSE.txt"):
             if not source.getmember(f"pffft-{sha}/{name}").isfile():
