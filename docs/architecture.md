@@ -39,7 +39,7 @@ the library.
 - `src/ambe/dstar_frame.c`: D-STAR DV air-interface byte mapping.
 - `src/imbe/`: IMBE frame and data processing.
 - `src/internal/`: private headers shared by implementation units.
-- `src/external/pffft/`: vendored third-party FFT sources.
+- `cmake/Pffft.cmake`: pinned third-party FFT source acquisition and integration.
 - `tests/`: automated unit and regression tests.
 - `examples/`: small consumer examples.
 - `bench/`: optional local micro-benchmarks.
@@ -99,6 +99,11 @@ Install rules export:
 
 ## Dependency Architecture
 
-The main compiled third-party code is vendored PFFFT/FFTPACK. CI and analysis
+The compiled third-party code is a pinned PFFFT fork, downloaded and verified
+at configure time (or supplied locally for offline builds). Its two production
+C sources compile directly into both libraries; only `mbe_unvoiced_fft.c` may
+include its headers. Debug disables explicit FMA as well as contraction, scalar
+mode uses scalar-one, and SIMD backend selection follows compiler features.
+CI and analysis
 tools are managed through pinned workflow actions, hashed Python requirement
 files, and documented supply-chain guardrails.

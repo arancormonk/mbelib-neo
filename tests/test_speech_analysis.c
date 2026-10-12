@@ -221,6 +221,43 @@ test_reset_and_commit(void) {
     assert(mbe_analysis_frame(NULL, &state, NULL, NULL, NULL) == MBE_STATUS_INVALID_ARGUMENT);
 }
 
+/* Check the 256-point ordered spectrum against a direct DFT, including DC
+ * and Nyquist packing. This exercises the production FFT integration only. */
+static void
+test_fft_spectrum(mbe_fft_plan* fft) {
+    float input[MBE_FFT_SIZE];
+    float spectrum[MBE_FFT_SIZE];
+    float again[MBE_FFT_SIZE];
+    for (int n = 0; n < MBE_FFT_SIZE; ++n) {
+        input[n] = (float)(0.3 + 0.7 * cos(2.0 * M_PI * 13.0 * n / MBE_FFT_SIZE)
+                           + 0.2 * sin(2.0 * M_PI * 31.0 * n / MBE_FFT_SIZE));
+        input[n] += n % 2 ? -0.1f : 0.1f;
+    }
+    assert(mbe_fft_forward_real(fft, input, spectrum) == 0);
+    assert(mbe_fft_forward_real(fft, input, again) == 0);
+    for (int n = 0; n < MBE_FFT_SIZE; ++n) {
+        uint32_t first_bits;
+        uint32_t second_bits;
+        memcpy(&first_bits, &spectrum[n], sizeof(first_bits));
+        memcpy(&second_bits, &again[n], sizeof(second_bits));
+        assert(first_bits == second_bits);
+    }
+    for (int k = 0; k <= MBE_FFT_SIZE / 2; ++k) {
+        double real = 0.0;
+        double imag = 0.0;
+        for (int n = 0; n < MBE_FFT_SIZE; ++n) {
+            double phase = 2.0 * M_PI * k * n / MBE_FFT_SIZE;
+            real += input[n] * cos(phase);
+            imag -= input[n] * sin(phase);
+        }
+        int index = k == MBE_FFT_SIZE / 2 ? 1 : 2 * k;
+        assert(fabs(spectrum[index] - real) < 1e-4);
+        if (k > 0 && k < MBE_FFT_SIZE / 2) {
+            assert(fabs(spectrum[index + 1] - imag) < 1e-4);
+        }
+    }
+}
+
 /* FFT autocorrelation matches the direct sum for every lag. */
 static void
 test_autocorrelation(mbe_acf_plan* acf) {
@@ -274,6 +311,7 @@ int
 main(void) {
     mbe_fft_plan* fft = mbe_fft_plan_alloc();
     assert(fft != NULL);
+    test_fft_spectrum(fft);
     mbe_acf_plan* acf = mbe_acf_plan_alloc();
     assert(acf != NULL);
     test_autocorrelation(acf);

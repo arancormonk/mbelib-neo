@@ -11,13 +11,11 @@
 #ifdef MBE_ENCODER_TEST_OOM
 #include <string.h>
 
-/* GNU link wrapping covers eleven allocation points: the context, the
- * project-owned synthesis FFT plan and its buffers, and the autocorrelation
- * plan and its buffers. These failures return NULL. Allocation failures inside
- * the vendored pffft setup are not recoverable; the same limitation applies to
- * decoder plan allocation. PFFFT's same-object internal aligned calls are not
- * wrapped. */
-#define ENCODER_ALLOCATIONS 11
+/* GNU link wrapping covers thirteen allocation points: the context, both
+ * plans and their buffers, including each PFFFT setup's twiddle allocation.
+ * The fork's separate allocator translation unit makes both twiddles visible.
+ * Setup struct malloc failures are tested by the fork itself. */
+#define ENCODER_ALLOCATIONS 13
 void* encoder_real_alloc(size_t size) __asm__("__real_pffft_aligned_malloc");
 void encoder_real_free(void* ptr) __asm__("__real_pffft_aligned_free");
 void* encoder_real_calloc(size_t count, size_t size) __asm__("__real_calloc");

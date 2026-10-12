@@ -27,7 +27,7 @@ PCM in memory before writing the WAV header and data to stdout.
 ## SIMD Target Selection
 
 `MBELIB_ENABLE_SIMD=ON` uses SSE2 or NEON routines when the compiler target
-provides those instructions, with scalar routines otherwise. The bundled PFFFT
+provides those instructions, with scalar routines otherwise. The downloaded PFFFT
 library uses its own supported backends (including SSE and AltiVec); CMake
 explicitly selects scalar FFT code when none is available, even with SIMD ON.
 Warnings-as-errors remains enabled by default in either case.
@@ -54,6 +54,11 @@ through their compiler flags or build type, the build and installation process
 should preserve it.
 
 ## Non-Recursive Build Structure
+
+PFFFT is fetched as a SHA-256-verified commit archive, or supplied with
+`FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT` for offline builds. Its top-level CMake
+project is not configured; the build remains C99-only. See
+[dependency management](dependencies.md) for cache, update and rollback steps.
 
 The project uses one top-level CMake build graph with explicit source lists. It
 does not rely on recursive make invocations to build cross-dependent

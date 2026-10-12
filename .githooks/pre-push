@@ -123,7 +123,7 @@ for p in "${changed_paths[@]}"; do
   esac
 
   case "$p" in
-    .github/dependabot.yml | tools/osv_scan.sh | src/external/*)
+    .github/dependabot.yml | tools/osv_scan.sh | src/external/* | tools/ci-dependency-pins.env | cmake/Pffft.cmake | tools/update_pffft.py | tools/update_aur_pffft.py | tools/pffft_metadata.py | CMakeLists.txt)
       dependency_scan_targets+=("$p")
       ;;
   esac

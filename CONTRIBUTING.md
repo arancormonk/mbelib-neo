@@ -49,8 +49,9 @@ pull request explains why an exception is appropriate.
 - Bug fixes include regression tests when practical.
 - Generated build outputs, compiled binaries, private captures, credentials,
   keys, and machine-specific configuration are not committed.
-- Vendored third-party code is placed under `src/external/`, keeps upstream
-  license notices, and is documented in dependency records.
+- PFFFT is downloaded at a pinned revision. Keep fixes and tests in the fork,
+  preserve upstream notices, and use `tools/update_pffft.py` for manual updates
+  (see `docs/dependencies.md`). Never edit the build directory copy.
 - Workflow, dependency, packaging, release, codec, DSP, public API, and security
   changes receive extra review when practical, or document solo-maintainer
   residual risk in the pull request.

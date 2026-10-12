@@ -188,7 +188,7 @@ fuzz_scope_paths=("${diff_paths[@]}")
 fuzz_targets=()
 for p in "${fuzz_scope_paths[@]}"; do
   case "$p" in
-    .clusterfuzzlite/* | .github/workflows/cflite_pr.yml | fuzz/* | include/* | src/* | CMakeLists.txt)
+    .clusterfuzzlite/* | .github/workflows/cflite_pr.yml | fuzz/* | include/* | src/* | CMakeLists.txt | cmake/Pffft.cmake | tools/ci-dependency-pins.env | tools/fetch-pinned-git.sh)
       fuzz_targets+=("$p")
       ;;
   esac
@@ -220,6 +220,14 @@ semgrep_targets=()
 cmake_format_files=()
 workflow_security_targets=()
 dependency_scan_targets=()
+# Dependency deletions and renames must trigger scanning too.
+for p in "${fuzz_scope_paths[@]}"; do
+  case "$p" in
+    tools/ci-dependency-pins.env | cmake/Pffft.cmake | CMakeLists.txt | tools/update_pffft.py | tools/update_aur_pffft.py | tools/pffft_metadata.py | tools/fetch-pinned-git.sh | src/external/*)
+      dependency_scan_targets+=("$p")
+      ;;
+  esac
+done
 
 for p in "${changed_paths[@]}"; do
   case "$p" in

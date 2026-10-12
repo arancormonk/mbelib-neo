@@ -86,6 +86,17 @@ fi
 CPPCHECK_BUILD_DIR="${CPPCHECK_BUILD_DIR:-.cppcheck-build}"
 mkdir -p "$CPPCHECK_BUILD_DIR"
 
+# Resolve downloaded or locally supplied headers from the actual CMake build.
+MBE_ANALYSIS_BUILD_DIR="${MBE_ANALYSIS_BUILD_DIR:-build/dev-debug}"
+if [[ ! -f "$MBE_ANALYSIS_BUILD_DIR/CMakeCache.txt" ]]; then
+  cmake -S . -B "$MBE_ANALYSIS_BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug
+fi
+PFFFT_SOURCE_DIR=$(sed -n 's/^MBELIB_PFFFT_SOURCE_DIR:INTERNAL=//p' "$MBE_ANALYSIS_BUILD_DIR/CMakeCache.txt")
+if [[ ! -f "$PFFFT_SOURCE_DIR/include/pffft/pffft.h" ]]; then
+  echo "PFFFT headers missing; reconfigure $MBE_ANALYSIS_BUILD_DIR with CMake." >&2
+  exit 1
+fi
+
 # Build cppcheck arguments
 # Note: cppcheck supports multiple --std flags; it applies the appropriate
 # standard based on file extension (.c -> C standard, .cpp -> C++ standard)
@@ -99,7 +110,7 @@ CPPCHECK_ARGS=(
   "-D__has_include(x)=0"
   -I include
   -I src/internal
-  -I src/external/pffft
+  -I "$PFFFT_SOURCE_DIR/include/pffft"
   -j "$NPROC"
   --error-exitcode=1
 )
@@ -121,7 +132,7 @@ if [[ $STRICT -eq 1 ]]; then
     "-D__has_include(x)=0"
     -I include
     -I src/internal
-    -I src/external/pffft
+    -I "$PFFFT_SOURCE_DIR/include/pffft"
     -j "$NPROC"
     --error-exitcode=1
   )
@@ -144,11 +155,13 @@ CPPCHECK_ARGS+=(
   --suppress=toomanyconfigs
   --suppress=checkersReport
   -i src/external
+  -i "$PFFFT_SOURCE_DIR"
+  "--suppress=*:$PFFFT_SOURCE_DIR/*"
 )
 
 # Include generated public headers (version.h) when present.
-if [[ -d build/dev-debug/include ]]; then
-  CPPCHECK_ARGS+=(-I build/dev-debug/include)
+if [[ -d "$MBE_ANALYSIS_BUILD_DIR/include" ]]; then
+  CPPCHECK_ARGS+=(-I "$MBE_ANALYSIS_BUILD_DIR/include")
 fi
 
 LOG_FILE=".cppcheck.local.out"
@@ -157,6 +170,7 @@ FILES=()
 if [[ ${#REQUESTED_FILES[@]} -gt 0 ]]; then
   for f in "${REQUESTED_FILES[@]}"; do
     f="${f#./}"
+    case "$f" in "$PFFFT_SOURCE_DIR"/* | "${PFFFT_SOURCE_DIR#"$ROOT_DIR/"}"/*) continue ;; esac
     case "$f" in
       build/* | src/external/*) continue ;;
     esac

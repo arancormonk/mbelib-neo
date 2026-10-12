@@ -14,7 +14,7 @@ mbelib-neo keeps CI dependencies explicit so analyzer results and release artifa
 
 ## Pinned CI Source Checkouts
 
-`tools/ci-dependency-pins.env` is the checked-in source of truth for CI-only
+`tools/ci-dependency-pins.env` is the checked-in source of truth for the compiled PFFFT dependency and CI
 GitHub source dependencies such as `include-what-you-use`, plus CI fallback
 container image digests.
 
@@ -45,7 +45,10 @@ an accepted residual risk for the AUR publish jobs.
 
 ## Vendored Code
 
-Vendored third-party sources live under `src/external/` and are excluded from project-owned analyzer findings where the tool supports path filtering.
+PFFFT sources are fetched by `cmake/Pffft.cmake` from the immutable revision
+and archive checksum in `tools/ci-dependency-pins.env`. An explicit local source
+override supports offline builds. The resolved source directory is excluded
+from project-owned analyzer findings. Fixes belong in the fork, with tests.
 
 - Keep bundled dependency updates small and traceable to an upstream release or commit.
 - Preserve upstream license files and attribution.
@@ -53,6 +56,6 @@ Vendored third-party sources live under `src/external/` and are excluded from pr
 
 ## Vulnerability Scanning
 
-- `tools/osv_scan.sh` runs OSV-Scanner source scanning for lockfiles, manifests, and vendored C/C++ dependency fingerprints.
+- `tools/osv_scan.sh` runs OSV-Scanner source scanning for lockfiles, manifests, and explicit PFFFT commit metadata generated from the pin.
 - PR CI runs OSV when dependency inputs change; scheduled guardrails run a full repository scan.
 - If OSV reports a vulnerability that is not exploitable in mbelib-neo, add the narrowest possible `osv-scanner.toml` ignore with a reason and expiry date.

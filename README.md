@@ -25,8 +25,7 @@ This notice is advisory and does not modify the license. See `LICENSE` for terms
 
 - mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license.
 - Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `docs/upstream-mbelib-attribution.md` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
-- Project-maintained source files carry SPDX identifiers reflecting their license; vendored sources under
-  `src/external/pffft/` retain upstream license headers.
+- Project-maintained source files carry SPDX identifiers. Downloaded PFFFT sources retain their upstream license headers; installation includes its license and compiled-source notices.
 
 ## Overview
 
@@ -44,6 +43,18 @@ Requirements
 - C compiler with C99 support.
 - CMake ≥ 3.20.
 - On non‑Windows platforms, links against `-lm` automatically.
+- The first configure downloads a fixed PFFFT fork revision and verifies its SHA-256. No submodule or C++ compiler is needed.
+
+For a fresh offline build, supply a checkout or extracted archive of the pinned
+fork (see [dependency updates](docs/dependencies.md)):
+
+```sh
+cmake --preset dev-debug -DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=/absolute/path/to/pffft
+```
+
+An already populated build directory can be reconfigured offline with
+`-DFETCHCONTENT_FULLY_DISCONNECTED=ON`. PFFFT is compiled into both libraries;
+consumers need no separate PFFFT library.
 
 Using CMake presets (recommended)
 
@@ -399,7 +410,7 @@ Project documentation and policies:
 - Public headers: `include/mbelib-neo/`
 - Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`
 - Internal headers: `src/internal/`
-- External libraries: `src/external/pffft/` (bundled PFFFT + FFTPACK sources, BSD-like license)
+- External libraries: pinned PFFFT fork populated by `cmake/Pffft.cmake` (BSD-like license)
 - Tests: `tests/` • Examples: `examples/` • Benchmarks: `bench/`
 - Developer tooling and CI parity scripts: `tools/`
 
