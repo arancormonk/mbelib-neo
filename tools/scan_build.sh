@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Run Clang Static Analyzer via scan-build on a dedicated temporary build tree.
 # Intended for CI or explicit local runs (heavier than per-file analyzers).
-# Excludes third-party code under src/external.
+# Excludes the resolved PFFFT source directory, including local overrides.
 
 ROOT_DIR=$(git rev-parse --show-toplevel 2> /dev/null || pwd)
 cd "$ROOT_DIR"
@@ -135,9 +135,19 @@ set +e
   echo "Excluding analyzer path: $ROOT_DIR/src/external"
   echo ""
   echo "Configuring analysis build in $BUILD_DIR ..."
+  pffft_override=()
+  if [[ -n "${FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT:-}" ]]; then
+    pffft_override+=("-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=$FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT")
+  fi
   scan-build "${SCAN_ARGS[@]}" cmake -S . -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${pffft_override[@]}" || exit "$?"
+  pffft_source=$(sed -n 's/^MBELIB_PFFFT_SOURCE_DIR:INTERNAL=//p' "$BUILD_DIR/CMakeCache.txt")
+  if [[ ! -d "$pffft_source" ]]; then
+    echo "PFFFT source path missing from $BUILD_DIR/CMakeCache.txt" >&2
+    exit 1
+  fi
+  SCAN_ARGS+=(--exclude "$pffft_source")
   echo ""
   echo "Building under scan-build ..."
   scan-build "${SCAN_ARGS[@]}" cmake --build "$BUILD_DIR" -j "$JOBS"

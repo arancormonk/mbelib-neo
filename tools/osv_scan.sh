@@ -63,11 +63,16 @@ PINNED_OSV_IMAGE="${OSV_SCANNER_IMAGE:?OSV_SCANNER_IMAGE is required}"
 OSV_IMAGE="${MBE_OSV_SCANNER_IMAGE:-$PINNED_OSV_IMAGE}"
 ALLOW_NO_PACKAGES="${MBE_OSV_ALLOW_NO_PACKAGES:-1}"
 LOG_FILE=".osv-scanner.local.out"
+# Explicit commit input survives removal of vendored sources, even before CMake runs.
+OSV_PIN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mbelib-osv-pffft.XXXXXX")
+trap 'rm -rf "$OSV_PIN_DIR"' EXIT
+python3 tools/pffft_metadata.py --osv "$OSV_PIN_DIR/osv-scanner-custom.json"
+OSV_PIN_FILE="$OSV_PIN_DIR/osv-scanner-custom.json"
 
 run_osv() {
   local format="$1"
   local output_file="${2:-}"
-  local args=(scan source --recursive --format "$format" --verbosity error)
+  local args=(scan source --recursive --format "$format" --verbosity error --lockfile "osv-scanner:$OSV_PIN_FILE")
   if [[ "$ALLOW_NO_PACKAGES" == "1" ]]; then
     args+=(--allow-no-lockfiles)
   fi
@@ -81,6 +86,7 @@ run_osv() {
   elif command -v docker > /dev/null 2>&1; then
     docker run --rm \
       --volume "$ROOT_DIR:/src" \
+      --volume "$OSV_PIN_DIR:$OSV_PIN_DIR:ro" \
       --workdir /src \
       "$OSV_IMAGE" \
       "${args[@]}"

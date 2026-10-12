@@ -222,6 +222,8 @@ rules:
     pattern-either:
       - pattern: '#include "src/external/..."'
       - pattern: '#include <src/external/...>'
+      - pattern: '#include "pffft/..."'
+      - pattern: '#include <pffft/...>'
       - pattern: '#include "pffft.h"'
       - pattern: '#include <pffft.h>'
       - pattern: '#include "fftpack.h"'

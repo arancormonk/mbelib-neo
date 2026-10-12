@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.4.0 LANGUAGES C)
+project(mbelib-neo VERSION 2.4.1 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -252,14 +252,8 @@ configure_file(
     @ONLY
 )
 
-# PFFFT sources (bundled, BSD-like FFTPACK license)
-set(PFFFT_SOURCES src/external/pffft/pffft.c src/external/pffft/fftpack.c)
-if(MBELIB_ENABLE_WARNINGS AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
-    set_source_files_properties(
-        ${PFFFT_SOURCES}
-        PROPERTIES COMPILE_OPTIONS "-Wno-missing-prototypes;-Wno-vla"
-    )
-endif()
+# Pinned, checksum-verified PFFFT sources.
+include(cmake/Pffft.cmake)
 
 # Explicit source lists (avoids FILE(GLOB ...))
 set(MBELIB_FIRST_PARTY_SOURCES
@@ -301,6 +295,12 @@ add_library(mbe_neo::mbe_shared ALIAS mbe-shared)
 add_library(mbe_neo::mbe_static ALIAS mbe-static)
 
 target_compile_definitions(mbe-shared PRIVATE MBE_BUILDING=1)
+foreach(_target mbe-shared mbe-static mbe-codeql-first-party)
+    target_compile_definitions(
+        ${_target}
+        PRIVATE PFFFT_STATIC_DEFINE $<$<CONFIG:Debug>:PFFFT_DISABLE_FMA=1>
+    )
+endforeach()
 
 target_include_directories(
     mbe-shared
@@ -311,7 +311,7 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/src/internal
-        ${PROJECT_SOURCE_DIR}/src/external/pffft
+        ${PFFFT_INCLUDE_DIR}
 )
 target_include_directories(
     mbe-static
@@ -322,7 +322,7 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/src/internal
-        ${PROJECT_SOURCE_DIR}/src/external/pffft
+        ${PFFFT_INCLUDE_DIR}
 )
 target_include_directories(
     mbe-codeql-first-party
@@ -331,7 +331,7 @@ target_include_directories(
         ${MBELIB_GENERATED_INCLUDE_DIR}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/src/internal
-        ${PROJECT_SOURCE_DIR}/src/external/pffft
+        ${PFFFT_INCLUDE_DIR}
 )
 
 # Mark static consumption for Windows to avoid dllimport decorations in headers
@@ -424,14 +424,14 @@ endif()
 if(MBELIB_ENABLE_SIMD)
     target_compile_definitions(mbe-shared PRIVATE MBELIB_ENABLE_SIMD=1)
     target_compile_definitions(mbe-static PRIVATE MBELIB_ENABLE_SIMD=1)
-    # Mirror the backend selection in src/external/pffft/pffft.c, including
+    # Mirror the fork's backend selection, including
     # PFFFT-only backends (AltiVec and SSE1).
     set(_mbelib_pffft_simd_probe_source
         [=[
         #if (defined(__ppc__) || defined(__ppc64__) || defined(__powerpc__) || defined(__powerpc64__)) && (defined(__VEC__) || defined(__ALTIVEC__))
         /* AltiVec */
-        #elif defined(__ARM_NEON) || defined(__aarch64__) || defined(__arm64) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__wasm_simd128__)
-        /* NEON (PFFFT also takes this branch for WebAssembly SIMD builds) */
+        #elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__wasm_simd128__)
+        /* NEON or native WebAssembly SIMD */
         #elif defined(__x86_64__) || defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
         /* SSE */
         #else
@@ -441,6 +441,14 @@ if(MBELIB_ENABLE_SIMD)
       ]=]
     )
     _mbelib_check_c_source_compiles_static("${_mbelib_pffft_simd_probe_source}" _mbelib_pffft_simd_available)
+    # The fork gates NEON/WASM behind opt-in macros. Its headers additionally
+    # check compiler target features; no host-based ISA flags are introduced.
+    foreach(_target mbe-shared mbe-static)
+        target_compile_definitions(
+            ${_target}
+            PRIVATE PFFFT_ENABLE_NEON=1 PFFFT_ENABLE_WASM=1
+        )
+    endforeach()
     if(MBELIB_TARGET_X86_32)
         set(_mbelib_x86_sse2_flag "")
         _mbelib_check_c_source_compiles_static("${_mbelib_x86_32_sse2_probe_source}" _mbelib_x86_targets_sse2_by_default)
@@ -713,6 +721,12 @@ install(
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )
 
+install(
+    FILES "${MBELIB_PFFFT_SOURCE_DIR}/LICENSE.txt"
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft
+)
+install(FILES "${PFFFT_NOTICES}" DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft)
+
 # Exported targets and CMake package config
 install(
     EXPORT mbe-neoTargets
@@ -979,7 +993,7 @@ if(MBELIB_BUILD_TESTS)
                 PRIVATE ${_SAN_LDFLAGS}
             )
         endif()
-        foreach(allocation RANGE 1 11)
+        foreach(allocation RANGE 1 13)
             add_test(
                 NAME test_ambe2400_encoder_oom_${allocation}
                 COMMAND test_ambe2400_encoder_oom ${allocation}
@@ -1359,6 +1373,16 @@ if(MBELIB_BUILD_TESTS)
                 endif()
             endif()
         endif()
+    endif()
+
+    find_package(Python3 3.8 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME test_pffft_metadata
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/test_pffft_metadata.py
+        )
     endif()
 
     # tools/ci_changed_files.sh decides which pull requests PR fuzzing runs on. It is

@@ -13,6 +13,8 @@ import sys
 import tempfile
 
 BASE_FILES = {
+    "cmake/Pffft.cmake": "# dependency\n",
+    "tools/ci-dependency-pins.env": "PFFFT_SHA=pin\n",
     "CMakeLists.txt": "project(t C)\n",
     ".clusterfuzzlite/build.sh": "#!/bin/bash\n",
     ".github/workflows/cflite_pr.yml": "name: fuzz\n",
@@ -134,6 +136,13 @@ def main():
             assert listed == expected, (label, listed, expected)
             assert count == len(expected), (label, count)
             print(f"PASS {label}: fuzz_targets={count}")
+
+        for path in ("cmake/Pffft.cmake", "tools/ci-dependency-pins.env"):
+            for change in (modify, delete):
+                count, listed, outputs = fuzz_targets(bash, git, script, repo, base, change(path))
+                assert count == 1 and listed == [path], outputs
+                assert int(outputs["dependency_scan_targets"]) == 1, outputs
+                print(f"PASS dependency {change.__name__}: {path}")
 
         def rename_out(repo_dir):
             os.makedirs(os.path.join(repo_dir, "lib"), exist_ok=True)

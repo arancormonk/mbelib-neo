@@ -114,6 +114,16 @@ ARGS=(
   -x "./src/external/*"
 )
 
+# Honor a local PFFFT checkout even when it lives inside the source tree.
+analysis_cache="${MBE_ANALYSIS_BUILD_DIR:-build/dev-debug}/CMakeCache.txt"
+if [[ -f "$analysis_cache" ]]; then
+  pffft_source=$(sed -n 's/^MBELIB_PFFFT_SOURCE_DIR:INTERNAL=//p' "$analysis_cache")
+  if [[ -n "$pffft_source" ]]; then
+    pffft_relative="${pffft_source#"$ROOT_DIR/"}"
+    ARGS+=(-x "$pffft_source/*" -x "$pffft_relative/*" -x "./$pffft_relative/*")
+  fi
+fi
+
 if [[ $STRICT -eq 0 ]]; then
   ARGS+=(-i -1)
 fi

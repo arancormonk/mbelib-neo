@@ -1,4 +1,5 @@
 #!/bin/bash -eu
+# SPDX-License-Identifier: GPL-2.0-or-later
 
 PROJECT_DIR="$SRC/mbelib-neo"
 OBJ_DIR="$WORK/obj"
@@ -16,11 +17,13 @@ read -r -a FUZZING_ENGINE <<< "${LIB_FUZZING_ENGINE:-}"
 COMMON_CFLAGS=(
   -std=gnu99
   -DPFFFT_SIMD_DISABLE=1
+  -DPFFFT_STATIC_DEFINE
+  -DPFFFT_DISABLE_FMA=1
   -I"$PROJECT_DIR/include"
   -I"$GEN_INCLUDE_DIR"
   -I"$PROJECT_DIR"
   -I"$PROJECT_DIR/src/internal"
-  -I"$PROJECT_DIR/src/external/pffft"
+  -I"$SRC/pffft/include/pffft"
 )
 
 PROJECT_WARNING_FLAGS=(
@@ -53,8 +56,6 @@ sources=(
   src/core/mbe_tone_detect.c
   src/core/mbe_tone_fit.c
   src/core/mbe_unvoiced_fft.c
-  src/external/pffft/pffft.c
-  src/external/pffft/fftpack.c
 )
 
 objects=()
@@ -65,6 +66,14 @@ for source in "${sources[@]}"; do
     source_cflags+=(-fno-fast-math)
   fi
   "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" "${source_cflags[@]}" -c "$PROJECT_DIR/$source" -o "$object"
+  objects+=("$object")
+done
+
+# Production PFFFT only; FFTPACK is the fork's separate reference implementation.
+for source in pffft.c pffft_common.c; do
+  object="$OBJ_DIR/pffft_$source.o"
+  "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" \
+    -c "$SRC/pffft/src/$source" -o "$object"
   objects+=("$object")
 done
 
