@@ -56,7 +56,8 @@ class Recovery(unittest.TestCase):
                     recovery.verify_assets(dist, self.tag, self.commit)
 
 
-@unittest.skipUnless(sys.platform != "win32" and shutil.which("bash"), "Release publishing uses Bash")
+@unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("bash"),
+                     "Release publisher uses Linux Bash and sha256sum")
 class ReleaseAssets(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
