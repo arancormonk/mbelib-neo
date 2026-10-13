@@ -353,10 +353,40 @@ mbe_generate_noise_with_overlap(float* restrict buffer, float* restrict seed, fl
     memcpy(buffer, overlap, MBE_NOISE_OVERLAP * sizeof(float));
 
     unsigned int state = ((unsigned int)(*seed)) % 53125u;
+#if defined(MBE_VF_WIDTH)
+#if ((MBE_FFT_SIZE - MBE_NOISE_OVERLAP) % 8) != 0
+#error "Noise tail must contain whole four/eight-lane batches"
+#endif
+    /* Seed consecutive samples, then advance each lane by a full batch.
+     * Composing x' = (171*x + 11213) mod 53125 four/eight times gives
+     * the constants below. Each product plus increment fits uint32_t.
+     * Independent integer recurrences let the compiler vectorize without
+     * changing sample order, float rounding, overlap or the returned seed. */
+    uint32_t states[MBE_VF_WIDTH];
+    for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+        states[lane] = state;
+        state = (171u * state + 11213u) % 53125u;
+    }
+#if MBE_VF_WIDTH == 8
+    const uint32_t multiplier = 7311u, increment = 42784u;
+#elif MBE_VF_WIDTH == 4
+    const uint32_t multiplier = 42331u, increment = 45787u;
+#else
+#error "Noise generator requires four or eight SIMD lanes"
+#endif
+    for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; i += MBE_VF_WIDTH) {
+        for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+            buffer[i + lane] = (float)states[lane];
+            states[lane] = (multiplier * states[lane] + increment) % 53125u;
+        }
+    }
+    state = states[0];
+#else
     for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; i++) {
         buffer[i] = (float)state;
         state = (171u * state + 11213u) % 53125u;
     }
+#endif
     *seed = (float)state;
 
     memcpy(overlap, buffer + (MBE_FFT_SIZE - MBE_NOISE_OVERLAP), MBE_NOISE_OVERLAP * sizeof(float));

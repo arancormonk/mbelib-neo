@@ -213,7 +213,14 @@ separate scalar scan and keeps exceptional frames vectorized. Its tests include
 arbitrary IEEE bit patterns, signaling NaNs, unaligned inputs/outputs and frame
 boundary canaries. Hard/soft bit validation uses compiler-vectorized integer OR
 reductions in SIMD builds, with tests for every invalid byte value and tail
-length. Reliability bytes are excluded from validation.
+length. All three frame encoders use the same hard-bit validator. Reliability
+bytes are excluded from validation.
+
+Unvoiced noise generation advances four independent integer LCG lanes (eight
+on AVX2), preserving the original sample order and stream state exactly.
+`test_simd_numerics` compares every one of the 53,125 states with a scalar
+recurrence across three consecutive frames, including the overlap and next
+seed. This oracle also runs on ARM32 and AArch64 under QEMU.
 
 On AVX2 compile targets, float kernels process eight lanes, including voiced
 oscillators, unvoiced windowing/overlap and PCM conversion. Portable x86 builds
@@ -272,6 +279,39 @@ samples. The largest absolute change in log-spectral distance was below
 changed by less than 0.000008. Preserve these per-codec comparisons when
 changing SIMD kernels: passing synthetic numerical tests alone does not
 establish speech quality. Keep DVSI vectors and generated audio local.
+
+The subsequent noise-generation and frame-validation changes were also
+compared directly with the earlier PR head, `c204ce4`. Across GCC SSE2/AVX2
+with fast-math and LTO, and Clang 23.1.1 SSE2 with IEEE math, all 79 DVSI inputs
+produced identical encoder parameter bits, packed frames and decoded PCM:
+770,121 compared frames and 123,105,600 PCM samples, with no nonfinite output.
+The established DVSI quality scores therefore remain unchanged by these two
+optimizations. Native ARM performance remains a separate measurement.
+
+For this follow-up, five alternating comparisons pinned to one CPU on the
+same Ryzen/GCC setup measured the following additional reductions relative
+to `c204ce4`. The first three codecs replay the DVSI `dam` stream through
+`bench_replay hard <codec> 10 7`; ProVoice uses a converted frame fixture.
+
+| Hard-frame replay | Target | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| D-STAR | SSE2 | 3.954 us/frame | 3.791 us/frame | 4.1% |
+| AMBE+2 | SSE2 | 4.305 us/frame | 4.145 us/frame | 3.7% |
+| IMBE | SSE2 | 4.394 us/frame | 4.238 us/frame | 3.6% |
+| ProVoice | SSE2 | 4.721 us/frame | 4.568 us/frame | 3.2% |
+| D-STAR | AVX2 | 3.493 us/frame | 3.140 us/frame | 10.1% |
+| AMBE+2 | AVX2 | 3.802 us/frame | 3.456 us/frame | 9.1% |
+| IMBE | AVX2 | 3.911 us/frame | 3.576 us/frame | 8.6% |
+| ProVoice | AVX2 | 4.109 us/frame | 3.778 us/frame | 8.1% |
+
+`bench_unvoiced 36 20000 7` took 7.2% less time on SSE2 and 20.8% less on
+AVX2. A separate frame-packing microbenchmark cycled 256 deterministic input
+bit arrays through two million calls to each `mbe_encode*Frame` API: AMBE
+packing took 17–19% less time (about 14–15 ns/frame), and IMBE took 5–9% less
+(about 12–25 ns/frame). These packing figures exclude PCM analysis and
+parameter quantization; whole-frame decoding above establishes the gain
+from batching the noise generator. With Clang 23.1.1 SSE2 and IEEE math,
+the same replay comparisons took 6.6–7.9% less time.
 
 ## Speech Quality Evaluation
 

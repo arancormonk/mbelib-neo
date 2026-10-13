@@ -4,11 +4,55 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include "ambe_encoder.h"
 #include "mbe_tone_fit.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_voiced.h" // IWYU pragma: keep (MBE_VOICED_KERNELS selects the voiced checks)
 
 #define PI 3.14159265358979323846
+
+static void
+assert_float_bits_equal(const float* actual, const float* expected, int count) {
+    for (int i = 0; i < count; ++i) {
+        uint32_t actual_bits, expected_bits;
+        memcpy(&actual_bits, &actual[i], sizeof(actual_bits));
+        memcpy(&expected_bits, &expected[i], sizeof(expected_bits));
+        assert(actual_bits == expected_bits);
+    }
+}
+
+static void
+test_noise_sequence(void) {
+    /* Every possible LCG state, with three frames to exercise both overlap
+     * and returned state. The oracle advances one sample at a time, never
+     * using the production batch constants. Offset buffers exercise callers
+     * that do not provide SIMD alignment. */
+    for (uint32_t initial = 0; initial < 53125u; ++initial) {
+        float seed = (float)initial;
+        uint32_t state = initial;
+        float storage[MBE_FFT_SIZE + 1], overlap_storage[MBE_NOISE_OVERLAP + 1];
+        float* actual = storage + 1;
+        float* overlap = overlap_storage + 1;
+        float expected[MBE_FFT_SIZE], expected_overlap[MBE_NOISE_OVERLAP];
+        for (int i = 0; i < MBE_NOISE_OVERLAP; ++i) {
+            overlap[i] = expected_overlap[i] = (float)(i * 37);
+        }
+        for (int frame = 0; frame < 3; ++frame) {
+            memcpy(expected, expected_overlap, sizeof(expected_overlap));
+            for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; ++i) {
+                expected[i] = (float)state;
+                state = (171u * state + 11213u) % 53125u;
+            }
+            memcpy(expected_overlap, expected + MBE_FFT_SIZE - MBE_NOISE_OVERLAP, sizeof(expected_overlap));
+            float expected_seed = (float)state;
+            mbe_generate_noise_with_overlap(actual, &seed, overlap);
+            assert_float_bits_equal(actual, expected, MBE_FFT_SIZE);
+            assert_float_bits_equal(overlap, expected_overlap, MBE_NOISE_OVERLAP);
+            assert_float_bits_equal(&seed, &expected_seed, 1);
+        }
+    }
+}
 
 static int
 nearest_reference(const float* table, int width, int rows, int step, const float* target, int used) {
@@ -235,6 +279,7 @@ test_large_phases(void) {
 
 int
 main(void) {
+    test_noise_sequence();
     test_nearest_codebook();
     test_tone_fit();
 #if defined(MBE_VOICED_KERNELS)
