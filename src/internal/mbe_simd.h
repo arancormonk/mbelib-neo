@@ -72,6 +72,16 @@ mbe_vd_store(double* x, mbe_vd a) {
 #endif
 
 #if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
+#if defined(__AVX2__)
+typedef __m256 mbe_vf;
+#define MBE_VF_WIDTH 8
+#define mbe_vf_set   _mm256_set1_ps
+#define mbe_vf_add   _mm256_add_ps
+#define mbe_vf_sub   _mm256_sub_ps
+#define mbe_vf_mul   _mm256_mul_ps
+#define mbe_vf_load  _mm256_loadu_ps
+#define mbe_vf_store _mm256_storeu_ps
+#else
 typedef __m128 mbe_vf;
 #define MBE_VF_WIDTH 4
 #define mbe_vf_set   _mm_set1_ps
@@ -80,6 +90,7 @@ typedef __m128 mbe_vf;
 #define mbe_vf_mul   _mm_mul_ps
 #define mbe_vf_load  _mm_loadu_ps
 #define mbe_vf_store _mm_storeu_ps
+#endif
 #elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
 #include <arm_neon.h>
 typedef float32x4_t mbe_vf;

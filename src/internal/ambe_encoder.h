@@ -62,6 +62,10 @@ void ambe_enc_prediction(struct ambe_enc_frame* q, const struct ambe_enc_tables*
 /* b3..b8: block DCTs, the PRBA vector and the higher-order coefficients. */
 void ambe_enc_quantize_residual(struct ambe_enc_frame* q, const struct ambe_enc_tables* t);
 
+/* Nearest codebook row; private kernel shared with the numerical tests.
+ * width > 0, rows > 0, step > 0, and 0 <= used <= width. */
+int ambe_enc_nearest(const float* table, int width, int rows, int step, const float* target, int used);
+
 /*
  * The 72-bit frame of 49 parameter bits: C0 as (23,12) Golay plus even parity,
  * C1 as (23,12) Golay scrambled by the sequence seeded from C0's data, and C2

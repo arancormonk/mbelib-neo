@@ -364,7 +364,7 @@ Run benchmark executables:
 ./build/dev-release/bench_encode
 ```
 
-Quick scalar-vs-SIMD comparison helper (builds ad hoc comparison trees under `build/bench-compare-scalar/` and `build/bench-compare-simd/`):
+Scalar-vs-SIMD comparison for all three encoders, voiced/unvoiced synthesis and PCM conversion (builds ad hoc comparison trees under `build/bench-compare-scalar/` and `build/bench-compare-simd/`):
 
 ```
 tools/bench_compare.sh

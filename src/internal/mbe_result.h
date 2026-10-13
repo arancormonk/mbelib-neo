@@ -22,12 +22,22 @@ mbe_validate_bits(const char* bits, size_t count) {
     if (!bits) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
+#if defined(MBELIB_ENABLE_SIMD)
+    /* An OR reduction lets the compiler check whole vectors without a branch
+     * per bit. Any bit outside the least significant bit makes the input bad. */
+    unsigned char combined = 0;
+    for (size_t i = 0u; i < count; ++i) {
+        combined |= (unsigned char)bits[i];
+    }
+    return combined > 1u ? MBE_STATUS_INVALID_BITS : 0;
+#else
     for (size_t i = 0u; i < count; ++i) {
         if (bits[i] != 0 && bits[i] != 1) {
             return MBE_STATUS_INVALID_BITS;
         }
     }
     return 0;
+#endif
 }
 
 static inline int
@@ -35,12 +45,20 @@ mbe_validate_soft_bits(const mbe_soft_bit* bits, size_t count) {
     if (!bits) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
+#if defined(MBELIB_ENABLE_SIMD)
+    unsigned char combined = 0;
+    for (size_t i = 0u; i < count; ++i) {
+        combined |= bits[i].bit;
+    }
+    return combined > 1u ? MBE_STATUS_INVALID_BITS : 0;
+#else
     for (size_t i = 0u; i < count; ++i) {
         if (bits[i].bit > 1u) {
             return MBE_STATUS_INVALID_BITS;
         }
     }
     return 0;
+#endif
 }
 
 static inline int

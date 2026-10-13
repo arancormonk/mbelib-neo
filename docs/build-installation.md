@@ -26,13 +26,15 @@ PCM in memory before writing the WAV header and data to stdout.
 
 ## SIMD Target Selection
 
-`MBELIB_ENABLE_SIMD=ON` uses SSE2 or NEON routines when the compiler target
+`MBELIB_ENABLE_SIMD=ON` uses SSE2/AVX2 or NEON routines when the compiler target
 provides those instructions, with scalar routines otherwise. The option defaults
 to ON for Release, RelWithDebInfo, and MinSizeRel builds of 64-bit targets and
 to OFF for Debug builds and 32-bit targets. The downloaded PFFFT
 library uses its own supported backends (including SSE and AltiVec); CMake
 explicitly selects scalar FFT code when none is available, even with SIMD ON.
-Warnings-as-errors remains enabled by default in either case.
+Warnings-as-errors remains enabled by default in either case. AVX2 kernels
+require an explicit compiler target such as `-DCMAKE_C_FLAGS=-march=x86-64-v3`;
+the portable x86-64 build continues to require only SSE2.
 
 On 32-bit ARM, the option preserves the toolchain's FPU selection. A VFP-only
 target builds with scalar FFT code and a configure status message explaining

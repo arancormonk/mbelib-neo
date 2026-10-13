@@ -39,6 +39,7 @@
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
 #include "mbe_math.h"
+#include "mbe_result.h"
 #include "mbe_speech_analysis.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
@@ -343,10 +344,9 @@ mbe_encodeImbe7200x4400Frame(const char imbe_d[88], char imbe_fr[8][23]) {
     if (imbe_d == NULL || imbe_fr == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    for (int i = 0; i < 88; i++) {
-        if (imbe_d[i] != 0 && imbe_d[i] != 1) {
-            return MBE_STATUS_INVALID_BITS;
-        }
+    int bit_status = mbe_validate_bits(imbe_d, 88u);
+    if (bit_status < 0) {
+        return bit_status;
     }
     char d[88];
     memcpy(d, imbe_d, sizeof(d)); /* the caller's bits may share the frame's memory */

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "mbe_compiler.h"
+#include "mbe_simd.h" // IWYU pragma: keep (MBE_VF_WIDTH selects the SIMD window/scaling kernels)
 #include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
@@ -30,16 +31,6 @@
 /* Thread-local seed override for unvoiced-noise cold start. */
 static MBE_THREAD_LOCAL uint32_t mbe_unvoiced_seed_state = (uint32_t)MBE_LCG_DEFAULT_SEED;
 static MBE_THREAD_LOCAL int mbe_unvoiced_seed_override = 0;
-
-/* SIMD headers for vectorized paths */
-#if defined(MBELIB_ENABLE_SIMD)
-#if defined(MBE_SIMD_TARGET_SSE2)
-#include <emmintrin.h>
-#endif
-#if defined(MBE_SIMD_TARGET_NEON)
-#include <arm_neon.h>
-#endif
-#endif
 
 /* Frame length for WOLA (always 160 samples) */
 #define MBE_FRAME_LEN 160
@@ -251,17 +242,11 @@ static void
 mbe_apply_synthesis_window(float* restrict dst, const float* restrict src, const mbe_fft_plan* restrict plan) {
     const float* window = plan->synthesis_window;
 
-#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
-    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
-        __m128 vsrc = _mm_loadu_ps(src + i);
-        __m128 vwin = _mm_loadu_ps(window + i);
-        _mm_storeu_ps(dst + i, _mm_mul_ps(vsrc, vwin));
-    }
-#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
-    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
-        float32x4_t vsrc = vld1q_f32(src + i);
-        float32x4_t vwin = vld1q_f32(window + i);
-        vst1q_f32(dst + i, vmulq_f32(vsrc, vwin));
+#if defined(MBE_VF_WIDTH)
+    for (int i = 0; i < MBE_FFT_SIZE; i += MBE_VF_WIDTH) {
+        mbe_vf vsrc = mbe_vf_load(src + i);
+        mbe_vf vwin = mbe_vf_load(window + i);
+        mbe_vf_store(dst + i, mbe_vf_mul(vsrc, vwin));
     }
 #else
     for (int i = 0; i < MBE_FFT_SIZE; i++) {
@@ -368,10 +353,40 @@ mbe_generate_noise_with_overlap(float* restrict buffer, float* restrict seed, fl
     memcpy(buffer, overlap, MBE_NOISE_OVERLAP * sizeof(float));
 
     unsigned int state = ((unsigned int)(*seed)) % 53125u;
+#if defined(MBE_VF_WIDTH)
+#if ((MBE_FFT_SIZE - MBE_NOISE_OVERLAP) % 8) != 0
+#error "Noise tail must contain whole four/eight-lane batches"
+#endif
+    /* Seed consecutive samples, then advance each lane by a full batch.
+     * Composing x' = (171*x + 11213) mod 53125 four/eight times gives
+     * the constants below. Each product plus increment fits uint32_t.
+     * Independent integer recurrences let the compiler vectorize without
+     * changing sample order, float rounding, overlap or the returned seed. */
+    uint32_t states[MBE_VF_WIDTH];
+    for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+        states[lane] = state;
+        state = (171u * state + 11213u) % 53125u;
+    }
+#if MBE_VF_WIDTH == 8
+    const uint32_t multiplier = 7311u, increment = 42784u;
+#elif MBE_VF_WIDTH == 4
+    const uint32_t multiplier = 42331u, increment = 45787u;
+#else
+#error "Noise generator requires four or eight SIMD lanes"
+#endif
+    for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; i += MBE_VF_WIDTH) {
+        for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+            buffer[i + lane] = (float)states[lane];
+            states[lane] = (multiplier * states[lane] + increment) % 53125u;
+        }
+    }
+    state = states[0];
+#else
     for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; i++) {
         buffer[i] = (float)state;
         state = (171u * state + 11213u) % 53125u;
     }
+#endif
     *seed = (float)state;
 
     memcpy(overlap, buffer + (MBE_FFT_SIZE - MBE_NOISE_OVERLAP), MBE_NOISE_OVERLAP * sizeof(float));
@@ -450,37 +465,43 @@ mbe_wola_combine_scalar_range(float* restrict output, const float* restrict prev
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(MBE_SIMD_TARGET_SSE2)
 static void
-mbe_wola_combine_sse2_center(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
-                             const mbe_fft_plan* restrict plan) {
+mbe_wola_combine_x86_center(float* restrict output, const float* restrict prevUw, const float* restrict currUw,
+                            const mbe_fft_plan* restrict plan) {
     const float* w_prev = plan->wola_w_prev;
     const float* w_curr = plan->wola_w_curr;
     const float* denom = plan->wola_denom;
-    const __m128 threshold = _mm_set1_ps(1e-10f);
+    const mbe_vf threshold = mbe_vf_set(1e-10f);
 
-    for (int n = 32; n < 128; n += 4) {
+    for (int n = 32; n < 128; n += MBE_VF_WIDTH) {
         /* Load precomputed weights */
-        __m128 vWprev = _mm_loadu_ps(&w_prev[n]);
-        __m128 vWcurr = _mm_loadu_ps(&w_curr[n]);
-        __m128 vDenom = _mm_loadu_ps(&denom[n]);
+        mbe_vf vWprev = mbe_vf_load(&w_prev[n]);
+        mbe_vf vWcurr = mbe_vf_load(&w_curr[n]);
+        mbe_vf vDenom = mbe_vf_load(&denom[n]);
 
         /* These source regions are contiguous for n=32..127. */
-        __m128 vPrevSamp = _mm_loadu_ps(prevUw + n + 128);
-        __m128 vCurrSamp = _mm_loadu_ps(currUw + n - 32);
+        mbe_vf vPrevSamp = mbe_vf_load(prevUw + n + 128);
+        mbe_vf vCurrSamp = mbe_vf_load(currUw + n - 32);
 
         /* Compute weighted samples */
-        __m128 vWeightedPrev = _mm_mul_ps(vWprev, vPrevSamp);
-        __m128 vWeightedCurr = _mm_mul_ps(vWcurr, vCurrSamp);
-        __m128 vSum = _mm_add_ps(vWeightedPrev, vWeightedCurr);
+        mbe_vf vWeightedPrev = mbe_vf_mul(vWprev, vPrevSamp);
+        mbe_vf vWeightedCurr = mbe_vf_mul(vWcurr, vCurrSamp);
+        mbe_vf vSum = mbe_vf_add(vWeightedPrev, vWeightedCurr);
 
         /* Divide by denominator (skip division for small denominators) */
+#if defined(__AVX2__)
+        mbe_vf vMask = _mm256_cmp_ps(vDenom, threshold, _CMP_GT_OQ);
+        mbe_vf vResult = _mm256_div_ps(vSum, vDenom);
+        vResult = _mm256_and_ps(vResult, vMask);
+#else
         __m128 vMask = _mm_cmpgt_ps(vDenom, threshold);
         __m128 vResult = _mm_div_ps(vSum, vDenom);
         vResult = _mm_and_ps(vResult, vMask);
+#endif
 
         /* Add to output */
-        __m128 vOut = _mm_loadu_ps(&output[n]);
-        vOut = _mm_add_ps(vOut, vResult);
-        _mm_storeu_ps(&output[n], vOut);
+        mbe_vf vOut = mbe_vf_load(&output[n]);
+        vOut = mbe_vf_add(vOut, vResult);
+        mbe_vf_store(&output[n], vOut);
     }
 }
 
@@ -555,7 +576,7 @@ mbe_wola_combine_fast(float* restrict output, const float* restrict prevUw, cons
     /* SIMD center range is n=32..127; outside that, one source index is out of range. */
 #if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
     mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 0, 32);
-    mbe_wola_combine_sse2_center(output, prevUw, currUw, plan);
+    mbe_wola_combine_x86_center(output, prevUw, currUw, plan);
     mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 128, MBE_FRAME_LEN);
 #elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
     mbe_wola_combine_scalar_range(output, prevUw, currUw, plan, 0, 32);
@@ -725,19 +746,12 @@ mbe_apply_unvoiced_band_scaling(float* restrict dftBinScalor, const float* restr
 static void
 mbe_normalize_ifft_output(float* restrict Uw_out) {
     const float scale = 1.0f / (float)MBE_FFT_SIZE;
-#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
-    __m128 vscale = _mm_set1_ps(scale);
-    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
-        __m128 v = _mm_loadu_ps(&Uw_out[i]);
-        v = _mm_mul_ps(v, vscale);
-        _mm_storeu_ps(&Uw_out[i], v);
-    }
-#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
-    float32x4_t vscale = vdupq_n_f32(scale);
-    for (int i = 0; i < MBE_FFT_SIZE; i += 4) {
-        float32x4_t v = vld1q_f32(&Uw_out[i]);
-        v = vmulq_f32(v, vscale);
-        vst1q_f32(&Uw_out[i], v);
+#if defined(MBE_VF_WIDTH)
+    mbe_vf vscale = mbe_vf_set(scale);
+    for (int i = 0; i < MBE_FFT_SIZE; i += MBE_VF_WIDTH) {
+        mbe_vf v = mbe_vf_load(&Uw_out[i]);
+        v = mbe_vf_mul(v, vscale);
+        mbe_vf_store(&Uw_out[i], v);
     }
 #else
     for (int i = 0; i < MBE_FFT_SIZE; i++) {

@@ -108,6 +108,97 @@ test_invalid_soft_frame_rejected_before_decode(void) {
 }
 
 static void
+test_bit_validation_vector_boundaries(void) {
+    char storage[184 + 16];
+    mbe_soft_bit out[184];
+    for (int offset = 0; offset < 16; ++offset) {
+        char* bits = storage + offset;
+        for (size_t count = 0; count <= 184; ++count) {
+            /* Invalid bytes just beyond count must never affect validation. */
+            memset(storage, 2, sizeof(storage));
+            for (size_t i = 0; i < count; ++i) {
+                bits[i] = (char)(i & 1u);
+            }
+            assert(mbe_softBitsFromHard(bits, out, count, 197) == 0);
+            for (size_t i = 0; i < count; ++i) {
+                assert(out[i].bit == (unsigned char)bits[i]);
+                assert(out[i].reliability == 197);
+            }
+            if (count > 0) {
+                /* Set the high bit without an out-of-range signed char cast. */
+                memset(&bits[count - 1], 0x80, sizeof(bits[0]));
+                assert(mbe_softBitsFromHard(bits, out, count, 197) == MBE_STATUS_INVALID_BITS);
+            }
+        }
+    }
+}
+
+static void
+test_all_invalid_bit_values(void) {
+    char hard[184] = {0};
+    mbe_soft_bit out[184];
+    mbe_soft_bit frame[8][23] = {{{0, 0}}};
+    char params[88], expected[88];
+    mbe_process_result result;
+    memset(expected, 9, sizeof(expected));
+    for (int i = 0; i < 184; ++i) {
+        frame[i / 23][i % 23].reliability = (uint8_t)(i + 72);
+    }
+    /* All reliability bits are allowed; only .bit participates in the check. */
+    assert(mbe_decodeImbe7200x4400SoftFrame((const mbe_soft_bit(*)[23])frame, params, &result) >= 0);
+    for (int pos = 0; pos < 184; ++pos) {
+        for (unsigned value = 2; value <= 255; ++value) {
+            hard[pos] = (char)value;
+            assert(mbe_softBitsFromHard(hard, out, 184, 255) == MBE_STATUS_INVALID_BITS);
+            frame[pos / 23][pos % 23].bit = (uint8_t)value;
+            memcpy(params, expected, sizeof(params));
+            assert(mbe_decodeImbe7200x4400SoftFrame((const mbe_soft_bit(*)[23])frame, params, &result)
+                   == MBE_STATUS_INVALID_BITS);
+            assert(memcmp(params, expected, sizeof(params)) == 0);
+        }
+        hard[pos] = 0;
+        frame[pos / 23][pos % 23].bit = 0;
+    }
+}
+
+static void
+test_frame_encoder_bit_validation(void) {
+    char storage[88 + 16], ambe_frame[4][24], imbe_frame[8][23];
+    char expected_ambe[4][24], expected_imbe[8][23];
+    for (int offset = 0; offset < 16; ++offset) {
+        char* bits = storage + offset;
+        memset(storage, 2, sizeof(storage));
+        memset(bits, 0, 49u);
+        /* Invalid bytes outside each codec's bit count must be ignored. */
+        assert(mbe_encodeAmbe3600x2400Frame(bits, ambe_frame) == 0);
+        assert(mbe_encodeAmbe3600x2450Frame(bits, ambe_frame) == 0);
+        memset(bits + 49, 0, 39u);
+        assert(mbe_encodeImbe7200x4400Frame(bits, imbe_frame) == 0);
+    }
+
+    char* bits = storage + 1;
+    memset(bits, 0, 88u);
+    memset(expected_ambe, 7, sizeof(expected_ambe));
+    memset(expected_imbe, 9, sizeof(expected_imbe));
+    memcpy(ambe_frame, expected_ambe, sizeof(ambe_frame));
+    memcpy(imbe_frame, expected_imbe, sizeof(imbe_frame));
+    for (int pos = 0; pos < 88; ++pos) {
+        for (int value = 2; value <= 255; ++value) {
+            memset(&bits[pos], value, sizeof(bits[pos]));
+            if (pos < 49) {
+                assert(mbe_encodeAmbe3600x2400Frame(bits, ambe_frame) == MBE_STATUS_INVALID_BITS);
+                assert(memcmp(ambe_frame, expected_ambe, sizeof(ambe_frame)) == 0);
+                assert(mbe_encodeAmbe3600x2450Frame(bits, ambe_frame) == MBE_STATUS_INVALID_BITS);
+                assert(memcmp(ambe_frame, expected_ambe, sizeof(ambe_frame)) == 0);
+            }
+            assert(mbe_encodeImbe7200x4400Frame(bits, imbe_frame) == MBE_STATUS_INVALID_BITS);
+            assert(memcmp(imbe_frame, expected_imbe, sizeof(imbe_frame)) == 0);
+        }
+        bits[pos] = 0;
+    }
+}
+
+static void
 test_invalid_parameter_bits_rejected_before_synthesis(void) {
     char params[49] = {0};
     float out[160];
@@ -470,6 +561,9 @@ test_low_level_public_bit_paths_validate(void) {
 
 int
 main(void) {
+    test_bit_validation_vector_boundaries();
+    test_all_invalid_bit_values();
+    test_frame_encoder_bit_validation();
     test_invalid_hard_frame_rejected_before_decode();
     test_invalid_soft_frame_rejected_before_decode();
     test_invalid_parameter_bits_rejected_before_synthesis();

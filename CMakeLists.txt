@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.4.2 LANGUAGES C)
+project(mbelib-neo VERSION 2.4.3 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()

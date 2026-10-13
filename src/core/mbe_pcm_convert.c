@@ -32,6 +32,9 @@
 #if defined(MBELIB_ENABLE_SIMD)
 #if defined(MBE_SIMD_TARGET_SSE2)
 #include <emmintrin.h>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 #endif
 #if defined(MBE_SIMD_TARGET_NEON)
 #include <arm_neon.h>
@@ -40,6 +43,7 @@
 
 #include "mbelib-neo/mbelib.h"
 
+#if !defined(MBELIB_ENABLE_SIMD) || (!defined(MBE_SIMD_TARGET_SSE2) && !defined(MBE_SIMD_TARGET_NEON))
 /**
  * @brief Scale one float sample by the historical gain and clip it for int16.
  *
@@ -77,42 +81,47 @@ mbe_scaleAndClipFloatSampleForShort(float sample) {
     }
     return audio;
 }
+#endif
 
 #if defined(MBELIB_ENABLE_SIMD)
-static inline int
-mbe_floatSampleIsNonFinite(float sample) {
-    uint32_t sample_bits;
-    memcpy(&sample_bits, &sample, sizeof(sample_bits));
-
-    return (sample_bits & 0x7FFFFFFFu) >= 0x7F800000u;
-}
-
-static int
-mbe_floatBufferHasNonFinite(const float* float_buf) {
-    for (int i = 0; i < 160; i++) {
-        if (mbe_floatSampleIsNonFinite(float_buf[i])) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/**
- * @brief Portable scalar fallback for float→int16 conversion.
- * @param float_buf Input 160 float samples.
- * @param aout_buf  Output 160 int16 samples.
- */
-static void
-mbe_floattoshort_scalar(const float* restrict float_buf, short* restrict aout_buf) {
-    for (int i = 0; i < 160; i++) {
-        aout_buf[i] = (short)mbe_scaleAndClipFloatSampleForShort(float_buf[i]);
-    }
-}
-
 /**
  * @brief SSE2 specialization for float→int16 conversion.
  */
 #if defined(MBE_SIMD_TARGET_SSE2)
+/* Classify in integer lanes before any floating-point arithmetic, including
+ * for signaling NaNs. Infinities survive and clip to the signed limit. */
+#if defined(__AVX2__)
+static inline __m256
+mbe_pcm_nan_to_zero_avx2(__m256 x) {
+    __m256i magnitude = _mm256_and_si256(_mm256_castps_si256(x), _mm256_set1_epi32(0x7fffffff));
+    __m256i nan = _mm256_cmpgt_epi32(magnitude, _mm256_set1_epi32(0x7f800000));
+    return _mm256_andnot_ps(_mm256_castsi256_ps(nan), x);
+}
+
+static void
+mbe_floattoshort_avx2(const float* restrict float_buf, short* restrict aout_buf) {
+    const __m256 scale = _mm256_set1_ps(7.0f);
+    const __m256 hi = _mm256_set1_ps(32767.0f * 0.95f);
+    const __m256 lo = _mm256_set1_ps(-32767.0f * 0.95f);
+    for (int i = 0; i < 160; i += 16) {
+        __m256 a = _mm256_mul_ps(mbe_pcm_nan_to_zero_avx2(_mm256_loadu_ps(float_buf + i)), scale);
+        __m256 b = _mm256_mul_ps(mbe_pcm_nan_to_zero_avx2(_mm256_loadu_ps(float_buf + i + 8)), scale);
+        a = _mm256_min_ps(_mm256_max_ps(a, lo), hi);
+        b = _mm256_min_ps(_mm256_max_ps(b, lo), hi);
+        __m256i packed = _mm256_packs_epi32(_mm256_cvttps_epi32(a), _mm256_cvttps_epi32(b));
+        /* packs works within 128-bit halves: restore consecutive samples. */
+        packed = _mm256_permute4x64_epi64(packed, _MM_SHUFFLE(3, 1, 2, 0));
+        _mm256_storeu_si256((__m256i*)(aout_buf + i), packed);
+    }
+}
+#else
+static inline __m128
+mbe_pcm_nan_to_zero_sse2(__m128 x) {
+    __m128i magnitude = _mm_and_si128(_mm_castps_si128(x), _mm_set1_epi32(0x7fffffff));
+    __m128i nan = _mm_cmpgt_epi32(magnitude, _mm_set1_epi32(0x7f800000));
+    return _mm_andnot_ps(_mm_castsi128_ps(nan), x);
+}
+
 static void
 mbe_floattoshort_sse2(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
@@ -120,8 +129,8 @@ mbe_floattoshort_sse2(const float* restrict float_buf, short* restrict aout_buf)
     const __m128 vmaxv = _mm_set1_ps(32767.0f * 0.95f);
     const __m128 vminv = _mm_set1_ps(-32767.0f * 0.95f);
     for (int i = 0; i < 160; i += 8) {
-        __m128 a = _mm_mul_ps(_mm_loadu_ps(float_buf + i), vscale);
-        __m128 b = _mm_mul_ps(_mm_loadu_ps(float_buf + i + 4), vscale);
+        __m128 a = _mm_mul_ps(mbe_pcm_nan_to_zero_sse2(_mm_loadu_ps(float_buf + i)), vscale);
+        __m128 b = _mm_mul_ps(mbe_pcm_nan_to_zero_sse2(_mm_loadu_ps(float_buf + i + 4)), vscale);
         a = _mm_min_ps(_mm_max_ps(a, vminv), vmaxv);
         b = _mm_min_ps(_mm_max_ps(b, vminv), vmaxv);
         __m128i ia = _mm_cvttps_epi32(a);
@@ -131,11 +140,20 @@ mbe_floattoshort_sse2(const float* restrict float_buf, short* restrict aout_buf)
     }
 }
 #endif
+#endif
 
 /**
  * @brief NEON specialization for float→int16 conversion.
  */
 #if defined(MBE_SIMD_TARGET_NEON)
+static inline float32x4_t
+mbe_pcm_nan_to_zero_neon(float32x4_t x) {
+    uint32x4_t bits = vreinterpretq_u32_f32(x);
+    uint32x4_t magnitude = vandq_u32(bits, vdupq_n_u32(0x7fffffffu));
+    uint32x4_t nan = vcgtq_u32(magnitude, vdupq_n_u32(0x7f800000u));
+    return vreinterpretq_f32_u32(vbicq_u32(bits, nan));
+}
+
 static void
 mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf) {
     /* JMBE-compatible soft clipping at 95% of maximum amplitude */
@@ -143,8 +161,8 @@ mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf)
     const float32x4_t vmaxv = vdupq_n_f32(32767.0f * 0.95f);
     const float32x4_t vminv = vdupq_n_f32(-32767.0f * 0.95f);
     for (int i = 0; i < 160; i += 8) {
-        float32x4_t a = vmulq_f32(vld1q_f32(float_buf + i), vscale);
-        float32x4_t b = vmulq_f32(vld1q_f32(float_buf + i + 4), vscale);
+        float32x4_t a = vmulq_f32(mbe_pcm_nan_to_zero_neon(vld1q_f32(float_buf + i)), vscale);
+        float32x4_t b = vmulq_f32(mbe_pcm_nan_to_zero_neon(vld1q_f32(float_buf + i + 4)), vscale);
         a = vminq_f32(vmaxq_f32(a, vminv), vmaxv);
         b = vminq_f32(vmaxq_f32(b, vminv), vmaxv);
         int32x4_t ia = vcvtq_s32_f32(a);
@@ -156,55 +174,13 @@ mbe_floattoshort_neon(const float* restrict float_buf, short* restrict aout_buf)
     }
 }
 #endif
-
-typedef void (*mbe_floattoshort_fn)(const float* restrict, short* restrict);
-/*
- * Keep dispatch state thread-local so first-use initialization has no cross-thread
- * data races and still amortizes probe cost to one-time per thread.
- */
-static MBE_THREAD_LOCAL mbe_floattoshort_fn mbe_floattoshort_impl = NULL; /**< Runtime-selected impl pointer. */
-
-/**
- * @brief Initialize conversion dispatch for the compiled target ISA.
- */
-static void
-mbe_init_runtime_dispatch(void) {
-    if (mbe_floattoshort_impl) {
-        return;
-    }
-    /* Choose implementation first, then publish once. */
-    mbe_floattoshort_fn impl = mbe_floattoshort_scalar;
-
-#if defined(MBE_ARCH_AARCH64)
-    /* NEON is mandatory on AArch64, including ARM64EC. */
-#if defined(MBE_SIMD_TARGET_NEON)
-    impl = mbe_floattoshort_neon;
-#endif
-#elif defined(MBE_ARCH_X86_64)
-    /* SSE2 is guaranteed on x86_64 */
-#if defined(MBE_SIMD_TARGET_SSE2)
-    impl = mbe_floattoshort_sse2;
-#endif
-#elif defined(MBE_ARCH_X86_32)
-    /*
-     * 32-bit x86 only compiles the SSE2 specialization when the build targets
-     * SSE2 explicitly (for example /arch:SSE2 or -msse2).
-     */
-#if defined(MBE_SIMD_TARGET_SSE2)
-    impl = mbe_floattoshort_sse2;
-#endif
-#elif defined(MBE_SIMD_TARGET_NEON)
-    /* Assume NEON if building with NEON intrinsics */
-    impl = mbe_floattoshort_neon;
-#endif
-    mbe_floattoshort_impl = impl;
-}
+#endif /* MBELIB_ENABLE_SIMD */
 
 /**
  * @brief Convert 160 float samples to clipped/scaled 16-bit PCM.
  *
- * Runtime-dispatched conversion with SIMD specializations. Frames containing
- * NaN or infinity always take the scalar path so the documented handling holds.
+ * Select the compiler target's SIMD specialization, with per-lane NaN/Inf
+ * handling. No CPU probing or stronger ISA than the compile target is needed.
  * @param float_buf Input 160 float samples.
  * @param aout_buf  Output 160 16-bit samples.
  */
@@ -213,29 +189,17 @@ mbe_floattoshort(const float* restrict float_buf, short* restrict aout_buf) {
     if (MBE_UNLIKELY(!float_buf || !aout_buf)) {
         return;
     }
-    if (MBE_UNLIKELY(mbe_floatBufferHasNonFinite(float_buf))) {
-        mbe_floattoshort_scalar(float_buf, aout_buf);
-        return;
-    }
-    if (MBE_UNLIKELY(!mbe_floattoshort_impl)) {
-        mbe_init_runtime_dispatch();
-    }
-    mbe_floattoshort_impl(float_buf, aout_buf);
-}
-
-#else  /* MBELIB_ENABLE_SIMD not set: keep scalar implementation */
-/**
- * @brief Convert 160 float samples to clipped/scaled 16-bit PCM (scalar build).
- * @param float_buf Input 160 float samples.
- * @param aout_buf  Output 160 16-bit samples.
- */
-void
-mbe_floattoshort(const float* restrict float_buf, short* restrict aout_buf) {
-    if (MBE_UNLIKELY(!float_buf || !aout_buf)) {
-        return;
-    }
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
+#if defined(__AVX2__)
+    mbe_floattoshort_avx2(float_buf, aout_buf);
+#else
+    mbe_floattoshort_sse2(float_buf, aout_buf);
+#endif
+#elif defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_NEON)
+    mbe_floattoshort_neon(float_buf, aout_buf);
+#else
     for (int i = 0; i < 160; i++) {
         aout_buf[i] = (short)mbe_scaleAndClipFloatSampleForShort(float_buf[i]);
     }
+#endif
 }
-#endif /* MBELIB_ENABLE_SIMD */

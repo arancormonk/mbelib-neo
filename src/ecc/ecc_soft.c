@@ -2,10 +2,21 @@
 /** @file Exact weighted soft ECC over immutable, enumeration-ordered codebooks. */
 #include <stddef.h>
 #include <stdint.h>
+#include "mbe_compiler.h"
 #include "mbe_result.h"
 #include "mbelib-neo/mbelib.h"
 
 #include "mbe_ecc_codebooks.h"
+
+#if defined(MBELIB_ENABLE_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
+#if defined(__AVX2__)
+#include <immintrin.h>
+#define SOFT_SCORE_LANES 8
+#else
+#include <emmintrin.h>
+#define SOFT_SCORE_LANES 4
+#endif
+#endif
 
 /* The search visits codewords in groups of 64 that share their high data bits. */
 #define GROUP_BITS 6u
@@ -109,6 +120,88 @@ soft_tables_init(struct soft_tables* t, const struct soft_input* s, const struct
     t->parity_mask = (1u << parity_bits) - 1u;
 }
 
+struct soft_match {
+    unsigned bound, score, rank;
+    uint32_t word;
+};
+
+static void
+soft_consider(const struct soft_input* s, const struct soft_code* code, uint32_t word, unsigned score,
+              struct soft_match* best) {
+    if (score > best->bound) {
+        return;
+    }
+    unsigned diffs = bit_count((word ^ s->received) & code->data_mask);
+    unsigned rank = (((word ^ s->hard) & code->data_mask) != 0u ? 32u : 0u) + diffs;
+    if (score < best->score || rank < best->rank) {
+        best->word = word;
+        best->score = score;
+        best->rank = rank;
+        best->bound = score;
+    }
+}
+
+#if defined(SOFT_SCORE_LANES)
+#if defined(__AVX2__)
+/* Gather pairs of 16-bit parity costs, then select the wanted half. This
+ * reads only complete pairs within parity[2048], including its last entry. */
+static unsigned
+soft_scores(const struct soft_tables* t, const uint32_t* words, unsigned k, unsigned limit,
+            uint32_t scores[SOFT_SCORE_LANES]) {
+    __m256i index = _mm256_and_si256(_mm256_loadu_si256((const __m256i*)words), _mm256_set1_epi32((int)t->parity_mask));
+    __m256i pairs = _mm256_i32gather_epi32((const int*)(const void*)t->parity, _mm256_srli_epi32(index, 1), 4);
+    __m256i shift = _mm256_slli_epi32(_mm256_and_si256(index, _mm256_set1_epi32(1)), 4);
+    __m256i parity = _mm256_and_si256(_mm256_srlv_epi32(pairs, shift), _mm256_set1_epi32(0xffff));
+    __m256i low = _mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i*)(t->low + k)));
+    __m256i sum = _mm256_add_epi32(low, parity);
+    _mm256_storeu_si256((__m256i*)scores, sum);
+    __m256i above = _mm256_cmpgt_epi32(sum, _mm256_set1_epi32((int)limit));
+    return (unsigned)~_mm256_movemask_ps(_mm256_castsi256_ps(above)) & 255u;
+}
+#else
+static unsigned
+soft_scores(const struct soft_tables* t, const uint32_t* words, unsigned k, unsigned limit,
+            uint32_t scores[SOFT_SCORE_LANES]) {
+    __m128i parity = _mm_setr_epi32(t->parity[words[0] & t->parity_mask], t->parity[words[1] & t->parity_mask],
+                                    t->parity[words[2] & t->parity_mask], t->parity[words[3] & t->parity_mask]);
+    __m128i low = _mm_unpacklo_epi16(_mm_loadl_epi64((const __m128i*)(t->low + k)), _mm_setzero_si128());
+    __m128i sum = _mm_add_epi32(low, parity);
+    _mm_storeu_si128((__m128i*)scores, sum);
+    __m128i above = _mm_cmpgt_epi32(sum, _mm_set1_epi32((int)limit));
+    return (unsigned)~_mm_movemask_ps(_mm_castsi128_ps(above)) & 15u;
+}
+#endif
+#endif
+
+static void
+soft_search_group(const struct soft_input* s, const struct soft_code* code, const struct soft_tables* t, unsigned first,
+                  struct soft_match* best) {
+    const unsigned base = t->high[first >> GROUP_BITS];
+    if (base > best->bound) {
+        return;
+    }
+    const uint32_t* row = code->words + first;
+#if defined(SOFT_SCORE_LANES)
+    for (unsigned k = 0; k < GROUP_SIZE; k += SOFT_SCORE_LANES) {
+        uint32_t scores[SOFT_SCORE_LANES];
+        unsigned mask = soft_scores(t, row + k, k, best->bound - base, scores);
+        if (mask == 0u) {
+            continue;
+        }
+        for (unsigned lane = 0; lane < SOFT_SCORE_LANES; ++lane) {
+            if ((mask >> lane) & 1u) {
+                soft_consider(s, code, row[k + lane], base + scores[lane], best);
+            }
+        }
+    }
+#else
+    for (unsigned k = 0; k < GROUP_SIZE; ++k) {
+        unsigned score = base + t->low[k] + t->parity[row[k] & t->parity_mask];
+        soft_consider(s, code, row[k], score, best);
+    }
+#endif
+}
+
 /* Equal cost prefers the hard decision, then fewer protected-bit changes,
  * then the first enumerated candidate. Do not reorder the codebooks. */
 static uint32_t
@@ -124,31 +217,11 @@ soft_search(const struct soft_input* s, const struct soft_code* code) {
     }
     unsigned bound =
         t.high[seed >> GROUP_BITS] + t.low[seed % GROUP_SIZE] + t.parity[code->words[seed] & t.parity_mask];
-    unsigned best_score = 5866u, best_rank = 64u;
-    uint32_t best = 0;
+    struct soft_match best = {bound, 5866u, 64u, 0};
     for (unsigned first = 0; first < code->count; first += GROUP_SIZE) {
-        const unsigned base = t.high[first >> GROUP_BITS];
-        if (base > bound) {
-            continue; /* every codeword in the group costs more */
-        }
-        const uint32_t* row = code->words + first;
-        for (unsigned k = 0; k < GROUP_SIZE; ++k) {
-            const unsigned score = base + t.low[k] + t.parity[row[k] & t.parity_mask];
-            if (score > bound) {
-                continue;
-            }
-            const uint32_t word = row[k];
-            unsigned diffs = bit_count((word ^ s->received) & code->data_mask);
-            unsigned rank = (((word ^ s->hard) & code->data_mask) != 0u ? 32u : 0u) + diffs;
-            if (score < best_score || rank < best_rank) {
-                best = word;
-                best_score = score;
-                best_rank = rank;
-                bound = score;
-            }
-        }
+        soft_search_group(s, code, &t, first, &best);
     }
-    return best;
+    return best.word;
 }
 
 static int

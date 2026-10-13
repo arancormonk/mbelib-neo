@@ -58,6 +58,55 @@ fill_test_input(float* input, uint32_t seed) {
     input[11] = -INFINITY;
 }
 
+/* Exercise vector lanes and unaligned input/output with finite frames,
+ * arbitrary IEEE bit patterns, signed zero, subnormals and signaling NaNs.
+ * The old nonfinite pre-scan routed every fixture above through scalar code. */
+static int
+check_vector_frames(void) {
+    static const uint32_t special[] = {
+        0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u, 0x007fffffu, 0x807fffffu, 0x00800000u, 0x80800000u,
+        0x7f7fffffu, 0xff7fffffu, 0x7f800000u, 0xff800000u, 0x7fc00000u, 0xffc00001u, 0x7f800001u, 0xff800001u,
+    };
+    uint32_t rng = 0x284a123bu;
+    for (int offset = 0; offset < 8; ++offset) {
+        float storage[TEST_FRAME_LEN + 8];
+        float* input = storage + offset;
+        short output[TEST_FRAME_LEN + 16];
+        short* out = output + offset + 1;
+        for (int trial = 0; trial < 512; ++trial) {
+            for (int i = 0; i < TEST_FRAME_LEN; ++i) {
+                rng = rng * 1664525u + 1013904223u;
+                if (trial < TEST_FRAME_LEN) {
+                    input[i] = ((float)(rng >> 8) - 8388608.0f) / 1024.0f;
+                } else {
+                    memcpy(&input[i], &rng, sizeof(rng));
+                }
+            }
+            if (trial < TEST_FRAME_LEN) {
+                uint32_t bits = special[(unsigned)trial % (sizeof(special) / sizeof(special[0]))];
+                memcpy(&input[trial], &bits, sizeof(bits));
+            }
+            for (int i = 0; i < TEST_FRAME_LEN + 16; ++i) {
+                output[i] = 12345;
+            }
+            mbe_floattoshort(input, out);
+            if (out[-1] != 12345 || out[TEST_FRAME_LEN] != 12345) {
+                fprintf(stderr, "conversion wrote outside the frame (offset=%d)\n", offset);
+                return 1;
+            }
+            for (int i = 0; i < TEST_FRAME_LEN; ++i) {
+                short expected = reference_floattoshort(input[i]);
+                if (out[i] != expected) {
+                    fprintf(stderr, "conversion mismatch offset=%d trial=%d sample=%d got=%d expected=%d\n", offset,
+                            trial, i, (int)out[i], (int)expected);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 int
 main(void) {
     static const uint32_t seeds[] = {
@@ -91,5 +140,5 @@ main(void) {
         }
     }
 
-    return 0;
+    return check_vector_frames();
 }

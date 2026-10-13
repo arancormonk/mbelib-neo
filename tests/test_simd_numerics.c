@@ -4,10 +4,101 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include "ambe_encoder.h"
 #include "mbe_tone_fit.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_voiced.h" // IWYU pragma: keep (MBE_VOICED_KERNELS selects the voiced checks)
 
 #define PI 3.14159265358979323846
+
+static void
+assert_float_bits_equal(const float* actual, const float* expected, int count) {
+    for (int i = 0; i < count; ++i) {
+        uint32_t actual_bits, expected_bits;
+        memcpy(&actual_bits, &actual[i], sizeof(actual_bits));
+        memcpy(&expected_bits, &expected[i], sizeof(expected_bits));
+        assert(actual_bits == expected_bits);
+    }
+}
+
+static void
+test_noise_sequence(void) {
+    /* Every possible LCG state, with three frames to exercise both overlap
+     * and returned state. The oracle advances one sample at a time, never
+     * using the production batch constants. Offset buffers exercise callers
+     * that do not provide SIMD alignment. */
+    for (uint32_t initial = 0; initial < 53125u; ++initial) {
+        float seed = (float)initial;
+        uint32_t state = initial;
+        float storage[MBE_FFT_SIZE + 1], overlap_storage[MBE_NOISE_OVERLAP + 1];
+        float* actual = storage + 1;
+        float* overlap = overlap_storage + 1;
+        float expected[MBE_FFT_SIZE], expected_overlap[MBE_NOISE_OVERLAP];
+        for (int i = 0; i < MBE_NOISE_OVERLAP; ++i) {
+            overlap[i] = expected_overlap[i] = (float)(i * 37);
+        }
+        for (int frame = 0; frame < 3; ++frame) {
+            memcpy(expected, expected_overlap, sizeof(expected_overlap));
+            for (int i = MBE_NOISE_OVERLAP; i < MBE_FFT_SIZE; ++i) {
+                expected[i] = (float)state;
+                state = (171u * state + 11213u) % 53125u;
+            }
+            memcpy(expected_overlap, expected + MBE_FFT_SIZE - MBE_NOISE_OVERLAP, sizeof(expected_overlap));
+            float expected_seed = (float)state;
+            mbe_generate_noise_with_overlap(actual, &seed, overlap);
+            assert_float_bits_equal(actual, expected, MBE_FFT_SIZE);
+            assert_float_bits_equal(overlap, expected_overlap, MBE_NOISE_OVERLAP);
+            assert_float_bits_equal(&seed, &expected_seed, 1);
+        }
+    }
+}
+
+static int
+nearest_reference(const float* table, int width, int rows, int step, const float* target, int used) {
+    int best = 0;
+    double best_error = 1e30;
+    for (int row = 0; row < rows; row += step) {
+        double error = 0.0;
+        for (int m = 0; m < used; ++m) {
+            double d = (double)target[m] - table[row * width + m];
+            error += d * d;
+        }
+        if (error < best_error) {
+            best = row;
+            best_error = error;
+        }
+    }
+    return best;
+}
+
+static void
+test_nearest_codebook(void) {
+    float storage[33 * 4 + 1], target_storage[5];
+    float* table = storage + 1;
+    float* target = target_storage + 1;
+    uint32_t rng = 0x793afb21u;
+    for (int width = 3; width <= 4; ++width) {
+        for (int i = 0; i < 33 * width; ++i) {
+            rng = rng * 1664525u + 1013904223u;
+            /* Small integers make float and double distances exact, even
+             * under fast-math, so this oracle can check the chosen index. */
+            table[i] = (float)((int)(rng >> 24) - 128);
+        }
+        for (int m = 0; m < width; ++m) {
+            target[m] = table[17 * width + m];
+            table[4 * width + m] = target[m]; /* tied minima in different lanes */
+        }
+        for (int rows = 1; rows <= 33; ++rows) {
+            for (int step = 1; step <= 3; ++step) {
+                for (int used = 0; used <= width; ++used) {
+                    assert(ambe_enc_nearest(table, width, rows, step, target, used)
+                           == nearest_reference(table, width, rows, step, target, used));
+                }
+            }
+        }
+    }
+}
 
 /* Independent Gaussian elimination with pivoting; production uses Cholesky. */
 static void
@@ -106,13 +197,15 @@ test_tone_fit(void) {
 #if defined(MBE_VOICED_KERNELS)
 static void
 test_voiced_kernels(void) {
-    float window[320];
+    float window_storage[321];
+    float* window = window_storage + 1;
     for (int n = 0; n < 320; ++n) {
         window[n] = n < 160 ? (float)n / 160.0f : (float)(320 - n) / 160.0f;
     }
     const float frequencies[] = {0.05f, 0.1f, 0.7f, 1.5f, 3.13f};
     for (int trial = 0; trial < 80; ++trial) {
-        float out[160] = {0};
+        float out_storage[161] = {0};
+        float* out = out_storage + 1;
         struct mbe_voiced_component p = {(float)trial * 5.13f, frequencies[trial % 5], 1.1f, trial % 3 != 0};
         struct mbe_voiced_component c = {(float)trial * -2.41f, frequencies[(trial + 1) % 5], 0.7f, trial % 3 != 1};
         mbe_voiced_windowed(out, window, &p, &c);
@@ -186,6 +279,8 @@ test_large_phases(void) {
 
 int
 main(void) {
+    test_noise_sequence();
+    test_nearest_codebook();
     test_tone_fit();
 #if defined(MBE_VOICED_KERNELS)
     test_voiced_kernels();

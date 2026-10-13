@@ -174,8 +174,11 @@ src/internal/mbe_ecc_codebooks.h`. Each decode builds small cost tables on the
 stack (data bits by enumeration index, parity bits by value) and starts from
 the cost of the codeword carrying the hard decision's data bits; it skips only
 codewords that cost more, so the result is exactly that of a full scan, ties
-included. Every build uses the same scalar search, with no lazy initialization
-or shared mutable state. `test_ecc` checks every clean codeword, then compares
+included. SIMD builds screen candidates in groups of four (SSE2) or eight (AVX2),
+then resolve surviving candidates in enumeration order with the same exact
+integer scores and tie rules. AVX2 gathers pairs of 16-bit parity costs without
+reading beyond the cost table. Other targets use the scalar search. There is no
+lazy initialization or shared mutable state. `test_ecc` checks every clean codeword, then compares
 1024 pseudo-random inputs per code against an independent oracle that scores
 every codeword, with zero, full, binary, single-bit, small tied, mostly
 confident and random confidences.
@@ -196,8 +199,119 @@ semantics even in fast-math builds, as `mbe_pcm_convert.c` is, since a
 fast-math math library need not reduce huge cos/sin arguments exactly. Phase and RNG updates stay outside
 these kernels. Tone refinement
 trials remain sequential and double precision; ARM32 uses scalar tone fitting.
-Speech analysis sums stay scalar and in order, since vector partial sums
-would change the encoders' bit streams.
+Without fast-math, the pitch low-pass filter assigns independent output samples
+to SIMD lanes; its 21 taps still accumulate in order. Fast-math builds retain
+the compiler-vectorized filter/energy loop. IEEE AMBE codebook searches assign
+complete candidate distances to lanes and resolve equal minima by original row
+index; fast-math builds retain the compiler-vectorized codebook loop.
+Neither kernel reduces partial floating-point sums across lanes. Remaining
+analysis reductions retain their existing evaluation order.
+
+`mbe_floattoshort` classifies NaNs in integer SIMD lanes before arithmetic,
+converts them to zero, and clips infinities to the signed limit. This avoids a
+separate scalar scan and keeps exceptional frames vectorized. Its tests include
+arbitrary IEEE bit patterns, signaling NaNs, unaligned inputs/outputs and frame
+boundary canaries. Hard/soft bit validation uses compiler-vectorized integer OR
+reductions in SIMD builds, with tests for every invalid byte value and tail
+length. All three frame encoders use the same hard-bit validator. Reliability
+bytes are excluded from validation.
+
+Unvoiced noise generation advances four independent integer LCG lanes (eight
+on AVX2), preserving the original sample order and stream state exactly.
+`test_simd_numerics` compares every one of the 53,125 states with a scalar
+recurrence across three consecutive frames, including the overlap and next
+seed. This oracle also runs on ARM32 and AArch64 under QEMU.
+
+On AVX2 compile targets, float kernels process eight lanes, including voiced
+oscillators, unvoiced windowing/overlap and PCM conversion. Portable x86 builds
+still require only SSE2; selecting AVX2 requires an explicit compiler target
+such as `-DCMAKE_C_FLAGS=-march=x86-64-v3`. Debug AVX2 has its own float and AMBE
+sequence PCM goldens because wider oscillator recurrences change rounding.
+Regenerate them with `gen_golden` in a Debug SIMD build using that target.
+
+`tools/bench_compare.sh` runs the encoder, PCM conversion, unvoiced synthesis
+and all six steady/gradual/jump mixed/voiced workloads in matching Release
+builds with explicit SIMD disabled/enabled. Compilers can still automatically
+vectorize C loops when explicit SIMD is disabled. Use `bench_replay` in those
+same trees for real speech, all four decoders, tone frames and channel errors;
+synthetic synthesis timings alone do not establish end-to-end gains.
+
+The October 2026 SIMD audit compared against `a962d3d` on a Ryzen 7 5800HS,
+with GCC 16.2.1, Release, fast-math and LTO enabled on both sides. These are
+medians of three alternating comparisons pinned to one CPU; lower is better.
+Replay uses the DVSI `dam` speech input. SSE2 and AVX2 are separate compile
+targets, each compared with the same target before the changes.
+
+| Workload | Target | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| PCM conversion, 10 million frames | SSE2 | 0.6210 s | 0.2845 s | 54% |
+| PCM conversion, 10 million frames | AVX2 | 0.2800 s | 0.2033 s | 27% |
+| Mixed synthesis, steady pitch, 2,000 frames | AVX2 | 9.751 ms | 8.531 ms | 13% |
+| Mixed synthesis, pitch jumps, 2,000 frames | AVX2 | 9.612 ms | 7.761 ms | 19% |
+| D-STAR hard-frame replay | AVX2 | 3.726 us/frame | 3.466 us/frame | 7% |
+| AMBE+2 hard-frame replay | AVX2 | 4.025 us/frame | 3.768 us/frame | 6% |
+| IMBE hard-frame replay | AVX2 | 4.101 us/frame | 3.889 us/frame | 5% |
+
+Explicit codebook batching reduced the complete AMBE residual quantizer's time
+by 9–17% with GCC and IEEE math. Its fast-math version measured slower than the
+compiler-vectorized loop, so explicit batching is enabled only with IEEE math.
+Fast-math encoder timings stayed near their previous values. With Clang 23.1.1,
+SSE2 and neither fast-math nor LTO, the pitch-filter changes reduced whole-frame
+encoding time by about 7% for the AMBE codecs and 10% for IMBE. FFTs, tone
+fitting and analysis reductions already had SIMD or effective compiler
+vectorization; changes there require their own measurements. ARM numerical
+checks run under QEMU establish correctness, not native ARM speedups.
+
+For the same audit, all three encoders produced identical parameter-bit rows
+on all 79 cached DVSI inputs (27 speech and 52 tone vectors): 256,707 frames
+per build pair. This held for GCC SSE2/AVX2 with fast-math and LTO, GCC SSE2
+with IEEE math, Clang AVX2/IEEE SSE2 configurations, and Android NDK Clang 19
+IEEE builds for ARM32 and AArch64 under QEMU. Compare each compiler and build
+configuration against its own baseline; cross-compiler identity is not the
+acceptance criterion.
+
+Decoder comparisons used every cached DVSI frame stream, a fixed seed and the
+baseline's alignment against both the original speech and DVSI's decoded PCM.
+SSE2 output was byte-identical. Across GCC and Clang AVX2 builds, each changed
+int16 sample differed by at most one unit, with no added clipping or nonfinite
+samples. The largest absolute change in log-spectral distance was below
+0.00018 dB against the input and 0.00007 dB against DVSI; envelope correlation
+changed by less than 0.000008. Preserve these per-codec comparisons when
+changing SIMD kernels: passing synthetic numerical tests alone does not
+establish speech quality. Keep DVSI vectors and generated audio local.
+
+The subsequent noise-generation and frame-validation changes were also
+compared directly with the earlier PR head, `c204ce4`. Across GCC SSE2/AVX2
+with fast-math and LTO, and Clang 23.1.1 SSE2 with IEEE math, all 79 DVSI inputs
+produced identical encoder parameter bits, packed frames and decoded PCM:
+770,121 compared frames and 123,105,600 PCM samples, with no nonfinite output.
+The established DVSI quality scores therefore remain unchanged by these two
+optimizations. Native ARM performance remains a separate measurement.
+
+For this follow-up, five alternating comparisons pinned to one CPU on the
+same Ryzen/GCC setup measured the following additional reductions relative
+to `c204ce4`. The first three codecs replay the DVSI `dam` stream through
+`bench_replay hard <codec> 10 7`; ProVoice uses a converted frame fixture.
+
+| Hard-frame replay | Target | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| D-STAR | SSE2 | 3.954 us/frame | 3.791 us/frame | 4.1% |
+| AMBE+2 | SSE2 | 4.305 us/frame | 4.145 us/frame | 3.7% |
+| IMBE | SSE2 | 4.394 us/frame | 4.238 us/frame | 3.6% |
+| ProVoice | SSE2 | 4.721 us/frame | 4.568 us/frame | 3.2% |
+| D-STAR | AVX2 | 3.493 us/frame | 3.140 us/frame | 10.1% |
+| AMBE+2 | AVX2 | 3.802 us/frame | 3.456 us/frame | 9.1% |
+| IMBE | AVX2 | 3.911 us/frame | 3.576 us/frame | 8.6% |
+| ProVoice | AVX2 | 4.109 us/frame | 3.778 us/frame | 8.1% |
+
+`bench_unvoiced 36 20000 7` took 7.2% less time on SSE2 and 20.8% less on
+AVX2. A separate frame-packing microbenchmark cycled 256 deterministic input
+bit arrays through two million calls to each `mbe_encode*Frame` API: AMBE
+packing took 17–19% less time (about 14–15 ns/frame), and IMBE took 5–9% less
+(about 12–25 ns/frame). These packing figures exclude PCM analysis and
+parameter quantization; whole-frame decoding above establishes the gain
+from batching the noise generator. With Clang 23.1.1 SSE2 and IEEE math,
+the same replay comparisons took 6.6–7.9% less time.
 
 ## Speech Quality Evaluation
 

@@ -43,6 +43,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "mbe_simd.h" // IWYU pragma: keep (MBE_VF_WIDTH selects the SIMD pitch filter)
 #include "mbelib-neo/mbelib.h"
 
 #define ANALYSIS_FFT       256
@@ -190,19 +191,56 @@ pitch_of(int index) {
     return PITCH_MIN + (PITCH_STEP * (float)index);
 }
 
+#if defined(MBE_VF_WIDTH) && !defined(__FAST_MATH__) && !defined(_M_FP_FAST)
+#define MBE_VECTOR_PITCH_LOWPASS 1
+
+/* Independent output samples occupy lanes; every lane still adds the 21
+ * filter taps in order. This also vectorizes IEEE builds, where an automatic
+ * vectorizer cannot reassociate the surrounding energy reduction. Fast-math
+ * builds let the compiler vectorize the filter and energy in a single pass. */
+static void
+pitch_lowpass(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, float* out) {
+    const int span = (2 * MBE_ANALYSIS_PITCH_HALF) + 1;
+    const float* input = s->buf + SAMPLE_CENTRE - MBE_ANALYSIS_PITCH_HALF;
+    int j = 0;
+    for (; j + MBE_VF_WIDTH <= span; j += MBE_VF_WIDTH) {
+        mbe_vf acc = mbe_vf_set(0.0f);
+        for (int k = -MBE_ANALYSIS_LPF_HALF; k <= MBE_ANALYSIS_LPF_HALF; ++k) {
+            mbe_vf tap = mbe_vf_set(t->lpf[k + MBE_ANALYSIS_LPF_HALF]);
+            acc = mbe_vf_add(acc, mbe_vf_mul(mbe_vf_load(input + j - k), tap));
+        }
+        mbe_vf_store(out + j, acc);
+    }
+    for (; j < span; ++j) {
+        float acc = 0.0f;
+        for (int k = -MBE_ANALYSIS_LPF_HALF; k <= MBE_ANALYSIS_LPF_HALF; ++k) {
+            acc += input[j - k] * t->lpf[k + MBE_ANALYSIS_LPF_HALF];
+        }
+        out[j] = acc;
+    }
+}
+#endif
+
 static int
 pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, mbe_acf_plan* acf,
                       struct pitch_work* w, float* energy) {
     const int span = (2 * MBE_ANALYSIS_PITCH_HALF) + 1;
     float e = 0.0f;
+#if defined(MBE_VECTOR_PITCH_LOWPASS)
+    pitch_lowpass(t, s, w->s_lpf);
+#endif
     for (int j = 0; j < span; ++j) {
+#if defined(MBE_VECTOR_PITCH_LOWPASS)
+        float acc = w->s_lpf[j];
+#else
         const float* x = s->buf + SAMPLE_CENTRE - MBE_ANALYSIS_PITCH_HALF + j; /* sample j - 150 */
         float acc = 0.0f;
         for (int k = -MBE_ANALYSIS_LPF_HALF; k <= MBE_ANALYSIS_LPF_HALF; ++k) {
             acc += x[-k] * t->lpf[k + MBE_ANALYSIS_LPF_HALF]; /* eq (9) */
         }
-        float wi2 = t->w_i[j] * t->w_i[j];
         w->s_lpf[j] = acc;
+#endif
+        float wi2 = t->w_i[j] * t->w_i[j];
         w->u[j] = acc * wi2;
         e += acc * acc * wi2;
     }

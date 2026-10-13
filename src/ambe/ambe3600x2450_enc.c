@@ -36,6 +36,7 @@
 #include "ambe3600x2450_const.h"
 #include "ambe_encoder.h"
 #include "mbe_encoder.h"
+#include "mbe_result.h"
 #include "mbe_speech_analysis.h"
 #include "mbe_tone.h"
 #include "mbe_tone_detect.h"
@@ -325,10 +326,9 @@ mbe_encodeAmbe3600x2450Frame(const char ambe_d[49], char ambe_fr[4][24]) {
     if (ambe_d == NULL || ambe_fr == NULL) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    for (int i = 0; i < 49; i++) {
-        if (ambe_d[i] != 0 && ambe_d[i] != 1) {
-            return MBE_STATUS_INVALID_BITS;
-        }
+    int bit_status = mbe_validate_bits(ambe_d, 49u);
+    if (bit_status < 0) {
+        return bit_status;
     }
     (void)ambe_enc_fec(ambe_d, ambe_fr);
     return 0;
