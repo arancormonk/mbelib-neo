@@ -1378,6 +1378,12 @@ if(MBELIB_BUILD_TESTS)
     find_package(Python3 3.8 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(
+            NAME test_release_assets
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/test_release_assets.py
+        )
+        add_test(
             NAME test_pffft_metadata
             COMMAND
                 ${Python3_EXECUTABLE}

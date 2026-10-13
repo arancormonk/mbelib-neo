@@ -12,6 +12,17 @@ mbelib-neo keeps CI dependencies explicit so analyzer results and release artifa
 - Release packaging workflows must generate package SBOMs and attest both the release packages and their SBOMs before publish jobs upload assets. Release publish jobs keep the checksum manifest and manifest attestation as an additional integrity layer.
 - Workflow changes that add secrets, write permissions, artifact publication, release upload, or external actions need human review.
 
+### Recovering release publication
+
+If only the final publish job failed, retain the signed tag and the original
+package artifacts. Dispatch `CI` with `release_tag=vX.Y.Z` and
+`release_run_id=ORIGINAL_RUN_ID` from a reviewed workflow revision. The recovery
+validates the existing tag's signature, version and ancestry, checks that the
+source run built that exact tag successfully through package attestation, and
+verifies each package's provenance and signed SBOM before publishing. It then
+attests the checksum manifest normally. Recovery does not create or move tags.
+The artifacts expire after seven days; recover before that retention window ends.
+
 ## Pinned CI Source Checkouts
 
 `tools/ci-dependency-pins.env` is the checked-in source of truth for the compiled PFFFT dependency and CI

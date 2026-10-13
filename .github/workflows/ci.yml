@@ -1,7 +1,16 @@
 name: CI
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional: existing signed tag whose publication needs recovery'
+        type: string
+        default: ''
+      release_run_id:
+        description: 'Original completed tag CI run with successful package attestations'
+        type: string
+        default: ''
   push:
     branches: [main, master]
     tags:
@@ -531,9 +540,14 @@ jobs:
 
   validate-release-tag:
     name: Validate release tag
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_tag != '' || inputs.release_run_id != ''))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
+      tag: ${{ steps.verify.outputs.tag }}
+      commit: ${{ steps.verify.outputs.commit }}
       version: ${{ steps.verify.outputs.version }}
       archive_prefix: ${{ steps.verify.outputs.archive_prefix }}
     steps:
@@ -545,6 +559,9 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG_CREATED: ${{ github.event.created }}
+          RELEASE_RECOVERY_TAG: ${{ inputs.release_tag }}
+          RELEASE_RECOVERY_RUN_ID: ${{ inputs.release_run_id }}
+          GH_TOKEN: ${{ github.token }}
         run: tools/ci_validate_release_tag.sh
 
   update-aur-git:
@@ -1181,16 +1198,23 @@ jobs:
     name: publish release
     needs: [validate-release-tag, package-release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'arancormonk/mbelib-neo'
+    if: >-
+      always() && !cancelled() && github.repository == 'arancormonk/mbelib-neo' &&
+      needs.validate-release-tag.result == 'success' &&
+      ((startsWith(github.ref, 'refs/tags/v') && needs.package-release.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_run_id != ''))
     permissions:
       actions: read
       attestations: write
       contents: write
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download release package artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          run-id: ${{ inputs.release_run_id || github.run_id }}
+          github-token: ${{ github.token }}
           pattern: release-package-*
           path: dist
           merge-multiple: true
@@ -1199,80 +1223,14 @@ jobs:
         env:
           ARCHIVE_PREFIX: ${{ needs.validate-release-tag.outputs.archive_prefix }}
         run: |
-          set -euo pipefail
-          mapfile -t packages < <(
-            find dist -maxdepth 1 -type f \
-              \( -name "${ARCHIVE_PREFIX}-*.tar.gz" -o -name "${ARCHIVE_PREFIX}-*.zip" \) |
-              sort
-          )
-          if [ "${#packages[@]}" -ne 3 ]; then
-            echo "Expected 3 release packages, found ${#packages[@]}." >&2
-            find dist -maxdepth 1 -type f -print >&2
-            exit 1
-          fi
-          for platform in linux macos windows; do
-            if ! printf '%s\n' "${packages[@]}" | grep -Fq "/${ARCHIVE_PREFIX}-${platform}-"; then
-              echo "Missing ${platform} release package." >&2
-              exit 1
-            fi
-          done
-          for package in "${packages[@]}"; do
-            package_name="$(basename "$package")"
-            package_stem="${package_name%.tar.gz}"
-            package_stem="${package_stem%.zip}"
-            platform_arch="${package_stem#"${ARCHIVE_PREFIX}-"}"
-            platform="${platform_arch%-*}"
-            arch="${platform_arch##*-}"
-
-            case "${platform}" in
-              linux) artifact_os="Linux" ;;
-              macos) artifact_os="macOS" ;;
-              windows) artifact_os="Windows" ;;
-              *)
-                echo "Unsupported release package platform: ${platform}" >&2
-                exit 1
-                ;;
-            esac
-            case "${arch}" in
-              x64) artifact_arch="X64" ;;
-              arm64) artifact_arch="ARM64" ;;
-              *)
-                echo "Unsupported release package architecture: ${arch}" >&2
-                exit 1
-                ;;
-            esac
-
-            artifact_sbom="dist/release-package-${artifact_os}-${artifact_arch}.spdx.json"
-            if [ ! -f "${artifact_sbom}" ]; then
-              echo "Missing SBOM artifact for ${package_name}: ${artifact_sbom}" >&2
-              find dist -maxdepth 1 -type f -print >&2
-              exit 1
-            fi
-            mv "${artifact_sbom}" "${package}.spdx.json"
-          done
-          mapfile -t sboms < <(
-            find dist -maxdepth 1 -type f -name "${ARCHIVE_PREFIX}-*.spdx.json" |
-              sort
-          )
-          if [ "${#sboms[@]}" -ne 3 ]; then
-            echo "Expected 3 release package SBOMs, found ${#sboms[@]}." >&2
-            find dist -maxdepth 1 -type f -print >&2
-            exit 1
-          fi
-          for package in "${packages[@]}"; do
-            if [ ! -f "${package}.spdx.json" ]; then
-              echo "Missing SBOM for $(basename "$package")." >&2
-              exit 1
-            fi
-          done
-          : > dist/SHA256SUMS.txt
-          for package in "${packages[@]}"; do
-            (
-              cd dist
-              sha256sum "$(basename "$package")"
-            ) >> dist/SHA256SUMS.txt
-          done
-          cat dist/SHA256SUMS.txt
+          tools/ci_prepare_release_assets.sh
+      - name: Verify original tag attestations for recovery
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-release-tag.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate-release-tag.outputs.commit }}
+        run: python3 tools/ci_verify_release_recovery.py --assets dist
       - name: Attest checksum manifest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -1280,6 +1238,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
+          tag_name: ${{ needs.validate-release-tag.outputs.tag }}
           files: |
             dist/${{ needs.validate-release-tag.outputs.archive_prefix }}-*.tar.gz
             dist/${{ needs.validate-release-tag.outputs.archive_prefix }}-*.zip
