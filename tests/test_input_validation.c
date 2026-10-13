@@ -125,7 +125,8 @@ test_bit_validation_vector_boundaries(void) {
                 assert(out[i].reliability == 197);
             }
             if (count > 0) {
-                bits[count - 1] = (char)0x80;
+                /* Set the high bit without an out-of-range signed char cast. */
+                memset(&bits[count - 1], 0x80, sizeof(bits[0]));
                 assert(mbe_softBitsFromHard(bits, out, count, 197) == MBE_STATUS_INVALID_BITS);
             }
         }
