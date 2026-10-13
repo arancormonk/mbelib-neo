@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.4.1 LANGUAGES C)
+project(mbelib-neo VERSION 2.4.2 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -66,11 +66,21 @@ option(
     "Enable Release-like compiler and linker hardening when supported"
     ON
 )
+# Release builds of 64-bit targets default to SIMD. 32-bit targets stay
+# opt-in: x86 would require SSE2 and ARM needs an explicit -mfpu=neon.
+set(_mbelib_simd_default OFF)
+if(
+    CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo|MinSizeRel"
+    AND CMAKE_SIZEOF_VOID_P EQUAL 8
+)
+    set(_mbelib_simd_default ON)
+endif()
 option(
     MBELIB_ENABLE_SIMD
     "Enable SIMD optimized routines when available (SSE2/NEON)"
-    OFF
+    ${_mbelib_simd_default}
 )
+unset(_mbelib_simd_default)
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
 option(MBELIB_BUILD_TOOLS "Build developer quality-analysis tools" OFF)
 # Warnings
