@@ -23,6 +23,7 @@
 #include "ambe3600x2400_internal.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
+#include "mbe_simd.h" // IWYU pragma: keep (MBE_VF_WIDTH selects the SIMD codebook search)
 #include "mbe_validation.h"
 
 void
@@ -143,12 +144,54 @@ ambe_enc_prba_dct(struct ambe_enc_frame* q) {
 }
 
 /* Index of the nearest of `rows` vectors (every `step`th) in their first
- * `used` elements, from element `first` of the target; ties keep the lower. */
-static int
-ambe_enc_nearest(const float* table, int width, int rows, int step, const float* target, int used) {
+ * `used` elements; ties keep the lower row. Inline at the codebook call sites
+ * so their fixed widths and strides specialize the vector loads. */
+static inline int
+ambe_enc_nearest_impl(const float* table, int width, int rows, int step, const float* target, int used) {
     int best = 0;
     float best_err = 1e30f;
-    for (int c = 0; c < rows; c += step) {
+    int c = 0;
+#if defined(MBE_VF_WIDTH) && !defined(__FAST_MATH__) && !defined(_M_FP_FAST)
+    /* Fast-math compilers already vectorize the fixed-width codebooks well;
+     * explicit batching benefits the ordered arithmetic in IEEE builds. */
+    /* Each lane scores a whole candidate in component order. Never combine
+     * partial errors across lanes. Lane minima are independent, so the
+     * compiler can vectorize their comparisons and index updates too. */
+    float lane_best[MBE_VF_WIDTH];
+    int lane_row[MBE_VF_WIDTH];
+    for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+        lane_best[lane] = best_err;
+        lane_row[lane] = 0;
+    }
+    for (; c + (MBE_VF_WIDTH - 1) * step < rows; c += MBE_VF_WIDTH * step) {
+        mbe_vf errors = mbe_vf_set(0.0f);
+        for (int m = 0; m < used; ++m) {
+            float column[MBE_VF_WIDTH];
+            for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+                column[lane] = table[((c + lane * step) * width) + m];
+            }
+            mbe_vf d = mbe_vf_sub(mbe_vf_set(target[m]), mbe_vf_load(column));
+            errors = mbe_vf_add(errors, mbe_vf_mul(d, d));
+        }
+        float scores[MBE_VF_WIDTH];
+        mbe_vf_store(scores, errors);
+        for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+            if (scores[lane] < lane_best[lane]) {
+                lane_best[lane] = scores[lane];
+                lane_row[lane] = c + lane * step;
+            }
+        }
+    }
+    for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
+        /* Ordered comparisons preserve exact ties without an epsilon: the
+         * first enumerated row wins, whichever lane contains it. */
+        if (lane_best[lane] < best_err || (!(best_err < lane_best[lane]) && lane_row[lane] < best)) {
+            best_err = lane_best[lane];
+            best = lane_row[lane];
+        }
+    }
+#endif
+    for (; c < rows; c += step) {
         float err = 0.0f;
         for (int m = 0; m < used; m++) {
             float d = target[m] - table[(c * width) + m];
@@ -162,19 +205,24 @@ ambe_enc_nearest(const float* table, int width, int rows, int step, const float*
     return best;
 }
 
+int
+ambe_enc_nearest(const float* table, int width, int rows, int step, const float* target, int used) {
+    return ambe_enc_nearest_impl(table, width, rows, step, target, used);
+}
+
 void
 ambe_enc_quantize_residual(struct ambe_enc_frame* q, const struct ambe_enc_tables* t) {
     ambe_enc_block_dct(q, t);
     ambe_enc_prba_dct(q);
     /* 4.3.1: b3 from Gm[2..4], b4 from Gm[5..8]. */
-    q->b[3] = ambe_enc_nearest(&t->prba24[0][0], 3, 512, 1, &q->Gm[2], 3);
-    q->b[4] = ambe_enc_nearest(&t->prba58[0][0], 4, 128, 1, &q->Gm[5], 4);
+    q->b[3] = ambe_enc_nearest_impl(&t->prba24[0][0], 3, 512, 1, &q->Gm[2], 3);
+    q->b[4] = ambe_enc_nearest_impl(&t->prba58[0][0], 4, 128, 1, &q->Gm[5], 4);
     /* 4.3.2: the HOC vector Cik[3..min(Ji, 6)]; an empty one quantizes to 0. */
     for (int blk = 0; blk < 4; blk++) {
         int ji = q->Ji[blk + 1];
         int used = ((ji < 6) ? ji : 6) - 2;
-        q->b[5 + blk] = (used > 0) ? ambe_enc_nearest(&t->hoc[blk][0][0], 4, t->hoc_rows[blk], t->hoc_step[blk],
-                                                      &q->Cik[blk + 1][3], used)
+        q->b[5 + blk] = (used > 0) ? ambe_enc_nearest_impl(&t->hoc[blk][0][0], 4, t->hoc_rows[blk], t->hoc_step[blk],
+                                                           &q->Cik[blk + 1][3], used)
                                    : 0;
     }
 }

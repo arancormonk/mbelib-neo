@@ -4,10 +4,57 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "ambe_encoder.h"
 #include "mbe_tone_fit.h"
 #include "mbe_voiced.h" // IWYU pragma: keep (MBE_VOICED_KERNELS selects the voiced checks)
 
 #define PI 3.14159265358979323846
+
+static int
+nearest_reference(const float* table, int width, int rows, int step, const float* target, int used) {
+    int best = 0;
+    double best_error = 1e30;
+    for (int row = 0; row < rows; row += step) {
+        double error = 0.0;
+        for (int m = 0; m < used; ++m) {
+            double d = (double)target[m] - table[row * width + m];
+            error += d * d;
+        }
+        if (error < best_error) {
+            best = row;
+            best_error = error;
+        }
+    }
+    return best;
+}
+
+static void
+test_nearest_codebook(void) {
+    float storage[33 * 4 + 1], target_storage[5];
+    float* table = storage + 1;
+    float* target = target_storage + 1;
+    uint32_t rng = 0x793afb21u;
+    for (int width = 3; width <= 4; ++width) {
+        for (int i = 0; i < 33 * width; ++i) {
+            rng = rng * 1664525u + 1013904223u;
+            /* Small integers make float and double distances exact, even
+             * under fast-math, so this oracle can check the chosen index. */
+            table[i] = (float)((int)(rng >> 24) - 128);
+        }
+        for (int m = 0; m < width; ++m) {
+            target[m] = table[17 * width + m];
+            table[4 * width + m] = target[m]; /* tied minima in different lanes */
+        }
+        for (int rows = 1; rows <= 33; ++rows) {
+            for (int step = 1; step <= 3; ++step) {
+                for (int used = 0; used <= width; ++used) {
+                    assert(ambe_enc_nearest(table, width, rows, step, target, used)
+                           == nearest_reference(table, width, rows, step, target, used));
+                }
+            }
+        }
+    }
+}
 
 /* Independent Gaussian elimination with pivoting; production uses Cholesky. */
 static void
@@ -106,13 +153,15 @@ test_tone_fit(void) {
 #if defined(MBE_VOICED_KERNELS)
 static void
 test_voiced_kernels(void) {
-    float window[320];
+    float window_storage[321];
+    float* window = window_storage + 1;
     for (int n = 0; n < 320; ++n) {
         window[n] = n < 160 ? (float)n / 160.0f : (float)(320 - n) / 160.0f;
     }
     const float frequencies[] = {0.05f, 0.1f, 0.7f, 1.5f, 3.13f};
     for (int trial = 0; trial < 80; ++trial) {
-        float out[160] = {0};
+        float out_storage[161] = {0};
+        float* out = out_storage + 1;
         struct mbe_voiced_component p = {(float)trial * 5.13f, frequencies[trial % 5], 1.1f, trial % 3 != 0};
         struct mbe_voiced_component c = {(float)trial * -2.41f, frequencies[(trial + 1) % 5], 0.7f, trial % 3 != 1};
         mbe_voiced_windowed(out, window, &p, &c);
@@ -186,6 +235,7 @@ test_large_phases(void) {
 
 int
 main(void) {
+    test_nearest_codebook();
     test_tone_fit();
 #if defined(MBE_VOICED_KERNELS)
     test_voiced_kernels();
