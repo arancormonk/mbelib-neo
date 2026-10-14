@@ -29,6 +29,11 @@ The CTest suite includes:
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
+Test assertions remain enabled in every configuration. MSVC force-includes
+`tests/enable_assertions.h` to undefine `NDEBUG` before reading test sources,
+avoiding the D9025 warning from combining `/DNDEBUG` and `/UNDEBUG`.
+`test_assertions` checks that the assertion expression actually executes.
+
 Run the default test suite with:
 
 ```sh
