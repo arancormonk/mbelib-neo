@@ -833,6 +833,10 @@ endif()
 if(MBELIB_BUILD_TESTS)
     include(CTest)
     enable_testing()
+
+    add_executable(test_assertions tests/test_assertions.c)
+    add_test(NAME test_assertions COMMAND test_assertions)
+
     # Golden data generator tool (not a test): helpful for refreshing hashes
     add_executable(gen_golden tools/gen_golden.c)
     target_link_libraries(gen_golden PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -1503,6 +1507,7 @@ if(MBELIB_BUILD_TESTS)
     add_test(NAME test_simd_numerics COMMAND test_simd_numerics)
 
     set(_MBELIB_TEST_TARGETS
+        test_assertions
         test_api
         test_ecc
         test_ambe2400_encoder
@@ -1529,7 +1534,12 @@ if(MBELIB_BUILD_TESTS)
     foreach(_mbelib_test_target IN LISTS _MBELIB_TEST_TARGETS)
         _mbelib_apply_hardening(${_mbelib_test_target})
         if(MSVC)
-            target_compile_options(${_mbelib_test_target} PRIVATE /UNDEBUG)
+            # /UNDEBUG conflicts with the release configuration's /DNDEBUG
+            # and emits D9025. Undefine it before the test source is read.
+            target_compile_options(
+                ${_mbelib_test_target}
+                PRIVATE "/FI${PROJECT_SOURCE_DIR}/tests/enable_assertions.h"
+            )
         elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
             target_compile_options(${_mbelib_test_target} PRIVATE -UNDEBUG)
         endif()
