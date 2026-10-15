@@ -106,8 +106,8 @@ def render(members, known=None):
         " * TETRA speech codec codebooks: numeric data from the C code archive attached to",
         " * ETSI EN 300 395-2 (TETRA; Speech codec for full-rate traffic channel; Part 2:",
         " * TETRA codec), (C) ETSI. Only the values are copied; no ETSI code is used.",
-        " * This file is not covered by the project's GPL grant, and no licence to the data",
-        " * is known: see LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt.",
+        " * This file is not covered by the project's GPL grant; the terms it is carried under",
+        " * are in LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt.",
         " *",
         " * Archives with identical members (SHA-256):",
     ]

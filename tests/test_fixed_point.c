@@ -155,13 +155,6 @@ test_double_precision(void) {
         assert(lo >= 0);
         assert(back == mbe_fx_lsl64(mbe_fx_asr64(values[i], 1), 1));
     }
-    /* 0.5 (Q31) times 0.5 (Q15) is 0.25 (Q31). */
-    {
-        int16_t hi;
-        int16_t lo;
-        mbe_fx_L_extract(0x40000000, &hi, &lo);
-        assert(mbe_fx_mpy_32_16(hi, lo, 16384) == 0x20000000);
-    }
 }
 
 int

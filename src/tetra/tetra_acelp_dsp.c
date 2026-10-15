@@ -85,6 +85,20 @@ tetra_lsp_interpolate(const int16_t old_lsp[TETRA_M], const int16_t new_lsp[TETR
     memcpy(out[3], new_lsp, sizeof(out[3]));
 }
 
+/**
+ * (hi, lo) * q, the 32 x 16-bit product of the polynomial recursion. Unlike the usual
+ * double-precision product 2 hi q + 2 floor(lo q / 2^15), the product of lo's top bit (bit 14) and q
+ * is kept exactly: 2 hi q + b q + 2 floor(l q / 2^15) with b = bit 14 of lo and l its lower 14 bits.
+ * For an even q the two agree; for an odd q they can differ by one in the last place (resolved
+ * against the reference decoder).
+ */
+static int32_t
+lsp_mpy(int16_t hi, int16_t lo, int16_t q) {
+    int64_t top = (lo >> 14) & 1;
+    int64_t low = lo & 0x3FFF;
+    return mbe_fx_sat32((int64_t)hi * q * 2 + top * q + 2 * mbe_fx_asr64(low * q, 15));
+}
+
 /** Coefficients f[0..5] (Q24) of the sum or difference polynomial of five LSPs (stride 2). */
 static void
 lsp_polynomial(const int16_t* lsp, int32_t f[6]) {
@@ -100,7 +114,7 @@ lsp_polynomial(const int16_t* lsp, int32_t f[6]) {
             int16_t lo;
             int32_t t;
             mbe_fx_L_extract(f[j - 1], &hi, &lo);
-            t = mbe_fx_L_shl(mbe_fx_mpy_32_16(hi, lo, q), 1);
+            t = mbe_fx_L_shl(lsp_mpy(hi, lo, q), 1);
             f[j] = mbe_fx_L_sub(mbe_fx_L_add(f[j], f[j - 2]), t);
         }
         f[1] = mbe_fx_L_msu(f[1], q, 512);

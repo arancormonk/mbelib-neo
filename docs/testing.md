@@ -28,7 +28,8 @@ The CTest suite includes:
   fixture round trips and preserved channel bits (`test_quality_dvsi`)
 - TETRA decoder: bit unpacking (tables 3 and 4), every pitch index, pulse positions and absent
   pulses, sharpening, LSP lookup, boundary widening and the rejection of crossed vectors,
-  interpolation, LSP to A(z) against a double-precision expansion, the synthesis filter, the
+  interpolation, LSP to A(z) against a double-precision expansion and against coefficients read
+  back from ETSI's reference decoder, the synthesis filter, the
   adaptive codebook, log2/pow2, the gains against values ETSI's reference decoder produced on the
   test's own streams (each ruling out another plausible computation) and at the extremes, the
   floor of the code-vector energy, the 27/25 energy limits, concealment state
@@ -344,11 +345,12 @@ ETSI's reference decoder and its output, outside the checkout; never commit them
 cmake --preset dev-debug -DMBELIB_BUILD_TOOLS=ON
 cmake --build --preset dev-debug -j --target mbe_tetra_decode
 ./build/dev-debug/mbe_tetra_decode TE1_46.CHD /tmp/ours.pcm
-python3 -I tools/quality/tetra_conformance.py compare /tmp/ours.pcm TE2_128.PCM --gate
+python3 -I tools/quality/tetra_conformance.py compare /tmp/ours.pcm TE2_128.PCM
 ```
 
-`compare` exits 0 only for identical files; `--gate` takes the exit status from the acceptance
-thresholds of this decoder, which is not bit-exact; `--json` writes the metrics. For concealment,
+`compare` exits 0 only for identical files, as TE1_46.CHD now gives; `--gate` instead takes the
+exit status from tolerance thresholds, for runs that are expected to differ (such as bad frames at
+the start); `--json` writes the metrics. For concealment,
 `tetra_conformance.py bfi TE1_46.CHD /tmp/lossy.chd --seed 1 --rate 3` (also `--burst START:LENGTH`
 and `--first N`) marks frames bad; decode the copy with both decoders and compare. Measured
 results, including the bad-frame patterns where the thresholds do not hold, are in

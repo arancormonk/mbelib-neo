@@ -11,10 +11,11 @@ homing-sequence detection are out of scope. The API is described in the README
 
 EN 300 395-2 clause 8 makes ETSI's fixed-point C code the normative definition of the codec, and
 EN 300 395-4 tests a decoder bit for bit: TE1_46.CHD decoded must equal TE2_128.PCM. **This
-decoder is not bit-exact and does not pass that test.** It is written from the text of the
-standard and from black-box measurements of ETSI's reference decoder, and it follows the
-reference closely; the remaining differences are rounding details of the reference's
-fixed-point arithmetic that the text does not specify (see [Known differences](#known-differences)).
+decoder passes that test: its output equals TE2_128.PCM byte for byte.** It is written from the
+text of the standard and from black-box measurements of ETSI's reference decoder. Outside the
+test sequence two differences from the reference decoder are known: bad frames received before
+the first good frame, and one synthetic stream of random bits whose output clips at full scale
+(see [Known differences](#known-differences)).
 
 The decoder uses integer arithmetic only, through saturating 16/32-bit operators with portable C
 semantics (`src/internal/mbe_fixed_point.h`), so its own output is identical on every compiler,
@@ -46,14 +47,16 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
 - **LSPs** (4.2.2.3, 4.2.3.1.1): the three split-VQ sub-vectors (Q15 cosines) are looked up, and
   the pairs on either side of a split boundary closer than 916 (q3/q4) or 1244 (q6/q7) are pushed
   apart, each moving by half the shortfall rounded down (so an odd shortfall leaves the gap one
-  short of 916 or 1244). If any adjacent pair is then still not
-  strictly decreasing (q(i) <= q(i+1)), the frame's LSPs are discarded and the previous frame's
-  are used, for interpolation and as the next frame's previous vector.
+  short of 916 or 1244). If any adjacent pair is then still not strictly decreasing
+  (q(i) <= q(i+1)), the frame's LSPs are discarded and the previous frame's are used, for
+  interpolation and as the next frame's previous vector.
 - **Interpolation** (equation 22): weights 3/4, 1/2, 1/4 of the previous vector in Q15, the
   result rounded down.
 - **LSPs to A(z)** (4.2.2.2): the sum and difference polynomials in Q24 with a 32 x 16-bit
-  double-precision multiply, A(z) coefficients rounded to Q12 (16 bits; a coefficient beyond +-8
-  wraps).
+  double-precision multiply that keeps the product of the low half's top bit exactly: (hi, lo) q
+  = 2 hi q + b q + 2 floor(l q / 2^15), with b bit 14 of lo and l its lower 14 bits (for an even q
+  this equals the usual 2 hi q + 2 floor(lo q / 2^15)). A(z) coefficients are rounded to Q12 (16
+  bits; a coefficient beyond +-8 wraps).
 - **Pitch** (4.2.2.4): subframe 1 has thirds from 19 1/3 to 84 2/3 (indices 0-196) and integers
   85-143; subframes 2-4 have 32 thirds from tmin - 2/3 around subframe 1's integer lag T1, with
   tmin = T1 - 5 limited so that [tmin, tmin + 9] lies within 20..143.
@@ -92,12 +95,18 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
 The boundary gaps 916 and 1244, the rejection of LSP vectors left crossed (gap 0 rejected, gap 1
 kept), the pitch index mapping, the interpolation filter taps, the pulse-1 indices 30 and 31,
 the order of the sign and the rounding in the codevector, the prediction's floor at zero, the
-gain computation and the concealment energy floor were each settled by comparing candidates with
-the reference decoder's output on TE1_46.CHD and on frames generated to isolate one stage. For the
-gains, the candidates followed the operator counts in the standard's informative complexity
-tables (annex C table C.9 and annex D tables D.25 to D.31: two log2 and two pow2 calls per
-subframe, two normalizations and two 16 x 16-bit products in the energy decoding), which rule out
-separate logs of the three energies.
+gain computation, the multiply of the LSP polynomials and the concealment energy floor were each
+settled by comparing candidates with the reference decoder's output on TE1_46.CHD and on frames
+generated to isolate one stage. For the gains, the candidates followed the operator counts in the
+standard's informative complexity tables (annex C table C.9 and annex D tables D.25 to D.31: two
+log2 and two pow2 calls per subframe, two normalizations and two 16 x 16-bit products in the
+energy decoding), which rule out separate logs of the three energies. For the polynomial
+multiply, frames with a single code pulse at the end of every subframe and a lag of 120 make the
+reference's output decay freely through 1/A(z), so its Q12 coefficients can be read back from
+the PCM. They equal those of the usual double-precision product whenever every LSP is even, and
+LSP transitions whose interpolated vector has a single odd value isolate the one to four
+multiplications that can differ; their measured deviations (over 1 300 single-multiplication
+cases) fit the multiply above without exception.
 
 ### Departure from the reference
 
@@ -109,65 +118,37 @@ does not cover this case.
 
 ## Known differences
 
-- **A(z) rounding.** Rarely a Q12 coefficient sits on a rounding tie, and the reference's
-  polynomial arithmetic lands on the other side of it (TE1 frame 1: 2533.498, where the
-  reference arrives at 2534). TE1 has 42 such subframes, 40 of them with interpolated LSPs. The
-  reference's coefficients can be read back from frames built so that its output decays freely
-  through 1/A(z) (one pulse at the end of every subframe, a lag of 120): in those subframes its
-  coefficient vector differs from this decoder's only in coefficients at a tie, each by one (one
-  coefficient in 41 of them, two in the other), and over 600 other LSP transitions 6 of 28 010
-  coefficients differed, each by one and each at a tie. Every variant of the recursion tried (rounding and splitting of the multiplications, other
-  Q formats, factor order, interpolation) matched the reference less often.
-- **Two isolated cases.** In one TE1 subframe whose output clips (frame 795) the output is about
-  0.1% louder than the reference's from the start of the subframe, and on TE3_46.SPE one subframe
-  of very low energy decodes its code gain one exponent step (1/512) higher.
-- These small differences feed the adaptive codebook, so they persist for a few frames: 4 942
-  of TE1's 5 340 frames are exact.
+- **Bad frames before the first good frame.** This decoder keeps its reset state (see the
+  departure above); the reference does not, so the first good frames after such a start differ.
+- **Clipping in random data.** In one synthetic stream of random bits with 5% of the frames lost
+  (one of `test_tetra_decoder`'s streams), the output differs from frame 1283 for four frames, in
+  a passage that clips at full scale. Every other stream tested decodes identically.
 
 ## Measured results
 
-`tools/quality/tetra_conformance.py compare --gate` (see [testing](testing.md#tetra-conformance))
-measures the output against the reference decoder's. The acceptance thresholds agreed for this
-non-bit-exact decoder are a segmental SNR of at least 30 dB over frames above -60 dBFS, a level
+`tools/quality/tetra_conformance.py compare` (see [testing](testing.md#tetra-conformance))
+compares the output with the reference decoder's and exits 0 only for identical files.
+
+- TE1_46.CHD decodes to TE2_128.PCM exactly (5 340 of 5 340 frames).
+- TE3_46.SPE (EN 300 395-4's encoding of TE2_128.PCM, a second stream of the same speech) decodes
+  exactly as the reference decoder decodes it.
+- TE1_46.CHD with bad frames set by `tetra_conformance.py bfi` decodes exactly as the reference
+  decodes it for `--rate 1`, `--rate 3` and `--rate 10` (seeds 1 and 2 each) and for
+  `--burst 100:20 --burst 1000:50 --burst 3000:300`. With `--first 3` the two differ from frame 3
+  (the bad-start departure): 5 197 of 5 340 frames exact, segmental SNR 97.2 dB, frame 10
+  (-31.1 dBFS) at 13.7 dB.
+- Concealment on its own was compared on 34 twelve-frame excerpts of TE1, each with nine bad-frame
+  patterns (a single bad frame at three places, runs of 2, 3 and 6, two bad frames around a good
+  one, and one or two at the start; 306 cases): the first concealed frame is exact in all 306
+  cases and the whole excerpt in all 238 cases without a bad start.
+- Of the seven synthetic streams behind `test_tetra_decoder`'s regression hashes, five decode
+  exactly as the reference decodes them; the bad-start stream and the random stream with losses
+  differ as described above.
+
+For runs that are expected to differ, `compare --gate` takes its exit status from tolerance
+thresholds instead: a segmental SNR of at least 30 dB over frames above -60 dBFS, a level
 difference within 0.1 dB, no frame above -50 dBFS below 14 dB SNR after the first 10 frames, and
 reference silence reproduced within 2 LSB.
-
-TE1_46.CHD against TE2_128.PCM: 4 942 of 5 340 frames exact, first difference at frame 1 sample
-8, SNR 57.2 dB, segmental SNR 94.7 dB over 4 431 frames, level 0.000 dB, no frame below the
-floor (and none above -60 dBFS below 15 dB). It passes the thresholds.
-
-TE3_46.SPE (EN 300 395-4's encoding of TE2_128.PCM, a second stream of the same speech) against
-the reference decoder's output for it: 4 775 of 5 340 frames exact, first difference at frame
-237 sample 61, SNR 56.2 dB, segmental SNR 93.2 dB over 4 368 frames, level 0.000 dB, no frame
-below the floor.
-
-TE1_46.CHD with bad frames set by `tetra_conformance.py bfi`, each decoded by both decoders:
-
-| Bad frames | Exact frames | SNR | Segmental SNR | Level | Frames below the floor |
-| --- | --- | --- | --- | --- | --- |
-| `--rate 1 --seed 1` | 4 958 | 57.4 dB | 94.9 dB | 0.000 dB | none |
-| `--rate 1 --seed 2` | 4 822 | 37.4 dB | 93.0 dB | -0.009 dB | none |
-| `--rate 3 --seed 1` | 4 883 | 54.4 dB | 94.0 dB | 0.000 dB | none |
-| `--rate 3 --seed 2` | 4 846 | 41.8 dB | 93.3 dB | +0.003 dB | 3 (frames 5337-5339, 12.4-13.8 dB) |
-| `--rate 10 --seed 1` | 4 958 | 57.5 dB | 94.7 dB | 0.000 dB | none |
-| `--rate 10 --seed 2` | 4 976 | 43.0 dB | 94.6 dB | 0.000 dB | none |
-| `--burst 100:20 --burst 1000:50 --burst 3000:300` | 4 951 | 57.0 dB | 94.6 dB | 0.000 dB | none |
-| `--first 3` | 4 800 | 52.6 dB | 93.0 dB | 0.000 dB | 1 (frame 10 at -31.1 dBFS, 13.7 dB) |
-
-The thresholds hold for every pattern except these:
-
-- The last frames of TE1 (from about frame 5200) do not look like coded speech: runs of
-  identical frames with extreme or crossed LSP indices and high pitch gains, often at the 1.2
-  limit. After a lost frame earlier in that section the small differences above grow there
-  instead of fading, down to 12-14 dB SNR in the last three frames. Those loud frames also
-  dominate the overall SNR of a run that differs there (`--rate 1 --seed 2`).
-- After three bad start frames, frame 10 differs because of the reset departure above.
-
-Concealment on its own was compared on 34 twelve-frame excerpts of TE1 that both decoders decode
-identically without losses, each with nine bad-frame patterns (a single bad frame at three
-places, runs of 2, 3 and 6, two bad frames around a good one, and one or two at the start; 306
-cases): the first concealed frame is exact in all 306 cases, and the whole excerpt in 232 of the
-238 cases without a bad start. The rest show the small rounding differences described above.
 
 ## Tables
 
@@ -177,10 +158,17 @@ ARCHIVE` checks the archive against the SHA-256 of en_30039502v010301p0.zip (V1.
 en_30039502v010303p0.zip (V1.3.3), whose C-CODE members are identical, reads those two members
 only, and writes `src/tetra/tetra_acelp_codebooks.c` with the archive and member hashes;
 `--check` compares instead of writing. The file carries `LicenseRef-ETSI-EN-300-395-2-data`: the
-values are (C) ETSI, they are not covered by the project's GPL grant, and no licence to them is
-known (`LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`). The project carries them as other
-open-source decoders of standardized speech codecs carry their standards' tables, for example
-FFmpeg's AMR and G.729 decoders.
+values are (C) ETSI and they are not covered by the project's GPL grant
+(`LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`). They are carried for an implementation of the
+standard that passes its decoder test bit for bit: ETSI's IPR Policy (clause 9.2.2, with SOFTWARE
+defined in clause 15, definition 14, to include codec code and data) grants implementers a
+royalty-free licence to software contributed to a standard "for the purpose of using the SOFTWARE
+in any compliant implementation". Whether that grant reaches these 1995 contributions has not been
+established, a contributor could have chosen fair, reasonable and non-discriminatory terms instead
+(clause 9.2.2(ii)), and the grant is limited to that purpose, so it does not make the data
+available under the GPL; no licence that does is known. Other open-source decoders of standardized
+speech codecs, for example FFmpeg's AMR and G.729 decoders, carry their standards' tables in the
+same way.
 
 Everything else is computed from formulas by `tools/tetra/gen_acelp_constants.py` into
 `src/internal/tetra_acelp_constants.h` (log2/pow2 tables, interpolation filters, gamma powers);

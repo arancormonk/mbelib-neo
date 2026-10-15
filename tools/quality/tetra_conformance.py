@@ -10,8 +10,9 @@
 compare reads two raw little-endian 16-bit PCM files of equal, nonzero length (240 samples
 per 30 ms frame) and reports how many frames match exactly, the first mismatching sample,
 the overall and segmental SNR, the level difference, and the frames below the SNR floor. By
-default it exits 1 unless the files are identical. With --gate it exits 1 unless the files
-meet the acceptance thresholds for this decoder, which is not bit-exact (docs/tetra-acelp.md):
+default it exits 1 unless the files are identical. With --gate, for runs expected to differ
+(such as bad frames at the start, docs/tetra-acelp.md), it exits 1 unless the files meet these
+tolerance thresholds:
 
 - segmental SNR of at least 30 dB over the frames whose reference level is above -60 dBFS;
 - level difference within 0.1 dB;
@@ -240,7 +241,7 @@ def main(argv=None):
     p = sub.add_parser("compare", help="compare decoded PCM with a reference")
     p.add_argument("ours", type=Path)
     p.add_argument("reference", type=Path)
-    p.add_argument("--gate", action="store_true", help="exit status from the acceptance thresholds")
+    p.add_argument("--gate", action="store_true", help="exit status from the tolerance thresholds")
     p.add_argument("--metrics-only", action="store_true", help="always exit 0 after reporting")
     p.add_argument("--json", type=Path, help="write the metrics as JSON")
     p = sub.add_parser("bfi", help="copy a .CHD file with bad-frame indicators set")

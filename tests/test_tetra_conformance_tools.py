@@ -83,7 +83,7 @@ def test_compare(root):
         assert b"Traceback" not in result.stderr, result.stderr
         loop.unlink()
 
-    # One sample off: not bit-exact, but well inside the acceptance thresholds.
+    # One sample off: not identical, but well inside the tolerance thresholds.
     changed = list(samples)
     changed[3 * FRAME + 17] += 1
     write_pcm(ours, changed)

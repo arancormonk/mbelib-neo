@@ -31,7 +31,7 @@ that it is complete. The search is recorded in `docs/tetra-acelp.md`.
 ## License
 
 - mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license, except the TETRA codebook data below.
-- `src/tetra/tetra_acelp_codebooks.c` holds the two codebooks of the TETRA speech codec, numeric data copied from the C code archive attached to ETSI EN 300 395-2, (C) ETSI. That data is not covered by the GPL grant and no licence to it is known; the file carries the `LicenseRef-ETSI-EN-300-395-2-data` identifier, whose text, `LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`, is installed with the other license files. Redistributors should make their own assessment of it.
+- `src/tetra/tetra_acelp_codebooks.c` holds the two codebooks of the TETRA speech codec, numeric data copied from the C code archive attached to ETSI EN 300 395-2, (C) ETSI. That data is not covered by the GPL grant. It is carried for a decoder that passes the standard's decoder test bit for bit, the use ETSI's IPR Policy (clause 9.2.2) licenses for software contributed to its standards ("in any compliant implementation"); whether that grant reaches these 1995 contributions has not been established, and it does not make the data available under the GPL. The file carries the `LicenseRef-ETSI-EN-300-395-2-data` identifier, whose text, `LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`, is installed with the other license files. Redistributors should make their own assessment of it.
 - Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `docs/upstream-mbelib-attribution.md` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
 - Project-maintained source files carry SPDX identifiers. Downloaded PFFFT sources retain their upstream license headers; installation includes its license and compiled-source notices.
 
@@ -39,7 +39,7 @@ that it is complete. The search is recorded in `docs/tetra-acelp.md`.
 
 - A performance‑enhanced fork of [lwvmobile/mbelib](https://github.com/lwvmobile/mbelib), which is a fork of [szechyjs/mbelib](https://github.com/szechyjs/mbelib)
 - Supports IMBE 7200x4400 (P25 Phase 1), IMBE 7100x4400 (ProVoice), AMBE (D‑STAR), and AMBE+2 (DMR, NXDN, P25 Phase 2, dPMR, etc.).
-- Decodes TETRA full-rate speech (ETSI EN 300 395-2 ACELP, 137 bits per 30 ms frame) with bad-frame concealment. The decoder is integer fixed-point and follows ETSI's reference decoder closely, but is not bit-exact with it (see [TETRA decoding](#tetra-decoding)).
+- Decodes TETRA full-rate speech (ETSI EN 300 395-2 ACELP, 137 bits per 30 ms frame) with bad-frame concealment. The decoder is integer fixed-point and passes the EN 300 395-4 decoder test bit for bit (see [TETRA decoding](#tetra-decoding)).
 - Public API in `#include <mbelib-neo/mbelib.h>` with version macro `MBELIB_VERSION`.
 - v2.0.0 is an ABI-breaking release that adds strict bit-array validation, soft-decision ECC/frame decode, staged frame-decode helpers, and result-structured synthesis APIs; use older tags for the v1 API.
 - Ships as shared and static libraries: `libmbe-neo.{so|dylib}` on Unix-like platforms, and `mbe-neo.dll` + import lib / `mbe-neo-static.lib` on Windows.
@@ -253,7 +253,7 @@ mbe_tetraDecoderFree(dec);
 - Output is plain 16-bit PCM at the level of ETSI's reference decoder; there is no float variant and no mbelib float scale.
 - Returns 0, `MBE_STATUS_INVALID_ARGUMENT` (NULL `dec` or `pcm`, NULL `bits` on a good frame) or `MBE_STATUS_INVALID_BITS`. A rejected frame leaves the context and `pcm` untouched, so it can be retried as a bad frame.
 - The context holds all decoder state and is not shared: use one per stream, any number per thread, and lock externally for concurrent use of one context. Decoding never allocates. The arithmetic is integer only, so the output is identical on every platform and build configuration.
-- Conformance: on the EN 300 395-4 decoder test (TE1_46.CHD in, TE2_128.PCM expected) the output is not bit-exact: 4 942 of the 5 340 frames match exactly, the overall SNR against the reference is 57.2 dB, the segmental SNR 94.7 dB and the level within 0.01 dB. The decoder therefore does not pass the EN 300 395-4 conformance test. The remaining differences are rare rounding details of the reference's fixed-point arithmetic (mostly in the conversion of LSPs to the synthesis filter) that its text does not specify; `docs/tetra-acelp.md` lists them with the measurements.
+- Conformance: the decoder passes the EN 300 395-4 decoder test: TE1_46.CHD decodes to TE2_128.PCM byte for byte. Bad-frame concealment matches ETSI's reference decoder on the tested loss patterns, except after bad frames that arrive before the first good frame, where this decoder deliberately keeps its reset state. `docs/tetra-acelp.md` records how the details the standard's text leaves open were resolved, the measurements and the known differences.
 
 ### Audio Sample Scaling (Float vs int16)
 

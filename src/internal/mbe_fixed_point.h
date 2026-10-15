@@ -243,10 +243,4 @@ mbe_fx_L_extract(int32_t a, int16_t* hi, int16_t* lo) {
     *lo = mbe_fx_extract_l(mbe_fx_L_msu(mbe_fx_L_shr(a, 1), *hi, 16384));
 }
 
-/** (hi, lo) * n, the 32 x 16-bit product of the double-precision format. */
-static inline int32_t
-mbe_fx_mpy_32_16(int16_t hi, int16_t lo, int16_t n) {
-    return mbe_fx_L_mac(mbe_fx_L_mult(hi, n), mbe_fx_mult(lo, n), 1);
-}
-
 #endif /* MBELIB_NEO_INTERNAL_MBE_FIXED_POINT_H */

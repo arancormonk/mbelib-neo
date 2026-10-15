@@ -428,6 +428,39 @@ test_lsp_to_lpc(void) {
     }
 }
 
+/* Interpolated LSP vectors from random codebook transitions, and the Q12 coefficients ETSI's
+ * reference decoder uses for them, read back from its output (a single pulse per subframe, so the
+ * output decays freely through 1/A(z)) and proven unique over the whole 16-bit range. Each vector has
+ * odd LSPs, and in each the usual double-precision product (2 hi q + 2 floor(lo q / 2^15)) gives one
+ * coefficient one away from these. */
+static void
+test_lsp_to_lpc_reference(void) {
+    static const struct {
+        int16_t lsp[TETRA_M];
+        int16_t a[TETRA_M];
+    } k_cases[] = {
+        {{30292, 26654, 26057, 25141, 18702, 8508, -3942, -11835, -21330, -30701},
+         {-8443, 8389, -4195, 1799, 529, -2030, 2141, -882, 113, 95}},
+        {{30560, 29038, 25231, 24315, 15228, 11942, -17880, -22825, -26879, -30264},
+         {-4808, -426, 4168, 1474, -5680, 2416, 3136, -1556, -2100, 2339}},
+        {{30496, 27960, 19049, 18133, 1680, -9682, -15246, -18143, -24760, -28796},
+         {-86, 1484, -1775, 2878, -99, 512, -1404, 1487, 816, 1378}},
+        {{31778, 30872, 25132, 19156, 4453, -2313, -6228, -11296, -24776, -30248},
+         {-4566, 3258, -3317, 861, 1179, -72, -919, 1064, -990, 1073}},
+    };
+
+    size_t c;
+    for (c = 0; c < sizeof(k_cases) / sizeof(k_cases[0]); c++) {
+        int16_t a[TETRA_M + 1];
+        int i;
+        tetra_lsp_to_lpc(k_cases[c].lsp, a);
+        assert(a[0] == 4096);
+        for (i = 1; i <= TETRA_M; i++) {
+            assert(a[i] == k_cases[c].a[i - 1]);
+        }
+    }
+}
+
 static void
 test_synthesis_filter(void) {
     int16_t a[TETRA_M + 1] = {4096, -2048, 0, 0, 0, 0, 0, 0, 0, 0, 0}; /* 1 / (1 - 0.5 z^-1) */
@@ -843,9 +876,11 @@ test_api_reset_and_reentrancy(void) {
 /* === Regression hashes ===
  *
  * FNV-1a over the little-endian PCM of whole streams. The decoder is integer arithmetic only,
- * so these hold on every compiler, architecture and build type. They pin this decoder's output;
- * how it compares with ETSI's reference decoder is measured outside the test suite
- * (docs/tetra-acelp.md).
+ * so these hold on every compiler, architecture and build type. They pin this decoder's output.
+ * Checked outside the test suite: ETSI's reference decoder produces the same PCM for the voiced,
+ * voiced-with-losses, random, long-erasure and alternating streams; it differs on the bad-start
+ * stream and, from frame 1283 in a passage that clips, on the random stream with losses (the known
+ * differences in docs/tetra-acelp.md).
  */
 
 typedef enum stream_kind { STREAM_VOICED, STREAM_RANDOM } stream_kind;
@@ -907,13 +942,13 @@ alternate(int f, uint32_t r) {
 
 static void
 test_regression_hashes(void) {
-    assert(stream_hash(STREAM_VOICED, 1u, 2000, no_losses) == 0x812585DEu);
-    assert(stream_hash(STREAM_VOICED, 2u, 2000, five_percent) == 0x07DD0589u);
-    assert(stream_hash(STREAM_RANDOM, 3u, 2000, no_losses) == 0x506D4DA4u);
-    assert(stream_hash(STREAM_RANDOM, 4u, 2000, five_percent) == 0x1425374Du);
-    assert(stream_hash(STREAM_VOICED, 5u, 200, bad_start) == 0x770144C3u);
-    assert(stream_hash(STREAM_VOICED, 6u, 450, long_erasure) == 0xE0E66C51u);
-    assert(stream_hash(STREAM_VOICED, 7u, 200, alternate) == 0x9FA45A4Cu);
+    assert(stream_hash(STREAM_VOICED, 1u, 2000, no_losses) == 0x57F200F9u);
+    assert(stream_hash(STREAM_VOICED, 2u, 2000, five_percent) == 0xC1F40AD8u);
+    assert(stream_hash(STREAM_RANDOM, 3u, 2000, no_losses) == 0x1195B24Fu);
+    assert(stream_hash(STREAM_RANDOM, 4u, 2000, five_percent) == 0x40F347CFu);
+    assert(stream_hash(STREAM_VOICED, 5u, 200, bad_start) == 0xB441AECFu);
+    assert(stream_hash(STREAM_VOICED, 6u, 450, long_erasure) == 0x40CC6E44u);
+    assert(stream_hash(STREAM_VOICED, 7u, 200, alternate) == 0x30360BE9u);
 }
 
 int
@@ -929,6 +964,7 @@ main(void) {
     test_lsp_ordering();
     test_lsp_interpolation();
     test_lsp_to_lpc();
+    test_lsp_to_lpc_reference();
     test_synthesis_filter();
     test_adaptive_vector();
     test_log2_pow2();
