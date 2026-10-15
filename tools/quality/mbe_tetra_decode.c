@@ -25,11 +25,13 @@
 #include "mbe_quality_fs.h"
 #include "mbelib-neo/mbelib.h"
 
-#define RECORD_WORDS (1 + MBE_TETRA_FRAME_BITS)
-#define RECORD_BYTES (2 * RECORD_WORDS)
+#define RECORD_WORDS ((size_t)1 + MBE_TETRA_FRAME_BITS)
+#define RECORD_BYTES ((size_t)2 * RECORD_WORDS)
+#define MAX_FRAMES   ((size_t)1 << 22) /* about 35 hours of speech */
 
+/** Read the whole file, refusing anything longer than max_size bytes. Returns 0 or -1. */
 static int
-read_all(const char* path, unsigned char** data, size_t* size) {
+read_all(const char* path, size_t max_size, unsigned char** data, size_t* size) {
     FILE* in = fopen(path, "rb");
     unsigned char* buf = NULL;
     size_t cap = 0;
@@ -39,10 +41,19 @@ read_all(const char* path, unsigned char** data, size_t* size) {
         return -1;
     }
     for (;;) {
+        size_t want;
         size_t got;
         if (len == cap) {
-            size_t ncap = cap ? cap * 2 : 65536;
-            unsigned char* nbuf = (cap > SIZE_MAX / 2) ? NULL : (unsigned char*)realloc(buf, ncap);
+            /* Read at most max_size + 1 bytes: one more than allowed shows the file is too large. */
+            size_t ncap = (cap == 0) ? 65536 : (cap <= max_size / 2) ? cap * 2 : max_size + 1;
+            unsigned char* nbuf;
+            if (cap > max_size) {
+                fprintf(stderr, "%s is larger than %zu bytes\n", path, max_size);
+                free(buf);
+                fclose(in);
+                return -1;
+            }
+            nbuf = (unsigned char*)realloc(buf, ncap);
             if (!nbuf) {
                 fprintf(stderr, "Out of memory reading %s\n", path);
                 free(buf);
@@ -52,14 +63,15 @@ read_all(const char* path, unsigned char** data, size_t* size) {
             buf = nbuf;
             cap = ncap;
         }
-        got = fread(buf + len, 1, cap - len, in);
+        want = cap - len;
+        got = fread(buf + len, 1, want, in);
         len += got;
-        if (got == 0) {
-            break;
+        if (got < want) {
+            break; /* end of file or an error; checked below without reading again */
         }
     }
-    if (ferror(in)) {
-        fprintf(stderr, "Error reading %s\n", path);
+    if (ferror(in) || len > max_size) {
+        fprintf(stderr, ferror(in) ? "Error reading %s\n" : "%s is too large\n", path);
         free(buf);
         fclose(in);
         return -1;
@@ -120,7 +132,7 @@ write_pcm(const char* path, const int16_t* pcm, size_t samples) {
     }
     for (i = 0; i < samples && ok; i++) {
         unsigned v = (unsigned)(uint16_t)pcm[i];
-        unsigned char b[2] = {(unsigned char)(v & 0xFFu), (unsigned char)(v >> 8)};
+        const unsigned char b[2] = {(unsigned char)(v & 0xFFu), (unsigned char)(v >> 8)};
         ok = fwrite(b, 1, 2, out) == 2;
     }
     if (fclose(out) != 0 || !ok) {
@@ -145,22 +157,29 @@ main(int argc, char** argv) {
         fprintf(stderr, "Input and output must be different files.\n");
         return 2;
     }
-    if (read_all(argv[1], &data, &size) != 0) {
+    if (read_all(argv[1], MAX_FRAMES * RECORD_BYTES, &data, &size) != 0) {
         return 2;
     }
     if (size % RECORD_BYTES != 0) {
-        fprintf(stderr, "%s: %zu bytes is not a whole number of %d-byte records\n", argv[1], size, RECORD_BYTES);
+        fprintf(stderr, "%s: %zu bytes is not a whole number of %zu-byte records\n", argv[1], size, RECORD_BYTES);
         free(data);
         return 2;
     }
     frames = size / RECORD_BYTES;
-    pcm = (int16_t*)calloc(frames ? frames * MBE_TETRA_FRAME_SAMPLES : 1, sizeof(int16_t));
+    if (frames > MAX_FRAMES) { /* read_all already enforces this; it bounds the allocation below */
+        fprintf(stderr, "%s: more than %zu frames\n", argv[1], MAX_FRAMES);
+        free(data);
+        return 2;
+    }
+    pcm = (int16_t*)calloc(frames ? frames * (size_t)MBE_TETRA_FRAME_SAMPLES : 1, sizeof(int16_t));
     if (!pcm) {
         fprintf(stderr, "Out of memory\n");
         free(data);
         return 2;
     }
-    ret = decode_all(data, frames, pcm) == 0 && write_pcm(argv[2], pcm, frames * MBE_TETRA_FRAME_SAMPLES) == 0 ? 0 : 2;
+    ret = decode_all(data, frames, pcm) == 0 && write_pcm(argv[2], pcm, frames * (size_t)MBE_TETRA_FRAME_SAMPLES) == 0
+              ? 0
+              : 2;
     free(pcm);
     free(data);
     return ret;
