@@ -495,16 +495,18 @@ void
 tetra_mix_excitation(int16_t gp, int16_t gc, int16_t v[TETRA_SUBFRAME], const int16_t c[TETRA_SUBFRAME]) {
     int n = 0;
 #if defined(TETRA_SIMD)
-    for (; n + 4 <= TETRA_SUBFRAME; n += 4) {
+    /* The 60-sample subframe is exactly 15 four-lane vectors. */
+    for (; n < TETRA_SUBFRAME; n += 4) {
         /* gp is capped at 4915; the sum including the rounding bias fits int32. */
         tetra_v32 acc = tetra_vadd(tetra_vmul(v + n, gp), tetra_vmul(c + n, gc));
         acc = tetra_vadd(acc, tetra_vset(2048));
         tetra_vstore_wrap(v + n, tetra_vshr(acc, 12));
     }
-#endif
+#else
     for (; n < TETRA_SUBFRAME; ++n) {
         v[n] = tetra_excitation(gp, v[n], gc, c[n]);
     }
+#endif
 }
 
 int32_t
