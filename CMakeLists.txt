@@ -289,6 +289,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/core/mbe_tone_detect.c
     src/core/mbe_tone_fit.c
     src/core/mbe_unvoiced_fft.c
+    src/tetra/tetra_acelp_codebooks.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
 
@@ -727,6 +728,7 @@ install(
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/LICENSES/GPL-2.0-or-later.txt"
         "${PROJECT_SOURCE_DIR}/LICENSES/ISC.txt"
+        "${PROJECT_SOURCE_DIR}/LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt"
         "${PROJECT_SOURCE_DIR}/docs/upstream-mbelib-attribution.md"
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )

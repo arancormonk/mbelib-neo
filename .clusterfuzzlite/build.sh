@@ -56,6 +56,7 @@ sources=(
   src/core/mbe_tone_detect.c
   src/core/mbe_tone_fit.c
   src/core/mbe_unvoiced_fft.c
+  src/tetra/tetra_acelp_codebooks.c
 )
 
 objects=()

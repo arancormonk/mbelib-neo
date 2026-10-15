@@ -23,7 +23,8 @@ This notice is advisory and does not modify the license. See `LICENSE` for terms
 
 ## License
 
-- mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license.
+- mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license, except the TETRA codebook data below.
+- `src/tetra/tetra_acelp_codebooks.c` holds the two codebooks of the TETRA speech codec, numeric data copied from the C code archive attached to ETSI EN 300 395-2, (C) ETSI. That data is not covered by the GPL grant and no licence to it is known; the file carries the `LicenseRef-ETSI-EN-300-395-2-data` identifier, whose text, `LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`, is installed with the other license files. Redistributors should make their own assessment of it.
 - Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `docs/upstream-mbelib-attribution.md` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
 - Project-maintained source files carry SPDX identifiers. Downloaded PFFFT sources retain their upstream license headers; installation includes its license and compiled-source notices.
 
