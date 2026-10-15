@@ -129,8 +129,7 @@ decode_subframe(tetra_acelp_state* st, const int16_t a[TETRA_M + 1], const tetra
                 &gp, &gc);
 
     for (n = 0; n < TETRA_SUBFRAME; n++) {
-        int32_t acc = mbe_fx_L_add(mbe_fx_L_mult0(exc_cur[n], gp), mbe_fx_L_mult0(code[n], gc));
-        exc_cur[n] = mbe_fx_sat16(mbe_fx_L_shr_r(acc, 12));
+        exc_cur[n] = tetra_excitation(gp, exc_cur[n], gc, code[n]);
     }
     tetra_syn_filt(a, exc_cur, s, TETRA_SUBFRAME, st->syn_mem, 1);
     for (n = 0; n < TETRA_SUBFRAME; n++) {
@@ -148,7 +147,10 @@ tetra_acelp_decode(tetra_acelp_state* st, const tetra_frame_params* fp, int16_t*
     int k;
 
     if (!fp && !st->good_seen) {
-        /* A bad frame with nothing to conceal from yet: stay silent and keep the reset state. */
+        /* A bad frame with nothing to conceal from yet: stay silent and keep the reset state,
+         * except that the first previous-frame LSP becomes 0, as in the reference decoder. The
+         * first good frame then interpolates from that vector (docs/tetra-acelp.md). */
+        st->lsp_old[0] = 0;
         memset(pcm, 0, TETRA_FRAME * sizeof(int16_t));
         return;
     }

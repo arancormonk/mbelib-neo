@@ -304,6 +304,27 @@ test_codevector_sharpening(void) {
     assert(abs((sharp[30] - plain[30]) - 4634) < 64);
 }
 
+static void
+test_codevector_wraps(void) {
+    /* A(z) of a subframe from random bits whose shaped pulses add up past 16 bits. Like the
+     * reference decoder, the codevector keeps the low 16 bits of each sum (docs/tetra-acelp.md). */
+    static const int16_t a[TETRA_M + 1] = {4096, -15148, 30060, 28874, 28014, -8564, -7298, 11777, -7368, 2341, -146};
+    int16_t code[TETRA_SUBFRAME];
+    tetra_subframe_params sp;
+    memset(&sp, 0, sizeof(sp));
+    sp.pulse1 = 8;
+    sp.pulse2 = 4;
+    sp.pulse3 = 3;
+    sp.pulse4 = 6;
+    sp.sign = 1;
+    sp.shift = 1;
+    tetra_codevector(a, 33, &sp, code);
+    assert(code[21] == -19200); /* 46336 */
+    assert(code[23] == 19201);  /* -46335 */
+    assert(code[33] == 13568);  /* 79104 */
+    assert(code[38] == -165);   /* 65371 */
+}
+
 /* === LSPs and the LP filter === */
 
 static void
@@ -569,6 +590,11 @@ test_gains(void) {
         {0, 3000, 10, 1 << 24, 3000000, 4845, 217},
         {0, 2600, 1, 2876416, 1 << 20, 4915, 521},
         {6912, 6400, INT32_MAX, INT32_MAX, INT32_MAX, 143, 72},
+        /* A code gain past 16 bits keeps its low 16 bits (34265 and 68436), as in the reference
+         * decoder; the pitch gain is capped instead (51783 here, which wrapped would be negative). */
+        {5764, 6400, 165943905, 3067269, 6680446, 1951, -31271},
+        {4525, 6400, 448152011, 2929961, 1748851, 433, 2900},
+        {512, 2600, 1, 2876416, 1 << 20, 4915, 521},
     };
 
     size_t i;
@@ -647,22 +673,106 @@ test_energy_limits(void) {
     assert(st.energy_p == 6912 || st.energy_c == 6400);
 }
 
+static void
+test_excitation_wraps(void) {
+    /* u = (gp v + gc c + 2048) >> 12, keeping the low 16 bits as the reference decoder does. */
+    assert(tetra_excitation(4915, 32767, 32767, 32767) == -26233);  /* 301447 */
+    assert(tetra_excitation(4915, -32768, -32768, 32767) == 26224); /* -301456 */
+    assert(tetra_excitation(1, -1, 4369, 30720) == 32767);          /* 134215679 rounds to 32767 */
+    assert(tetra_excitation(0, 0, 4369, 30720) == -32768);          /* 134215680 rounds to 32768 */
+    assert(tetra_excitation(1, -2048, 4096, -32768) == -32768);     /* rounds to -32768 */
+    assert(tetra_excitation(1, -2049, 4096, -32768) == 32767);      /* rounds to -32769 */
+    assert(tetra_excitation(1, -2048, 0, 0) == 0 && tetra_excitation(1, 2048, 0, 0) == 1); /* ties up */
+}
+
 /* === Concealment === */
 
 static void
 test_bad_frames_after_reset(void) {
     tetra_acelp_state st;
-    tetra_acelp_state fresh;
+    tetra_acelp_state expect;
     int16_t pcm[TETRA_FRAME];
     int frame;
+    lcg g = {9u};
+    int pass;
     tetra_acelp_reset(&st);
-    tetra_acelp_reset(&fresh);
-    for (frame = 0; frame < 3; frame++) {
-        memset(pcm, 0x55, sizeof(pcm));
-        tetra_acelp_decode(&st, NULL, pcm);
-        assert(pcm_is_silent(pcm));
-        assert(memcmp(&st, &fresh, sizeof(st)) == 0);
+    tetra_acelp_reset(&expect);
+    /* Silent, and like the reference decoder the previous frame's LSPs lose their first LSP,
+     * however many bad frames come before the first good one; the same after a reset of a used
+     * state. */
+    expect.lsp_old[0] = 0;
+    for (pass = 0; pass < 2; pass++) {
+        for (frame = 0; frame < 256; frame++) {
+            memset(pcm, 0x55, sizeof(pcm));
+            tetra_acelp_decode(&st, NULL, pcm);
+            assert(pcm_is_silent(pcm));
+            assert(memcmp(&st, &expect, sizeof(st)) == 0);
+        }
+        for (frame = 0; frame < 5; frame++) {
+            uint8_t bits[MBE_TETRA_FRAME_BITS];
+            tetra_frame_params fp;
+            voiced_frame(&g, bits);
+            tetra_acelp_unpack(bits, &fp);
+            tetra_acelp_decode(&st, &fp, pcm);
+        }
+        tetra_acelp_reset(&st);
     }
+}
+
+/** Decode one good frame whose LSPs are rejected (they stay crossed after widening). */
+static void
+decode_rejected_lsp_frame(tetra_acelp_state* st, lcg* g) {
+    uint8_t bits[MBE_TETRA_FRAME_BITS];
+    tetra_frame_params fp;
+    int16_t pcm[TETRA_FRAME];
+    voiced_frame(g, bits);
+    tetra_acelp_unpack(bits, &fp);
+    fp.lsp_index[0] = 0;
+    fp.lsp_index[1] = 0;
+    fp.lsp_index[2] = 0;
+    tetra_acelp_decode(st, &fp, pcm);
+}
+
+static void
+test_bad_start_transitions(void) {
+    tetra_acelp_state st;
+    int16_t pcm[TETRA_FRAME];
+    int16_t decoded[TETRA_M];
+    int32_t ep;
+    int32_t ec;
+    lcg g = {13u};
+    static const int zero_index[3] = {0, 0, 0};
+    tetra_lsp_decode(zero_index, decoded);
+    assert(!tetra_lsp_ordered(decoded));
+
+    /* A good frame ends the bad start even when its LSPs are rejected: the next bad frame is
+     * concealed (energies lowered) and the reset LSPs stay as they are. */
+    tetra_acelp_reset(&st);
+    decode_rejected_lsp_frame(&st, &g);
+    assert(st.good_seen);
+    assert(memcmp(st.lsp_old, k_lsp_init, sizeof(k_lsp_init)) == 0);
+    ep = st.energy_p;
+    ec = st.energy_c;
+    assert(ep > 0 || ec > 0);
+    tetra_acelp_decode(&st, NULL, pcm);
+    assert(st.energy_p == (ep - 512 > 0 ? ep - 512 : 0));
+    assert(st.energy_c == (ec - 512 > 0 ? ec - 512 : 0));
+    assert(memcmp(st.lsp_old, k_lsp_init, sizeof(k_lsp_init)) == 0);
+
+    /* After a bad start, a good frame with rejected LSPs keeps the vector the bad start left, and
+     * a later bad frame conceals from it. */
+    tetra_acelp_reset(&st);
+    tetra_acelp_decode(&st, NULL, pcm);
+    decode_rejected_lsp_frame(&st, &g);
+    assert(st.good_seen);
+    assert(st.lsp_old[0] == 0 && memcmp(&st.lsp_old[1], &k_lsp_init[1], (TETRA_M - 1) * sizeof(int16_t)) == 0);
+    ep = st.energy_p;
+    ec = st.energy_c;
+    assert(ep > 0 || ec > 0);
+    tetra_acelp_decode(&st, NULL, pcm);
+    assert(st.energy_p == (ep - 512 > 0 ? ep - 512 : 0));
+    assert(st.energy_c == (ec - 512 > 0 ? ec - 512 : 0));
+    assert(st.lsp_old[0] == 0);
 }
 
 static void
@@ -789,9 +899,9 @@ test_api_rejection_leaves_state(void) {
     assert(run_with_rejection(30, 0, 0x80) == clean);
 }
 
-/** Decode with bad frames 5..7, their payloads and indicator values chosen by `variant`. */
+/** Decode with bad frames first..first + 2, their payloads and indicator values chosen by `variant`. */
 static uint32_t
-run_bad_frames(int variant) {
+run_bad_frames(int variant, int first) {
     mbe_tetra_decoder* dec = mbe_tetraDecoderAlloc();
     lcg g = {33u};
     uint32_t h = 2166136261u;
@@ -801,7 +911,7 @@ run_bad_frames(int variant) {
         uint8_t bits[MBE_TETRA_FRAME_BITS];
         int16_t pcm[MBE_TETRA_FRAME_SAMPLES];
         voiced_frame(&g, bits);
-        if (f >= 5 && f <= 7) {
+        if (f >= first && f < first + 3) {
             static const int indicators[3] = {1, 2, -1};
             const uint8_t* payload = bits;
             if (variant == 1) {
@@ -809,7 +919,7 @@ run_bad_frames(int variant) {
             } else if (variant == 2) {
                 memset(bits, 0xFF, sizeof(bits)); /* not read: no MBE_STATUS_INVALID_BITS */
             }
-            assert(mbe_tetraDecodeFrame(dec, payload, variant == 3 ? indicators[f - 5] : 1, pcm) == 0);
+            assert(mbe_tetraDecodeFrame(dec, payload, variant == 3 ? indicators[f - first] : 1, pcm) == 0);
         } else {
             assert(mbe_tetraDecodeFrame(dec, bits, 0, pcm) == 0);
         }
@@ -821,10 +931,13 @@ run_bad_frames(int variant) {
 
 static void
 test_api_bad_frame_payload_ignored(void) {
-    uint32_t base = run_bad_frames(0);
-    assert(run_bad_frames(1) == base);
-    assert(run_bad_frames(2) == base);
-    assert(run_bad_frames(3) == base);
+    int first;
+    for (first = 0; first <= 5; first += 5) { /* at the start (before any good frame) and later */
+        uint32_t base = run_bad_frames(0, first);
+        assert(run_bad_frames(1, first) == base);
+        assert(run_bad_frames(2, first) == base);
+        assert(run_bad_frames(3, first) == base);
+    }
 }
 
 static void
@@ -877,13 +990,35 @@ test_api_reset_and_reentrancy(void) {
  *
  * FNV-1a over the little-endian PCM of whole streams. The decoder is integer arithmetic only,
  * so these hold on every compiler, architecture and build type. They pin this decoder's output.
- * Checked outside the test suite: ETSI's reference decoder produces the same PCM for the voiced,
- * voiced-with-losses, random, long-erasure and alternating streams; it differs on the bad-start
- * stream and, from frame 1283 in a passage that clips, on the random stream with losses (the known
- * differences in docs/tetra-acelp.md).
+ * Checked outside the test suite: ETSI's reference decoder produces the same PCM for every stream
+ * here. The random stream with losses wraps codevector samples, the overloaded stream also wraps
+ * code gains and excitation samples, and the bad-start stream starts from the reference's state
+ * after bad frames (docs/tetra-acelp.md).
  */
 
-typedef enum stream_kind { STREAM_VOICED, STREAM_RANDOM } stream_kind;
+typedef enum stream_kind { STREAM_VOICED, STREAM_RANDOM, STREAM_OVERLOADED } stream_kind;
+
+/** Random LSPs, pulses near the subframe end and high gain indices: large code gains. */
+static void
+overloaded_frame(lcg* g, uint8_t bits[MBE_TETRA_FRAME_BITS]) {
+    tetra_frame_params fp;
+    int k;
+    fp.lsp_index[0] = (int)(lcg_next(g) % 256u);
+    fp.lsp_index[1] = (int)(lcg_next(g) % 512u);
+    fp.lsp_index[2] = (int)(lcg_next(g) % 512u);
+    for (k = 0; k < TETRA_SUBFRAMES; k++) {
+        tetra_subframe_params* sp = &fp.sub[k];
+        sp->pitch = (int)(lcg_next(g) % (k == 0 ? 256u : 32u));
+        sp->pulse4 = 6 + (int)(lcg_next(g) % 2u);
+        sp->pulse3 = 6 + (int)(lcg_next(g) % 2u);
+        sp->pulse2 = 6 + (int)(lcg_next(g) % 2u);
+        sp->pulse1 = 26 + (int)(lcg_next(g) % 6u);
+        sp->sign = (int)(lcg_next(g) % 2u);
+        sp->shift = (int)(lcg_next(g) % 2u);
+        sp->gain = 40 + (int)(lcg_next(g) % 24u);
+    }
+    pack_frame(&fp, bits);
+}
 
 /** Hash `frames` frames; frame f is bad when bad(f) says so. */
 static uint32_t
@@ -899,8 +1034,10 @@ stream_hash(stream_kind kind, uint32_t seed, int frames, int (*bad)(int, uint32_
         int16_t pcm[MBE_TETRA_FRAME_SAMPLES];
         if (kind == STREAM_VOICED) {
             voiced_frame(&g, bits);
-        } else {
+        } else if (kind == STREAM_RANDOM) {
             random_bits(&g, bits);
+        } else {
+            overloaded_frame(&g, bits);
         }
         assert(mbe_tetraDecodeFrame(dec, bits, bad(f, lcg_next(&loss)), pcm) == 0);
         h = fnv1a_pcm(h, pcm, MBE_TETRA_FRAME_SAMPLES);
@@ -945,10 +1082,11 @@ test_regression_hashes(void) {
     assert(stream_hash(STREAM_VOICED, 1u, 2000, no_losses) == 0x57F200F9u);
     assert(stream_hash(STREAM_VOICED, 2u, 2000, five_percent) == 0xC1F40AD8u);
     assert(stream_hash(STREAM_RANDOM, 3u, 2000, no_losses) == 0x1195B24Fu);
-    assert(stream_hash(STREAM_RANDOM, 4u, 2000, five_percent) == 0x40F347CFu);
-    assert(stream_hash(STREAM_VOICED, 5u, 200, bad_start) == 0xB441AECFu);
+    assert(stream_hash(STREAM_RANDOM, 4u, 2000, five_percent) == 0xEE127CFCu);
+    assert(stream_hash(STREAM_VOICED, 5u, 200, bad_start) == 0xCC61F145u);
     assert(stream_hash(STREAM_VOICED, 6u, 450, long_erasure) == 0x40CC6E44u);
     assert(stream_hash(STREAM_VOICED, 7u, 200, alternate) == 0x30360BE9u);
+    assert(stream_hash(STREAM_OVERLOADED, 12u, 400, five_percent) == 0xB296BA68u);
 }
 
 int
@@ -960,6 +1098,7 @@ main(void) {
     test_pulse_positions();
     test_codevector_absent_pulses();
     test_codevector_sharpening();
+    test_codevector_wraps();
     test_lsp_decode_and_widening();
     test_lsp_ordering();
     test_lsp_interpolation();
@@ -971,7 +1110,9 @@ main(void) {
     test_gains();
     test_code_energy_floor();
     test_energy_limits();
+    test_excitation_wraps();
     test_bad_frames_after_reset();
+    test_bad_start_transitions();
     test_concealment_state();
     test_crossed_lsps_keep_previous();
     test_api_arguments();

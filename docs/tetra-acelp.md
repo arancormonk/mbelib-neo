@@ -12,10 +12,10 @@ homing-sequence detection are out of scope. The API is described in the README
 EN 300 395-2 clause 8 makes ETSI's fixed-point C code the normative definition of the codec, and
 EN 300 395-4 tests a decoder bit for bit: TE1_46.CHD decoded must equal TE2_128.PCM. **This
 decoder passes that test: its output equals TE2_128.PCM byte for byte.** It is written from the
-text of the standard and from black-box measurements of ETSI's reference decoder. Outside the
-test sequence two differences from the reference decoder are known: bad frames received before
-the first good frame, and one synthetic stream of random bits whose output clips at full scale
-(see [Known differences](#known-differences)).
+text of the standard and from black-box measurements of ETSI's reference decoder. No other
+difference from the reference decoder is known: TE3, every bad-frame pattern tried and about
+2.1 million frames of synthetic stress streams decode exactly as the reference decodes them (see
+[Measured results](#measured-results)).
 
 The decoder uses integer arithmetic only, through saturating 16/32-bit operators with portable C
 semantics (`src/internal/mbe_fixed_point.h`), so its own output is identical on every compiler,
@@ -68,7 +68,8 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
   indices 30 and 31, and pulses 3 and 4 at index 7). Amplitudes +1.4142 (Q14 23168), -1, +1, -1,
   all negated by the sign bit. The pulses are filtered by F(z) = A(z/0.75)/A(z/0.85) (gamma powers
   as recursive rounded Q15 products) and, for an integer lag T below 60, sharpened by
-  f(n) += 0.8 f(n - T); each sample is rounded down.
+  f(n) += 0.8 f(n - T); each sample is rounded down and keeps its low 16 bits (only an extreme
+  A(z), as from random bits, takes the sum past them).
 - **Gains** (4.2.2.6, equations 31-39): energies in Q8 log2, both 0 after a reset. Prediction
   0.5 E(p) + 0.25 E(c) - 3 (and symmetrically for the code), computed with the quarter rounded
   down and floored at zero, plus the codebook's prediction error; the results are limited to 27
@@ -80,15 +81,18 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
   (33-entry table round(32767 log2(1 + i/32)) with linear interpolation), the normalization
   shifts are subtracted (both for the pitch gain, pg's for the code gain), the result is truncated
   to Q8, and one offset (4434 in Q8) accounts for the Q formats of both gains. E - Ea, read in Q9,
-  is converted by a 33-entry pow2 table; the gains are Q12 and the pitch gain is limited to 1.2
-  afterwards (the stored energies are not changed by the limit).
-- **Excitation and synthesis** (equations 40-41): u = gp v + gc c rounded to 16 bits (it is also
-  the adaptive codebook's memory); 1/A(z) with Q12 coefficients and a saturating 32-bit
-  accumulator; the output doubled with saturation (4.2.1).
+  is converted by a 33-entry pow2 table; the gains are Q12. The pitch gain is limited to 1.2
+  afterwards (the stored energies are not changed by the limit); the code gain is not limited and
+  keeps the low 16 bits of the pow2 result, so a code gain of 8.0 or more, which only extreme
+  energies produce, wraps.
+- **Excitation and synthesis** (equations 40-41): u = gp v + gc c, rounded, keeping its low 16
+  bits (it is also the adaptive codebook's memory); 1/A(z) with Q12 coefficients and a saturating
+  32-bit accumulator; the output doubled with saturation (4.2.1).
 - **Concealment** (4.2.3.2): previous LSPs; the previous good frame's subframe-4 integer lag in
   all four subframes, fraction 0; both energies lowered by 0.5 per subframe and not below zero;
   the previous good frame's innovation indices. A bad frame's bits are not read, and any nonzero
-  indicator marks a frame bad.
+  indicator marks a frame bad. Bad frames before the first good frame since a reset are covered
+  [below](#bad-frames-before-the-first-good-frame).
 
 ### Spec-silent details resolved against the reference
 
@@ -108,21 +112,35 @@ LSP transitions whose interpolated vector has a single odd value isolate the one
 multiplications that can differ; their measured deviations (over 1 300 single-multiplication
 cases) fit the multiply above without exception.
 
-### Departure from the reference
+Where a 16-bit result overflows, which takes extreme input such as random bits, the reference's
+output shows that it wraps some results and saturates others: the codevector, the code gain and
+the excitation keep their low 16 bits, while the pitch gain, the synthesis filter and the doubled
+output saturate. Each choice was settled on synthetic stress streams (uniform random bits; pulses
+at the end of the subframe with high gain indices; rejected LSP vectors; loss bursts) by decoding
+them with variants of this decoder: only these choices reproduce the reference on every stream,
+and reverting any one of the three wraps breaks streams that the others leave intact.
 
-After a reset, bad frames that arrive before any good frame decode to silence in both decoders.
-The reference then starts the first good frame late and sometimes with a burst (in one test the
-first good frame peaked at 10 730 where a fresh decode peaks at 216). This decoder instead keeps
-its reset state until the first good frame, which then decodes as it would from a reset. The text
-does not cover this case.
+### Bad frames before the first good frame
+
+After a reset, bad frames that arrive before any good frame have no good frame to conceal from,
+and the text does not cover the case. They decode to silence and leave the decoder's state as
+reset, except that the first LSP of the previous-frame vector becomes 0 (30000 after a reset),
+however many such frames arrive (1 to 256 tested) and whatever their bits. The reference
+decoder's output after such a start is observationally equivalent to decoding from that state.
+The vector was found the way the A(z) coefficients were read back (a good frame whose LSPs are
+rejected keeps the previous vector for all four subframes, so its free decays show that vector's
+filter), and of the values tried for the first LSP only 0 reproduces the reference on every
+bad-start stream tested. The first good frame then interpolates its first three subframes from
+that vector, and their filters can be unstable: the output often starts quiet and then clips at
+full scale, in the reference decoder and in this one alike. The synthesis memory and the
+excitation history carry the burst on after the interpolation ends (in one test through the whole
+next frame), and good frames whose LSPs are rejected keep the vector, and its unstable filter, in
+all four subframes. A good frame ends the bad start even when its LSPs are rejected.
 
 ## Known differences
 
-- **Bad frames before the first good frame.** This decoder keeps its reset state (see the
-  departure above); the reference does not, so the first good frames after such a start differ.
-- **Clipping in random data.** In one synthetic stream of random bits with 5% of the frames lost
-  (one of `test_tetra_decoder`'s streams), the output differs from frame 1283 for four frames, in
-  a passage that clips at full scale. Every other stream tested decodes identically.
+None known: every stream compared, listed below, decodes exactly as the reference build
+described above decodes it.
 
 ## Measured results
 
@@ -133,22 +151,24 @@ compares the output with the reference decoder's and exits 0 only for identical 
 - TE3_46.SPE (EN 300 395-4's encoding of TE2_128.PCM, a second stream of the same speech) decodes
   exactly as the reference decoder decodes it.
 - TE1_46.CHD with bad frames set by `tetra_conformance.py bfi` decodes exactly as the reference
-  decodes it for `--rate 1`, `--rate 3` and `--rate 10` (seeds 1 and 2 each) and for
-  `--burst 100:20 --burst 1000:50 --burst 3000:300`. With `--first 3` the two differ from frame 3
-  (the bad-start departure): 5 197 of 5 340 frames exact, segmental SNR 97.2 dB, frame 10
-  (-31.1 dBFS) at 13.7 dB.
+  decodes it for `--rate 1`, `--rate 3` and `--rate 10` (seeds 1 and 2 each), for
+  `--burst 100:20 --burst 1000:50 --burst 3000:300` and for `--first 3`.
 - Concealment on its own was compared on 34 twelve-frame excerpts of TE1, each with nine bad-frame
   patterns (a single bad frame at three places, runs of 2, 3 and 6, two bad frames around a good
-  one, and one or two at the start; 306 cases): the first concealed frame is exact in all 306
-  cases and the whole excerpt in all 238 cases without a bad start.
-- Of the seven synthetic streams behind `test_tetra_decoder`'s regression hashes, five decode
-  exactly as the reference decodes them; the bad-start stream and the random stream with losses
-  differ as described above.
+  one, and one or two at the start; 306 cases): every excerpt is exact.
+- The eight synthetic streams behind `test_tetra_decoder`'s regression hashes decode exactly as
+  the reference decodes them.
+- 200 synthetic stress streams, about 2.1 million frames, decode exactly as the reference decodes
+  them: uniform random bits, pulses at the end of the subframe with high gain indices, plausible
+  voiced parameters, random bits with 30% of the frames forced to rejected LSPs; with random
+  losses, loss bursts, bad starts of 1 to 256 frames and good frames with rejected LSPs before and
+  between bad ones. Together they wrap about 68 000 codevector samples, 6 600 code gains and 600
+  excitation samples.
 
-For runs that are expected to differ, `compare --gate` takes its exit status from tolerance
-thresholds instead: a segmental SNR of at least 30 dB over frames above -60 dBFS, a level
-difference within 0.1 dB, no frame above -50 dBFS below 14 dB SNR after the first 10 frames, and
-reference silence reproduced within 2 LSB.
+For runs that may differ (a candidate change, say), `compare --gate` takes its exit status from
+tolerance thresholds instead: a segmental SNR of at least 30 dB over frames above -60 dBFS, a
+level difference within 0.1 dB, no frame above -50 dBFS below 14 dB SNR after the first 10
+frames, and reference silence reproduced within 2 LSB.
 
 ## Tables
 

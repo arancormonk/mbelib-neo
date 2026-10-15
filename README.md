@@ -249,11 +249,11 @@ mbe_tetraDecoderFree(dec);
 ```
 
 - Input is the 137 type-1 bits of one speech frame in the order of EN 300 395-2 clause 4.2.2.7, tables 3 and 4 (B1 is the most significant bit of the first LSP index), as a TETRA channel decoder delivers them. Each byte must be 0 or 1.
-- Pass a nonzero `bad_frame` when the class-2 CRC failed or the frame was stolen for signalling; the frame is then concealed as clause 4.2.3.2 describes (previous LSPs, the last subframe-4 pitch, energies lowered 1.5 dB per subframe, previous innovation indices) and `bits` is not read. Bad frames before the first good frame since allocation or `mbe_tetraDecoderReset()` give silence.
+- Pass a nonzero `bad_frame` when the class-2 CRC failed or the frame was stolen for signalling; the frame is then concealed as clause 4.2.3.2 describes (previous LSPs, the last subframe-4 pitch, energies lowered 1.5 dB per subframe, previous innovation indices) and `bits` is not read. Bad frames before the first good frame since allocation or `mbe_tetraDecoderReset()` give silence; as in ETSI's reference decoder, the output after them can start with a burst.
 - Output is plain 16-bit PCM at the level of ETSI's reference decoder; there is no float variant and no mbelib float scale.
 - Returns 0, `MBE_STATUS_INVALID_ARGUMENT` (NULL `dec` or `pcm`, NULL `bits` on a good frame) or `MBE_STATUS_INVALID_BITS`. A rejected frame leaves the context and `pcm` untouched, so it can be retried as a bad frame.
 - The context holds all decoder state and is not shared: use one per stream, any number per thread, and lock externally for concurrent use of one context. Decoding never allocates. The arithmetic is integer only, so the output is identical on every platform and build configuration.
-- Conformance: the decoder passes the EN 300 395-4 decoder test: TE1_46.CHD decodes to TE2_128.PCM byte for byte. Bad-frame concealment matches ETSI's reference decoder on the tested loss patterns, except after bad frames that arrive before the first good frame, where this decoder deliberately keeps its reset state. `docs/tetra-acelp.md` records how the details the standard's text leaves open were resolved, the measurements and the known differences.
+- Conformance: the decoder passes the EN 300 395-4 decoder test: TE1_46.CHD decodes to TE2_128.PCM byte for byte. Its output also matches ETSI's reference decoder on every other stream compared: TE3, the tested loss patterns (including bad frames before the first good frame) and about 2.1 million frames of synthetic stress streams. `docs/tetra-acelp.md` records how the details the standard's text leaves open were resolved, and the measurements.
 
 ### Audio Sample Scaling (Float vs int16)
 

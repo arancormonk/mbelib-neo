@@ -1163,9 +1163,10 @@ MBE_API void mbe_tetraDecoderFree(mbe_tetra_decoder* dec);
  *
  * The decoder is integer fixed-point throughout, so its output is identical on every platform
  * and build configuration. Decoding never allocates. The output is bit-exact with ETSI's
- * reference decoder on the EN 300 395-4 decoder test (TE1_46.CHD decodes to TE2_128.PCM);
- * docs/tetra-acelp.md lists the known differences outside that test. Bad frames before the first
- * good frame after an allocation or reset decode to silence and leave the context unchanged.
+ * reference decoder on the EN 300 395-4 decoder test (TE1_46.CHD decodes to TE2_128.PCM), and no
+ * difference outside that test is known (docs/tetra-acelp.md). Bad frames before the first good
+ * frame after an allocation or reset decode to silence; as in the reference decoder, the output
+ * after them can start with a burst.
  *
  * @param dec       Decoder context.
  * @param bits      MBE_TETRA_FRAME_BITS bytes, each 0 or 1: B1..B137 in the speech frame order of

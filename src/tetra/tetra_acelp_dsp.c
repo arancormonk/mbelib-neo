@@ -217,7 +217,8 @@ tetra_codevector(const int16_t a[TETRA_M + 1], int t0, const tetra_subframe_para
         if (sp->sign) {
             acc = -acc;
         }
-        code[n] = mbe_fx_sat16(mbe_fx_asr64(acc, 14));
+        /* The reference decoder keeps the low 16 bits; only an extreme A(z) gets past them. */
+        code[n] = mbe_fx_extract_l((int32_t)mbe_fx_asr64(acc, 14));
     }
 }
 
@@ -316,15 +317,16 @@ mantissa(int32_t x, int* shift) {
     return mbe_fx_extract_h(mbe_fx_L_shl(x, *shift));
 }
 
-/** Gain (Q12) from a quantized energy (Q8) and the log2 (Q15) of the energy product of equation 31/33. */
-static int16_t
+/** Gain (Q12, not yet narrowed, never negative) from a quantized energy (Q8) and the log2 (Q15) of
+ *  the energy product of equation 31/33. */
+static int32_t
 gain_from_log(int16_t energy_q8, int32_t log_q15) {
     /* The log is truncated to Q8 before the subtraction (equations 38-39); z is then log2 of the
      * squared gain in Q8, i.e. log2 of the gain in Q9. */
     int32_t z = energy_q8 + TETRA_GAIN_OFFSET - (int32_t)mbe_fx_asr64(log_q15, 7);
     int32_t e = (int32_t)mbe_fx_asr64(z, 9);
     int32_t f = z - (int32_t)mbe_fx_lsl64(e, 9);
-    return mbe_fx_sat16(tetra_pow2((int16_t)e, (int16_t)mbe_fx_lsl64(f, 6)));
+    return tetra_pow2((int16_t)e, (int16_t)mbe_fx_lsl64(f, 6));
 }
 
 void
@@ -336,11 +338,19 @@ tetra_gains(int16_t energy_p, int16_t energy_c, int32_t v_energy, int32_t c_ener
     int16_t mv = mantissa(v_energy, &nv);
     /* The code energy keeps a fixed scale: its high half, not normalized (at least 43, see the tests). */
     int16_t mc = mbe_fx_extract_h(c_energy);
+    int32_t p;
     /* One log2 per energy product of 16-bit mantissas; the two high halves drop 32 binary places,
      * which TETRA_GAIN_OFFSET accounts for. */
-    *gp = gain_from_log(energy_p, log2_q15(mbe_fx_L_mult0(mv, mpg)) - (int32_t)mbe_fx_lsl64(nv + npg, 15));
-    if (*gp > TETRA_GAIN_P_MAX) {
-        *gp = TETRA_GAIN_P_MAX;
-    }
-    *gc = gain_from_log(energy_c, log2_q15(mbe_fx_L_mult0(mc, mpg)) - (int32_t)mbe_fx_lsl64(npg, 15));
+    p = gain_from_log(energy_p, log2_q15(mbe_fx_L_mult0(mv, mpg)) - (int32_t)mbe_fx_lsl64(nv + npg, 15));
+    *gp = (int16_t)(p < TETRA_GAIN_P_MAX ? p : TETRA_GAIN_P_MAX);
+    /* The code gain is not capped: as in the reference decoder it keeps its low 16 bits, which a
+     * gain of 8.0 or more (only from extreme energies) gets past. */
+    *gc = mbe_fx_extract_l(gain_from_log(energy_c, log2_q15(mbe_fx_L_mult0(mc, mpg)) - (int32_t)mbe_fx_lsl64(npg, 15)));
+}
+
+int16_t
+tetra_excitation(int16_t gp, int16_t v, int16_t gc, int16_t c) {
+    /* Kept to the low 16 bits as the reference decoder does; the 32-bit sum cannot overflow, gp
+     * being at most 4915. */
+    return mbe_fx_extract_l(mbe_fx_L_shr_r(mbe_fx_L_add(mbe_fx_L_mult0(v, gp), mbe_fx_L_mult0(c, gc)), 12));
 }

@@ -10,9 +10,8 @@
 compare reads two raw little-endian 16-bit PCM files of equal, nonzero length (240 samples
 per 30 ms frame) and reports how many frames match exactly, the first mismatching sample,
 the overall and segmental SNR, the level difference, and the frames below the SNR floor. By
-default it exits 1 unless the files are identical. With --gate, for runs expected to differ
-(such as bad frames at the start, docs/tetra-acelp.md), it exits 1 unless the files meet these
-tolerance thresholds:
+default it exits 1 unless the files are identical. With --gate, for runs that may differ (a
+candidate decoder change, say), it exits 1 unless the files meet these tolerance thresholds:
 
 - segmental SNR of at least 30 dB over the frames whose reference level is above -60 dBFS;
 - level difference within 0.1 dB;
