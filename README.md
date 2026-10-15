@@ -1,6 +1,6 @@
 # mbelib-neo
 
-Performance‑enhanced IMBE/AMBE vocoder primitives with a modern CMake build, installable headers, and pkg-config/CMake package integration.
+Performance‑enhanced IMBE/AMBE vocoder primitives and a TETRA ACELP speech decoder, with a modern CMake build, installable headers, and pkg-config/CMake package integration.
 
 Project homepage: https://github.com/arancormonk/mbelib-neo
 
@@ -21,9 +21,17 @@ or licensing requirements before compiling or using this source code.
 
 This notice is advisory and does not modify the license. See `LICENSE` for terms.
 
+TETRA speech codec: a search of ETSI's IPR database exports on 2026-10-15 located two
+declarations bearing on the TETRA speech codec (ISLD-200101-005 against EN 300 395-2, and
+ISLD-190001-073 for the TETRA project). For every patent family they list, the individually
+checked family members have passed their anticipated expiration (Google Patents: 2007-2014).
+The database also holds general declarations that name no patents, and ETSI does not guarantee
+that it is complete. The search is recorded in `docs/tetra-acelp.md`.
+
 ## License
 
-- mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license.
+- mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license, except the TETRA codebook data below.
+- `src/tetra/tetra_acelp_codebooks.c` holds the two codebooks of the TETRA speech codec, numeric data copied from the C code archive attached to ETSI EN 300 395-2, (C) ETSI. That data is not covered by the GPL grant. It is carried for a decoder that passes the standard's decoder test bit for bit, the use ETSI's IPR Policy (clause 9.2.2) licenses for software contributed to its standards ("in any compliant implementation"); whether that grant reaches these 1995 contributions has not been established, and it does not make the data available under the GPL. The file carries the `LicenseRef-ETSI-EN-300-395-2-data` identifier, whose text, `LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`, is installed with the other license files. Redistributors should make their own assessment of it.
 - Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `docs/upstream-mbelib-attribution.md` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
 - Project-maintained source files carry SPDX identifiers. Downloaded PFFFT sources retain their upstream license headers; installation includes its license and compiled-source notices.
 
@@ -31,6 +39,7 @@ This notice is advisory and does not modify the license. See `LICENSE` for terms
 
 - A performance‑enhanced fork of [lwvmobile/mbelib](https://github.com/lwvmobile/mbelib), which is a fork of [szechyjs/mbelib](https://github.com/szechyjs/mbelib)
 - Supports IMBE 7200x4400 (P25 Phase 1), IMBE 7100x4400 (ProVoice), AMBE (D‑STAR), and AMBE+2 (DMR, NXDN, P25 Phase 2, dPMR, etc.).
+- Decodes TETRA full-rate speech (ETSI EN 300 395-2 ACELP, 137 bits per 30 ms frame) with bad-frame concealment. The decoder is integer fixed-point and passes the EN 300 395-4 decoder test bit for bit (see [TETRA decoding](#tetra-decoding)).
 - Public API in `#include <mbelib-neo/mbelib.h>` with version macro `MBELIB_VERSION`.
 - v2.0.0 is an ABI-breaking release that adds strict bit-array validation, soft-decision ECC/frame decode, staged frame-decode helpers, and result-structured synthesis APIs; use older tags for the v1 API.
 - Ships as shared and static libraries: `libmbe-neo.{so|dylib}` on Unix-like platforms, and `mbe-neo.dll` + import lib / `mbe-neo-static.lib` on Windows.
@@ -148,7 +157,7 @@ git push origin vX.Y.Z
 - `-DMBELIB_ENABLE_SIMD=ON` — Enable SSE2/NEON routines when the compiler target provides them, otherwise use scalar routines. Defaults to ON for Release, RelWithDebInfo, and MinSizeRel builds of 64-bit targets, and OFF otherwise. The bundled FFT also falls back to scalar when its compiler target has no supported SIMD backend. On 32-bit ARM, pass `-DCMAKE_C_FLAGS=-mfpu=neon` to enable NEON; the option itself preserves the toolchain's FPU selection. Measure performance on your own core. On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability. See [SIMD target selection](docs/build-installation.md#simd-target-selection).
 - Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
 - `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, `bench_convert`, and `bench_encode` (D-STAR, AMBE+2 and IMBE encoders).
-- `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation).
+- `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer, and the `mbe_tetra_decode` TETRA conformance-file decoder. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation) and [TETRA conformance](docs/testing.md#tetra-conformance).
 
 ## Using The Library
 
@@ -227,9 +236,30 @@ IMBE 7100x4400 frame decoders convert their `imbe_d[88]` output to the 7200x4400
 - For parameter-only processing, seed `mbe_process_result.total_errors` and any valid C0/C4 context before calling `mbe_process*Data*`.
 - Use `mbe_versionString()` for the static NUL-terminated library version string.
 
+### TETRA Decoding
+
+```c
+mbe_tetra_decoder* dec = mbe_tetraDecoderAlloc();      /* one context per stream */
+uint8_t bits[MBE_TETRA_FRAME_BITS];                    /* B1..B137, one 0/1 byte each */
+int16_t pcm[MBE_TETRA_FRAME_SAMPLES];                  /* 240 samples, 30 ms at 8 kHz */
+/* ... per received speech frame ... */
+int status = mbe_tetraDecodeFrame(dec, crc_failed ? NULL : bits, crc_failed, pcm);
+/* ... at the end of the call ... */
+mbe_tetraDecoderFree(dec);
+```
+
+- Input is the 137 type-1 bits of one speech frame in the order of EN 300 395-2 clause 4.2.2.7, tables 3 and 4 (B1 is the most significant bit of the first LSP index), as a TETRA channel decoder delivers them. Each byte must be 0 or 1.
+- Pass a nonzero `bad_frame` when the class-2 CRC failed or the frame was stolen for signalling; the frame is then concealed as clause 4.2.3.2 describes (previous LSPs, the last subframe-4 pitch, energies lowered 1.5 dB per subframe, previous innovation indices) and `bits` is not read. Bad frames before the first good frame since allocation or `mbe_tetraDecoderReset()` give silence; as in ETSI's reference decoder, the output after them can start with a burst.
+- Output is plain 16-bit PCM at the level of ETSI's reference decoder; there is no float variant and no mbelib float scale.
+- Returns 0, `MBE_STATUS_INVALID_ARGUMENT` (NULL `dec` or `pcm`, NULL `bits` on a good frame) or `MBE_STATUS_INVALID_BITS`. A rejected frame leaves the context and `pcm` untouched, so it can be retried as a bad frame.
+- The context holds all decoder state and is not shared: use one per stream, any number per thread, and lock externally for concurrent use of one context. Decoding never allocates. The arithmetic is integer only, so the output is identical on every platform and build configuration.
+- Conformance: the decoder passes the EN 300 395-4 decoder test: TE1_46.CHD decodes to TE2_128.PCM byte for byte. Its output also matches ETSI's reference decoder on every other stream compared: TE3, the tested loss patterns (including bad frames before the first good frame) and about 2.1 million frames of synthetic stress streams. `docs/tetra-acelp.md` records how the details the standard's text leaves open were resolved, and the measurements.
+
 ### Audio Sample Scaling (Float vs int16)
 
-- The library synthesizes 8 kHz audio in 160-sample frames.
+This section covers the IMBE/AMBE decoders. The TETRA decoder writes 240-sample int16 frames with plain saturation and has no float variant ([TETRA decoding](#tetra-decoding)).
+
+- The IMBE/AMBE decoders synthesize 8 kHz audio in 160-sample frames.
 - The `short` entry points write 16-bit PCM with soft clipping (~95% full-scale).
 - The `*f` entry points return mbelib’s historical float scale (not normalized `[-1, +1]`). `mbe_floattoshort()` applies the same `* 7.0` scaling and clipping used by the `short` APIs.
 - To feed a normalized float pipeline, scale each float sample by `(7.0f / 32768.0f)` (range is approximately `[-0.95, +0.95]` after soft clipping).
@@ -373,7 +403,7 @@ tools/bench_compare.sh
 ## Tests and Examples
 
 - Run tests with `ctest --preset dev-debug -V` (or `ctest -V` from the build directory).
-- Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_ambe2450_frame_types` (AMBE 3600x2450 silence, repeat, erasure, tone and mute handling per TIA-102.BABA-1), `test_tones` (AMBE+2 and D-STAR tone levels and frequencies against the DVSI-calibrated laws), `test_golden_pcm` (golden hash regression checks, including voice-only AMBE 2450 and D-STAR sequences).
+- Included tests: `test_api` (version/header/result helpers), `test_ecc` (hard and soft Golay/Hamming), `test_noise_determinism` (unvoiced RNG/frame-state determinism), `test_params` (parameter/synthesis behavior, soft frame decode, and v2 wrappers), `test_floattoshort_parity` (exact float-to-int16 conversion parity), `test_ambe2450_frame_types` (AMBE 3600x2450 silence, repeat, erasure, tone and mute handling per TIA-102.BABA-1), `test_tones` (AMBE+2 and D-STAR tone levels and frequencies against the DVSI-calibrated laws), `test_golden_pcm` (golden hash regression checks, including voice-only AMBE 2450 and D-STAR sequences), `test_tetra_decoder` (TETRA decoding stages, concealment, API contract and stream hashes), `test_fixed_point` (the TETRA decoder's saturating operators), `test_tetra_shared_api` (TETRA entry points through the shared library), `test_tetra_tables` (table generators and provenance), `test_tetra_conformance_tools` (the TETRA comparison tool).
 - Example: `examples/print_version.c` shows linking and header usage.
 - WAV round trip: `./build/dev-debug/dstar_encode < input.wav > output.dstar`, then `./build/dev-debug/dstar_decode < output.dstar > output.wav`. These example binaries are not installed. They use binary stdin/stdout, accept no path arguments, and send diagnostics to stderr. The private `.dstar` container is not a D-STAR air-interface stream.
 - When Python 3.7 or newer is available, CTest also checks the D-STAR examples through stdin/stdout pipes, including malformed WAVs, exact silence, and the final flush frame.
@@ -408,7 +438,7 @@ Project documentation and policies:
 ## Project Layout
 
 - Public headers: `include/mbelib-neo/`
-- Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`
+- Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`, `src/tetra/`
 - Internal headers: `src/internal/`
 - External libraries: pinned PFFFT fork populated by `cmake/Pffft.cmake` (BSD-like license)
 - Tests: `tests/` • Examples: `examples/` • Benchmarks: `bench/`

@@ -559,6 +559,42 @@ test_low_level_public_bit_paths_validate(void) {
     assert(mbe_convertImbe7100to7200(imbe_params) == MBE_STATUS_INVALID_BITS);
 }
 
+static void
+test_tetra_frame_validation(void) {
+    mbe_tetra_decoder* dec = mbe_tetraDecoderAlloc();
+    uint8_t storage[MBE_TETRA_FRAME_BITS + 16];
+    int16_t pcm[MBE_TETRA_FRAME_SAMPLES];
+    int16_t expected[MBE_TETRA_FRAME_SAMPLES];
+    assert(dec);
+    memset(expected, 0x33, sizeof(expected));
+    assert(mbe_tetraDecodeFrame(NULL, storage, 1, pcm) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_tetraDecodeFrame(dec, storage, 1, NULL) == MBE_STATUS_INVALID_ARGUMENT);
+    memcpy(pcm, expected, sizeof(pcm));
+    assert(mbe_tetraDecodeFrame(dec, NULL, 0, pcm) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(memcmp(pcm, expected, sizeof(pcm)) == 0);
+    for (int offset = 0; offset < 16; ++offset) {
+        uint8_t* bits = storage + offset;
+        /* Invalid bytes outside the frame must never affect validation. */
+        memset(storage, 2, sizeof(storage));
+        for (int i = 0; i < MBE_TETRA_FRAME_BITS; ++i) {
+            bits[i] = (uint8_t)((i * 7 + offset) % 3 == 0);
+        }
+        assert(mbe_tetraDecodeFrame(dec, bits, 0, pcm) == 0);
+    }
+    for (int pos = 0; pos < MBE_TETRA_FRAME_BITS; pos += 17) {
+        uint8_t bits[MBE_TETRA_FRAME_BITS] = {0};
+        for (unsigned value = 2; value <= 255; ++value) {
+            bits[pos] = (uint8_t)value;
+            memcpy(pcm, expected, sizeof(pcm));
+            assert(mbe_tetraDecodeFrame(dec, bits, 0, pcm) == MBE_STATUS_INVALID_BITS);
+            assert(memcmp(pcm, expected, sizeof(pcm)) == 0);
+            /* A bad frame's payload is not read. */
+            assert(mbe_tetraDecodeFrame(dec, bits, 1, pcm) == 0);
+        }
+    }
+    mbe_tetraDecoderFree(dec);
+}
+
 int
 main(void) {
     test_bit_validation_vector_boundaries();
@@ -574,5 +610,6 @@ main(void) {
     test_null_parameter_helpers_are_noops();
     test_tone_helpers_silence_invalid_inputs();
     test_low_level_public_bit_paths_validate();
+    test_tetra_frame_validation();
     return 0;
 }

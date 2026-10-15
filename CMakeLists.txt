@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.4.3 LANGUAGES C)
+project(mbelib-neo VERSION 2.5.0 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -289,6 +289,9 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/core/mbe_tone_detect.c
     src/core/mbe_tone_fit.c
     src/core/mbe_unvoiced_fft.c
+    src/tetra/tetra_acelp_codebooks.c
+    src/tetra/tetra_acelp_decoder.c
+    src/tetra/tetra_acelp_dsp.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
 
@@ -727,6 +730,7 @@ install(
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/LICENSES/GPL-2.0-or-later.txt"
         "${PROJECT_SOURCE_DIR}/LICENSES/ISC.txt"
+        "${PROJECT_SOURCE_DIR}/LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt"
         "${PROJECT_SOURCE_DIR}/docs/upstream-mbelib-attribution.md"
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )
@@ -858,6 +862,26 @@ if(MBELIB_BUILD_TESTS)
         target_link_options(test_api BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_test(NAME test_api COMMAND test_api)
+
+    # test_api links the static library on Windows; this one calls the TETRA exports through
+    # the shared library everywhere. The DLL is built next to the test, so Windows finds it.
+    add_executable(test_tetra_shared_api tests/test_tetra_shared_api.c)
+    target_link_libraries(test_tetra_shared_api PRIVATE mbe-shared)
+    target_include_directories(
+        test_tetra_shared_api
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(test_tetra_shared_api PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(
+            test_tetra_shared_api
+            BEFORE
+            PRIVATE ${_SAN_LDFLAGS}
+        )
+    endif()
+    add_test(NAME test_tetra_shared_api COMMAND test_tetra_shared_api)
 
     add_executable(test_ecc tests/test_ecc.c)
     target_link_libraries(test_ecc PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -1060,6 +1084,37 @@ if(MBELIB_BUILD_TESTS)
         target_link_options(test_params BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_test(NAME test_params COMMAND test_params)
+
+    # The TETRA tests exercise private decoding stages and fixed-point operators.
+    foreach(
+        _mbelib_private_test
+        IN
+        ITEMS test_fixed_point test_tetra_decoder test_tetra_simd
+    )
+        add_executable(${_mbelib_private_test} tests/${_mbelib_private_test}.c)
+        target_link_libraries(${_mbelib_private_test} PRIVATE mbe-static)
+        target_include_directories(
+            ${_mbelib_private_test}
+            PRIVATE
+                "${PROJECT_SOURCE_DIR}/include"
+                "${PROJECT_SOURCE_DIR}/src/internal"
+        )
+        if(_SAN_CFLAGS)
+            target_compile_options(
+                ${_mbelib_private_test}
+                PRIVATE ${_SAN_CFLAGS}
+            )
+        endif()
+        if(_SAN_LDFLAGS)
+            target_link_options(
+                ${_mbelib_private_test}
+                BEFORE
+                PRIVATE ${_SAN_LDFLAGS}
+            )
+        endif()
+        add_test(NAME ${_mbelib_private_test} COMMAND ${_mbelib_private_test})
+    endforeach()
+    unset(_mbelib_private_test)
 
     add_executable(
         test_frame_paths
@@ -1403,6 +1458,27 @@ if(MBELIB_BUILD_TESTS)
                 ${Python3_EXECUTABLE}
                 ${PROJECT_SOURCE_DIR}/tests/test_pffft_metadata.py
         )
+        add_test(
+            NAME test_tetra_conformance_tools
+            COMMAND
+                ${Python3_EXECUTABLE} -I
+                ${PROJECT_SOURCE_DIR}/tests/test_tetra_conformance_tools.py
+        )
+        add_test(
+            NAME test_tetra_tables
+            COMMAND
+                ${Python3_EXECUTABLE} -I
+                ${PROJECT_SOURCE_DIR}/tests/test_tetra_tables.py
+        )
+        if(MBELIB_BUILD_TOOLS AND NOT CMAKE_CROSSCOMPILING)
+            add_test(
+                NAME test_tetra_decode_tool
+                COMMAND
+                    ${Python3_EXECUTABLE} -I
+                    ${PROJECT_SOURCE_DIR}/tests/test_tetra_conformance_tools.py
+                    $<TARGET_FILE:mbe_tetra_decode>
+            )
+        endif()
     endif()
 
     # tools/ci_changed_files.sh decides which pull requests PR fuzzing runs on. It is
@@ -1509,6 +1585,7 @@ if(MBELIB_BUILD_TESTS)
     set(_MBELIB_TEST_TARGETS
         test_assertions
         test_api
+        test_tetra_shared_api
         test_ecc
         test_ambe2400_encoder
         test_ambe2450_encoder
@@ -1517,6 +1594,9 @@ if(MBELIB_BUILD_TESTS)
         test_simd_numerics
         test_noise_determinism
         test_params
+        test_fixed_point
+        test_tetra_decoder
+        test_tetra_simd
         test_frame_paths
         test_quality_dvsi
         test_input_validation
@@ -1591,6 +1671,19 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(bench_replay BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_executable(bench_tetra bench/bench_tetra.c)
+    target_link_libraries(bench_tetra PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_tetra)
+    target_include_directories(
+        bench_tetra
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(bench_tetra PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(bench_tetra BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_executable(bench_unvoiced bench/bench_unvoiced.c)
     target_link_libraries(bench_unvoiced PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -1698,17 +1791,40 @@ if(MBELIB_BUILD_TOOLS)
             PRIVATE _CRT_SECURE_NO_WARNINGS
         )
     endif()
+    # TETRA speech frame file (.CHD layout) to PCM through the public API.
+    add_executable(
+        mbe_tetra_decode
+        tools/quality/mbe_tetra_decode.c
+        tools/quality/mbe_quality_fs.c
+    )
+    if(NOT WIN32)
+        target_compile_definitions(mbe_tetra_decode PRIVATE _XOPEN_SOURCE=700)
+    endif()
+    target_link_libraries(mbe_tetra_decode PRIVATE mbe-static)
+    _mbelib_apply_hardening(mbe_tetra_decode)
+    target_include_directories(
+        mbe_tetra_decode
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(MSVC)
+        target_compile_definitions(
+            mbe_tetra_decode
+            PRIVATE _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
     get_directory_property(_SAN_CFLAGS MBELIB_SANITIZER_CFLAGS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
         target_compile_options(mbe_quality_eval PRIVATE ${_SAN_CFLAGS})
         target_compile_options(mbe_quality_reframe PRIVATE ${_SAN_CFLAGS})
         target_compile_options(mbe_quality_encode PRIVATE ${_SAN_CFLAGS})
+        target_compile_options(mbe_tetra_decode PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(mbe_quality_eval BEFORE PRIVATE ${_SAN_LDFLAGS})
         target_link_options(mbe_quality_reframe BEFORE PRIVATE ${_SAN_LDFLAGS})
         target_link_options(mbe_quality_encode BEFORE PRIVATE ${_SAN_LDFLAGS})
+        target_link_options(mbe_tetra_decode BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     # Let the CodeQL extraction target compile the quality tools too.
     target_sources(
@@ -1717,6 +1833,7 @@ if(MBELIB_BUILD_TOOLS)
             tools/quality/mbe_quality_eval.c
             tools/quality/mbe_quality_reframe.c
             tools/quality/mbe_quality_encode.c
+            tools/quality/mbe_tetra_decode.c
             tools/quality/mbe_quality_frames.c
             tools/quality/mbe_quality_dvsi.c
             tools/quality/mbe_quality_fs.c

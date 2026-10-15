@@ -1,0 +1,32 @@
+LicenseRef-ETSI-EN-300-395-2-data
+
+Applies to: src/tetra/tetra_acelp_codebooks.c
+
+That file holds the numeric codebooks of the TETRA full-rate speech codec: the split vector
+quantizer codebooks of the line spectral pairs (C-CODE/CLSP_334.TAB) and the gain vector
+quantizer codebook (C-CODE/ENER_QUA.TAB) from the C code archive attached to ETSI EN 300 395-2
+(Terrestrial Trunked Radio (TETRA); Speech codec for full-rate traffic channel; Part 2: TETRA
+codec). Versions V1.3.1 (2005-01) and V1.3.3 (2025-02) carry identical copies. The values are
+copyright (C) European Telecommunications Standards Institute (ETSI).
+tools/tetra/extract_acelp_tables.py copies the values, and nothing else, from a copy of the
+archive obtained from ETSI. No ETSI program code is used in this project.
+
+The data is not licensed under the GNU General Public License, and the project's GPL grant does
+not cover it. Apart from the purpose-limited grant described below, no licence permitting
+redistribution of the data is known to the project. ETSI's
+deliverables state: "No part may be reproduced or utilized in any form or by any means,
+electronic or mechanical, including photocopying and microfilm except as authorized by written
+permission of ETSI."
+
+The project carries the data because a decoder for the standard cannot work without it, in an
+implementation that passes the standard's decoder test bit for bit (EN 300 395-4: TE1_46.CHD
+decodes to TE2_128.PCM exactly). ETSI's IPR Policy (clause 9.2.2, with SOFTWARE defined in
+clause 15, definition 14, to include codec code and data) grants implementers a royalty-free
+licence to software contributed to a standard "for the purpose of using the SOFTWARE in any
+compliant implementation". Whether that grant reaches these 1995 contributions has not been
+established, a contributor could have chosen fair, reasonable and non-discriminatory terms
+instead, and the grant is limited to that purpose; it does not make the data available under the
+GNU General Public License. Other open-source decoders of standardized speech codecs, such as
+FFmpeg's AMR and G.729 decoders, carry their standards' tables as data in the same way. Anyone
+redistributing mbelib-neo, in source or binary form, should make their own assessment of this
+data.

@@ -26,6 +26,27 @@ The CTest suite includes:
   permissions (`test_quality_tools`, with tools enabled and Python 3 available)
 - DVSI test-vector import: deinterleave bijection, TIA-102.BABA 7.5 code spacing,
   fixture round trips and preserved channel bits (`test_quality_dvsi`)
+- TETRA decoder: bit unpacking (tables 3 and 4), every pitch index, pulse positions and absent
+  pulses, sharpening, the 16-bit wrap of an overflowing codevector, LSP lookup, boundary widening
+  and the rejection of crossed vectors,
+  interpolation, LSP to A(z) against a double-precision expansion and against coefficients read
+  back from ETSI's reference decoder, the synthesis filter, the
+  adaptive codebook, log2/pow2, the gains against values ETSI's reference decoder produced on the
+  test's own streams (each ruling out another plausible computation) and at the extremes
+  (including a code gain past 16 bits), the floor of the code-vector energy, the 27/25 energy
+  limits, concealment state (energy decay and floor, held LSPs, lag and indices, silence and the
+  reference decoder's LSP state before the first good frame, ended by any good frame), the
+  API contract (NULL arguments, rejected frames leaving state and output untouched, ignored
+  bad-frame payloads, reset, interleaved contexts), and stream hashes asserted on every build
+  (`test_tetra_decoder`); the saturating fixed-point operators at their edges
+  (`test_fixed_point`); independent ordered arithmetic oracles for SIMD and scalar
+  synthesis, fractional pitch, pulse shaping, excitation, energy and LSP interpolation
+  (`test_tetra_simd`), including saturation, wraps, short-lag dependencies, unaligned
+  buffers and tails; the TETRA entry points through the shared library
+  (`test_tetra_shared_api`); TETRA argument and bit validation (`test_input_validation`); the
+  table generators and the committed tables' shape and provenance (`test_tetra_tables`); the
+  TETRA comparison tool, and with tools enabled `mbe_tetra_decode` (`test_tetra_conformance_tools`,
+  `test_tetra_decode_tool`). `fuzz_tetra_decode` fuzzes the decoder through the public API.
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -139,6 +160,7 @@ build/dev-release/bench_synth jump voiced
 build/dev-release/bench_replay encode ambe2400 3 7 < speech.raw
 build/dev-release/bench_replay hard ambe2450 3 7 < ambe2450.frames
 build/dev-release/bench_replay soft imbe7200 3 7 mixed < imbe7200.frames
+build/dev-release/bench_tetra 3 7 < /path/to/TE1_46.CHD
 ```
 
 `bench_synth [legacy|steady|gradual|jump] [mixed|voiced]` defaults to legacy
@@ -171,6 +193,19 @@ builds. Compare identical compiler, fast-math and LTO settings. `-march=x86-64-v
 is a separate compile target; portable SIMD builds still require only SSE2 on
 x86 and use NEON only when enabled by the existing target selection. Native ARM
 measurements are required before claiming NEON performance improvements.
+
+`bench_tetra [repeats=10] [runs=7]` applies the same in-memory replay method to
+TETRA's 30 ms frames. Standard input is CHD format: 138 little-endian 16-bit
+words per frame (bad-frame indicator followed by 137 bits). It rejects empty,
+truncated or invalid good-frame input, caps input at 65,536 frames, and ignores
+bad-frame payloads as the public decoder does. The reported median excludes
+loading, allocation, resets and one warm-up run. Repeats concatenate the input
+without resetting; every measured run starts from reset and must reproduce the
+warm-up checksum. One PCM sample per frame contributes to the timed checksum;
+use `mbe_tetra_decode` and byte comparisons to check complete PCM identity.
+Include speech, losses and overloaded synthetic streams in comparisons. See
+[TETRA SIMD measurements](tetra-acelp.md#simd-optimization) for the measured
+speed and bit-exactness checks.
 
 The soft ECC codebooks are immutable 32-bit codewords (32 KiB in all) in the
 original enumeration order, with the codeword bit of each data bit. Regenerate
@@ -239,7 +274,8 @@ and all six steady/gradual/jump mixed/voiced workloads in matching Release
 builds with explicit SIMD disabled/enabled. Compilers can still automatically
 vectorize C loops when explicit SIMD is disabled. Use `bench_replay` in those
 same trees for real speech, all four decoders, tone frames and channel errors;
-synthetic synthesis timings alone do not establish end-to-end gains.
+synthetic synthesis timings alone do not establish end-to-end gains. It also
+builds `bench_tetra`; supply local CHD inputs to compare TETRA in the same trees.
 
 The October 2026 SIMD audit compared against `a962d3d` on a Ryzen 7 5800HS,
 with GCC 16.2.1, Release, fast-math and LTO enabled on both sides. These are
@@ -317,6 +353,27 @@ packing took 17–19% less time (about 14–15 ns/frame), and IMBE took 5–9% l
 parameter quantization; whole-frame decoding above establishes the gain
 from batching the noise generator. With Clang 23.1.1 SSE2 and IEEE math,
 the same replay comparisons took 6.6–7.9% less time.
+
+## TETRA Conformance
+
+EN 300 395-4 tests a TETRA speech decoder bit for bit: TE1_46.CHD (138 little-endian 16-bit
+words per frame: the bad-frame indicator, then B1..B137) decoded must equal TE2_128.PCM. The
+files are in `orignl.zip` inside ETSI's en_30039504v010301p0.zip. Keep them, and any build of
+ETSI's reference decoder and its output, outside the checkout; never commit them.
+
+```sh
+cmake --preset dev-debug -DMBELIB_BUILD_TOOLS=ON
+cmake --build --preset dev-debug -j --target mbe_tetra_decode
+./build/dev-debug/mbe_tetra_decode TE1_46.CHD /tmp/ours.pcm
+python3 -I tools/quality/tetra_conformance.py compare /tmp/ours.pcm TE2_128.PCM
+```
+
+`compare` exits 0 only for identical files, as TE1_46.CHD now gives; `--gate` instead takes the
+exit status from tolerance thresholds, for runs that may differ (a candidate change, say);
+`--json` writes the metrics. For concealment,
+`tetra_conformance.py bfi TE1_46.CHD /tmp/lossy.chd --seed 1 --rate 3` (also `--burst START:LENGTH`
+and `--first N`) marks frames bad; decode the copy with both decoders and compare. Measured
+results are in [docs/tetra-acelp.md](tetra-acelp.md#measured-results).
 
 ## Speech Quality Evaluation
 

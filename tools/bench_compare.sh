@@ -7,7 +7,7 @@ set -euo pipefail
 root_dir=$(cd "$(dirname "$0")/.." && pwd)
 scalar_build="$root_dir/build/bench-compare-scalar"
 simd_build="$root_dir/build/bench-compare-simd"
-benchmarks=(bench_synth bench_unvoiced bench_convert bench_encode bench_replay)
+benchmarks=(bench_synth bench_unvoiced bench_convert bench_encode bench_replay bench_tetra)
 
 echo "== Configure scalar benchmark build =="
 cmake --preset dev-release \
@@ -49,4 +49,4 @@ echo "== Running SIMD benchmark =="
 run_benchmarks "$simd_build"
 
 echo
-echo "Replay real speech and hard/soft frames with bench_replay in these same trees; see docs/testing.md."
+echo "Replay speech and frames with bench_replay, or TETRA CHD files with bench_tetra, in these same trees; see docs/testing.md."

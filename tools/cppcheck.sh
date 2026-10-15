@@ -193,9 +193,9 @@ echo ""
 
 # Select analysis targets.
 CPPCHECK_TARGETS=(src/ include/ fuzz/)
-# The C quality tools are first-party; the OP25 encoder driver (.cc) builds
-# against an external checkout and is compiled by build_op25_encoder.sh.
-for quality_source in tools/quality/mbe_quality_*.c; do
+# The C quality tools (and the TETRA conformance-file decoder) are first-party; the OP25 encoder
+# driver (.cc) builds against an external checkout and is compiled by build_op25_encoder.sh.
+for quality_source in tools/quality/mbe_quality_*.c tools/quality/mbe_tetra_decode.c; do
   if [ -f "$quality_source" ]; then
     CPPCHECK_TARGETS+=("$quality_source")
   fi
