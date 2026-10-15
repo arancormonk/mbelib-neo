@@ -7,6 +7,7 @@
 #define MBELIB_NEO_INTERNAL_MBE_RESULT_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -33,6 +34,28 @@ mbe_validate_bits(const char* bits, size_t count) {
 #else
     for (size_t i = 0u; i < count; ++i) {
         if (bits[i] != 0 && bits[i] != 1) {
+            return MBE_STATUS_INVALID_BITS;
+        }
+    }
+    return 0;
+#endif
+}
+
+/** mbe_validate_bits() for byte arrays (one 0/1 byte per bit), as the TETRA decoder takes them. */
+static inline int
+mbe_validate_bits_u8(const uint8_t* bits, size_t count) {
+    if (!bits) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+#if defined(MBELIB_ENABLE_SIMD)
+    uint8_t combined = 0;
+    for (size_t i = 0u; i < count; ++i) {
+        combined |= bits[i];
+    }
+    return combined > 1u ? MBE_STATUS_INVALID_BITS : 0;
+#else
+    for (size_t i = 0u; i < count; ++i) {
+        if (bits[i] > 1u) {
             return MBE_STATUS_INVALID_BITS;
         }
     }

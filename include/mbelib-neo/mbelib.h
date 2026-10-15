@@ -8,7 +8,7 @@
  * @brief Public API for mbelib-neo vocoder primitives and helpers.
  *
  * This header exposes the installed `mbe_` API used to decode IMBE/AMBE frames
- * and synthesize 8 kHz PCM audio. The 2.x API uses result-returning processing
+ * and synthesize 8 kHz PCM audio, and a TETRA full-rate speech decoder. The 2.x API uses result-returning processing
  * calls and `mbe_process_result` status reporting; it is ABI-breaking relative
  * to 1.x, while minor releases within a major version are intended to remain
  * ABI compatible.
@@ -26,7 +26,8 @@
  *       `MBE_STATUS_INVALID_BITS`.
  *
  * @note Threading: processing APIs are reentrant when each stream has its own
- *       `mbe_parms` state. `mbe_setThreadRngSeed()` affects only the calling
+ *       state: an `mbe_parms` triplet for IMBE/AMBE, an `mbe_tetra_decoder`
+ *       context for TETRA. `mbe_setThreadRngSeed()` affects only the calling
  *       thread's synthesis RNG state.
  */
 
@@ -1127,6 +1128,58 @@ MBE_API void mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev
  * @return Non-zero if smoothing should be applied.
  */
 MBE_API int mbe_requiresAdaptiveSmoothing(const mbe_parms* mp);
+
+/* === TETRA ACELP decoding === */
+
+/** Coded bits in one TETRA speech frame, B1..B137 (EN 300 395-2 table 3). */
+#define MBE_TETRA_FRAME_BITS    137
+/** PCM samples in one TETRA speech frame: 30 ms at 8000 Hz. */
+#define MBE_TETRA_FRAME_SAMPLES 240
+
+/**
+ * @brief Caller-owned state of one TETRA full-rate speech decoder (EN 300 395-2 clause 4).
+ *
+ * Use one context per stream. A context is not thread-safe for concurrent use; any number of
+ * independent contexts may be used in one thread. Unlike the IMBE/AMBE decoders, which keep
+ * their state in `mbe_parms` triplets, the TETRA decoder keeps all of its state here.
+ */
+typedef struct mbe_tetra_decoder mbe_tetra_decoder;
+
+/**
+ * @brief Allocate a decoder context in its reset state.
+ * @return Owned context, or NULL when it cannot be allocated.
+ * @see mbe_tetraDecoderFree
+ */
+MBE_API mbe_tetra_decoder* mbe_tetraDecoderAlloc(void);
+
+/** @brief Restore the reset state of a decoder context; NULL is accepted. */
+MBE_API void mbe_tetraDecoderReset(mbe_tetra_decoder* dec);
+
+/** @brief Free a decoder context; NULL is accepted. */
+MBE_API void mbe_tetraDecoderFree(mbe_tetra_decoder* dec);
+
+/**
+ * @brief Decode one 30 ms TETRA speech frame into 16-bit PCM.
+ *
+ * The decoder is integer fixed-point throughout, so its output is identical on every platform
+ * and build configuration. Decoding never allocates. The output is at the level of ETSI's
+ * reference decoder and follows it closely, but is not bit-exact with it, so the decoder does not
+ * pass the EN 300 395-4 conformance test (see docs/tetra-acelp.md). Bad frames before the first
+ * good frame after an allocation or reset decode to silence and leave the context unchanged.
+ *
+ * @param dec       Decoder context.
+ * @param bits      MBE_TETRA_FRAME_BITS bytes, each 0 or 1: B1..B137 in the speech frame order of
+ *                  EN 300 395-2 clause 4.2.2.7, tables 3 and 4. Not read when @p bad_frame is
+ *                  nonzero, and may then be NULL.
+ * @param bad_frame Nonzero when the channel decoder flagged the frame (class-2 CRC failure or a
+ *                  frame stolen for signalling): the frame is concealed as clause 4.2.3.2
+ *                  describes.
+ * @param pcm       Output: MBE_TETRA_FRAME_SAMPLES samples at 8000 Hz.
+ * @return 0; MBE_STATUS_INVALID_ARGUMENT for a NULL @p dec or @p pcm, or NULL @p bits on a good
+ *         frame; MBE_STATUS_INVALID_BITS when a byte of @p bits is not 0 or 1. On error the
+ *         context and @p pcm are left unchanged, so the frame can be retried as a bad frame.
+ */
+MBE_API int mbe_tetraDecodeFrame(mbe_tetra_decoder* dec, const uint8_t* bits, int bad_frame, int16_t* pcm);
 
 #ifdef __cplusplus
 }

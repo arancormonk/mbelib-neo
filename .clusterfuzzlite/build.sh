@@ -57,6 +57,8 @@ sources=(
   src/core/mbe_tone_fit.c
   src/core/mbe_unvoiced_fft.c
   src/tetra/tetra_acelp_codebooks.c
+  src/tetra/tetra_acelp_decoder.c
+  src/tetra/tetra_acelp_dsp.c
 )
 
 objects=()
@@ -97,6 +99,7 @@ fuzzers=(
   fuzz/fuzz_process_frame.cc
   fuzz/fuzz_frame_decode.cc
   fuzz/fuzz_encode_frame.cc
+  fuzz/fuzz_tetra_decode.cc
 )
 
 for fuzzer in "${fuzzers[@]}"; do
