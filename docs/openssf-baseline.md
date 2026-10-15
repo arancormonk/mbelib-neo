@@ -45,10 +45,13 @@ This document records mbelib-neo's evidence for OpenSSF OSPS Baseline Level 1.
 
 ## Licensing and Repository Contents
 
-- Source code is licensed under GPL-2.0-or-later. Third-party license notices
-  are retained under `LICENSES/` and `src/external/pffft/`.
-- Release install trees include the project license, GPL text, ISC text, and
-  upstream attribution.
+- Source code is licensed under GPL-2.0-or-later, except
+  `src/tetra/tetra_acelp_codebooks.c`: numeric codebook data from ETSI
+  EN 300 395-2, identified as `LicenseRef-ETSI-EN-300-395-2-data` and not
+  covered by the GPL grant (see `docs/tetra-acelp.md`). Third-party license
+  notices are retained under `LICENSES/` and `src/external/pffft/`.
+- Release install trees include the project license, GPL text, ISC text, the
+  ETSI data notice, and upstream attribution.
 - The public Git repository records changes, authors, and timestamps.
 - Generated executable artifacts, compiled binaries, release archives, private
   captures, credentials, keys, and machine-specific configuration must not be

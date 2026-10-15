@@ -26,6 +26,19 @@ The CTest suite includes:
   permissions (`test_quality_tools`, with tools enabled and Python 3 available)
 - DVSI test-vector import: deinterleave bijection, TIA-102.BABA 7.5 code spacing,
   fixture round trips and preserved channel bits (`test_quality_dvsi`)
+- TETRA decoder: bit unpacking (tables 3 and 4), every pitch index, pulse positions and absent
+  pulses, sharpening, LSP lookup, boundary widening and the rejection of crossed vectors,
+  interpolation, LSP to A(z) against a double-precision expansion, the synthesis filter, the
+  adaptive codebook, log2/pow2, gain monotonicity and the 27/25 energy limits, concealment state
+  (energy decay and floor, held LSPs, lag and indices, silence before the first good frame), the
+  API contract (NULL arguments, rejected frames leaving state and output untouched, ignored
+  bad-frame payloads, reset, interleaved contexts), and stream hashes asserted on every build
+  (`test_tetra_decoder`); the saturating fixed-point operators at their edges
+  (`test_fixed_point`); the TETRA entry points through the shared library
+  (`test_tetra_shared_api`); TETRA argument and bit validation (`test_input_validation`); the
+  table generators and the committed tables' shape and provenance (`test_tetra_tables`); the
+  TETRA comparison tool, and with tools enabled `mbe_tetra_decode` (`test_tetra_conformance_tools`,
+  `test_tetra_decode_tool`). `fuzz_tetra_decode` fuzzes the decoder through the public API.
 
 PCM conversion is always compiled with IEEE semantics, including fast-math builds, so NaN/Inf handling is preserved.
 
@@ -317,6 +330,27 @@ packing took 17–19% less time (about 14–15 ns/frame), and IMBE took 5–9% l
 parameter quantization; whole-frame decoding above establishes the gain
 from batching the noise generator. With Clang 23.1.1 SSE2 and IEEE math,
 the same replay comparisons took 6.6–7.9% less time.
+
+## TETRA Conformance
+
+EN 300 395-4 tests a TETRA speech decoder bit for bit: TE1_46.CHD (138 little-endian 16-bit
+words per frame: the bad-frame indicator, then B1..B137) decoded must equal TE2_128.PCM. The
+files are in `orignl.zip` inside ETSI's en_30039504v010301p0.zip. Keep them, and any build of
+ETSI's reference decoder and its output, outside the checkout; never commit them.
+
+```sh
+cmake --preset dev-debug -DMBELIB_BUILD_TOOLS=ON
+cmake --build --preset dev-debug -j --target mbe_tetra_decode
+./build/dev-debug/mbe_tetra_decode TE1_46.CHD /tmp/ours.pcm
+python3 -I tools/quality/tetra_conformance.py compare /tmp/ours.pcm TE2_128.PCM --gate
+```
+
+`compare` exits 0 only for identical files; `--gate` takes the exit status from the acceptance
+thresholds of this decoder, which is not bit-exact; `--json` writes the metrics. For concealment,
+`tetra_conformance.py bfi TE1_46.CHD /tmp/lossy.chd --seed 1 --rate 3` (also `--burst START:LENGTH`
+and `--first N`) marks frames bad; decode the copy with both decoders and compare. Measured
+results, including the bad-frame patterns where the thresholds do not hold, are in
+[docs/tetra-acelp.md](tetra-acelp.md#measured-results).
 
 ## Speech Quality Evaluation
 
