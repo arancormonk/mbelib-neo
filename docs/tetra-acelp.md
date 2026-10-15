@@ -44,8 +44,9 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
 - **Bits** (4.2.2.7): table 3 order; table 3 misprints subframe 3's pulse fields
   ("B95-B99", "B100-B102"), and table 4 gives pulse 2 = B95-B97 and pulse 1 = B98-B102.
 - **LSPs** (4.2.2.3, 4.2.3.1.1): the three split-VQ sub-vectors (Q15 cosines) are looked up, and
-  the pairs on either side of a split boundary are pushed apart to at least 916 (q3/q4) and 1244
-  (q6/q7), each moving by half the shortfall rounded down. If any adjacent pair is then still not
+  the pairs on either side of a split boundary closer than 916 (q3/q4) or 1244 (q6/q7) are pushed
+  apart, each moving by half the shortfall rounded down (so an odd shortfall leaves the gap one
+  short of 916 or 1244). If any adjacent pair is then still not
   strictly decreasing (q(i) <= q(i+1)), the frame's LSPs are discarded and the previous frame's
   are used, for interpolation and as the next frame's previous vector.
 - **Interpolation** (equation 22): weights 3/4, 1/2, 1/4 of the previous vector in Q15, the
@@ -68,10 +69,16 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
 - **Gains** (4.2.2.6, equations 31-39): energies in Q8 log2, both 0 after a reset. Prediction
   0.5 E(p) + 0.25 E(c) - 3 (and symmetrically for the code), computed with the quarter rounded
   down and floored at zero, plus the codebook's prediction error; the results are limited to 27
-  and 25. The gain is 2^((E - log2 L - log2 pg + C) / 2) with L = 1 + sum v^2 (pitch) or sum c^2
-  (code), pg the energy of the synthesis filter's response to an impulse of 1024, log2/pow2 by
-  33-entry table interpolation, the exponent truncated to 1/512, gains in Q12, the pitch gain
-  limited to 1.2. The offsets C (1 616 254 and 1 616 274 in Q15) were fitted to the reference.
+  and 25. Each gain is 2^((E - Ea) / 2) (equations 38 and 39), Ea being the log2 of an energy
+  product (equations 31 and 33) formed from 16-bit mantissas: pg, the energy of the synthesis
+  filter's response to an impulse of 1024, and the adaptive-vector energy 1 + sum v^2 are
+  normalized and their high halves taken; the code-vector energy sum c^2 contributes its high half
+  at a fixed scale, without normalization. Each product of two mantissas goes through one log2
+  (33-entry table round(32767 log2(1 + i/32)) with linear interpolation), the normalization
+  shifts are subtracted (both for the pitch gain, pg's for the code gain), the result is truncated
+  to Q8, and one offset (4434 in Q8) accounts for the Q formats of both gains. E - Ea, read in Q9,
+  is converted by a 33-entry pow2 table; the gains are Q12 and the pitch gain is limited to 1.2
+  afterwards (the stored energies are not changed by the limit).
 - **Excitation and synthesis** (equations 40-41): u = gp v + gc c rounded to 16 bits (it is also
   the adaptive codebook's memory); 1/A(z) with Q12 coefficients and a saturating 32-bit
   accumulator; the output doubled with saturation (4.2.1).
@@ -85,8 +92,12 @@ Clause references are to EN 300 395-2. Values in Qn have n fractional bits.
 The boundary gaps 916 and 1244, the rejection of LSP vectors left crossed (gap 0 rejected, gap 1
 kept), the pitch index mapping, the interpolation filter taps, the pulse-1 indices 30 and 31,
 the order of the sign and the rounding in the codevector, the prediction's floor at zero, the
-gain offsets and the concealment energy floor were each settled by comparing candidates with the
-reference decoder's output on TE1_46.CHD and on frames generated to isolate one stage.
+gain computation and the concealment energy floor were each settled by comparing candidates with
+the reference decoder's output on TE1_46.CHD and on frames generated to isolate one stage. For the
+gains, the candidates followed the operator counts in the standard's informative complexity
+tables (annex C table C.9 and annex D tables D.25 to D.31: two log2 and two pow2 calls per
+subframe, two normalizations and two 16 x 16-bit products in the energy decoding), which rule out
+separate logs of the three energies.
 
 ### Departure from the reference
 
@@ -98,17 +109,20 @@ does not cover this case.
 
 ## Known differences
 
-- **Gain rounding.** Given the reference's own excitation history, 95.6% of TE1's 20 893
-  unclipped subframes come out sample-exact. In about 1.2% of pitch-gain and 2.1% of code-gain
-  computations the reference's exponent lands on the other side of a 1/512 step, a few Q15 units
-  away from ours; exact log2, mixed exact/table log2, other table sizes and roundings, a single
-  log2 of the product, other impulse amplitudes and lengths for pg, and higher-precision energies
-  were all tried and none matched better.
-- **A(z) rounding.** Rarely a coefficient sits on a rounding boundary (TE1 frame 1: 2533.498 in
-  Q12, where the reference arrives at 2534), so the reference's polynomial arithmetic differs
-  from ours below the last bit.
-- These small differences feed the adaptive codebook, so they persist: about half of TE1's
-  frames are exact although nearly all subframes would be.
+- **A(z) rounding.** Rarely a Q12 coefficient sits on a rounding tie, and the reference's
+  polynomial arithmetic lands on the other side of it (TE1 frame 1: 2533.498, where the
+  reference arrives at 2534). TE1 has 42 such subframes, 40 of them with interpolated LSPs. The
+  reference's coefficients can be read back from frames built so that its output decays freely
+  through 1/A(z) (one pulse at the end of every subframe, a lag of 120): in those subframes its
+  coefficient vector differs from this decoder's only in coefficients at a tie, each by one (one
+  coefficient in 41 of them, two in the other), and over 600 other LSP transitions 6 of 28 010
+  coefficients differed, each by one and each at a tie. Every variant of the recursion tried (rounding and splitting of the multiplications, other
+  Q formats, factor order, interpolation) matched the reference less often.
+- **Two isolated cases.** In one TE1 subframe whose output clips (frame 795) the output is about
+  0.1% louder than the reference's from the start of the subframe, and on TE3_46.SPE one subframe
+  of very low energy decodes its code gain one exponent step (1/512) higher.
+- These small differences feed the adaptive codebook, so they persist for a few frames: 4 942
+  of TE1's 5 340 frames are exact.
 
 ## Measured results
 
@@ -118,38 +132,42 @@ non-bit-exact decoder are a segmental SNR of at least 30 dB over frames above -6
 difference within 0.1 dB, no frame above -50 dBFS below 14 dB SNR after the first 10 frames, and
 reference silence reproduced within 2 LSB.
 
-TE1_46.CHD against TE2_128.PCM: 2 756 of 5 340 frames exact, first difference at frame 1 sample
-8, SNR 39.6 dB, segmental SNR 70.5 dB over 4 431 frames, level +0.006 dB, no frame below the
-floor. It passes the thresholds. (Seven frames are below 15 dB: six between -50 and -58 dBFS and
-one at 14.6 dB.)
+TE1_46.CHD against TE2_128.PCM: 4 942 of 5 340 frames exact, first difference at frame 1 sample
+8, SNR 57.2 dB, segmental SNR 94.7 dB over 4 431 frames, level 0.000 dB, no frame below the
+floor (and none above -60 dBFS below 15 dB). It passes the thresholds.
+
+TE3_46.SPE (EN 300 395-4's encoding of TE2_128.PCM, a second stream of the same speech) against
+the reference decoder's output for it: 4 775 of 5 340 frames exact, first difference at frame
+237 sample 61, SNR 56.2 dB, segmental SNR 93.2 dB over 4 368 frames, level 0.000 dB, no frame
+below the floor.
 
 TE1_46.CHD with bad frames set by `tetra_conformance.py bfi`, each decoded by both decoders:
 
 | Bad frames | Exact frames | SNR | Segmental SNR | Level | Frames below the floor |
 | --- | --- | --- | --- | --- | --- |
-| `--rate 1 --seed 1` | 2 764 | 40.0 dB | 70.5 dB | -0.003 dB | none |
-| `--rate 1 --seed 2` | 2 787 | 41.9 dB | 70.7 dB | -0.001 dB | none |
-| `--rate 3 --seed 1` | 2 730 | 39.9 dB | 69.7 dB | -0.003 dB | none |
-| `--rate 3 --seed 2` | 2 784 | 33.0 dB | 70.3 dB | +0.013 dB | 11 (frames 5328-5339, 9.2-14.0 dB) |
-| `--rate 10 --seed 1` | 2 828 | 30.7 dB | 70.1 dB | -0.021 dB | 9 (frames 5331-5339, 7.8-14.0 dB) |
-| `--rate 10 --seed 2` | 2 895 | 38.3 dB | 70.9 dB | -0.011 dB | 2 (frame 5195 at -45.5 dBFS, 12.5 dB; frame 5227 at -47.5 dBFS, 13.1 dB) |
-| `--burst 100:20 --burst 1000:50 --burst 3000:300` | 2 920 | 39.5 dB | 70.7 dB | +0.007 dB | none |
-| `--first 3` | 2 758 | 39.5 dB | 70.4 dB | +0.006 dB | 1 (frame 10 at -31.1 dBFS, 13.6 dB) |
+| `--rate 1 --seed 1` | 4 958 | 57.4 dB | 94.9 dB | 0.000 dB | none |
+| `--rate 1 --seed 2` | 4 822 | 37.4 dB | 93.0 dB | -0.009 dB | none |
+| `--rate 3 --seed 1` | 4 883 | 54.4 dB | 94.0 dB | 0.000 dB | none |
+| `--rate 3 --seed 2` | 4 846 | 41.8 dB | 93.3 dB | +0.003 dB | 3 (frames 5337-5339, 12.4-13.8 dB) |
+| `--rate 10 --seed 1` | 4 958 | 57.5 dB | 94.7 dB | 0.000 dB | none |
+| `--rate 10 --seed 2` | 4 976 | 43.0 dB | 94.6 dB | 0.000 dB | none |
+| `--burst 100:20 --burst 1000:50 --burst 3000:300` | 4 951 | 57.0 dB | 94.6 dB | 0.000 dB | none |
+| `--first 3` | 4 800 | 52.6 dB | 93.0 dB | 0.000 dB | 1 (frame 10 at -31.1 dBFS, 13.7 dB) |
 
 The thresholds hold for every pattern except these:
 
 - The last frames of TE1 (from about frame 5200) do not look like coded speech: runs of
   identical frames with extreme or crossed LSP indices and high pitch gains, often at the 1.2
   limit. After a lost frame earlier in that section the small differences above grow there
-  instead of fading, down to 8-14 dB SNR.
-- One speech frame at -45.5 dBFS reaches 12.5 dB at 10% loss.
+  instead of fading, down to 12-14 dB SNR in the last three frames. Those loud frames also
+  dominate the overall SNR of a run that differs there (`--rate 1 --seed 2`).
 - After three bad start frames, frame 10 differs because of the reset departure above.
 
 Concealment on its own was compared on 34 twelve-frame excerpts of TE1 that both decoders decode
 identically without losses, each with nine bad-frame patterns (a single bad frame at three
 places, runs of 2, 3 and 6, two bad frames around a good one, and one or two at the start; 306
-cases): the first concealed frame is exact in 299 cases, and the whole excerpt in 172 of the 238
-cases without a bad start. The rest show the small rounding differences described above.
+cases): the first concealed frame is exact in all 306 cases, and the whole excerpt in 232 of the
+238 cases without a bad start. The rest show the small rounding differences described above.
 
 ## Tables
 

@@ -30,7 +30,9 @@ def q15_mult_r(a, b):
 
 
 def log2_table():
-    return [min(32767, int(math.floor(math.log2(1 + i / 32) * 32768 + 0.5))) for i in range(33)]
+    # Scaled by 32767, not 32768 (so the last entry is 32767 without a limit): the gain decoder
+    # matches ETSI's reference decoder with this table and not with the 32768-scaled one.
+    return [int(math.floor(math.log2(1 + i / 32) * 32767 + 0.5)) for i in range(33)]
 
 
 def pow2_table():
@@ -79,7 +81,7 @@ def render():
         "",
         "// clang-format off",
         "",
-        "/* round(32768 * log2(1 + i/32)), i = 0..32, the last entry limited to 32767. */",
+        "/* round(32767 * log2(1 + i/32)), i = 0..32. */",
     ]
     lines += array("tetra_log2_tab", log2_table())
     lines += ["", "/* round(16384 * 2^(i/32)), i = 0..32, the last entry limited to 32767. */"]

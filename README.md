@@ -253,7 +253,7 @@ mbe_tetraDecoderFree(dec);
 - Output is plain 16-bit PCM at the level of ETSI's reference decoder; there is no float variant and no mbelib float scale.
 - Returns 0, `MBE_STATUS_INVALID_ARGUMENT` (NULL `dec` or `pcm`, NULL `bits` on a good frame) or `MBE_STATUS_INVALID_BITS`. A rejected frame leaves the context and `pcm` untouched, so it can be retried as a bad frame.
 - The context holds all decoder state and is not shared: use one per stream, any number per thread, and lock externally for concurrent use of one context. Decoding never allocates. The arithmetic is integer only, so the output is identical on every platform and build configuration.
-- Conformance: on the EN 300 395-4 decoder test (TE1_46.CHD in, TE2_128.PCM expected) the output is not bit-exact: half the frames match exactly, the overall SNR against the reference is 39.6 dB, the segmental SNR 70.5 dB and the level within 0.01 dB. The decoder therefore does not pass the EN 300 395-4 conformance test. The remaining differences are rounding details of the reference's fixed-point arithmetic that its text does not specify; `docs/tetra-acelp.md` lists them with the measurements.
+- Conformance: on the EN 300 395-4 decoder test (TE1_46.CHD in, TE2_128.PCM expected) the output is not bit-exact: 4 942 of the 5 340 frames match exactly, the overall SNR against the reference is 57.2 dB, the segmental SNR 94.7 dB and the level within 0.01 dB. The decoder therefore does not pass the EN 300 395-4 conformance test. The remaining differences are rare rounding details of the reference's fixed-point arithmetic (mostly in the conversion of LSPs to the synthesis filter) that its text does not specify; `docs/tetra-acelp.md` lists them with the measurements.
 
 ### Audio Sample Scaling (Float vs int16)
 

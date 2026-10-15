@@ -82,6 +82,10 @@ void tetra_codevector(const int16_t a[TETRA_M + 1], int t0, const tetra_subframe
 void tetra_adaptive_vector(int16_t* exc_cur, int t0, int frac);
 void tetra_log2(int32_t x, int16_t* exponent, int16_t* fraction);
 int32_t tetra_pow2(int16_t exponent, int16_t fraction);
-int16_t tetra_gain(int16_t energy_q8, int32_t vec_energy, int32_t pg_energy, int32_t constant);
+/** Pitch and code gains (Q12, the pitch gain limited to 1.2) from the quantized energies (Q8) and the
+ * energies of the adaptive vector plus one, the code vector and the synthesis filter's response to an
+ * impulse of 1024 (clause 4.2.2.6, equations 31-39). */
+void tetra_gains(int16_t energy_p, int16_t energy_c, int32_t v_energy, int32_t c_energy, int32_t pg_energy, int16_t* gp,
+                 int16_t* gc);
 
 #endif /* MBELIB_NEO_INTERNAL_TETRA_ACELP_H */

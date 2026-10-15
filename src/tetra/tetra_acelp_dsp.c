@@ -20,13 +20,18 @@
 #include "tetra_acelp_codebooks.h"
 #include "tetra_acelp_constants.h"
 
-/* Minimum distance kept between the LSPs on either side of a split-VQ boundary (Q15 cosine). */
-#define TETRA_LSP_GAP_34 916
-#define TETRA_LSP_GAP_67 1244
-#define TETRA_SHARP      26216 /* 0.8 pitch sharpening factor (Q13 6554, scaled to Q15) */
-#define TETRA_PULSE1_AMP 23168 /* 1.4142 pulse amplitude (Q12 5792, scaled to Q14) */
+/* Distance the LSPs on either side of a split-VQ boundary are widened towards (Q15 cosine). */
+#define TETRA_LSP_GAP_34  916
+#define TETRA_LSP_GAP_67  1244
+#define TETRA_SHARP       26216 /* 0.8 pitch sharpening factor (Q13 6554, scaled to Q15) */
+#define TETRA_PULSE1_AMP  23168 /* 1.4142 pulse amplitude (Q12 5792, scaled to Q14) */
+/* Q8 log2 offset of both gains: the Q formats of the energies, of their mantissas and of the Q12
+ * gains, resolved against the reference decoder. */
+#define TETRA_GAIN_OFFSET 4434
+#define TETRA_GAIN_P_MAX  4915 /* 1.2 in Q12 */
 
-/** Widen the LSP pair (i, i + 1) to at least gap, moving both by half the shortfall. */
+/** Widen the LSP pair (i, i + 1) towards gap, moving each by half the shortfall rounded down (so the
+ * gap ends at gap, or gap - 1 for an odd shortfall). */
 static void
 lsp_widen(int16_t lsp[TETRA_M], int i, int gap) {
     int32_t d = (int32_t)lsp[i] - lsp[i + 1];
@@ -290,10 +295,38 @@ log2_q15(int32_t x) {
     return (int32_t)e * 32768 + f;
 }
 
-int16_t
-tetra_gain(int16_t energy_q8, int32_t vec_energy, int32_t pg_energy, int32_t constant) {
-    int64_t z15 = (int64_t)energy_q8 * 128 - log2_q15(vec_energy) - log2_q15(pg_energy) + constant;
-    int32_t z = (int32_t)mbe_fx_asr64(z15, 7); /* Q8 log2 energy; the gain is 2^(z / 512) */
-    int32_t g = tetra_pow2((int16_t)mbe_fx_asr64(z, 9), (int16_t)mbe_fx_lsl64(z & 511, 6));
-    return mbe_fx_sat16(g);
+/** High 16 bits of x after normalization; *shift receives the left shift that normalized it. */
+static int16_t
+mantissa(int32_t x, int* shift) {
+    *shift = mbe_fx_norm_l(x);
+    return mbe_fx_extract_h(mbe_fx_L_shl(x, *shift));
+}
+
+/** Gain (Q12) from a quantized energy (Q8) and the log2 (Q15) of the energy product of equation 31/33. */
+static int16_t
+gain_from_log(int16_t energy_q8, int32_t log_q15) {
+    /* The log is truncated to Q8 before the subtraction (equations 38-39); z is then log2 of the
+     * squared gain in Q8, i.e. log2 of the gain in Q9. */
+    int32_t z = energy_q8 + TETRA_GAIN_OFFSET - (int32_t)mbe_fx_asr64(log_q15, 7);
+    int32_t e = (int32_t)mbe_fx_asr64(z, 9);
+    int32_t f = z - (int32_t)mbe_fx_lsl64(e, 9);
+    return mbe_fx_sat16(tetra_pow2((int16_t)e, (int16_t)mbe_fx_lsl64(f, 6)));
+}
+
+void
+tetra_gains(int16_t energy_p, int16_t energy_c, int32_t v_energy, int32_t c_energy, int32_t pg_energy, int16_t* gp,
+            int16_t* gc) {
+    int npg;
+    int nv;
+    int16_t mpg = mantissa(pg_energy, &npg);
+    int16_t mv = mantissa(v_energy, &nv);
+    /* The code energy keeps a fixed scale: its high half, not normalized (at least 43, see the tests). */
+    int16_t mc = mbe_fx_extract_h(c_energy);
+    /* One log2 per energy product of 16-bit mantissas; the two high halves drop 32 binary places,
+     * which TETRA_GAIN_OFFSET accounts for. */
+    *gp = gain_from_log(energy_p, log2_q15(mbe_fx_L_mult0(mv, mpg)) - (int32_t)mbe_fx_lsl64(nv + npg, 15));
+    if (*gp > TETRA_GAIN_P_MAX) {
+        *gp = TETRA_GAIN_P_MAX;
+    }
+    *gc = gain_from_log(energy_c, log2_q15(mbe_fx_L_mult0(mc, mpg)) - (int32_t)mbe_fx_lsl64(npg, 15));
 }

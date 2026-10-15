@@ -22,14 +22,11 @@
 /* Initial past quantized LSP vector, EN 300 395-2 clause 4.2.2.3 (Q15 cosine domain). */
 static const int16_t tetra_lsp_init[TETRA_M] = {30000, 26000, 21000, 15000, 8000, 0, -8000, -15000, -21000, -26000};
 
-#define TETRA_PRED_CONST    (-768)  /* -3.0 in the Q8 log2 energy domain, equation 35 */
-#define TETRA_ENERGY_MAX_P  6912    /* 27.0, clause 4.2.2.6 */
-#define TETRA_ENERGY_MAX_C  6400    /* 25.0 */
-#define TETRA_CONCEAL_DECAY 128     /* 0.5, equation 42 */
-#define TETRA_GAIN_P_CONST  1616254 /* gain offsets (Q15 log2) of the pitch and code gains */
-#define TETRA_GAIN_C_CONST  1616274
-#define TETRA_GAIN_P_MAX    4915 /* 1.2 in Q12 */
-#define TETRA_PG_IMPULSE    1024 /* impulse amplitude of the prediction-gain response */
+#define TETRA_PRED_CONST    (-768) /* -3.0 in the Q8 log2 energy domain, equation 35 */
+#define TETRA_ENERGY_MAX_P  6912   /* 27.0, clause 4.2.2.6 */
+#define TETRA_ENERGY_MAX_C  6400   /* 25.0 */
+#define TETRA_CONCEAL_DECAY 128    /* 0.5, equation 42 */
+#define TETRA_PG_IMPULSE    1024   /* impulse amplitude of the prediction-gain response */
 
 void
 tetra_acelp_reset(tetra_acelp_state* st) {
@@ -128,11 +125,8 @@ decode_subframe(tetra_acelp_state* st, const int16_t a[TETRA_M + 1], const tetra
     memset(zero_mem, 0, sizeof(zero_mem));
     tetra_syn_filt(a, x, h, TETRA_SUBFRAME, zero_mem, 0);
     pg = energy(h, TETRA_SUBFRAME, 0);
-    gp = tetra_gain(st->energy_p, energy(exc_cur, TETRA_SUBFRAME, 1), pg, TETRA_GAIN_P_CONST);
-    if (gp > TETRA_GAIN_P_MAX) {
-        gp = TETRA_GAIN_P_MAX;
-    }
-    gc = tetra_gain(st->energy_c, energy(code, TETRA_SUBFRAME, 0), pg, TETRA_GAIN_C_CONST);
+    tetra_gains(st->energy_p, st->energy_c, energy(exc_cur, TETRA_SUBFRAME, 1), energy(code, TETRA_SUBFRAME, 0), pg,
+                &gp, &gc);
 
     for (n = 0; n < TETRA_SUBFRAME; n++) {
         int32_t acc = mbe_fx_L_add(mbe_fx_L_mult0(exc_cur[n], gp), mbe_fx_L_mult0(code[n], gc));

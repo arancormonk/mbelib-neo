@@ -507,18 +507,77 @@ test_log2_pow2(void) {
     }
 }
 
+/* Gains from the quantized energies (Q8) and the energies of the adaptive vector (plus one), the code
+ * vector and the synthesis filter's impulse response. The first seven pairs are what ETSI's reference
+ * decoder produced on subframes of this file's voiced and random streams whose excitation determines
+ * the pair uniquely; each rules out at least one other plausible computation (separate logs of the
+ * energies, a log table scaled by 32768, a normalized code energy, the log rounded instead of
+ * truncated). The last three were worked out from the computation in docs/tetra-acelp.md: a negative
+ * log (an adaptive vector of almost no energy), the smallest possible code energy (see
+ * test_code_energy_floor) and saturated energies. */
 static void
-test_gain_is_monotonic(void) {
-    int16_t energy;
-    int16_t prev = 0;
-    for (energy = 0; energy <= 6912; energy = (int16_t)(energy + 64)) {
-        int16_t g = tetra_gain(energy, 1 << 24, 1 << 21, 1616274);
-        assert(g >= prev);
-        prev = g;
+test_gains(void) {
+    static const struct {
+        int16_t ep;
+        int16_t ec;
+        int32_t v;
+        int32_t c;
+        int32_t pg;
+        int16_t gp;
+        int16_t gc;
+    } k_cases[] = {
+        {6912, 6132, 203887612, 95280214, 5305354, 4915, 4760}, /* pitch gain at its 1.2 limit */
+        {4466, 5994, 32412758, 78162297, 3285482, 1087, 5540},
+        {5315, 4373, 35456188, 88262392, 5830866, 2462, 436},
+        {3716, 4344, 659049, 87242289, 6180387, 2012, 410},
+        {968, 4248, 22708, 47961888, 12466714, 185, 342},
+        {5338, 3827, 23679096, 101696287, 3301618, 4130, 258},
+        {2671, 3857, 32060785, 21733092, 2747147, 105, 637},
+        {0, 3000, 10, 1 << 24, 3000000, 4845, 217},
+        {0, 2600, 1, 2876416, 1 << 20, 4915, 521},
+        {6912, 6400, INT32_MAX, INT32_MAX, INT32_MAX, 143, 72},
+    };
+
+    size_t i;
+    for (i = 0; i < sizeof(k_cases) / sizeof(k_cases[0]); i++) {
+        int16_t gp = -1;
+        int16_t gc = -1;
+        tetra_gains(k_cases[i].ep, k_cases[i].ec, k_cases[i].v, k_cases[i].c, k_cases[i].pg, &gp, &gc);
+        assert(gp == k_cases[i].gp);
+        assert(gc == k_cases[i].gc);
     }
-    /* A larger vector or prediction-gain energy lowers the gain. */
-    assert(tetra_gain(4000, 1 << 26, 1 << 21, 1616274) < tetra_gain(4000, 1 << 24, 1 << 21, 1616274));
-    assert(tetra_gain(4000, 1 << 24, 1 << 23, 1616274) < tetra_gain(4000, 1 << 24, 1 << 21, 1616274));
+}
+
+/* The code energy's high half is used without normalization, so it must never be zero: the earliest
+ * pulse sample alone is at least (1.4142 - 1) x 4096 = 1696 in magnitude, whatever the pulses. */
+static void
+test_code_energy_floor(void) {
+    int16_t a[TETRA_M + 1];
+    int64_t least = INT64_MAX;
+    int combo;
+    tetra_lsp_to_lpc(k_lsp_init, a);
+    for (combo = 0; combo < (1 << 16); combo++) {
+        tetra_subframe_params sp;
+        int16_t code[TETRA_SUBFRAME];
+        int64_t e = 0;
+        int n;
+        memset(&sp, 0, sizeof(sp));
+        sp.pulse1 = combo & 31;
+        sp.pulse2 = (combo >> 5) & 7;
+        sp.pulse3 = (combo >> 8) & 7;
+        sp.pulse4 = (combo >> 11) & 7;
+        sp.sign = (combo >> 14) & 1;
+        sp.shift = (combo >> 15) & 1;
+        tetra_codevector(a, 19, &sp, code); /* the shortest integer lag (of 19 1/3): sharpened */
+        for (n = 0; n < TETRA_SUBFRAME; n++) {
+            e += (int64_t)code[n] * code[n];
+        }
+        if (e < least) {
+            least = e;
+        }
+    }
+    assert(least >= (int64_t)1696 * 1696);
+    assert((least >> 16) >= 43);
 }
 
 static void
@@ -848,13 +907,13 @@ alternate(int f, uint32_t r) {
 
 static void
 test_regression_hashes(void) {
-    assert(stream_hash(STREAM_VOICED, 1u, 2000, no_losses) == 0x80B24841u);
-    assert(stream_hash(STREAM_VOICED, 2u, 2000, five_percent) == 0x4BB5F9CBu);
-    assert(stream_hash(STREAM_RANDOM, 3u, 2000, no_losses) == 0x4111137Fu);
-    assert(stream_hash(STREAM_RANDOM, 4u, 2000, five_percent) == 0x371FC000u);
-    assert(stream_hash(STREAM_VOICED, 5u, 200, bad_start) == 0xF8F8B82Cu);
-    assert(stream_hash(STREAM_VOICED, 6u, 450, long_erasure) == 0x7B280177u);
-    assert(stream_hash(STREAM_VOICED, 7u, 200, alternate) == 0x97858358u);
+    assert(stream_hash(STREAM_VOICED, 1u, 2000, no_losses) == 0x812585DEu);
+    assert(stream_hash(STREAM_VOICED, 2u, 2000, five_percent) == 0x07DD0589u);
+    assert(stream_hash(STREAM_RANDOM, 3u, 2000, no_losses) == 0x506D4DA4u);
+    assert(stream_hash(STREAM_RANDOM, 4u, 2000, five_percent) == 0x1425374Du);
+    assert(stream_hash(STREAM_VOICED, 5u, 200, bad_start) == 0x770144C3u);
+    assert(stream_hash(STREAM_VOICED, 6u, 450, long_erasure) == 0xE0E66C51u);
+    assert(stream_hash(STREAM_VOICED, 7u, 200, alternate) == 0x9FA45A4Cu);
 }
 
 int
@@ -873,7 +932,8 @@ main(void) {
     test_synthesis_filter();
     test_adaptive_vector();
     test_log2_pow2();
-    test_gain_is_monotonic();
+    test_gains();
+    test_code_energy_floor();
     test_energy_limits();
     test_bad_frames_after_reset();
     test_concealment_state();

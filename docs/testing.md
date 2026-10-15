@@ -29,7 +29,9 @@ The CTest suite includes:
 - TETRA decoder: bit unpacking (tables 3 and 4), every pitch index, pulse positions and absent
   pulses, sharpening, LSP lookup, boundary widening and the rejection of crossed vectors,
   interpolation, LSP to A(z) against a double-precision expansion, the synthesis filter, the
-  adaptive codebook, log2/pow2, gain monotonicity and the 27/25 energy limits, concealment state
+  adaptive codebook, log2/pow2, the gains against values ETSI's reference decoder produced on the
+  test's own streams (each ruling out another plausible computation) and at the extremes, the
+  floor of the code-vector energy, the 27/25 energy limits, concealment state
   (energy decay and floor, held LSPs, lag and indices, silence before the first good frame), the
   API contract (NULL arguments, rejected frames leaving state and output untouched, ignored
   bad-frame payloads, reset, interleaved contexts), and stream hashes asserted on every build
