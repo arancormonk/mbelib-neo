@@ -1086,7 +1086,11 @@ if(MBELIB_BUILD_TESTS)
     add_test(NAME test_params COMMAND test_params)
 
     # The TETRA tests exercise private decoding stages and fixed-point operators.
-    foreach(_mbelib_private_test IN ITEMS test_fixed_point test_tetra_decoder)
+    foreach(
+        _mbelib_private_test
+        IN
+        ITEMS test_fixed_point test_tetra_decoder test_tetra_simd
+    )
         add_executable(${_mbelib_private_test} tests/${_mbelib_private_test}.c)
         target_link_libraries(${_mbelib_private_test} PRIVATE mbe-static)
         target_include_directories(
@@ -1592,6 +1596,7 @@ if(MBELIB_BUILD_TESTS)
         test_params
         test_fixed_point
         test_tetra_decoder
+        test_tetra_simd
         test_frame_paths
         test_quality_dvsi
         test_input_validation
@@ -1666,6 +1671,19 @@ if(MBELIB_BUILD_BENCHMARKS)
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(bench_replay BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_executable(bench_tetra bench/bench_tetra.c)
+    target_link_libraries(bench_tetra PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    _mbelib_apply_hardening(bench_tetra)
+    target_include_directories(
+        bench_tetra
+        PRIVATE "${PROJECT_SOURCE_DIR}/include"
+    )
+    if(_SAN_CFLAGS)
+        target_compile_options(bench_tetra PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(bench_tetra BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_executable(bench_unvoiced bench/bench_unvoiced.c)
     target_link_libraries(bench_unvoiced PRIVATE ${MBELIB_EXEC_LINK_TGT})

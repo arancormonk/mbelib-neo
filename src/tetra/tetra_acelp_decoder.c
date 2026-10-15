@@ -18,6 +18,7 @@
 #include "mbelib-neo/mbelib.h"
 #include "tetra_acelp.h"
 #include "tetra_acelp_codebooks.h"
+#include "tetra_simd.h" // IWYU pragma: keep (TETRA_SIMD selects the output scaling kernel)
 
 /* Initial past quantized LSP vector, EN 300 395-2 clause 4.2.2.3 (Q15 cosine domain). */
 static const int16_t tetra_lsp_init[TETRA_M] = {30000, 26000, 21000, 15000, 8000, 0, -8000, -15000, -21000, -26000};
@@ -62,17 +63,6 @@ tetra_acelp_unpack(const uint8_t* bits, tetra_frame_params* fp) {
         sp->shift = read_bits(bits, &pos, 1);
         sp->gain = read_bits(bits, &pos, 6);
     }
-}
-
-/** Energy of x plus init, accumulated with saturation. */
-static int32_t
-energy(const int16_t* x, int len, int32_t init) {
-    int32_t acc = init;
-    int n;
-    for (n = 0; n < len; n++) {
-        acc = mbe_fx_L_mac0(acc, x[n], x[n]);
-    }
-    return acc;
 }
 
 /** Predicted energy (equation 35), floored at zero. */
@@ -124,15 +114,20 @@ decode_subframe(tetra_acelp_state* st, const int16_t a[TETRA_M + 1], const tetra
     x[0] = TETRA_PG_IMPULSE;
     memset(zero_mem, 0, sizeof(zero_mem));
     tetra_syn_filt(a, x, h, TETRA_SUBFRAME, zero_mem, 0);
-    pg = energy(h, TETRA_SUBFRAME, 0);
-    tetra_gains(st->energy_p, st->energy_c, energy(exc_cur, TETRA_SUBFRAME, 1), energy(code, TETRA_SUBFRAME, 0), pg,
-                &gp, &gc);
+    pg = tetra_energy(h, TETRA_SUBFRAME, 0);
+    tetra_gains(st->energy_p, st->energy_c, tetra_energy(exc_cur, TETRA_SUBFRAME, 1),
+                tetra_energy(code, TETRA_SUBFRAME, 0), pg, &gp, &gc);
 
-    for (n = 0; n < TETRA_SUBFRAME; n++) {
-        exc_cur[n] = tetra_excitation(gp, exc_cur[n], gc, code[n]);
-    }
+    tetra_mix_excitation(gp, gc, exc_cur, code);
     tetra_syn_filt(a, exc_cur, s, TETRA_SUBFRAME, st->syn_mem, 1);
-    for (n = 0; n < TETRA_SUBFRAME; n++) {
+    n = 0;
+#if defined(TETRA_SIMD)
+    for (; n + 4 <= TETRA_SUBFRAME; n += 4) {
+        tetra_v32 v = tetra_vload(s + n);
+        tetra_vstore_sat(out + n, tetra_vadd(v, v));
+    }
+#endif
+    for (; n < TETRA_SUBFRAME; n++) {
         out[n] = mbe_fx_add(s[n], s[n]); /* post-processing: x2 with saturation */
     }
     memmove(st->exc, &st->exc[TETRA_SUBFRAME], TETRA_EXC_HIST * sizeof(int16_t));

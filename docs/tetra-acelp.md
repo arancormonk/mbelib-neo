@@ -18,7 +18,8 @@ difference from the reference decoder is known: TE3, every bad-frame pattern tri
 [Measured results](#measured-results)).
 
 The decoder uses integer arithmetic only, through saturating 16/32-bit operators with portable C
-semantics (`src/internal/mbe_fixed_point.h`), so its own output is identical on every compiler,
+semantics (`src/internal/mbe_fixed_point.h`) and matching SIMD kernels (`src/internal/tetra_simd.h`),
+so its own output is identical on every compiler,
 architecture and build configuration (`test_tetra_decoder` asserts stream hashes everywhere).
 
 ## Clean-room process
@@ -169,6 +170,68 @@ For runs that may differ (a candidate change, say), `compare --gate` takes its e
 tolerance thresholds instead: a segmental SNR of at least 30 dB over frames above -60 dBFS, a
 level difference within 0.1 dB, no frame above -50 dBFS below 14 dB SNR after the first 10
 frames, and reference silence reproduced within 2 LSB.
+
+## SIMD optimization
+
+`MBELIB_ENABLE_SIMD` enables SSE2 on supported x86 targets and NEON on ARM32/AArch64.
+An explicit AVX2 compile target also enables eight-sample fractional-pitch interpolation.
+The public API, state layout, fixed-point scales and PCM are unchanged; there are no SIMD-specific
+golden hashes or audio tolerances.
+
+- Synthesis reduces ten products with SIMD only when `4096 + sum(abs(a[1..10])) <= 65535`.
+  This proves every intermediate, including the input term, fits int32 for any int16 history.
+  Larger coefficients retain the original ordered saturating filter. Output samples remain
+  sequential because each sample feeds the next.
+- Fractional-pitch interpolation assigns independent output samples to lanes and keeps the
+  tap order. The first 18 taps of both filters have an absolute sum at most 65535; their
+  partial sums cannot overflow. Every later MAC saturates separately, as do doubling and
+  rounding. Four lanes are safe at every valid fractional lag; AVX2 uses eight only when the
+  newest tap precedes that entire block, then handles the four-sample tail with SSE2.
+- LSP interpolation, LPC weighting, pulse accumulation, excitation mixing and output scaling
+  use four lanes. Pulse and excitation narrowing retain the low 16 bits, including overflowing
+  pulse sums; filter output and final scaling saturate instead. Energies accumulate squares
+  in 64 bits and saturate once at the end, which is exact because every term is nonnegative.
+- The small LSP polynomial, gain and frame-control computations, integer-lag copying and
+  recursive pitch-sharpening loop retain scalar arithmetic.
+
+`test_tetra_simd` compares the stages with independent ordered scalar oracles across random
+full-range inputs, deliberately overflowing MACs with later cancellation, the synthesis bound's
+neighbors, every lag from 19 through 144 and all three fractions, absent pulses, unaligned
+buffers, tails, in-place synthesis and memory-update modes. Existing stream hashes are unchanged.
+
+The pre-merge SIMD audit compared against PR #129's `5c12ecf`. All 180 local reference streams
+(TE1, TE3, 104 saved stress cases, ten speech-loss/burst/bad-start patterns and 64 new stress
+streams) are byte-identical to ETSI's output: 1,130,134 frames per configuration with GCC scalar,
+GCC SSE2/AVX2 and Clang SSE2/AVX2. The new stress streams cover uniform bits, late pulses/high
+gains, voiced-like fields and rejected LSPs, with losses, bursts and bad starts up to 256 frames.
+ARM32 and AArch64 NEON under QEMU also reproduce the reference exactly on TE1, TE3, one loss
+pattern and one stream of each stress distribution (81,556 frames per target), and pass the
+stage oracles and existing stream hashes. The x86 32-bit scalar and SSE2 builds pass those
+tests too. Full Debug, Release, NOTONES and sanitizer suites pass; the AVX2 stage and stream
+tests also pass ASan/UBSan. Reference data and generated PCM stay outside the repository.
+
+Replay timings below are CPU microseconds per 30 ms frame on a Ryzen 9 5950X,
+GCC 16.2.1 and Clang 23.1.1, Release with fast-math and LTO. Each value is the median
+of three alternating baseline/candidate comparisons pinned to CPU 2, with three input
+repetitions and five measured runs per invocation after warm-up. The same replay executable
+loads each matched library; loading and reset are untimed, and every checksum agrees.
+AVX2 uses `-march=x86-64-v3` on both sides; the portable x86 build requires SSE2 only.
+
+| Compiler / target | Input | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| GCC SSE2 | TE1 | 8.886 | 4.666 | 47.5% |
+| GCC SSE2 | TE3 | 8.922 | 4.715 | 47.2% |
+| GCC AVX2 | TE1 | 8.511 | 4.133 | 51.4% |
+| GCC AVX2 | TE3 | 10.471 | 4.473 | 57.3% |
+| Clang SSE2 | TE1 | 11.302 | 4.199 | 62.8% |
+| Clang SSE2 | TE3 | 11.229 | 3.811 | 66.1% |
+| Clang AVX2 | TE1 | 11.045 | 3.490 | 68.4% |
+| Clang AVX2 | TE3 | 10.997 | 3.461 | 68.5% |
+
+Speech with losses, an overloaded late-pulse/high-gain stream and a uniform random-bit
+stream also improve in all four configurations: 43.7–69.1% less time. These are local
+measurements, not performance guarantees for other CPUs. NEON has numerical and conformance
+coverage under QEMU; native ARM timing has not been measured.
 
 ## Tables
 

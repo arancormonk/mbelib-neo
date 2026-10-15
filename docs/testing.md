@@ -39,7 +39,10 @@ The CTest suite includes:
   API contract (NULL arguments, rejected frames leaving state and output untouched, ignored
   bad-frame payloads, reset, interleaved contexts), and stream hashes asserted on every build
   (`test_tetra_decoder`); the saturating fixed-point operators at their edges
-  (`test_fixed_point`); the TETRA entry points through the shared library
+  (`test_fixed_point`); independent ordered arithmetic oracles for SIMD and scalar
+  synthesis, fractional pitch, pulse shaping, excitation, energy and LSP interpolation
+  (`test_tetra_simd`), including saturation, wraps, short-lag dependencies, unaligned
+  buffers and tails; the TETRA entry points through the shared library
   (`test_tetra_shared_api`); TETRA argument and bit validation (`test_input_validation`); the
   table generators and the committed tables' shape and provenance (`test_tetra_tables`); the
   TETRA comparison tool, and with tools enabled `mbe_tetra_decode` (`test_tetra_conformance_tools`,
@@ -157,6 +160,7 @@ build/dev-release/bench_synth jump voiced
 build/dev-release/bench_replay encode ambe2400 3 7 < speech.raw
 build/dev-release/bench_replay hard ambe2450 3 7 < ambe2450.frames
 build/dev-release/bench_replay soft imbe7200 3 7 mixed < imbe7200.frames
+build/dev-release/bench_tetra 3 7 < /path/to/TE1_46.CHD
 ```
 
 `bench_synth [legacy|steady|gradual|jump] [mixed|voiced]` defaults to legacy
@@ -189,6 +193,19 @@ builds. Compare identical compiler, fast-math and LTO settings. `-march=x86-64-v
 is a separate compile target; portable SIMD builds still require only SSE2 on
 x86 and use NEON only when enabled by the existing target selection. Native ARM
 measurements are required before claiming NEON performance improvements.
+
+`bench_tetra [repeats=10] [runs=7]` applies the same in-memory replay method to
+TETRA's 30 ms frames. Standard input is CHD format: 138 little-endian 16-bit
+words per frame (bad-frame indicator followed by 137 bits). It rejects empty,
+truncated or invalid good-frame input, caps input at 65,536 frames, and ignores
+bad-frame payloads as the public decoder does. The reported median excludes
+loading, allocation, resets and one warm-up run. Repeats concatenate the input
+without resetting; every measured run starts from reset and must reproduce the
+warm-up checksum. One PCM sample per frame contributes to the timed checksum;
+use `mbe_tetra_decode` and byte comparisons to check complete PCM identity.
+Include speech, losses and overloaded synthetic streams in comparisons. See
+[TETRA SIMD measurements](tetra-acelp.md#simd-optimization) for the measured
+speed and bit-exactness checks.
 
 The soft ECC codebooks are immutable 32-bit codewords (32 KiB in all) in the
 original enumeration order, with the codeword bit of each data bit. Regenerate
@@ -257,7 +274,8 @@ and all six steady/gradual/jump mixed/voiced workloads in matching Release
 builds with explicit SIMD disabled/enabled. Compilers can still automatically
 vectorize C loops when explicit SIMD is disabled. Use `bench_replay` in those
 same trees for real speech, all four decoders, tone frames and channel errors;
-synthetic synthesis timings alone do not establish end-to-end gains.
+synthetic synthesis timings alone do not establish end-to-end gains. It also
+builds `bench_tetra`; supply local CHD inputs to compare TETRA in the same trees.
 
 The October 2026 SIMD audit compared against `a962d3d` on a Ryzen 7 5800HS,
 with GCC 16.2.1, Release, fast-math and LTO enabled on both sides. These are

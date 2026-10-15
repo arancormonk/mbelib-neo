@@ -89,5 +89,9 @@ void tetra_gains(int16_t energy_p, int16_t energy_c, int32_t v_energy, int32_t c
                  int16_t* gc);
 /** One excitation sample u = gp v + gc c (equation 40) from Q12 gains, rounded, kept to its low 16 bits. */
 int16_t tetra_excitation(int16_t gp, int16_t v, int16_t gc, int16_t c);
+/** Mix one subframe in place; gp is in 0..4915, gc may span int16. */
+void tetra_mix_excitation(int16_t gp, int16_t gc, int16_t v[TETRA_SUBFRAME], const int16_t c[TETRA_SUBFRAME]);
+/** Saturating sum of squares plus init (0 or 1), for 0..TETRA_SUBFRAME samples. */
+int32_t tetra_energy(const int16_t* x, int len, int32_t init);
 
 #endif /* MBELIB_NEO_INTERNAL_TETRA_ACELP_H */

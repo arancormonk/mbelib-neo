@@ -7,28 +7,34 @@
  * @file
  * @brief Signal-processing stages of the TETRA ACELP decoder (EN 300 395-2 clause 4.2.3).
  *
- * Everything is integer fixed-point arithmetic through mbe_fixed_point.h, so the output is
- * identical on every platform and build configuration.
+ * Integer fixed-point arithmetic through mbe_fixed_point.h and equivalent SIMD kernels,
+ * with identical output on every platform and build configuration.
  */
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
+#include "mbe_compiler.h"
 #include "mbe_fixed_point.h"
 #include "tetra_acelp.h"
 #include "tetra_acelp_codebooks.h"
 #include "tetra_acelp_constants.h"
+#include "tetra_simd.h" // IWYU pragma: keep (TETRA_SIMD selects the integer vector kernels)
 
 /* Distance the LSPs on either side of a split-VQ boundary are widened towards (Q15 cosine). */
-#define TETRA_LSP_GAP_34  916
-#define TETRA_LSP_GAP_67  1244
-#define TETRA_SHARP       26216 /* 0.8 pitch sharpening factor (Q13 6554, scaled to Q15) */
-#define TETRA_PULSE1_AMP  23168 /* 1.4142 pulse amplitude (Q12 5792, scaled to Q14) */
+#define TETRA_LSP_GAP_34       916
+#define TETRA_LSP_GAP_67       1244
+#define TETRA_SHARP            26216 /* 0.8 pitch sharpening factor (Q13 6554, scaled to Q15) */
+#define TETRA_PULSE1_AMP       23168 /* 1.4142 pulse amplitude (Q12 5792, scaled to Q14) */
 /* Q8 log2 offset of both gains: the Q formats of the energies, of their mantissas and of the Q12
  * gains, resolved against the reference decoder. */
-#define TETRA_GAIN_OFFSET 4434
-#define TETRA_GAIN_P_MAX  4915 /* 1.2 in Q12 */
+#define TETRA_GAIN_OFFSET      4434
+#define TETRA_GAIN_P_MAX       4915 /* 1.2 in Q12 */
+/* Both interpolation filters' first 18 taps have an absolute sum <= 65535.
+ * Their MAC prefixes cannot overflow int32 for any int16 samples. Later taps
+ * can overflow and must saturate in order. test_tetra_simd checks this bound. */
+#define TETRA_INTERP_SAFE_TAPS 18
 
 /** Widen the LSP pair (i, i + 1) towards gap, moving each by half the shortfall rounded down (so the
  * gap ends at gap, or gap - 1 for an odd shortfall). */
@@ -76,7 +82,15 @@ tetra_lsp_interpolate(const int16_t old_lsp[TETRA_M], const int16_t new_lsp[TETR
     int k;
     int i;
     for (k = 0; k < 3; k++) {
-        for (i = 0; i < TETRA_M; i++) {
+        i = 0;
+#if defined(TETRA_SIMD)
+        for (; i + 4 <= TETRA_M; i += 4) {
+            tetra_v32 acc =
+                tetra_vadd(tetra_vmul(old_lsp + i, w_old[k]), tetra_vmul(new_lsp + i, (int16_t)(32768 - w_old[k])));
+            tetra_vstore_sat(out[k] + i, tetra_vshr(acc, 15));
+        }
+#endif
+        for (; i < TETRA_M; i++) {
             int32_t acc = mbe_fx_L_mult(old_lsp[i], w_old[k]);
             acc = mbe_fx_L_mac(acc, new_lsp[i], (int16_t)(32768 - w_old[k]));
             out[k][i] = mbe_fx_extract_h(acc);
@@ -139,12 +153,10 @@ tetra_lsp_to_lpc(const int16_t lsp[TETRA_M], int16_t a[TETRA_M + 1]) {
     }
 }
 
-void
-tetra_syn_filt(const int16_t a[TETRA_M + 1], const int16_t* x, int16_t* y, int len, int16_t mem[TETRA_M], int update) {
-    int16_t buf[TETRA_M + TETRA_FRAME];
+static void
+syn_filt_scalar(const int16_t a[TETRA_M + 1], const int16_t* x, int16_t* y, int len, int16_t* buf) {
     int n;
     int i;
-    memcpy(buf, mem, TETRA_M * sizeof(int16_t));
     for (n = 0; n < len; n++) {
         int32_t acc = mbe_fx_L_shl(x[n], 12);
         for (i = 1; i <= TETRA_M; i++) {
@@ -153,6 +165,46 @@ tetra_syn_filt(const int16_t a[TETRA_M + 1], const int16_t* x, int16_t* y, int l
         acc = mbe_fx_L_add(mbe_fx_L_shl(acc, 4), 0x8000);
         buf[TETRA_M + n] = mbe_fx_extract_h(acc);
         y[n] = buf[TETRA_M + n];
+    }
+}
+
+#if defined(TETRA_SIMD)
+/* Reordering a saturating reduction is only valid when no intermediate can overflow.
+ * The bound also covers the initial x * 4096, for every possible int16 input/history. */
+static int
+syn_filt_bounded(const int16_t a[TETRA_M + 1], int16_t reversed[TETRA_M]) {
+    int32_t sum = 4096;
+    for (int i = 0; i < TETRA_M; ++i) {
+        int32_t v = a[TETRA_M - i];
+        reversed[i] = (int16_t)v;
+        sum += v < 0 ? -v : v;
+    }
+    return sum <= 65535;
+}
+
+static void
+syn_filt_simd(const int16_t reversed[TETRA_M], const int16_t* x, int16_t* y, int len, int16_t* buf) {
+    for (int n = 0; n < len; ++n) {
+        int32_t acc = (int32_t)x[n] * 4096 - tetra_dot10(reversed, buf + n);
+        /* sat16((acc + 2048) >> 12) is exactly the original saturated shift/round. */
+        buf[TETRA_M + n] = mbe_fx_sat16(mbe_fx_asr64((int64_t)acc + 2048, 12));
+        y[n] = buf[TETRA_M + n];
+    }
+}
+#endif
+
+void
+tetra_syn_filt(const int16_t a[TETRA_M + 1], const int16_t* x, int16_t* y, int len, int16_t mem[TETRA_M], int update) {
+    int16_t buf[TETRA_M + TETRA_FRAME];
+    memcpy(buf, mem, TETRA_M * sizeof(int16_t));
+#if defined(TETRA_SIMD)
+    int16_t reversed[TETRA_M];
+    if (syn_filt_bounded(a, reversed)) {
+        syn_filt_simd(reversed, x, y, len, buf);
+    } else
+#endif
+    {
+        syn_filt_scalar(a, x, y, len, buf);
     }
     if (update) {
         memcpy(mem, &buf[len], TETRA_M * sizeof(int16_t));
@@ -164,7 +216,14 @@ static void
 weight_lpc(const int16_t a[TETRA_M + 1], const int16_t* gamma_pow, int16_t ap[TETRA_M + 1]) {
     int i;
     ap[0] = a[0];
-    for (i = 1; i <= TETRA_M; i++) {
+    i = 1;
+#if defined(TETRA_SIMD)
+    for (; i + 3 <= TETRA_M; i += 4) {
+        tetra_v32 p = tetra_vmulpair(a + i, gamma_pow + i - 1);
+        tetra_vstore_sat(ap + i, tetra_vshr(tetra_vadd(p, tetra_vset(0x4000)), 15));
+    }
+#endif
+    for (; i <= TETRA_M; i++) {
         ap[i] = mbe_fx_round(mbe_fx_L_mult(a[i], gamma_pow[i - 1]));
     }
 }
@@ -198,19 +257,42 @@ tetra_pulse_positions(const tetra_subframe_params* sp, int pos[4]) {
     pos[3] = 6 + 8 * sp->pulse4 + sp->shift;
 }
 
+#if !defined(TETRA_SIMD)
 /** f(n - m), zero outside the subframe (a pulse at 60 or beyond is absent). */
 static int64_t
 shifted(const int16_t f[TETRA_SUBFRAME], int n, int m) {
     return (n >= m && m < TETRA_SUBFRAME) ? f[n - m] : 0;
 }
+#endif
 
 void
 tetra_codevector(const int16_t a[TETRA_M + 1], int t0, const tetra_subframe_params* sp, int16_t code[TETRA_SUBFRAME]) {
+    /* A pulse position is at most 63. Zero padding makes every four-lane load
+     * valid, including absent pulses and the first partial pulse block. */
+#if defined(TETRA_SIMD)
+    int16_t padded[64 + TETRA_SUBFRAME] = {0};
+    int16_t* f = padded + 64;
+#else
     int16_t f[TETRA_SUBFRAME];
+#endif
     int pos[4];
     int n;
     shaping_response(a, t0, f);
     tetra_pulse_positions(sp, pos);
+#if defined(TETRA_SIMD)
+    for (n = 0; n < TETRA_SUBFRAME; n += 4) {
+        tetra_v32 acc = tetra_vmul(f + n - pos[0], TETRA_PULSE1_AMP);
+        tetra_v32 rest = tetra_vsub(tetra_vload(f + n - pos[2]), tetra_vload(f + n - pos[1]));
+        rest = tetra_vsub(rest, tetra_vload(f + n - pos[3]));
+        /* Modulo-2^32 adds/shifts preserve the low 16 bits after the Q14 shift,
+         * even when the full pulse sum exceeds int32. No saturating narrowing. */
+        acc = tetra_vadd(acc, tetra_vshl(rest, 14));
+        if (sp->sign) {
+            acc = tetra_vsub(tetra_vset(0), acc);
+        }
+        tetra_vstore_wrap(code + n, tetra_vshr(acc, 14));
+    }
+#else
     for (n = 0; n < TETRA_SUBFRAME; n++) {
         int64_t acc = TETRA_PULSE1_AMP * shifted(f, n, pos[0]);
         acc += mbe_fx_lsl64(-shifted(f, n, pos[1]) + shifted(f, n, pos[2]) - shifted(f, n, pos[3]), 14);
@@ -220,6 +302,7 @@ tetra_codevector(const int16_t a[TETRA_M + 1], int t0, const tetra_subframe_para
         /* The reference decoder keeps the low 16 bits; only an extreme A(z) gets past them. */
         code[n] = mbe_fx_extract_l((int32_t)mbe_fx_asr64(acc, 14));
     }
+#endif
 }
 
 void
@@ -249,13 +332,66 @@ tetra_decode_pitch(int subframe, int index, int t1, int* t0, int* frac) {
     }
 }
 
+#if defined(TETRA_SIMD) && defined(__AVX2__) && defined(MBE_SIMD_TARGET_SSE2)
+static int
+adaptive_avx2(int16_t* exc_cur, int t0, int first, const int16_t* taps) {
+    int n = 0;
+    if (t0 - (first + 31) < 8) {
+        return 0; /* Short lags need the four-lane kernel's earlier stores. */
+    }
+    for (; n + 8 <= TETRA_SUBFRAME; n += 8) {
+        __m256i acc = _mm256_setzero_si256();
+        int k;
+        for (k = 0; k < TETRA_INTERP_SAFE_TAPS; ++k) {
+            __m128i x = _mm_loadu_si128((const __m128i*)(exc_cur + n - t0 + first + k));
+            __m256i p = _mm256_mullo_epi32(_mm256_cvtepi16_epi32(x), _mm256_set1_epi32(taps[k]));
+            acc = _mm256_add_epi32(acc, p);
+        }
+        for (; k < 32; ++k) {
+            __m128i x = _mm_loadu_si128((const __m128i*)(exc_cur + n - t0 + first + k));
+            __m256i p = _mm256_mullo_epi32(_mm256_cvtepi16_epi32(x), _mm256_set1_epi32(taps[k]));
+            acc = tetra_vadds8(acc, p);
+        }
+        acc = tetra_vadds8(acc, acc);
+        acc = _mm256_srai_epi32(tetra_vadds8(acc, _mm256_set1_epi32(0x8000)), 16);
+        _mm_storeu_si128((__m128i*)(exc_cur + n),
+                         _mm_packs_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1)));
+    }
+    return n;
+}
+#endif
+
 void
 tetra_adaptive_vector(int16_t* exc_cur, int t0, int frac) {
     const int16_t* taps = (frac > 0) ? tetra_interp_p13 : tetra_interp_m13;
     int first = (frac > 0) ? -16 : -15;
     int n;
     int k;
-    for (n = 0; n < TETRA_SUBFRAME; n++) {
+    n = 0;
+#if defined(TETRA_SIMD) && defined(__AVX2__) && defined(MBE_SIMD_TARGET_SSE2)
+    if (frac != 0) {
+        n = adaptive_avx2(exc_cur, t0, first, taps);
+    }
+#endif
+#if defined(TETRA_SIMD)
+    /* Four output lanes, taps in their original order, including saturation after
+     * every MAC. The newest tap must precede the block, even at the shortest lag. */
+    if (frac != 0 && t0 - (first + 31) >= 4) {
+        for (; n + 4 <= TETRA_SUBFRAME; n += 4) {
+            tetra_v32 acc = tetra_vset(0);
+            for (k = 0; k < TETRA_INTERP_SAFE_TAPS; ++k) {
+                acc = tetra_vadd(acc, tetra_vmul(exc_cur + n - t0 + first + k, taps[k]));
+            }
+            for (; k < 32; ++k) {
+                acc = tetra_vadds(acc, tetra_vmul(exc_cur + n - t0 + first + k, taps[k]));
+            }
+            acc = tetra_vadds(acc, acc);
+            acc = tetra_vadds(acc, tetra_vset(0x8000));
+            tetra_vstore_sat(exc_cur + n, tetra_vshr(acc, 16));
+        }
+    }
+#endif
+    for (; n < TETRA_SUBFRAME; n++) {
         const int16_t* x = exc_cur + n - t0;
         if (frac == 0) {
             exc_cur[n] = x[0];
@@ -353,4 +489,52 @@ tetra_excitation(int16_t gp, int16_t v, int16_t gc, int16_t c) {
     /* Kept to the low 16 bits as the reference decoder does; the 32-bit sum cannot overflow, gp
      * being at most 4915. */
     return mbe_fx_extract_l(mbe_fx_L_shr_r(mbe_fx_L_add(mbe_fx_L_mult0(v, gp), mbe_fx_L_mult0(c, gc)), 12));
+}
+
+void
+tetra_mix_excitation(int16_t gp, int16_t gc, int16_t v[TETRA_SUBFRAME], const int16_t c[TETRA_SUBFRAME]) {
+    int n = 0;
+#if defined(TETRA_SIMD)
+    for (; n + 4 <= TETRA_SUBFRAME; n += 4) {
+        /* gp is capped at 4915; the sum including the rounding bias fits int32. */
+        tetra_v32 acc = tetra_vadd(tetra_vmul(v + n, gp), tetra_vmul(c + n, gc));
+        acc = tetra_vadd(acc, tetra_vset(2048));
+        tetra_vstore_wrap(v + n, tetra_vshr(acc, 12));
+    }
+#endif
+    for (; n < TETRA_SUBFRAME; ++n) {
+        v[n] = tetra_excitation(gp, v[n], gc, c[n]);
+    }
+}
+
+int32_t
+tetra_energy(const int16_t* x, int len, int32_t init) {
+    /* Squares are nonnegative, so saturating once at the end is identical to
+     * saturating after every MAC. Widen before summing: two -32768 squares
+     * produce unsigned 0x80000000, and 60 full-scale samples need 36 bits. */
+    int n = 0;
+    int64_t sum = init;
+#if defined(TETRA_SIMD) && defined(MBE_SIMD_TARGET_SSE2)
+    __m128i acc = _mm_setzero_si128();
+    for (; n + 8 <= len; n += 8) {
+        __m128i v = _mm_loadu_si128((const __m128i*)(x + n));
+        __m128i p = _mm_madd_epi16(v, v);
+        acc = _mm_add_epi64(acc, _mm_unpacklo_epi32(p, _mm_setzero_si128()));
+        acc = _mm_add_epi64(acc, _mm_unpackhi_epi32(p, _mm_setzero_si128()));
+    }
+    int64_t lanes[2];
+    _mm_storeu_si128((__m128i*)lanes, acc);
+    sum += lanes[0] + lanes[1];
+#elif defined(TETRA_SIMD) && defined(MBE_SIMD_TARGET_NEON)
+    uint64x2_t acc = vdupq_n_u64(0);
+    for (; n + 4 <= len; n += 4) {
+        int16x4_t v = vld1_s16(x + n);
+        acc = vpadalq_u32(acc, vreinterpretq_u32_s32(vmull_s16(v, v)));
+    }
+    sum += (int64_t)(vgetq_lane_u64(acc, 0) + vgetq_lane_u64(acc, 1));
+#endif
+    for (; n < len; ++n) {
+        sum += (int64_t)((int32_t)x[n] * x[n]);
+    }
+    return mbe_fx_sat32(sum);
 }
