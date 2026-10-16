@@ -213,6 +213,16 @@ float_bits_differ(float a, float b) {
     return !float_bits_equal(a, b);
 }
 
+/* Byte identity of two parameter sets, for exact reproducibility. */
+static int
+parms_identical(const mbe_parms* a, const mbe_parms* b) {
+    unsigned char x[sizeof(mbe_parms)];
+    unsigned char y[sizeof(mbe_parms)];
+    memcpy(x, a, sizeof(x));
+    memcpy(y, b, sizeof(y));
+    return memcmp(x, y, sizeof(x)) == 0;
+}
+
 /**
  * @brief Check whether two float arrays differ in at least one element.
  * @param a First array.
@@ -360,8 +370,8 @@ test_low_band_phase_rendering(void) {
         const mbe_parms before = prev;
         mbe_synthesizeSpeechf(frame ? out + (size_t)(frame - 1) * 160u : out, &cur, &prev);
         /* The previous model is rendered with the roll-off too, and restored. */
-        assert(memcmp(prev.Ml, before.Ml, sizeof(prev.Ml)) == 0);
-        assert(memcmp(prev.PHIl, before.PHIl, sizeof(prev.PHIl)) == 0);
+        assert(float_array_equal_exact(prev.Ml, before.Ml, 57));
+        assert(float_array_equal_exact(prev.PHIl, before.PHIl, 57));
     }
     /* Two 128-sample periods ending at the last frame's end. */
     const float* tail = out + ((size_t)8 * 160u) - 256u;
@@ -395,10 +405,10 @@ test_render_aliased_model(void) {
     mbe_synthesizeSpeechf(out, &aliased, &aliased);
     mbe_setThreadRngSeed(0xA11A5u);
     mbe_synthesizeSpeechf(out, &cur, &prev);
-    assert(memcmp(aliased.Ml, cur.Ml, sizeof(cur.Ml)) == 0);
-    assert(memcmp(aliased.Ml, model.Ml, sizeof(model.Ml)) == 0);
-    assert(memcmp(aliased.PHIl, cur.PHIl, sizeof(cur.PHIl)) == 0);
-    assert(memcmp(aliased.PSIl, cur.PSIl, sizeof(cur.PSIl)) == 0);
+    assert(float_array_equal_exact(aliased.Ml, cur.Ml, 57));
+    assert(float_array_equal_exact(aliased.Ml, model.Ml, 57));
+    assert(float_array_equal_exact(aliased.PHIl, cur.PHIl, 57));
+    assert(float_array_equal_exact(aliased.PSIl, cur.PSIl, 57));
 }
 
 /* Synthesis renders voiced harmonics 0.3 dB up and unvoiced ones 0.4 dB down,
@@ -782,7 +792,9 @@ test_ambe2400_error_rate_mute(void) {
                 memcpy(hard_out[f], out, sizeof(out));
                 continue;
             }
-            assert(memcmp(hard_state[f], state, sizeof(state)) == 0);
+            for (int k = 0; k < 3; ++k) {
+                assert(parms_identical(&hard_state[f][k], &state[k]));
+            }
             if (rate > 0.042f) {
                 /* Comfort noise where the soft stream plays the frame's speech. */
                 float hard_peak = 0.0f, soft_peak = 0.0f;
