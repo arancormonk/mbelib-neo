@@ -441,9 +441,11 @@ test_fixture_ecc(void) {
                     memcpy(damaged, frame, (size_t)count);
                     damaged[row * fixture_modes[mode].columns + column] ^= 1;
                     /* Golay reports corrected data bits, not parity-bit damage.
-                     * AMBE C0 additionally reports its overall parity correction. */
+                     * AMBE C0 additionally reports its overall parity correction,
+                     * and rate 33 counts every damaged bit of either codeword
+                     * (TIA-102.BABA-1 5.5). */
                     int errors = row >= 4 || column - first >= 11;
-                    if (mode >= AMBE2450 && row == 0) {
+                    if (mode == AMBE2450 || (mode == AMBE2400 && row == 0)) {
                         errors = 1;
                     }
                     assert_decoded_fixture((enum fixture_mode)mode, damaged, data, row == 0 ? errors : 0,
@@ -752,8 +754,128 @@ test_ambe2400_accepted_tones(void) {
     }
 }
 
+/* A voice frame's 49 parameter bits (b0 40) for the error-count checks. */
+static void
+ambe_voice_bits(char ambe_d[49]) {
+    for (int i = 0; i < 49; ++i) {
+        ambe_d[i] = (char)(((i * 7) + 3) % 5 == 0);
+    }
+    static const int b0_pos[7] = {0, 1, 2, 3, 37, 38, 39};
+    for (int k = 0; k < 7; ++k) {
+        ambe_d[b0_pos[k]] = (char)((40 >> (6 - k)) & 1);
+    }
+}
+
+/* Channel errors at C0 positions (ambe_fr[0][p]: 0 the extended parity bit,
+ * 1..11 the Golay parity bits, 12..23 data) and C1 positions (ambe_fr[1][p]:
+ * 0..10 parity, 11..22 data). */
+struct ambe_error_case {
+    int c0[4], n0;
+    int c1[3], n1;
+    int want_c0, want_total;
+};
+
+static const struct ambe_error_case ambe2450_error_cases[] = {
+    {{0}, 0, {0}, 0, 0, 0},
+    {{16}, 1, {0}, 0, 1, 1},              /* one C0 data bit */
+    {{4}, 1, {0}, 0, 1, 1},               /* one C0 Golay parity bit */
+    {{0}, 1, {0}, 0, 1, 1},               /* the extended parity bit alone */
+    {{2, 9, 20}, 3, {0}, 0, 3, 3},        /* three, two of them parity bits */
+    {{2, 9, 20, 0}, 4, {0}, 0, 4, 4},     /* three plus the extended parity bit: detected */
+    {{0}, 0, {3, 8}, 2, 0, 2},            /* two C1 parity bits */
+    {{0}, 0, {1, 5, 17}, 3, 0, 3},        /* three in C1, two of them parity */
+    {{5, 14, 21}, 3, {2, 6, 15}, 3, 3, 6} /* eps0 3, epsT 6 */
+};
+
+static void
+ambe_flip(char fr[4][24], const struct ambe_error_case* c) {
+    for (int i = 0; i < c->n0; ++i) {
+        fr[0][c->c0[i]] ^= 1;
+    }
+    for (int i = 0; i < c->n1; ++i) {
+        fr[1][c->c1[i]] ^= 1;
+    }
+}
+
+/* Rate 33 counts, per TIA-102.BABA-1 5.5, the bit errors corrected or
+ * detected in each Golay codeword, parity bits included; C0's extended parity
+ * makes a fourth error detectable. A hard frame repeats only when C0 shows
+ * four errors: DVSI's AMBE-3000 does not apply eq 57-58's second condition
+ * (eps0 >= 2 and epsT >= 6). D-STAR keeps counting corrected data bits. */
+static void
+test_ambe_error_counts(void) {
+    char ambe_d[49], clean[4][24], frame[4][24], data[49];
+    ambe_voice_bits(ambe_d);
+    assert(mbe_encodeAmbe3600x2450Frame(ambe_d, clean) == 0);
+    for (size_t i = 0; i < sizeof(ambe2450_error_cases) / sizeof(ambe2450_error_cases[0]); ++i) {
+        const struct ambe_error_case* c = &ambe2450_error_cases[i];
+        memcpy(frame, clean, sizeof(frame));
+        ambe_flip(frame, c);
+        mbe_process_result result;
+        int ret = mbe_decodeAmbe3600x2450Frame((const char (*)[24])frame, data, &result);
+        assert(ret == c->want_total);
+        assert(result.c0_errors == c->want_c0 && result.total_errors == c->want_total);
+        if (c->want_c0 < 4) {
+            assert(memcmp(data, ambe_d, sizeof(data)) == 0);
+        }
+
+        /* Repeat decision after one clean frame. */
+        mbe_parms cur, prev, enh;
+        float pcm[160];
+        init_params(&cur, &prev, &enh);
+        assert(mbe_processAmbe3600x2450Framef(pcm, NULL, (const char (*)[24])clean, data, &cur, &prev, &enh) >= 0);
+        mbe_initProcessResult(&result);
+        assert(mbe_processAmbe3600x2450Framef(pcm, &result, (const char (*)[24])frame, data, &cur, &prev, &enh) >= 0);
+        assert(((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0) == (c->want_c0 >= 4));
+    }
+
+    /* D-STAR keeps JMBE's count: corrected data bits, plus the extended
+     * parity bit only when the codeword decodes clean. A data bit and a parity
+     * bit in C0 count 1 there (2 under 5.5). */
+    assert(mbe_encodeAmbe3600x2400Frame(ambe_d, clean) == 0);
+    memcpy(frame, clean, sizeof(frame));
+    frame[0][16] ^= 1;
+    frame[0][4] ^= 1;
+    mbe_process_result result;
+    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, data, &result) == 1);
+    assert(result.c0_errors == 1);
+}
+
+/* Fully reliable soft decisions count as hard ones; an unreliable flip counts
+ * by its reliability (rounded), so a lone weak flip is not an error. */
+static void
+test_ambe2450_soft_error_counts(void) {
+    char ambe_d[49], clean[4][24], frame[4][24], hard_d[49], soft_d[49];
+    mbe_soft_bit soft[4][24];
+    ambe_voice_bits(ambe_d);
+    assert(mbe_encodeAmbe3600x2450Frame(ambe_d, clean) == 0);
+    for (size_t i = 0; i < sizeof(ambe2450_error_cases) / sizeof(ambe2450_error_cases[0]); ++i) {
+        const struct ambe_error_case* c = &ambe2450_error_cases[i];
+        memcpy(frame, clean, sizeof(frame));
+        ambe_flip(frame, c);
+        mbe_process_result hard, weak;
+        int hard_ret = mbe_decodeAmbe3600x2450Frame((const char (*)[24])frame, hard_d, &hard);
+        soft_from_bits(&frame[0][0], &soft[0][0], 96u);
+        assert(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, soft_d, &weak) == hard_ret);
+        assert(weak.c0_errors == hard.c0_errors && memcmp(hard_d, soft_d, sizeof(hard_d)) == 0);
+        /* The same flips marked unreliable (40 of 255): each counts 0.16,
+         * rounded per codeword. */
+        for (int k = 0; k < c->n0; ++k) {
+            soft[0][c->c0[k]].reliability = 40u;
+        }
+        for (int k = 0; k < c->n1; ++k) {
+            soft[1][c->c1[k]].reliability = 40u;
+        }
+        int want = (((c->n0 * 40) + 127) / 255) + (((c->n1 * 40) + 127) / 255);
+        assert(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, soft_d, &weak) == want);
+        assert(memcmp(soft_d, ambe_d, sizeof(soft_d)) == 0);
+    }
+}
+
 int
 main(void) {
+    test_ambe_error_counts();
+    test_ambe2450_soft_error_counts();
     test_ambe2400_frame_paths();
     test_imbe7200_frame_paths();
     test_imbe7100_frame_paths();

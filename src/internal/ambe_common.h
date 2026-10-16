@@ -32,6 +32,34 @@ int mbe_eccAmbe3600C0_common(char fr[4][24]);
 int mbe_eccAmbe3600C0Soft_common(mbe_soft_bit fr[4][24]);
 
 /**
+ * @brief Correct C0 and count its errors as TIA-102.BABA-1 5.5 does.
+ *
+ * Corrects the Golay(23,12) codeword in `fr[0][1..23]`, parity bits
+ * included, and counts every bit that differs from the corrected codeword;
+ * the extended parity bit `fr[0][0]` is checked against that codeword and
+ * counted when it disagrees, so three corrected errors plus a parity
+ * disagreement give 4, a detected uncorrectable pattern.
+ *
+ * @param fr AMBE frame as 4x24 bitplanes (modified).
+ * @return Bit errors corrected or detected in C0 (0..4).
+ */
+int mbe_eccAmbe3600C0Counted_common(char fr[4][24]);
+
+/**
+ * @brief Soft-decision twin of mbe_eccAmbe3600C0Counted_common().
+ *
+ * The count is the soft decoder's own cost: the summed reliability, in units
+ * of a fully reliable bit (255) and rounded, of the received bits that
+ * disagree with the chosen codeword and of a disagreeing extended parity bit.
+ * Fully reliable input counts as hard input does; a flip the channel already
+ * marked unreliable counts little, as in DVSI's soft-decision decoding.
+ *
+ * @param fr AMBE frame as 4x24 soft bitplanes (bits modified).
+ * @return Weighted bit errors corrected or detected in C0.
+ */
+int mbe_eccAmbe3600C0SoftCounted_common(mbe_soft_bit fr[4][24]);
+
+/**
  * @brief Demodulate AMBE 3600x{2400,2450} C1 in-place.
  *
  * Uses a pseudo-random sequence derived from the C0 payload to remove
@@ -54,6 +82,17 @@ void mbe_demodulateAmbe3600DataSoft_common(mbe_soft_bit fr[4][24]);
  */
 int mbe_eccAmbe3600Data_common(char fr[4][24], char* out49);
 int mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49);
+
+/**
+ * @brief As mbe_eccAmbe3600Data_common(), counting C1's errors as
+ *        TIA-102.BABA-1 5.5 does: every bit of the received (demodulated)
+ *        codeword that differs from the corrected one, parity bits included.
+ * @return Bit errors corrected in C1 (0..3).
+ */
+int mbe_eccAmbe3600DataCounted_common(char fr[4][24], char* out49);
+/** @brief Soft-decision twin of mbe_eccAmbe3600DataCounted_common(), counting as
+ *         mbe_eccAmbe3600C0SoftCounted_common() does. */
+int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
 
 /** AMBE+2 silence-frame fundamental 2*pi/32, TIA-102.BABA-1 4.1 eq 1 (radians/sample). */
 #define MBE_AMBE_SILENCE_W0 ((float)0.19634954084936207)

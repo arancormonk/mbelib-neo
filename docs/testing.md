@@ -835,8 +835,11 @@ with its status), `history` (the prediction state after the frame) and `synth`
 per-band `Vl`, `Ml` (linear amplitude as synthesized; for AMBE unvoiced bands
 it includes the unvoiced scale factor) and `log2Ml` (the codec's log2 spectral
 amplitude before that factor), plus `gamma`. `synth` also holds `PHIl` and
-`PSIl`, the harmonic phases the frame was rendered with, so phase readbacks can
-be checked against the decoder itself. Dumping does not change the PCM.
+`PSIl`, the model's harmonic phases for the frame. Synthesis renders each voiced
+harmonic with `PHIl` plus the output high-pass's phase at its frequency
+(`mbe_low_band_phase()`: 180 degrees toward DC, 90 at 100 Hz, under 9 above
+1 kHz), so phase readbacks can be checked against the decoder itself. Dumping
+does not change the PCM.
 
 ### Encoder evaluation
 

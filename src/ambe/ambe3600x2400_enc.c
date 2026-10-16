@@ -83,6 +83,9 @@ struct mbe_ambe2400_encoder {
 static const struct ambe_enc_tables ambe2400_enc_tables = {
     .dg = AmbePlusDg,
     .dg_count = 64,
+    .dg_scale = MBE_AMBE2400_GAIN_SCALE,
+    .dg_offset = MBE_AMBE2400_GAIN_OFFSET,
+    .dg_history = 0.0f,
     .prba24 = AmbePlusPRBA24,
     .prba58 = AmbePlusPRBA58,
     .hoc = {AmbePlusHOCb5, AmbePlusHOCb6, AmbePlusHOCb7, AmbePlusHOCb8},
@@ -92,6 +95,11 @@ static const struct ambe_enc_tables ambe2400_enc_tables = {
     .rho = MBE_AMBE2400_PREDICTION_RHO,
     .fit_floor_gain = 1,
 };
+
+const struct ambe_enc_tables*
+mbe_ambe2400_enc_tables(void) {
+    return &ambe2400_enc_tables;
+}
 
 void
 mbe_ambe2400EncoderReset(mbe_ambe2400_encoder* enc) {

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ambe3600x2450_internal.h"
 #include "ambe_encoder.h"
 #include "encoder_test_support.h"
 #include "mbe_speech_analysis.h"
@@ -550,6 +551,35 @@ test_invalid_arguments(void* enc) {
     return 0;
 }
 
+/* The pitch quantizer picks the code nearest in log2 f0 on DVSI's law: each
+ * code's own f0 maps back to it, and the decision point between neighbours is
+ * their geometric mean (the arithmetic mean of linear f0, as the Annex A
+ * search used, sits about 2.9e-5 relative higher). */
+static int
+test_pitch_code(void) {
+    for (int b0 = 0; b0 < MBE_AMBE2450_PITCH_CODES; b0++) {
+        if (mbe_ambe2450_pitch_code(mbe_ambe2450_f0(b0)) != b0) {
+            printf("pitch code: f0 of b0 %d quantized to %d\n", b0, mbe_ambe2450_pitch_code(mbe_ambe2450_f0(b0)));
+            return 1;
+        }
+    }
+    for (int b0 = 0; b0 + 1 < MBE_AMBE2450_PITCH_CODES; b0++) {
+        double mid = sqrt((double)mbe_ambe2450_f0(b0) * (double)mbe_ambe2450_f0(b0 + 1));
+        if (mbe_ambe2450_pitch_code((float)(mid * 1.00002)) != b0
+            || mbe_ambe2450_pitch_code((float)(mid / 1.00002)) != b0 + 1) {
+            printf("pitch code: decision point between %d and %d misplaced\n", b0, b0 + 1);
+            return 1;
+        }
+    }
+    if (mbe_ambe2450_pitch_code(0.25f) != 0 || mbe_ambe2450_pitch_code(1e-4f) != 119
+        || mbe_ambe2450_pitch_code(0.0f) != 119 || mbe_ambe2450_pitch_code(-1.0f) != 119) {
+        puts("pitch code: out-of-range f0 not clamped");
+        return 1;
+    }
+    puts("AMBE+2 pitch quantizer follows the law");
+    return 0;
+}
+
 int
 main(void) {
     void* enc = mbe_ambe2450EncoderAlloc();
@@ -558,6 +588,7 @@ main(void) {
     }
     int fails = 0;
     fails += test_invalid_arguments(enc);
+    fails += test_pitch_code();
     fails += test_frame_roundtrip();
     fails += test_frame_single_bit_errors();
     fails += test_frame_overlap();

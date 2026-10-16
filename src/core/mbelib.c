@@ -639,10 +639,14 @@ mbe_apply_high_band_gain(mbe_parms* cur_mp, float gain) {
  * Low-band roll-off, rendered by synthesis. On the same test vectors DVSI's
  * decoders roll off everything below 200 Hz like a second-order high-pass at
  * 100 Hz (-8 dB at 62 Hz, -2 dB at 112 Hz), identically in every mode, where
- * the TIA-102.BABA synthesis passes it flat. It is a property of the output,
- * not of the spectral envelope, so it scales only the amplitudes being
+ * the TIA-102.BABA synthesis passes it flat. DVSI's harmonics also carry that
+ * filter's phase: with it, the phase DVSI renders on held-out speech differs
+ * from ours by a median 6.6-8.9 degrees (4-5 below 300 Hz) where it differed by
+ * 10.0-12.1 (12.1-14.3), per harmonic of steady voiced frames once each
+ * frame's time shift and common phase are removed. It is a property of the
+ * output, not of the spectral envelope, so it changes only the harmonics being
  * rendered: the model, its regenerated phase and the stored state keep the
- * envelope as decoded.
+ * envelope and phases as decoded.
  */
 #define MBE_LOW_BAND_CORNER_HZ 100.0f
 
@@ -658,20 +662,42 @@ mbe_low_band_gain(float hz) {
     return hz2 / sqrtf((hz2 * hz2) + (corner2 * corner2));
 }
 
-/* Scale Ml[1..56] by the roll-off, keeping the decoded amplitudes in `saved`. */
+float
+mbe_low_band_phase(float hz) {
+    /* arg of H(s) = s^2 / (s^2 + sqrt2 s + 1) at s = j hz / corner. */
+    if (!(hz > 0.0f)) {
+        return 0.0f;
+    }
+    const float x = hz / MBE_LOW_BAND_CORNER_HZ;
+    return (float)M_PI - atan2f((float)M_SQRT2 * x, 1.0f - (x * x));
+}
+
+/* A model's decoded amplitudes and phases, kept while it is rendered. */
+struct mbe_render_saved {
+    float Ml[57];
+    float PHIl[57];
+};
+
+/* Give Ml[1..56] and PHIl[1..56] what the output renders: the low-band
+ * roll-off's magnitude and phase and the voiced or unvoiced gain. */
 static void
-mbe_roll_off_low_band(mbe_parms* mp, float saved[57]) {
+mbe_render_prepare(mbe_parms* mp, struct mbe_render_saved* saved) {
     const float hz_per_harmonic = mp->w0 * (8000.0f / (2.0f * (float)M_PI));
     for (int l = 1; l <= 56; l++) {
-        saved[l] = mp->Ml[l];
-        mp->Ml[l] *= mbe_low_band_gain(hz_per_harmonic * (float)l);
+        const float hz = hz_per_harmonic * (float)l;
+        const int voiced = (l <= mp->L) && (mp->Vl[l] == 1);
+        saved->Ml[l] = mp->Ml[l];
+        saved->PHIl[l] = mp->PHIl[l];
+        mp->Ml[l] *= mbe_low_band_gain(hz) * (voiced ? MBE_RENDER_VOICED_GAIN : MBE_RENDER_UNVOICED_GAIN);
+        mp->PHIl[l] += mbe_low_band_phase(hz);
     }
 }
 
 static void
-mbe_restore_amplitudes(mbe_parms* mp, const float saved[57]) {
+mbe_render_restore(mbe_parms* mp, const struct mbe_render_saved* saved) {
     for (int l = 1; l <= 56; l++) {
-        mp->Ml[l] = saved[l];
+        mp->Ml[l] = saved->Ml[l];
+        mp->PHIl[l] = saved->PHIl[l];
     }
 }
 
@@ -1177,13 +1203,14 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* Integrate pulse position and regenerate phase from the spectral envelope. */
     mbe_update_speech_phases(cur_mp, prev_mp, N);
 
-    /* Render with the low-band roll-off; both models keep their decoded
-     * amplitudes. A caller may pass one model as both frames: scale it once. */
-    float cur_saved[57], prev_saved[57];
+    /* Render with the low-band roll-off and the voicing gains; both models
+     * keep their decoded amplitudes and phases. A caller may pass one model as
+     * both frames: prepare it once. */
+    struct mbe_render_saved cur_saved, prev_saved;
     const int shared_model = prev_mp == cur_mp;
-    mbe_roll_off_low_band(cur_mp, cur_saved);
+    mbe_render_prepare(cur_mp, &cur_saved);
     if (!shared_model) {
-        mbe_roll_off_low_band(prev_mp, prev_saved);
+        mbe_render_prepare(prev_mp, &prev_saved);
     }
 
     /* Synthesize voiced components
@@ -1199,9 +1226,9 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
     }
 
-    mbe_restore_amplitudes(cur_mp, cur_saved);
+    mbe_render_restore(cur_mp, &cur_saved);
     if (!shared_model) {
-        mbe_restore_amplitudes(prev_mp, prev_saved);
+        mbe_render_restore(prev_mp, &prev_saved);
     }
 
     /* s(n) to output scale, then JMBE's float-path soft clip, which should

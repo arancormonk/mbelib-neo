@@ -257,7 +257,9 @@ main(int argc, char** argv) {
 #include <stdint.h>
 #include <string.h>
 
+#include "ambe3600x2400_const.h"
 #include "ambe3600x2400_internal.h"
+#include "ambe_encoder.h"
 #include "encoder_test_support.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
@@ -725,12 +727,14 @@ test_invalid_samples(mbe_ambe2400_encoder* enc) {
 }
 
 /* A prediction history with a non-finite or out-of-range log2Ml or gamma, or
- * one from which the model would overflow, is rejected with cur_mp untouched. */
+ * one from which the model would overflow, is rejected with cur_mp untouched.
+ * D-STAR's gain is absolute, so a large but finite gamma(-1) is no hazard: it
+ * encodes, and the model is the decoder's own for the emitted bits. */
 static int
 test_bad_history(mbe_ambe2400_encoder* enc) {
     float pcm[160] = {0};
     char d[49];
-    for (int k = 0; k < 5; k++) {
+    for (int k = 0; k < 4; k++) {
         mbe_parms cur, prev, enhanced;
         mbe_ambe2400EncoderReset(enc);
         mbe_initMbeParms(&cur, &prev, &enhanced);
@@ -747,8 +751,6 @@ test_bad_history(mbe_ambe2400_encoder* enc) {
             for (int l = 0; l <= 56; l++) {
                 prev.log2Ml[l] = (2 * l <= prev.L) ? 1000.0f : -1000.0f;
             }
-        } else {
-            prev.gamma = 1000.0f; /* likewise through the gain */
         }
         if (mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev) != MBE_STATUS_INVALID_ARGUMENT) {
             printf("bad history case %d was not rejected\n", k);
@@ -756,6 +758,19 @@ test_bad_history(mbe_ambe2400_encoder* enc) {
         }
         if (!parms_identical(&cur, &before)) {
             printf("bad history case %d changed cur_mp\n", k);
+            return 1;
+        }
+    }
+    {
+        mbe_parms cur, prev, enhanced, decoded, history;
+        mbe_ambe2400EncoderReset(enc);
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        prev.gamma = 1000.0f;
+        history = prev;
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev) != 0
+            || mbe_decodeAmbe2400Parms(d, &decoded, &history) != 0 || !model_finite(&cur)
+            || !float_bits_equal(cur.gamma, decoded.gamma)) {
+            puts("a history with gamma 1000 did not encode as the decoder decodes it");
             return 1;
         }
     }
@@ -836,14 +851,80 @@ test_fit_floor_range(void) {
     return 0;
 }
 
+/* The frame's gain on a gently sloped envelope: gamma_raw = mean + 0.5 log2 L. */
+static void
+gain_frame(struct ambe_enc_frame* q, float gamma_raw) {
+    memset(q, 0, sizeof(*q));
+    q->L = 20;
+    const float mean = gamma_raw - (0.5f * log2f(20.0f));
+    for (int l = 1; l <= q->L; l++) {
+        q->a[l] = mean + (0.05f * ((float)l - 10.5f));
+    }
+    ambe_enc_mean_amplitude(q);
+}
+
+/* D-STAR's gain quantizer picks the absolute level 2 Dg[k] - 0.09 nearest the
+ * frame's gain whatever gamma(-1) is: each level maps to itself, the decision
+ * between neighbours is their midpoint, the ends clamp, and a frame below the
+ * lowest level has its envelope fitted to the level that one plays. */
+static int
+test_gain_quantizer(void) {
+    const struct ambe_enc_tables* t = mbe_ambe2400_enc_tables();
+    static const float priors[3] = {-5.0f, 0.0f, 9.0f};
+    struct ambe_enc_frame q;
+    mbe_parms prev, cur, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int h = 0; h < 3; h++) {
+        prev.gamma = priors[h];
+        for (int k = 0; k < 64; k++) {
+            const float level = (2.0f * AmbePlusDg[k]) - 0.09f;
+            gain_frame(&q, level);
+            ambe_enc_quantize_gain(&q, t, &prev);
+            /* Dg[62] == Dg[63]: the nearest-first search keeps 62. */
+            if (q.b[2] != (k == 63 ? 62 : k) || fabsf(q.gamma_q - level) > 1e-5f) {
+                printf("gain quantizer: level %d (gamma(-1) %.1f) gave %d\n", k, (double)priors[h], q.b[2]);
+                return 1;
+            }
+            if (k < 62) {
+                const float next = (2.0f * AmbePlusDg[k + 1]) - 0.09f;
+                const float mid = 0.5f * (level + next);
+                gain_frame(&q, mid - 1e-3f);
+                ambe_enc_quantize_gain(&q, t, &prev);
+                int below = q.b[2];
+                gain_frame(&q, mid + 1e-3f);
+                ambe_enc_quantize_gain(&q, t, &prev);
+                if (below != k || q.b[2] != k + 1) {
+                    printf("gain quantizer: decision between %d and %d misplaced\n", k, k + 1);
+                    return 1;
+                }
+            }
+        }
+        gain_frame(&q, 40.0f);
+        ambe_enc_quantize_gain(&q, t, &prev);
+        if (q.b[2] != 62) {
+            puts("gain quantizer: a gain above the top level did not clamp");
+            return 1;
+        }
+        gain_frame(&q, -6.0f);
+        ambe_enc_quantize_gain(&q, t, &prev);
+        if (q.b[2] != 0 || fabsf(q.gamma_q + 0.09f) > 1e-6f
+            || fabsf(q.mean_a - (-0.09f - (0.5f * log2f(20.0f)))) > 1e-5f) {
+            puts("gain quantizer: a frame below the lowest level was not fitted to it");
+            return 1;
+        }
+    }
+    puts("D-STAR gain quantizer: absolute levels, midpoints, ends and floor fit");
+    return 0;
+}
+
 /* The decoder's own highest states encode. The frame b0..b8 = {118, 0, 63, 511,
- * 123, 13, 0, 0, 0} takes log2Ml[1] past 48 by its 19th repeat and to 48.6 by
- * its 200th; a bound on the history any tighter than the overflow itself
- * would refuse it. */
+ * 123, 13, 0, 0, 0} takes log2Ml[1] past 48 by its 70th repeat, where it stays
+ * at 48.5; a bound on the history any tighter than the overflow itself would
+ * refuse it. */
 static int
 test_reachable_history(mbe_ambe2400_encoder* enc) {
     static const char frame[] = "1110111111111111111110110010000000000000001111110";
-    const int repeats[] = {19, 200};
+    const int repeats[] = {70, 200};
     for (size_t r = 0; r < sizeof(repeats) / sizeof(repeats[0]); r++) {
         mbe_parms cur, prev, enhanced;
         char d[49];
@@ -1784,6 +1865,7 @@ main(void) {
     fails += test_invalid_arguments(enc);
     fails += test_invalid_samples(enc);
     fails += test_bad_history(enc);
+    fails += test_gain_quantizer();
     fails += test_reachable_history(enc);
     fails += test_fit_floor_range();
     fails += test_c1_parity();

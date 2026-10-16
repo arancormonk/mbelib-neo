@@ -34,6 +34,7 @@
 
 #include "ambe3600x2400_internal.h"
 #include "ambe3600x2450_const.h"
+#include "ambe3600x2450_internal.h"
 #include "ambe_encoder.h"
 #include "mbe_encoder.h"
 #include "mbe_result.h"
@@ -42,8 +43,7 @@
 #include "mbe_tone_detect.h"
 #include "mbelib-neo/mbelib.h"
 
-#define AMBE2450_PITCH_CODES   120 /* b0 120..127 are not voice frames (Table 4) */
-#define AMBE2450_VUV_CODES     17  /* 4.2: only the first 17 vectors are searched */
+#define AMBE2450_VUV_CODES     17 /* 4.2: only the first 17 vectors are searched */
 
 /*
  * Level: AMBE2450_ENC_MAG_SCALE scales the analysis amplitudes so the decoded
@@ -62,6 +62,9 @@ struct mbe_ambe2450_encoder {
 static const struct ambe_enc_tables ambe2450_enc_tables = {
     .dg = AmbeDg,
     .dg_count = 32,
+    .dg_scale = 1.0f,
+    .dg_offset = 0.0f,
+    .dg_history = 0.5f,
     .prba24 = AmbePRBA24,
     .prba58 = AmbePRBA58,
     .hoc = {AmbeHOCb5, AmbeHOCb6, AmbeHOCb7, AmbeHOCb8},
@@ -104,16 +107,13 @@ mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc) {
     }
 }
 
-/* 4.1: the Annex A entry nearest the analysed fundamental. */
-static int
-ambe2450_enc_pitch(float f0) {
-    int best = 0;
-    for (int b0 = 1; b0 < AMBE2450_PITCH_CODES; b0++) {
-        if (fabsf(AmbeW0table[b0] - f0) < fabsf(AmbeW0table[best] - f0)) {
-            best = b0;
-        }
+int
+mbe_ambe2450_pitch_code(float f0) {
+    if (!(f0 > 0.0f)) {
+        return MBE_AMBE2450_PITCH_CODES - 1;
     }
-    return best;
+    long b0 = lroundf((MBE_AMBE2450_LOG2_F0_OFFSET - log2f(f0)) / MBE_AMBE2450_LOG2_F0_SLOPE);
+    return (int)((b0 < 0) ? 0 : ((b0 >= MBE_AMBE2450_PITCH_CODES) ? MBE_AMBE2450_PITCH_CODES - 1 : b0));
 }
 
 /* eq 5: the V/UV vector element of harmonic l at fundamental f0q. */
@@ -127,8 +127,8 @@ int
 mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[MBE_ANALYSIS_BANDS]) {
     /* 4.2 eq 4: the vector minimizing the squared-amplitude weighted
      * disagreement with the band decisions; ties keep the lower index. */
-    const float f0q = AmbeW0table[b0];
-    const int L = (int)AmbeLtable[b0];
+    const float f0q = mbe_ambe2450_f0(b0);
+    const int L = mbe_ambe2450_harmonic_count(b0);
     int best = 0;
     float best_distance = 0.0f;
     for (int n = 0; n < AMBE2450_VUV_CODES; n++) {
@@ -151,38 +151,11 @@ mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[M
  * raised by the inverse of the decoder's unvoiced scale 0.2046 / sqrt(w0). */
 static void
 ambe2450_enc_log_amplitudes(int b0, int b1, const float m[57], float a[57]) {
-    const float f0q = AmbeW0table[b0];
+    const float f0q = mbe_ambe2450_f0(b0);
     const float unvoiced_offset = (0.5f * log2f(f0q * 2.0f * (float)M_PI)) + 2.289f;
-    for (int l = 1; l <= (int)AmbeLtable[b0]; l++) {
+    for (int l = 1; l <= mbe_ambe2450_harmonic_count(b0); l++) {
         int voiced = AmbeVuv[b1][ambe2450_enc_column(f0q, l)];
         a[l] = log2f(m[l] + 1e-12f) + (voiced ? 0.0f : unvoiced_offset);
-    }
-}
-
-/* Bit positions of b0..b8 in ambe_d, most significant first (Tables 5-8, as
- * mbe_decodeAmbe2450Parms() reads them). */
-static const signed char ambe2450_enc_layout[9][10] = {
-    {0, 1, 2, 3, 37, 38, 39, -1},
-    {4, 5, 6, 7, 35, -1},
-    {8, 9, 10, 11, 36, -1},
-    {12, 13, 14, 15, 16, 17, 18, 19, 40, -1},
-    {20, 21, 22, 23, 41, 42, 43, -1},
-    {24, 25, 26, 27, 44, -1},
-    {28, 29, 30, 45, -1},
-    {31, 32, 33, 46, -1},
-    {34, 47, 48, -1},
-};
-
-static void
-ambe2450_enc_pack(const int b[9], char ambe_d[49]) {
-    for (int i = 0; i < 9; i++) {
-        int width = 0;
-        while (ambe2450_enc_layout[i][width] >= 0) {
-            width++;
-        }
-        for (int j = 0; j < width; j++) {
-            ambe_d[(int)ambe2450_enc_layout[i][j]] = (char)((b[i] >> (width - 1 - j)) & 1);
-        }
     }
 }
 
@@ -192,14 +165,14 @@ mbe_ambe2450_quantize_amplitudes(int b0, int b1, const float a[57], const mbe_pa
     q.cache = mbe_ambe2400_get_dct_cache();
     q.b[0] = b0;
     q.b[1] = b1;
-    q.f0q = AmbeW0table[b0];
-    q.L = (int)AmbeLtable[b0];
+    q.f0q = mbe_ambe2450_f0(b0);
+    q.L = mbe_ambe2450_harmonic_count(b0);
     memcpy(q.a, a, sizeof(q.a));
     ambe_enc_mean_amplitude(&q);
     ambe_enc_quantize_gain(&q, &ambe2450_enc_tables, prev_mp);
     ambe_enc_prediction(&q, &ambe2450_enc_tables, prev_mp);
     ambe_enc_quantize_residual(&q, &ambe2450_enc_tables);
-    ambe2450_enc_pack(q.b, ambe_d);
+    mbe_ambe2450_pack(q.b, ambe_d);
 }
 
 /* Quantize and pack a voice frame; cur_mp is the decoder's model of it. */
@@ -210,8 +183,8 @@ ambe2450_enc_voice(mbe_ambe2450_encoder* enc, const struct mbe_analysis_result* 
     float m[57] = {0};
     float a[57] = {0};
 
-    const int b0 = ambe2450_enc_pitch(res->f0);
-    const int L = (int)AmbeLtable[b0];
+    const int b0 = mbe_ambe2450_pitch_code(res->f0);
+    const int L = mbe_ambe2450_harmonic_count(b0);
     mbe_analysis_band_voicing(res, L, enc->bands_prev, bands);
     for (int l = 1; l <= L; l++) {
         int voiced = bands[mbe_analysis_band_of(l) - 1];
