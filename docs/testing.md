@@ -791,11 +791,15 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   section reports, per vector, how often our mute decisions agree with DVSI's
   on loud frames, the false and missed mute rates, the first loud frame each
   mutes, our repeat rate, and the log-spectral distance from DVSI's output on
-  the loud frames neither decoder mutes, with our output aligned and
-  level-matched by the clean bits' comparison. Each run mutes its own frames,
-  so `--compare` measures that distance for both runs on the frames that count
-  in both (`channel.hd.lsd_common_db`) and reports their share of the frames
-  DVSI plays (`coverage`).
+  the loud frames with no muted frame at or next to them (a frame's spectra
+  reach into its neighbours), with our output aligned and level-matched by the
+  clean bits' comparison. Each run mutes its own frames, so `--compare`
+  measures that distance for both runs on the frames that count in both
+  (`channel.hd.lsd_common_db`) and reports their share of all the loud frames
+  DVSI plays (`coverage`), so frames a run did not measure count as lost. Soft
+  vectors need a baseline build whose tools read them (`--from-dvsi` of an
+  `_sd.bit` file and `mbe_quality_eval --soft`): for an older library, build it
+  with this checkout's `tools/quality` sources.
 - **Partitions** are by source recording. Several vectors are one recording
   through different filters, noise or levels (found by matching 3 s blocks of
   the inputs at any lag): `dam` and its variants (`lvl` among them),
@@ -818,14 +822,17 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   worst vector, and counts the baseline's speech vectors whose PCM changed
   (a vector missing from the run counts as changed). Every comparison of the
   run is measured at the lag the baseline recorded for it (`lags` in each
-  vector's entry), so a change that moves the evaluator's alignment search
-  does not also move the samples measured. `--gates` evaluates gate sets (a
-  comma list) from
+  vector's entry, with the frame shift of the encoder-tone comparison), so a
+  change that moves the evaluator's alignment search does not also move the
+  samples measured; a vector whose recorded lags still differ from the
+  baseline's is not paired. `--gates` evaluates gate sets (a comma list) from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and
-  exits non-zero when a gate fails. A paired check fails when a metric was
-  measured for a vector in only one of the two runs. `all_no_increase` and
-  `all_no_decrease` hold every vector to the limit, not just the mean, and a
-  check's `min_coverage` fails it when its common frames are too few.
+  exits non-zero when a gate fails. A gate set fails unless both runs scored
+  every vector of its partition in every mode it gates, and a paired check
+  fails when a metric was measured for a vector in only one of the two runs.
+  `all_no_increase` and `all_no_decrease` hold every vector to the limit, not
+  just the mean, and a check's `min_coverage` fails it when its common frames
+  are too few.
 
 `mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
 `bits` (the frame's parameter bits after FEC), `decoded` (the frame's own

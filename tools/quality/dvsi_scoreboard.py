@@ -620,14 +620,14 @@ ENCODER_TONE_FIELDS = {
 }
 
 
-def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
+def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33", shift=None):
     """Our encoder's tone frames against DVSI's, at the frame shift where the most agree (of equals, the
-    one nearest ENCODER_TONE_SHIFT).
+    one nearest ENCODER_TONE_SHIFT), or at `shift` when given (a baseline's).
 
     Returns the fraction of DVSI's tone frames we send as the same tone, the fraction of all compared
-    frames we send as a tone where DVSI sends voice, and the mean absolute level difference, in the
-    mode's level steps (AD, or D-STAR's volume), where the tones agree. When DVSI sends no tone frame
-    only the second is defined.
+    frames we send as a tone where DVSI sends voice, the mean absolute level difference, in the
+    mode's level steps (AD, or D-STAR's volume), where the tones agree, and the shift used. When DVSI
+    sends no tone frame only the second is defined.
     """
     fields, level_key = ENCODER_TONE_FIELDS[mode]
     ours = [fields(record.get("bits", "")) for record in encoded]
@@ -643,8 +643,9 @@ def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
     def agreeing(shift):
         return [index for index in tone_frames if mine(index, shift) and mine(index, shift)[0] == theirs[index][0]]
 
-    shift = max(range(-max_shift, max_shift + 1),
-                key=lambda candidate: (len(agreeing(candidate)), -abs(candidate - ENCODER_TONE_SHIFT)))
+    if shift is None:
+        shift = max(range(-max_shift, max_shift + 1),
+                    key=lambda candidate: (len(agreeing(candidate)), -abs(candidate - ENCODER_TONE_SHIFT)))
     compared = [index for index in range(len(theirs)) if 0 <= index + shift < len(ours)]
     extra = [index for index in compared if theirs[index] is None and mine(index, shift)]
     same = agreeing(shift)
@@ -652,6 +653,7 @@ def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
         "encoder_agreement": len(same) / len(tone_frames),
         "encoder_extra_rate": len(extra) / len(compared) if compared else 0.0,
         level_key: mean([abs(mine(index, shift)[1] - theirs[index][1]) for index in same]),
+        "shift": shift,
     }
 
 
@@ -674,15 +676,19 @@ def score_tone_vector(tools, vectors, mode, name, work, encoder=False, decode_to
     metrics["tone_frames"] = sum(1 for record in records if record["flags"] & 0x0010)
     metrics["frames"] = len(records)
     metrics["alignment_corr"] = versus.get("alignment_corr")
+    used = {"vs_dvsi": versus["lag_samples"]}
     if encoder and mode in ENCODER_TONE_FIELDS and codec in encoder_codecs(tools):
         speech = work / f"{name}_input.raw"
         shutil.copyfile(vectors / f"{name}.pcm", speech)
         run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
         run([(decode_tools or tools) / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows",
              "--out", f"{base}_enc.wav", "--params", f"{base}_enc.jsonl"])
-        metrics.update(encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records, mode=mode) or {})
-    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics,
-            "lags": {"vs_dvsi": versus["lag_samples"]}}
+        agreement = encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records, mode=mode,
+                                           shift=(lags or {}).get("encoder_tone_shift"))
+        if "shift" in agreement:
+            used["encoder_tone_shift"] = agreement.pop("shift")
+        metrics.update(agreement)
+    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics, "lags": used}
 
 
 # --------------------------------------------------------------------------------------------
@@ -768,19 +774,25 @@ def covered_unmuted(muted, lag, count):
 
 def channel_lsd(*runs):
     """(mean LSD of each run, coverage) on the frames that count in every run of one channel vector: loud
-    in DVSI's clean decode, not muted by DVSI, measured, and under no frame a run muted. Coverage is
-    their share of the loud frames DVSI leaves unmuted that every run measured; LSD is None without
-    any such frame."""
+    in DVSI's clean decode, not muted by DVSI, measured by every run, and with no muted frame at or
+    next to them (a frame's spectra reach into its neighbours): neither a loud frame DVSI mutes nor one
+    under a frame a run muted. Coverage is their share of all the loud frames DVSI leaves unmuted, so
+    frames a run did not measure count as lost; LSD is None without any such frame."""
     frames = runs[0]["frames"]
-    count = min(len(run["frames"]["lsd"]) for run in runs)
-    measured = [frames["loud"][g] and not frames["dvsi_muted"][g]
-                and all(run["frames"]["lsd"][g] is not None for run in runs) for g in range(count)]
-    counted = list(measured)
+    count = len(frames["loud"])
+    eligible = [frames["loud"][g] and not frames["dvsi_muted"][g] for g in range(count)]
+    clear = [not (frames["loud"][g] and frames["dvsi_muted"][g]) for g in range(count)]
     for run in runs:
         cover = covered_unmuted(run["frames"]["muted"], run["lags"]["clean_vs_dvsi"], count)
-        counted = [ok and covered for ok, covered in zip(counted, cover)]
-    chosen = [g for g in range(count) if counted[g]]
-    coverage = len(chosen) / sum(measured) if any(measured) else None
+        clear = [ok and covered for ok, covered in zip(clear, cover)]
+
+    def measured(run, g):
+        values = run["frames"]["lsd"]
+        return g < len(values) and values[g] is not None
+
+    chosen = [g for g in range(count) if eligible[g] and all(clear[max(0, g - 1):g + 2])
+              and all(measured(run, g) for run in runs)]
+    coverage = len(chosen) / sum(eligible) if any(eligible) else None
     if not chosen:
         return [None] * len(runs), coverage
     return [sum(run["frames"]["lsd"][g] for g in chosen) / len(chosen) for run in runs], coverage
@@ -1008,6 +1020,11 @@ def compare(candidate, baseline):
         name = f"{result['mode']}/{result['partition']}"
         group = report.setdefault(name, {})
         twin = raw.get((result["mode"], result["name"]))
+        if candidate.get("lags_from") and twin is not None and result.get("lags") != twin.get("lags"):
+            # Measured at other lags than the baseline's: not a pair.
+            for key in sorted(set(after) | set(before)):
+                unpaired.setdefault(name, {}).setdefault(key, []).append(result["name"])
+            continue
         if "channel" in result and twin is not None and "channel" in twin:
             # LSD against DVSI on the frames that count in both runs, since each run mutes its own frames.
             key = f"channel.{result['kind']}.lsd_common_db"
@@ -1049,6 +1066,36 @@ def compare(candidate, baseline):
             if shares is not None:
                 summary[group][key]["coverage"] = None if None in shares else min(shares)
     return summary
+
+
+def unscored_vectors(gates, *runs):
+    """(mode, name) of the gate set's partition, for every mode it gates, that one of `runs` did not score:
+    a gate measured on part of its partition says nothing about the rest."""
+    modes = {mode for check in gates["checks"]
+             for mode in (check["mode"] if isinstance(check["mode"], list) else [check["mode"]])}
+    missing = set()
+    for run in runs:
+        scored = {(result["mode"], result["name"]) for result in run["vectors"]}
+        missing |= {(mode, name) for mode in modes for name in PARTITIONS[gates["partition"]]
+                    if (mode, name) not in scored}
+    return sorted(missing)
+
+
+def evaluate_gate_sets(names, declared, candidate_summary, comparison, runs):
+    """Every named gate set of `declared`: its checks, and every vector of its partition scored in each
+    of `runs` (the candidate and the baseline). Returns (passed, lines)."""
+    passed, lines = True, []
+    for name in names:
+        if name not in declared:
+            raise ValueError(f"unknown gate set {name!r}")
+        ok, set_lines = check_gates(declared[name], candidate_summary, comparison)
+        missing = unscored_vectors(declared[name], *runs)
+        if missing:
+            ok = False
+            set_lines.append(f"FAIL {declared[name]['partition']}: not scored in both runs: {missing}")
+        lines += set_lines + [f"gate set {name}: {'PASS' if ok else 'FAIL'}"]
+        passed &= ok
+    return passed, lines
 
 
 def check_gates(gates, candidate_summary, comparison):
@@ -1235,14 +1282,12 @@ def main():
         if not args.compare:
             sys.exit("--gates needs --compare")
         declared = load_json(Path(__file__).with_name("dvsi_gates.json"))
-        passed = True
-        for name in args.gates.split(","):
-            if name not in declared:
-                sys.exit(f"unknown gate set {name!r}")
-            ok, lines = check_gates(declared[name], summary, report["comparison"])
-            print("\n".join(lines))
-            print(f"gate set {name}: {'PASS' if ok else 'FAIL'}")
-            passed &= ok
+        try:
+            passed, lines = evaluate_gate_sets(args.gates.split(","), declared, summary, report["comparison"],
+                                               (report, baseline))
+        except ValueError as error:
+            sys.exit(str(error))
+        print("\n".join(lines))
         return 0 if passed else 1
     return 0
 

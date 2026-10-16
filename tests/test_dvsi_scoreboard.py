@@ -386,6 +386,14 @@ def check_encoder_tones(board):
     ours = frames([(129, 100)] * 10)
     metrics = board.encoder_tone_agreement(ours, dvsi)
     assert metrics["encoder_agreement"] == 1.0 and metrics["encoder_extra_rate"] == 0.0, metrics
+    assert metrics["shift"] == -1, metrics
+    # A shift fixed from the baseline is used as given: an encoder that sends DVSI's tone frames three
+    # frames late no longer agrees, though the free search would line it up again.
+    dvsi = frames([None] * 3 + [(129, 100)] * 4 + [None] * 3)
+    late = frames([None] * 5 + [(129, 100)] * 4 + [None])
+    assert board.encoder_tone_agreement(late, dvsi)["encoder_agreement"] == 1.0
+    fixed = board.encoder_tone_agreement(late, dvsi, shift=-1)
+    assert fixed["shift"] == -1 and fixed["encoder_agreement"] == 0.25, fixed
     # The encoders a build offers, from its usage line.
     assert board.usage_codecs("Usage: x --codec ambe2400|ambe2450|imbe7200 --in A") == {"ambe2400", "ambe2450", "imbe7200"}
     assert board.usage_codecs("Usage: x --codec ambe2400 --in A") == {"ambe2400"}
@@ -459,6 +467,32 @@ def check_every_vector_rules(board):
     assert board.check_gates(falling, {}, comparison)[0]
 
 
+def check_frozen_lag_pairing(board):
+    # With lags frozen from the baseline, a vector measured at other lags (one whose baseline recorded
+    # none, or a lag the run had to search) is not a pair: all its metrics go unpaired.
+    def result(name, lags):
+        entry = vector(name, "validation", 7.0, 0.88)
+        entry["lags"] = lags
+        return entry
+
+    baseline = {"vectors": [result("t03", {"ours": 352, "vs_dvsi": 80}), result("t04", {"ours": 344, "vs_dvsi": -8})]}
+    same = {"lags_from": "baseline.json", "vectors": [result("t03", {"ours": 352, "vs_dvsi": 80}),
+                                                      result("t04", {"ours": 344, "vs_dvsi": -8})]}
+    assert board.compare(same, baseline)["dstar/validation"]["ours.lsd_db"]["unpaired"] == []
+    moved = {"lags_from": "baseline.json", "vectors": [result("t03", {"ours": 352, "vs_dvsi": 80}),
+                                                       result("t04", {"ours": 344, "vs_dvsi": -8, "ref": 16})]}
+    comparison = board.compare(moved, baseline)
+    entry = comparison["dstar/validation"]["ours.lsd_db"]
+    assert entry["unpaired"] == ["t04"] and entry["n"] == 1, entry
+    gates = {"partition": "validation", "checks": [{"mode": "dstar", "metric": "ours.lsd_db", "rule": "no_increase"}]}
+    passed, lines = board.check_gates(gates, {}, comparison)
+    assert not passed and any("unpaired" in line for line in lines), lines
+    # Without frozen lags (an old baseline) the lags are free to differ.
+    free = dict(moved)
+    del free["lags_from"]
+    assert board.compare(free, baseline)["dstar/validation"]["ours.lsd_db"]["unpaired"] == []
+
+
 def check_decoder_identity(board):
     with tempfile.TemporaryDirectory() as directory:
         first, second = Path(directory) / "a", Path(directory) / "b"
@@ -499,6 +533,7 @@ class FakeTools:
 
     def __init__(self):
         self.commands = []
+        self.bits = "0" * 49  # every decoded frame's parameter bits
 
     def __call__(self, command):
         command = [str(part) for part in command]
@@ -517,7 +552,7 @@ class FakeTools:
                 samples = [int(1000 * math.sin(n / 5.0)) for n in range(1600)]
                 Path(options["--out"]).write_bytes(struct.pack(f"<{len(samples)}h", *samples))
             if "--params" in options:
-                records = [{"f": f, "flags": 0, "errors": 0, "bits": "0" * 49, "decoded": {"status": 0}}
+                records = [{"f": f, "flags": 0, "errors": 0, "bits": self.bits, "decoded": {"status": 0}}
                            for f in range(10)]
                 Path(options["--params"]).write_text("".join(json.dumps(r) + "\n" for r in records))
             if "--json" in options:
@@ -577,6 +612,22 @@ def check_scoring_commands(board):
         aligned = [c for c in fake.commands if "--json" in c]
         assert len(aligned) == 1 and aligned[0][aligned[0].index("--lag-samples") + 1] == "-8", aligned
 
+        # A tone vector records its lag and the encoder-tone frame shift it chose, and a later run
+        # measures at the baseline's.
+        for path in (vectors / "dtmf.pcm", vectors / "r33" / "dtmf.pcm", vectors / "r33" / "dtmf.bit"):
+            path.write_bytes(silence)
+        fake.bits = tone_bits(129, 100)  # all ten frames, DVSI's and ours, carry the same tone
+        result = board.score_tone_vector(tools, vectors, "r33", "dtmf", work, True)
+        assert result["lags"]["encoder_tone_shift"] == 0 and "vs_dvsi" in result["lags"], result["lags"]
+        assert result["tone"]["encoder_agreement"] == 1.0 and "shift" not in result["tone"], result["tone"]
+        fake.commands.clear()
+        result = board.score_tone_vector(tools, vectors, "r33", "dtmf", work, True, decode_tools=decoder,
+                                         lags={"vs_dvsi": 24, "encoder_tone_shift": 2})
+        assert result["lags"] == {"vs_dvsi": 24, "encoder_tone_shift": 2}, result["lags"]
+        assert abs(result["tone"]["encoder_agreement"] - 0.8) < 1e-12, result["tone"]  # frames 8 and 9 fall off
+        encoded = [c for c in fake.commands if "--frames" in c and "_enc.rows" in c[c.index("--frames") + 1]]
+        assert len(encoded) == 1 and Path(encoded[0][0]).parent == decoder, encoded
+
 
 def check_channel(board):
     rng = random.Random(5)
@@ -613,20 +664,35 @@ def check_channel(board):
     assert board.covered_unmuted([0, 0, 0, 1, 0], 80, 5) == [True, True, False, False, False]
     assert board.covered_unmuted([0, 0, 0, 1, 0], -8, 5) == [False, True, True, False, False]
 
-    # LSD on the frames eligible in both runs: loud, not muted by DVSI, and under no muted frame of either.
-    def run(muted, lsd):
+    # LSD on the frames that count in both runs: loud, measured, and with no muted frame (DVSI's, among loud
+    # frames, or either run's) at or next to them, since a frame's spectra reach into its neighbours.
+    loud = [True] * 18 + [False] * 2
+    dvsi_muted = [f in (8, 9) for f in range(20)]
+
+    def run(muted_frame, lsd):
         return {"mode": "r33", "name": "dam_e10_hd", "partition": "channel", "kind": "hd",
                 "channel": {"mute_agreement": 0.5}, "lags": {"clean_vs_dvsi": 0},
-                "frames": {"loud": loud, "dvsi_muted": dvsi_muted, "muted": muted, "lsd": lsd}}
+                "frames": {"loud": loud, "dvsi_muted": dvsi_muted, "muted": [f == muted_frame for f in range(20)],
+                           "lsd": lsd}}
 
-    candidate = run([False] * 6 + [True] + [False] * 3, [9.0, 2.0, 2.0] + [9.0] * 4 + [2.0, 9.0, 9.0])
-    baseline = run([True] + [False] * 9, [9.0, 3.0, 3.0] + [9.0] * 4 + [3.0, 9.0, 9.0])
+    # Frames 1, 3, 7, 10, 13 and 15 neighbour a muted frame: the candidate's 9 dB there must not count.
+    near = (1, 3, 7, 8, 9, 10, 13, 14, 15, 18, 19)
+    candidate = run(14, [9.0 if f in near else 2.0 for f in range(20)])
+    baseline = run(2, [9.0 if f in (2, 8, 9, 14, 18, 19) else 3.0 for f in range(20)])
     comparison = board.compare({"vectors": [candidate]}, {"vectors": [baseline]})
     entry = comparison["r33/channel"]["channel.hd.lsd_common_db"]
-    assert abs(entry["mean"] + 1.0) < 1e-9 and abs(entry["coverage"] - 3 / 5) < 1e-12, entry
+    # Common: frames 0, 4, 5, 6, 11, 12, 16 and 17 of the 16 loud frames DVSI leaves unmuted.
+    assert abs(entry["mean"] + 1.0) < 1e-9 and abs(entry["coverage"] - 8 / 16) < 1e-12, entry
     own = board.flatten(candidate)
-    assert abs(own["channel.hd.lsd_db"] - 3.75) < 1e-9 and abs(own["channel.hd.lsd_coverage"] - 4 / 5) < 1e-12, own
+    # The candidate alone: frames 0-6, 11, 12, 16 and 17, two of them (1 and 3) at 9 dB.
+    assert abs(own["channel.hd.lsd_db"] - 36 / 11) < 1e-9 and abs(own["channel.hd.lsd_coverage"] - 11 / 16) < 1e-12, own
     assert abs(own["channel.hd.mute_agreement"] - 0.5) < 1e-12, own
+    # Frames a run did not measure (a short or missing output) are lost coverage, not a smaller denominator.
+    short = run(14, [None if f in (11, 12) else v for f, v in enumerate(candidate["frames"]["lsd"])])
+    own = board.flatten(short)
+    assert abs(own["channel.hd.lsd_db"] - 32 / 9) < 1e-9 and abs(own["channel.hd.lsd_coverage"] - 9 / 16) < 1e-12, own
+    short["frames"]["lsd"] = short["frames"]["lsd"][:4]  # an output that ends after frame 3
+    assert abs(board.flatten(short)["channel.hd.lsd_coverage"] - 4 / 16) < 1e-12
     summary = board.aggregate([candidate])
     assert abs(summary["r33/channel"]["mean"]["channel.hd.mute_agreement"] - 0.5) < 1e-12, summary
     # A delta on too small a share of the frames DVSI leaves unmuted fails a gate that sets a floor.
@@ -637,13 +703,42 @@ def check_channel(board):
     assert board.check_gates(gate, {}, comparison)[0]
 
 
+def check_unscored_vectors(board):
+    # A gate judges its whole partition: every vector of it must be scored, for every mode it gates, in
+    # both runs, or the gate set fails.
+    gate_set = {"partition": "channel", "checks": [
+        {"mode": ["r33", "dstar"], "metric": "channel.hd.mute_agreement", "rule": "all_no_decrease"}]}
+    every = {"vectors": [{"mode": mode, "name": name} for mode in ("r33", "dstar")
+                         for name in board.PARTITIONS["channel"]]}
+    assert board.unscored_vectors(gate_set, every, every) == []
+    some = {"vectors": [v for v in every["vectors"] if v["name"] in ("dam_e1_hd", "dam_e10_hd")]}
+    missing = board.unscored_vectors(gate_set, some, every)
+    assert len(missing) == 12 and ("r33", "dam_e5_sd") in missing and ("dstar", "dam_e2_hd") in missing, missing
+    assert board.unscored_vectors(gate_set, every, some) == missing
+    summary = {f"{mode}/channel": {"mean": {"channel.hd.mute_rate": 0.1}} for mode in ("r33", "dstar")}
+    rate = {"partition": "channel", "checks": [
+        {"mode": ["r33", "dstar"], "metric": "channel.hd.mute_rate", "rule": "max", "value": 0.5}]}
+    passed, lines = board.evaluate_gate_sets(["rate"], {"rate": rate}, summary, {}, (every, every))
+    assert passed and lines[-1] == "gate set rate: PASS", lines
+    passed, lines = board.evaluate_gate_sets(["rate"], {"rate": rate}, summary, {}, (every, some))
+    assert not passed and any("not scored" in line for line in lines), lines
+    try:
+        board.evaluate_gate_sets(["other"], {"rate": rate}, summary, {}, (every, every))
+    except ValueError as error:
+        assert "other" in str(error), error
+    else:
+        raise AssertionError("an undeclared gate set must be refused")
+
+
 def main():
     board = load_scoreboard()
     check_configuration(board)
     check_recordings(board)
     check_group_bootstrap(board)
     check_every_vector_rules(board)
+    check_frozen_lag_pairing(board)
     check_decoder_identity(board)
+    check_unscored_vectors(board)
     check_voicing(board)
     check_gates(board)
     check_encoder_metrics(board)
