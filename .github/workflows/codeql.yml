@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 name: codeql
 
 on:
@@ -20,20 +21,27 @@ jobs:
   analyze:
     name: analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       security-events: write
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - language: c-cpp
             build-mode: manual
+            ci_group: ci-worker-10
           - language: actions
             build-mode: ""
+            ci_group: ci-fast-2
           - language: python
             build-mode: ""
-
+            ci_group: ci-fast-1
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

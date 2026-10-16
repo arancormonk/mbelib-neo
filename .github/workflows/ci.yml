@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 name: CI
 
 on:
@@ -26,25 +27,79 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    # Keep the revision local; actionlint does not yet recognize the $/ spelling.
+    uses: ./.github/workflows/ci-changes.yml # zizmor: ignore[self-repository] -- same-revision workflow; actionlint lacks $/ support
+
   build-test:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped')
     name: ${{ matrix.os }} • preset=${{ matrix.preset }}
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        preset: [dev-debug, dev-release, notones-debug]
+        include:
+          - os: ubuntu-latest
+            preset: dev-debug
+            ci_group: ci-worker-01
+          - os: ubuntu-latest
+            preset: dev-release
+            ci_group: ci-worker-02
+          - os: ubuntu-latest
+            preset: notones-debug
+            ci_group: ci-worker-03
+          - os: macos-latest
+            preset: dev-debug
+            ci_group: ci-worker-04
+          - os: macos-latest
+            preset: dev-release
+            ci_group: ci-worker-05
+          - os: macos-latest
+            preset: notones-debug
+            ci_group: ci-worker-06
+          - os: windows-latest
+            preset: dev-debug
+            ci_group: ci-worker-07
+          - os: windows-latest
+            preset: dev-release
+            ci_group: ci-worker-08
+          - os: windows-latest
+            preset: notones-debug
+            ci_group: ci-worker-09
+    env:
+      CI_RUN_CHECK: ${{ needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false' }}
     steps:
+      # Expand every matrix entry so required checks retain their exact names.
+      - name: No relevant changes
+        if: env.CI_RUN_CHECK != 'true'
+        run: echo "No relevant changes for this check."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.CI_RUN_CHECK == 'true'
       - name: Configure (${{ matrix.preset }})
+        if: env.CI_RUN_CHECK == 'true'
         run: cmake --preset ${{ matrix.preset }} -DMBELIB_BUILD_TOOLS=ON
       - name: Build (${{ matrix.preset }})
+        if: env.CI_RUN_CHECK == 'true'
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       - name: Test (${{ matrix.preset }})
+        if: env.CI_RUN_CHECK == 'true'
         run: ctest --preset ${{ matrix.preset }} -V
       - name: Verify release hardening (Unix)
-        if: matrix.os != 'windows-latest' && matrix.preset == 'dev-release'
+        if: env.CI_RUN_CHECK == 'true' && (matrix.os != 'windows-latest' && matrix.preset == 'dev-release')
         run: |
           case "${RUNNER_OS}" in
             Linux) lib_path="build/dev-release/libmbe-neo.so" ;;
@@ -57,7 +112,7 @@ jobs:
           tools/check_release_hardening.sh "${lib_path}" build/dev-release
           tools/check_release_hardening.sh build/dev-release/example_print_version build/dev-release
       - name: Verify release hardening (Windows)
-        if: matrix.os == 'windows-latest' && matrix.preset == 'dev-release'
+        if: env.CI_RUN_CHECK == 'true' && (matrix.os == 'windows-latest' && matrix.preset == 'dev-release')
         shell: pwsh
         run: |
           $dll = Get-ChildItem -Path build/dev-release -Filter mbe-neo.dll -Recurse | Select-Object -First 1
@@ -68,9 +123,22 @@ jobs:
           ./tools/check_release_hardening.ps1 $exe.FullName
 
   clang-release-linux:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: linux • Clang • Release
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-01
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Clang and LLD
@@ -96,9 +164,22 @@ jobs:
   # x86-64-v3 because every hosted x86_64 runner has it; AVX-512 (v4) is not
   # guaranteed, so the v4 job below only links.
   optimized-v3-ctest:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: linux • Release • ctest (x86-64-v3, fast-math)
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-02
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -123,9 +204,22 @@ jobs:
   # v2.5.0's codebook search failed to build here (GCC 13
   # -Waggressive-loop-optimizations) while every preset job passed.
   consumer-release-gcc:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: linux • Release • ctest (consumer defaults, GCC)
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-03
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,9 +250,22 @@ jobs:
   # toolchain, and a probe that fails the job if the compiler stops enforcing
   # it.
   optimized-v3-ctest-clang:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: linux • Release • ctest (x86-64-v3, fast-math, clang)
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-12
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -239,9 +346,22 @@ jobs:
   # Fix the code it flags, or give a false positive the narrowest suppression
   # with a reason, rather than merging around it.
   lto-link-v4:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: linux • GCC LTO link (x86-64-v4)
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-13
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,23 +404,49 @@ jobs:
           '
 
   cross-arm32:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped')
     name: linux • ARM32 Release • FPU=${{ matrix.fpu }} • QEMU tests
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
-        fpu: [default, neon]
+        include:
+          - fpu: default
+            ci_group: ci-worker-08
+          - fpu: neon
+            ci_group: ci-worker-09
     defaults:
       run:
         shell: bash
+    env:
+      CI_RUN_CHECK: ${{ needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false' }}
     steps:
+      # Expand every matrix entry so required checks retain their exact names.
+      - name: No relevant changes
+        if: env.CI_RUN_CHECK != 'true'
+        run: echo "No relevant changes for this check."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.CI_RUN_CHECK == 'true'
       - name: Install ARM cross compiler and emulator
+        if: env.CI_RUN_CHECK == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user-static
       - name: Configure ARM32 Release
+        if: env.CI_RUN_CHECK == 'true'
         env:
           ARM_FPU: ${{ matrix.fpu }}
         run: |
@@ -328,14 +474,29 @@ jobs:
             exit 1
           fi
       - name: Build ARM32 Release
+        if: env.CI_RUN_CHECK == 'true'
         run: cmake --build build/arm32 --parallel
       - name: Test ARM32 Release under QEMU
+        if: env.CI_RUN_CHECK == 'true'
         run: ctest --test-dir build/arm32 --output-on-failure
 
   sanitize-linux:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: linux • Debug • sanitizers
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-11
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure (asan-ubsan-debug)
@@ -349,8 +510,14 @@ jobs:
         run: ctest --preset asan-ubsan-debug -V
 
   format-check:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false') }}
     name: clang-format
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check Docker Hub credentials
@@ -395,8 +562,14 @@ jobs:
           '
 
   clang-tidy:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false') }}
     name: clang-tidy
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-10
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check Docker Hub credentials
@@ -490,8 +663,14 @@ jobs:
           include-hidden-files: true
           retention-days: 7
   cppcheck:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false') }}
     name: cppcheck
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-01
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -540,8 +719,14 @@ jobs:
           retention-days: 7
 
   scan-build:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false') }}
     name: scan-build
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-11
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -586,8 +771,14 @@ jobs:
           retention-days: 7
 
   semgrep:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false') }}
     name: semgrep
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-1
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 20
     permissions:
       contents: read
@@ -636,6 +827,10 @@ jobs:
   lizard:
     name: lizard
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-1
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -660,6 +855,10 @@ jobs:
     name: Validate release tag
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_tag != '' || inputs.release_run_id != ''))
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-control
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       actions: read
@@ -688,6 +887,7 @@ jobs:
     concurrency:
       group: aur-mbelib-neo-git
       cancel-in-progress: false
+      queue: max
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
     runs-on: ubuntu-latest
     container:
@@ -897,6 +1097,7 @@ jobs:
     concurrency:
       group: aur-mbelib-neo
       cancel-in-progress: false
+      queue: max
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
     runs-on: ubuntu-latest
     container:
@@ -1060,28 +1261,56 @@ jobs:
           GIT_SSH_COMMAND="$aur_ssh_command" git push origin master
 
   install-and-consume:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
-    name: install + consume (pkg-config/CMake)
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped')
+    name: install + consume (pkg-config/CMake) (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            ci_group: ci-worker-02
+          - os: macos-latest
+            ci_group: ci-worker-04
+    env:
+      CI_RUN_CHECK: ${{ needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false' }}
     steps:
+      # Expand every matrix entry so required checks retain their exact names.
+      - name: No relevant changes
+        if: env.CI_RUN_CHECK != 'true'
+        run: echo "No relevant changes for this check."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.CI_RUN_CHECK == 'true'
       - name: Ensure pkg-config is available (Linux)
-        if: runner.os == 'Linux'
+        if: env.CI_RUN_CHECK == 'true' && (runner.os == 'Linux')
         run: sudo apt-get update && sudo apt-get install -y pkg-config
       - name: Ensure pkg-config is available (macOS)
-        if: runner.os == 'macOS'
+        if: env.CI_RUN_CHECK == 'true' && (runner.os == 'macOS')
         run: brew update && brew install pkg-config
       - name: Configure (dev-release preset)
+        if: env.CI_RUN_CHECK == 'true'
         run: cmake --preset dev-release
       - name: Build (dev-release preset)
+        if: env.CI_RUN_CHECK == 'true'
         run: cmake --build --preset dev-release --parallel
       - name: Install
+        if: env.CI_RUN_CHECK == 'true'
         run: cmake --install build/dev-release --prefix "$RUNNER_TEMP/mbe-install"
       - name: Test pkg-config consumer
+        if: env.CI_RUN_CHECK == 'true'
         env:
           PKG_CONFIG_PATH: ${{ runner.temp }}/mbe-install/lib/pkgconfig:${{ env.PKG_CONFIG_PATH }}
         run: |
@@ -1098,6 +1327,7 @@ jobs:
           cc consumer.c "${pkg_config_flags[@]}" "-Wl,-rpath,${RUNNER_TEMP}/mbe-install/lib" -o consumer
           ./consumer
       - name: Test CMake package consumer
+        if: env.CI_RUN_CHECK == 'true'
         run: |
           mkdir -p demo && cd demo
           cat > CMakeLists.txt << 'EOF'
@@ -1121,9 +1351,22 @@ jobs:
           ./build/consumer
 
   install-and-consume-win:
-    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
     name: install + consume (CMake, Windows)
     runs-on: windows-latest
+    concurrency:
+      group: ci-worker-07
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure (dev-release preset)
@@ -1162,6 +1405,10 @@ jobs:
     needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       actions: read
       attestations: write
@@ -1170,11 +1417,15 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         include:
           - os: ubuntu-latest
+            ci_group: ci-worker-01
           - os: macos-latest
+            ci_group: ci-worker-04
           - os: windows-latest
+            ci_group: ci-worker-07
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Configure (dev-release preset)
@@ -1328,6 +1579,10 @@ jobs:
     name: publish release
     needs: [validate-release-tag, package-release]
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     if: >-
       always() && !cancelled() && github.repository == 'arancormonk/mbelib-neo' &&
       needs.validate-release-tag.result == 'success' &&

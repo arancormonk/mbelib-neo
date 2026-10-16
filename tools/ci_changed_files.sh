@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 set -euo pipefail
 
 # Compute the changed-file target sets used by pull-request CI.
@@ -185,10 +186,19 @@ read_diff_paths() {
 diff_paths=()
 read_diff_paths --no-renames
 fuzz_scope_paths=("${diff_paths[@]}")
+# Skip native work only for recognized prose. Unknown inputs, CI/tool changes,
+# deletions and both sides of renames retain the complete build/analysis checks.
+native_needed=false
+for p in "${fuzz_scope_paths[@]}"; do
+  case "$p" in
+    docs/*.md | README.md | CHANGELOG.md | CONTRIBUTING.md | SECURITY.md | AGENTS.md) ;;
+    *) native_needed=true ;;
+  esac
+done
 fuzz_targets=()
 for p in "${fuzz_scope_paths[@]}"; do
   case "$p" in
-    .clusterfuzzlite/* | .github/workflows/cflite_pr.yml | fuzz/* | include/* | src/* | CMakeLists.txt | cmake/Pffft.cmake | tools/ci-dependency-pins.env | tools/fetch-pinned-git.sh)
+    .clusterfuzzlite/* | .github/workflows/cflite_pr.yml | .github/workflows/ci-changes.yml | tools/ci_changed_files.sh | fuzz/* | include/* | src/* | CMakeLists.txt | cmake/Pffft.cmake | tools/ci-dependency-pins.env | tools/fetch-pinned-git.sh)
       fuzz_targets+=("$p")
       ;;
   esac
@@ -341,12 +351,13 @@ echo "ci-changed-files: base=${BASE_REF} head=${HEAD_REF}"
 echo "ci-changed-files: changed=${#changed_paths[@]} format=${#format_files[@]}" \
   "tus=${#analysis_tus[@]} cppcheck=${#cppcheck_sources[@]} semgrep=${#semgrep_targets[@]}" \
   "cmake=${#cmake_format_files[@]} workflows=${#workflow_security_targets[@]}" \
-  "deps=${#dependency_scan_targets[@]} fuzz=${#fuzz_targets[@]}"
+  "deps=${#dependency_scan_targets[@]} fuzz=${#fuzz_targets[@]} native=${native_needed}"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "out_dir=$OUT_DIR"
     echo "changed_paths=${#changed_paths[@]}"
+    echo "native_needed=$native_needed"
     echo "format_files=${#format_files[@]}"
     echo "analysis_tus=${#analysis_tus[@]}"
     echo "cppcheck_sources=${#cppcheck_sources[@]}"
