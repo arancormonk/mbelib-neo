@@ -725,16 +725,18 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
 `tools/quality/dvsi_scoreboard.py` runs every speech vector of the D-STAR, P25
 and rate-33 sets through the tools above and writes `scoreboard.json` and
 `scoreboard.md` (needs NumPy). A change is judged by scoring a baseline build
-and then the candidate against it:
+and the candidate, each aligning freely, then both again at their joint lags,
+the candidate against the baseline:
 
 ```sh
-python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
-  --tools build/baseline --decode-tools build/tools-debug \
-  --out build/quality/scoreboard/baseline
-python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
-  --tools build/tools-debug --decode-tools build/tools-debug \
-  --out build/quality/scoreboard/candidate \
-  --compare build/quality/scoreboard/baseline/scoreboard.json --gates pitch-law
+SB="python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors --decode-tools build/tools-debug"
+Q=build/quality/scoreboard
+$SB --tools build/baseline --out $Q/baseline-free
+$SB --tools build/tools-debug --out $Q/candidate-free
+JOINT=$Q/baseline-free/scoreboard.json,$Q/candidate-free/scoreboard.json
+$SB --tools build/baseline --out $Q/baseline --lags-from $JOINT
+$SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
+  --compare $Q/baseline/scoreboard.json --gates pitch-law
 ```
 
 - **Speech:** ours vs the input, DVSI's decoder vs the input, and ours vs
@@ -820,16 +822,24 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   apart.
 - `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
   worst vector, and counts the baseline's speech vectors whose PCM changed
-  (a vector missing from the run counts as changed). Every comparison of the
-  run is measured at the lag the baseline recorded for it (`lags` in each
-  vector's entry, with the frame shift of the encoder-tone comparison), so a
-  change that moves the evaluator's alignment search does not also move the
-  samples measured; a vector whose recorded lags still differ from the
-  baseline's is not paired. `--gates` evaluates gate sets (a comma list) from
+  (a vector missing from the run counts as changed). Both runs are measured at
+  one lag per comparison, so a change that moves the evaluator's alignment
+  search does not also move the samples measured: `--lags-from` takes the lags
+  a scoreboard recorded (`lags` in each vector's entry, with the frame shift of
+  the encoder-tone comparison), or, given two, their joint lags. Where the two
+  free runs' searches disagree, the joint lag is that of the run whose
+  alignment reached the higher correlation (`alignment`), since a change can
+  let a decoder align where the old one could not: main's D-STAR gain law
+  played onsets up to 16 dB low and pulled its alignment with DVSI's output
+  56-96 samples off the -8 at which the corrected decoder, P25 and rate 33 all
+  align. Without `--lags-from`, `--compare` uses the baseline's lags. A vector
+  whose recorded lags still differ from the baseline's is not paired.
+  `--gates` evaluates gate sets (a comma list) from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and
-  exits non-zero when a gate fails. A gate set fails unless both runs scored
-  every vector of its partition in every mode it gates, and a paired check
-  fails when a metric was measured for a vector in only one of the two runs.
+  exits non-zero when a gate fails. A gate set fails unless the run was scored
+  at fixed lags and both runs scored every vector of its partition in every
+  mode it gates, and a paired check fails when a metric was measured for a
+  vector in only one of the two runs.
   `all_no_increase` and `all_no_decrease` hold every vector to the limit, not
   just the mean, and a check's `min_coverage` fails it when its common frames
   are too few.

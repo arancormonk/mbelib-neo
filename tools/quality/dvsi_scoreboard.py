@@ -445,8 +445,47 @@ def decoder_identity(tools):
 
 
 def lag_option(lags, key):
-    """The evaluator's --lag-samples for comparison `key` when `lags` (a baseline's) fixes it; else it searches."""
+    """The evaluator's --lag-samples for comparison `key` when `lags` fixes it; else it searches."""
     return ["--lag-samples", lags[key]] if lags and lags.get(key) is not None else []
+
+
+def joint_lags(baseline, candidate):
+    """Per vector both runs scored, one lag per comparison both measured: their common lag, or where their
+    alignment searches disagree, the lag of the run that aligned with the higher correlation. Equal
+    correlations, and keys with none recorded (the encoder-tone frame shift), keep the baseline's. A
+    change can let a decoder align where the old one could not, as when a gain law that played onsets
+    16 dB low pulled the old decoder's alignment off by half a frame, so neither run's lag is right by
+    default."""
+    def quality(result, key):
+        value = (result.get("alignment") or {}).get(key)
+        return value if isinstance(value, (int, float)) else -math.inf
+
+    other = {(result["mode"], result["name"]): result for result in candidate["vectors"]}
+    joint = {}
+    for result in baseline["vectors"]:
+        twin = other.get((result["mode"], result["name"]))
+        if twin is None or not result.get("lags") or not twin.get("lags"):
+            continue
+        lags = {}
+        for key in result["lags"].keys() & twin["lags"].keys():
+            mine, theirs = result["lags"][key], twin["lags"][key]
+            if mine == theirs or quality(result, key) >= quality(twin, key):
+                lags[key] = mine
+            else:
+                lags[key] = theirs
+        joint[(result["mode"], result["name"])] = lags
+    return joint
+
+
+def load_lag_source(paths):
+    """Lags to score at: one scoreboard.json's own, or two runs' joint_lags() (baseline first)."""
+    reports = [load_json(path) for path in paths]
+    if len(reports) == 1:
+        return {(result["mode"], result["name"]): result["lags"] for result in reports[0]["vectors"]
+                if result.get("lags")}
+    if len(reports) == 2:
+        return joint_lags(*reports)
+    raise ValueError("lags come from one scoreboard.json, or two to join")
 
 
 def alignment_ok(metrics):
@@ -504,6 +543,8 @@ def score_vector(tools, vectors, mode, name, work, encoder, decode_tools=None, l
         "dvsi": {key: dvsi.get(key) for key in SPEECH_KEYS},
         "vs_dvsi": {key: versus.get(key) for key in SPEECH_KEYS},
         "lags": {"ours": ours["lag_samples"], "dvsi": dvsi["lag_samples"], "vs_dvsi": versus["lag_samples"]},
+        "alignment": {"ours": ours["alignment_corr"], "dvsi": dvsi["alignment_corr"],
+                      "vs_dvsi": versus["alignment_corr"]},
     }
     pairs = {
         "ours": pitch_ratios(records, ours_pcm, 0),
@@ -514,7 +555,7 @@ def score_vector(tools, vectors, mode, name, work, encoder, decode_tools=None, l
     result["pitch_pairs"] = pairs
     if encoder and codec in encoder_codecs(tools):
         result["encoder"] = score_encoder(tools, decode_tools or tools, mode, speech, base, speech_samples,
-                                          lags, result["lags"])
+                                          lags, result["lags"], result["alignment"])
     return result
 
 
@@ -524,24 +565,25 @@ def tone_frame_rate(records):
     return sum(1 for record in records if record["flags"] & tone_or_silence) / len(records) if records else None
 
 
-def score_encoder(tools, decode_tools, mode, speech, base, speech_samples, lags, measured):
+def score_encoder(tools, decode_tools, mode, speech, base, speech_samples, lags, measured, quality):
     """Our encoding of the input (by `tools`) against DVSI's, both decoded by `decode_tools`.
 
     One decoder for a baseline's and a candidate's encodings leaves only the encoders' difference. The
-    lags this uses (fixed by `lags` when given) are added to `measured`.
+    lags this uses (fixed by `lags` when given) are added to `measured`, and the correlation each
+    comparison's own alignment search reached to `quality`.
     """
     codec = MODES[mode]
     run([decode_tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ref.wav",
          "--ref", speech, "--json", f"{base}_ref.json", "--params", f"{base}_ref.jsonl"] + lag_option(lags, "ref"))
     dvsi_eval = aligned(load_json(f"{base}_ref.json"), f"{base.name}_ref")
     dvsi_records = load_records(f"{base}_ref.jsonl")
-    measured["ref"] = dvsi_eval["lag_samples"]
+    measured["ref"], quality["ref"] = dvsi_eval["lag_samples"], dvsi_eval["alignment_corr"]
     run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
     run([decode_tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows",
          "--out", f"{base}_enc.wav", "--ref", speech, "--json", f"{base}_enc.json",
          "--params", f"{base}_enc.jsonl"] + lag_option(lags, "enc"))
     encoded = load_json(f"{base}_enc.json")
-    measured["enc"] = encoded.get("lag_samples")
+    measured["enc"], quality["enc"] = encoded.get("lag_samples"), encoded.get("alignment_corr")
     if not alignment_ok(encoded):
         # Our encoding cannot be aligned with the input (say, it is mostly silence frames), so nothing
         # measured through that alignment is scored. The count still reaches the summary and the gates.
@@ -556,7 +598,7 @@ def score_encoder(tools, decode_tools, mode, speech, base, speech_samples, lags,
          "--json", f"{base}_enc_vs_dvsi.json"] + lag_option(lags, "enc_vs_dvsi"))
     failures = []
     versus = load_json(f"{base}_enc_vs_dvsi.json")
-    measured["enc_vs_dvsi"] = versus.get("lag_samples")
+    measured["enc_vs_dvsi"], quality["enc_vs_dvsi"] = versus.get("lag_samples"), versus.get("alignment_corr")
     if not alignment_ok(versus):
         print(f"warning: {base.name}_enc_vs_dvsi: no usable alignment; not scored", file=sys.stderr)
         failures.append(f"{base.name}_enc_vs_dvsi")
@@ -688,7 +730,8 @@ def score_tone_vector(tools, vectors, mode, name, work, encoder=False, decode_to
         if "shift" in agreement:
             used["encoder_tone_shift"] = agreement.pop("shift")
         metrics.update(agreement)
-    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics, "lags": used}
+    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics, "lags": used,
+            "alignment": {"vs_dvsi": versus["alignment_corr"]}}
 
 
 # --------------------------------------------------------------------------------------------
@@ -800,8 +843,8 @@ def channel_lsd(*runs):
 
 @functools.lru_cache(maxsize=None)
 def channel_reference(tools, vectors, mode, work, lag):
-    """(lag, gain) aligning and level-matching our decodes of dam's bits with DVSI's, from the clean bits;
-    `lag` (a baseline's) fixes the lag when not None."""
+    """(lag, gain, alignment correlation) aligning and level-matching our decodes of dam's bits with
+    DVSI's, from the clean bits; `lag` fixes the lag when not None."""
     codec = MODES[mode]
     base = work / f"{mode}_channel_dam"
     dvsi_pcm = Path(f"{base}_dvsi.raw")
@@ -812,14 +855,14 @@ def channel_reference(tools, vectors, mode, work, lag):
     run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
          "--json", f"{base}_vs_dvsi.json"] + lag_option({"clean": lag}, "clean"))
     versus = aligned(load_json(f"{base}_vs_dvsi.json"), f"{base.name}_vs_dvsi")
-    return versus["lag_samples"], 10.0 ** (-versus["level_offset_db"] / 20.0)
+    return versus["lag_samples"], 10.0 ** (-versus["level_offset_db"] / 20.0), versus["alignment_corr"]
 
 
 def score_channel_vector(tools, vectors, mode, name, work, lags=None):
     """Our decode of one of dam's channel-error vectors against DVSI's decode of the same bits."""
     codec = MODES[mode]
     kind = name.rsplit("_", 1)[1]
-    lag, gain = channel_reference(tools, vectors, mode, work, (lags or {}).get("clean_vs_dvsi"))
+    lag, gain, corr = channel_reference(tools, vectors, mode, work, (lags or {}).get("clean_vs_dvsi"))
     base = work / f"{mode}_{name}"
     run([tools / "mbe_quality_reframe", "--codec", codec, "--from-dvsi", vectors / mode / f"{name}.bit",
          "--out", f"{base}.frames"])
@@ -833,7 +876,7 @@ def score_channel_vector(tools, vectors, mode, name, work, lags=None):
     metrics["repeat_rate"] = sum(1 for r in records if r["flags"] & REPEAT_FLAG) / len(records) if records else None
     metrics["errors_per_frame"] = mean([record["errors"] for record in records])
     return {"mode": mode, "name": name, "partition": "channel", "kind": kind, "channel": metrics,
-            "lags": {"clean_vs_dvsi": lag},
+            "lags": {"clean_vs_dvsi": lag}, "alignment": {"clean_vs_dvsi": corr},
             "frames": {"loud": loud, "dvsi_muted": dvsi_muted, "muted": muted,
                        "lsd": frame_lsd(read_pcm(f"{base}_ours.wav"), dvsi_errored, lag, gain)}}
 
@@ -1082,8 +1125,9 @@ def unscored_vectors(gates, *runs):
 
 
 def evaluate_gate_sets(names, declared, candidate_summary, comparison, runs):
-    """Every named gate set of `declared`: its checks, and every vector of its partition scored in each
-    of `runs` (the candidate and the baseline). Returns (passed, lines)."""
+    """Every named gate set of `declared`: its checks, every vector of its partition scored in each of
+    `runs` (the candidate and the baseline), and the candidate scored at fixed lags, so that compare()
+    paired only vectors measured at the baseline's lags. Returns (passed, lines)."""
     passed, lines = True, []
     for name in names:
         if name not in declared:
@@ -1093,6 +1137,9 @@ def evaluate_gate_sets(names, declared, candidate_summary, comparison, runs):
         if missing:
             ok = False
             set_lines.append(f"FAIL {declared[name]['partition']}: not scored in both runs: {missing}")
+        if not runs[0].get("lags_from"):
+            ok = False
+            set_lines.append(f"FAIL {declared[name]['partition']}: not scored at fixed lags (--lags-from)")
         lines += set_lines + [f"gate set {name}: {'PASS' if ok else 'FAIL'}"]
         passed &= ok
     return passed, lines
@@ -1225,7 +1272,11 @@ def main():
                         help="build whose decoder decodes both encodings in the encoder comparisons (default "
                              "--tools); give a baseline and a candidate run the same one")
     parser.add_argument("--compare", type=Path,
-                        help="baseline scoreboard.json for paired deltas; its recorded lags fix this run's alignments")
+                        help="baseline scoreboard.json for paired deltas; its recorded lags fix this run's "
+                             "alignments unless --lags-from is given")
+    parser.add_argument("--lags-from",
+                        help="scoreboard.json whose lags fix this run's alignments, or two (baseline,candidate; "
+                             "comma-separated) to score at their joint lags")
     parser.add_argument("--gates", help="comma list of gate sets from dvsi_gates.json to evaluate against --compare")
     args = parser.parse_args()
 
@@ -1236,11 +1287,15 @@ def main():
     work = args.out / "work"
     work.mkdir(exist_ok=True)
     baseline = load_json(args.compare) if args.compare else None
-    # Both runs measure the same samples: each comparison at the lag the baseline found for it.
-    frozen = {(result["mode"], result["name"]): result["lags"] for result in (baseline or {}).get("vectors", [])
-              if result.get("lags")}
-    if baseline and not frozen:
-        print("warning: the baseline recorded no lags, so each comparison searches its own", file=sys.stderr)
+    # Both runs measure the same samples: each comparison at one lag for both.
+    sources = [Path(path) for path in args.lags_from.split(",")] if args.lags_from else (
+        [args.compare] if args.compare else [])
+    try:
+        frozen = load_lag_source(sources) if sources else {}
+    except ValueError as error:
+        sys.exit(str(error))
+    if sources and not frozen:
+        print("warning: no lags recorded there, so each comparison searches its own", file=sys.stderr)
     encoder = not args.no_encoder
     decode_tools = args.decode_tools or args.tools
     results = []
@@ -1267,7 +1322,7 @@ def main():
     summary = aggregate(results)
     report = {"schema_version": 2, "tools_identity": decoder_identity(args.tools),
               "decoder_identity": decoder_identity(decode_tools) if encoder else None,
-              "lags_from": str(args.compare) if frozen else None, "vectors": results, "summary": summary}
+              "lags_from": ",".join(map(str, sources)) if frozen else None, "vectors": results, "summary": summary}
     if baseline:
         try:
             report["comparison"] = compare(report, baseline)
