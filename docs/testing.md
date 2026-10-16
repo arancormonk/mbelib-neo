@@ -706,7 +706,16 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
   9-byte rate-33 frames (MSB first, DMR interleave). It writes Framef rows for
   `mbe_quality_eval`. Bits are only deinterleaved, so the `_eN` channel-error
   variants still exercise FEC and repeat handling. A truncated final frame is
-  rejected, and so are the 4-bit soft-decision `*_sd.bit` files.
+  rejected.
+- The `_eN_hd` and `_eN_sd` variants carry the same channel errors, at bit
+  error rates of about 1.1, 2.2, 4.9 and 10.6% for `e1`, `e2`, `e5` and `e10`.
+  `_sd.bit` (DVSI's `-sdbits 4`) holds one 4-bit value per bit of the `_hd.bit`
+  file, two per byte, high nibble first, in that file's MSB-first bit order;
+  values 8 to 15 decide 1, so the `_hd` file is exactly their hard decisions.
+  `--from-dvsi` recognizes the `_sd.bit` name and writes one lowercase hex digit
+  per frame cell; `mbe_quality_eval --soft` decodes those rows through the
+  `*SoftFramef` APIs, with each value's distance from 7.5 as the reliability
+  (16 to 240).
 - Copy the inputs and DVSI's decoded files to `.raw` names before using them as
   `--ref` or `--decoded` operands. The evaluator selects the format by
   extension.
@@ -790,7 +799,9 @@ with its status), `history` (the prediction state after the frame) and `synth`
 (the enhanced model synthesized). Each holds `w0` (radians per sample), `L` and
 per-band `Vl`, `Ml` (linear amplitude as synthesized; for AMBE unvoiced bands
 it includes the unvoiced scale factor) and `log2Ml` (the codec's log2 spectral
-amplitude before that factor), plus `gamma`. Dumping does not change the PCM.
+amplitude before that factor), plus `gamma`. `synth` also holds `PHIl` and
+`PSIl`, the harmonic phases the frame was rendered with, so phase readbacks can
+be checked against the decoder itself. Dumping does not change the PCM.
 
 ### Encoder evaluation
 

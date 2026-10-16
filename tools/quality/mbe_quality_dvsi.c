@@ -22,7 +22,7 @@
  */
 /**
  * @file
- * @brief Import DVSI hard-decision test-vector frames as rectangular frames.
+ * @brief Import DVSI hard- and soft-decision test-vector frames as rectangular frames.
  *
  * The bits are only deinterleaved: channel errors and FEC parity are kept, so
  * error-variant vectors still exercise the decoder's error handling.
@@ -126,4 +126,43 @@ mbe_quality_frame_from_dvsi(const char* codec, const unsigned char* bytes, size_
     }
     memcpy(frame, &packed, (size_t)frame_count);
     return frame_count;
+}
+
+/* The frame cell holding the hard file's MSB-first bit n, found by importing
+ * that bit alone, so the soft layout follows the hard tables by construction. */
+static int
+dvsi_cell_of_bit(const char* codec, int frame_bytes, int n, int* cells) {
+    unsigned char probe[18] = {0};
+    char frame[184];
+    probe[n >> 3] = (unsigned char)(0x80u >> (n & 7));
+    *cells = mbe_quality_frame_from_dvsi(codec, probe, (size_t)frame_bytes, frame, sizeof(frame));
+    for (int c = 0; c < *cells; ++c) {
+        if (frame[c]) {
+            return c;
+        }
+    }
+    return MBE_STATUS_INVALID_ARGUMENT;
+}
+
+int
+mbe_quality_soft_frame_from_dvsi(const char* codec, const unsigned char* bytes, size_t count, unsigned char* frame,
+                                 size_t capacity) {
+    const int frame_bytes = mbe_quality_dvsi_frame_bytes(codec);
+    if (frame_bytes < 0 || !bytes || !frame || count != (size_t)frame_bytes * 4u) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    unsigned char out[184] = {0};
+    int cells = 0;
+    for (int n = 0; n < frame_bytes * 8; ++n) {
+        int cell = dvsi_cell_of_bit(codec, frame_bytes, n, &cells);
+        if (cell < 0) {
+            return MBE_STATUS_INVALID_ARGUMENT;
+        }
+        out[cell] = (unsigned char)((n & 1) ? (bytes[n >> 1] & 15u) : (bytes[n >> 1] >> 4));
+    }
+    if (capacity < (size_t)cells) {
+        return MBE_STATUS_INVALID_ARGUMENT;
+    }
+    memcpy(frame, out, (size_t)cells);
+    return cells;
 }

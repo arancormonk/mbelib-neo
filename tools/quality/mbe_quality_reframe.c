@@ -14,7 +14,8 @@ static void
 usage(const char* program) {
     fprintf(stderr,
             "Usage: %s --codec imbe7200|imbe7100|ambe2450|ambe2400 --in DATA_FILE --out FRAME_FILE\n"
-            "       %s --codec imbe7200|ambe2450|ambe2400 --from-dvsi VECTOR.bit --out FRAME_FILE\n",
+            "       %s --codec imbe7200|ambe2450|ambe2400 --from-dvsi VECTOR.bit --out FRAME_FILE\n"
+            "A DVSI *_sd.bit soft-decision vector becomes rows of hex soft values for mbe_quality_eval --soft.\n",
             program, program);
 }
 
@@ -31,25 +32,50 @@ write_frame_row(FILE* staged, char* frame, int bits) {
     return 0;
 }
 
-/* DVSI hard-decision vectors: whole binary frames only, channel bits kept. */
+/* One frame of soft values (0..15) as a row of lowercase hex digits. */
 static int
-reframe_dvsi(FILE* input, FILE* staged, const char* codec) {
-    const int frame_bytes = mbe_quality_dvsi_frame_bytes(codec);
-    if (frame_bytes < 0) {
+write_soft_row(FILE* staged, const unsigned char* soft, int cells) {
+    char row[185];
+    for (int i = 0; i < cells; ++i) {
+        row[i] = "0123456789abcdef"[soft[i] & 15u];
+    }
+    row[cells] = '\n';
+    if (fwrite(row, 1, (size_t)cells + 1, staged) != (size_t)cells + 1) {
+        fprintf(stderr, "Cannot stage reframed output.\n");
+        return 2;
+    }
+    return 0;
+}
+
+/* Import one DVSI frame (bytes of `count`) and stage its row; returns 0 or 2. */
+static int
+reframe_dvsi_frame(FILE* staged, const char* codec, const unsigned char* bytes, size_t count, int soft,
+                   size_t frame_index) {
+    char frame[185];
+    unsigned char values[184];
+    int cells = soft ? mbe_quality_soft_frame_from_dvsi(codec, bytes, count, values, sizeof(values))
+                     : mbe_quality_frame_from_dvsi(codec, bytes, count, frame, sizeof(frame));
+    if (cells < 0) {
+        fprintf(stderr, "frame %zu: DVSI import failed (%d)\n", frame_index, cells);
+        return 2;
+    }
+    return soft ? write_soft_row(staged, values, cells) : write_frame_row(staged, frame, cells);
+}
+
+/* DVSI vectors: whole frames only, channel bits (or their soft values) kept. */
+static int
+reframe_dvsi(FILE* input, FILE* staged, const char* codec, int soft) {
+    const int hard_bytes = mbe_quality_dvsi_frame_bytes(codec);
+    if (hard_bytes < 0) {
         fprintf(stderr, "DVSI import supports imbe7200, ambe2450 and ambe2400.\n");
         return 2;
     }
-    unsigned char bytes[18];
+    const int frame_bytes = soft ? 4 * hard_bytes : hard_bytes;
+    unsigned char bytes[72];
     size_t frame_index = 0;
     size_t count;
     while ((count = fread(bytes, 1, (size_t)frame_bytes, input)) == (size_t)frame_bytes) {
-        char frame[185];
-        int bits = mbe_quality_frame_from_dvsi(codec, bytes, count, frame, sizeof(frame));
-        if (bits < 0) {
-            fprintf(stderr, "frame %zu: DVSI import failed (%d)\n", frame_index, bits);
-            return 2;
-        }
-        if (write_frame_row(staged, frame, bits) != 0) {
+        if (reframe_dvsi_frame(staged, codec, bytes, count, soft, frame_index) != 0) {
             return 2;
         }
         ++frame_index;
@@ -129,6 +155,7 @@ struct reframe_options {
     const char* input_path; /* parameter rows, or the DVSI vector when dvsi is set */
     const char* output_path;
     int dvsi;
+    int soft; /* a DVSI soft-decision vector */
     size_t width;
 };
 
@@ -145,7 +172,7 @@ parameter_width(const char* codec) {
 }
 
 /* DVSI names its 4-bit soft-decision vectors *_sd.bit. Their size is a whole
- * number of hard-decision frames, so only the name tells them apart.
+ * number of hard-decision frames too, so only the name tells them apart.
  */
 static int
 is_soft_decision_vector(const char* path) {
@@ -184,11 +211,8 @@ parse_options(int argc, char** argv, struct reframe_options* options) {
         usage(argv[0]);
         return 2;
     }
-    if (dvsi_path && is_soft_decision_vector(dvsi_path)) {
-        fprintf(stderr, "DVSI soft-decision vectors (*_sd.bit) are not supported; use the *_hd.bit file.\n");
-        return 2;
-    }
     options->dvsi = dvsi_path != NULL;
+    options->soft = dvsi_path != NULL && is_soft_decision_vector(dvsi_path);
     options->input_path = options->dvsi ? dvsi_path : rows_path;
     options->width = parameter_width(codec);
     if (options->width == 0) {
@@ -261,7 +285,7 @@ main(int argc, char** argv) {
         fclose(input);
         return 2;
     }
-    int ret = dvsi ? reframe_dvsi(input, staged, codec) : reframe(input, staged, codec, width);
+    int ret = dvsi ? reframe_dvsi(input, staged, codec, options.soft) : reframe(input, staged, codec, width);
     if (fclose(input) != 0) {
         fprintf(stderr, "Error closing input: %s\n", input_path);
         ret = 2;
