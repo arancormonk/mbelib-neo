@@ -170,7 +170,7 @@ ambe_enc_nearest_impl(const float* table, int width, int rows, int step, const f
         for (int m = 0; m < used; ++m) {
             float column[MBE_VF_WIDTH];
             for (int lane = 0; lane < MBE_VF_WIDTH; ++lane) {
-                column[lane] = table[((c + lane * step) * width) + m];
+                column[lane] = table[((size_t)(c + lane * step) * (size_t)width) + (size_t)m];
             }
             mbe_vf d = mbe_vf_sub(mbe_vf_set(target[m]), mbe_vf_load(column));
             errors = mbe_vf_add(errors, mbe_vf_mul(d, d));
@@ -193,10 +193,13 @@ ambe_enc_nearest_impl(const float* table, int width, int rows, int step, const f
         }
     }
 #endif
+    /* Row offsets are size_t: GCC 13 cannot bound c after the batched loop above, and an int product it may assume
+     * overflows fails its -Waggressive-loop-optimizations check in IEEE Release builds. */
     for (; c < rows; c += step) {
+        const float* row = table + ((size_t)c * (size_t)width);
         float err = 0.0f;
         for (int m = 0; m < used; m++) {
-            float d = target[m] - table[(c * width) + m];
+            float d = target[m] - row[m];
             err += d * d;
         }
         if (err < best_err) {

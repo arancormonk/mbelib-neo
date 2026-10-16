@@ -115,6 +115,34 @@ jobs:
       - name: Test (dev-release, x86-64-v3)
         run: ctest --preset dev-release --output-on-failure
 
+  # The configuration consumers build: a plain Release configure with the
+  # defaults (SIMD on, fast-math off, warnings as errors) under the runner's
+  # GCC, as dsd-neo's CI, distribution packages and the vcpkg port do. The
+  # dev-release preset enables fast-math, which compiles out the IEEE-only SIMD
+  # batches, so only this job builds them with GCC's Release optimizers:
+  # v2.5.0's codebook search failed to build here (GCC 13
+  # -Waggressive-loop-optimizations) while every preset job passed.
+  consumer-release-gcc:
+    needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    name: linux • Release • ctest (consumer defaults, GCC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure (Release, default options)
+        run: |
+          set -euo pipefail
+          gcc --version
+          cmake -S . -B build/consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DMBELIB_BUILD_TESTS=ON
+          # The job exists for these defaults; fail if they change under it.
+          grep -Fx 'MBELIB_ENABLE_SIMD:BOOL=ON' build/consumer/CMakeCache.txt
+          grep -Fx 'MBELIB_ENABLE_FAST_MATH:BOOL=OFF' build/consumer/CMakeCache.txt
+          grep -Fx 'MBELIB_WARNINGS_AS_ERRORS:BOOL=ON' build/consumer/CMakeCache.txt
+      - name: Build (Release, default options)
+        run: cmake --build build/consumer --parallel
+      - name: Test (Release, default options)
+        run: ctest --test-dir build/consumer --output-on-failure
+
   # The same suite built by a current Clang, the macOS toolchain's compiler
   # family, which treats fast-math more aggressively than GCC or Ubuntu's Clang:
   # it folds bit tests on floats it computed or took as arguments (an

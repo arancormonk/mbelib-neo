@@ -88,6 +88,15 @@ never run. To test for NaN or infinity in fast-math code, compare the
 magnitude of the bit pattern against a bound, or compile the translation unit
 with IEEE semantics as `mbe_pcm_convert.c` is.
 
+Consumers do not build a preset. dsd-neo's CI, distribution packages and the
+vcpkg port configure a plain `CMAKE_BUILD_TYPE=Release`, whose defaults are
+SIMD on, fast-math off and warnings as errors. The IEEE-only SIMD batches
+(`!defined(__FAST_MATH__)`, such as the AMBE codebook search) compile only
+there, so a fourth Linux job builds and tests exactly that configuration with
+the runner's GCC and fails if those defaults change. v2.5.0's codebook search
+failed to build under it (GCC 13 `-Waggressive-loop-optimizations` on an `int`
+row offset) while every preset job passed.
+
 Every required check runs on every pull request. A required check that a path
 filter keeps from starting never reports, so the pull request waits on it
 forever. A job that only matters for some paths therefore runs on every pull
