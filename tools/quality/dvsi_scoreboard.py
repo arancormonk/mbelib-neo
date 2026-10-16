@@ -454,8 +454,8 @@ def joint_lags(baseline, candidate):
     alignment searches disagree, the lag of the run that aligned with the higher correlation. Equal
     correlations, and keys with none recorded (the encoder-tone frame shift), keep the baseline's. A
     change can let a decoder align where the old one could not, as when a gain law that played onsets
-    16 dB low pulled the old decoder's alignment off by half a frame, so neither run's lag is right by
-    default."""
+    16 dB low pulled the old decoder's alignment off by up to about 100 samples, so neither run's lag is
+    right by default."""
     def quality(result, key):
         value = (result.get("alignment") or {}).get(key)
         return value if isinstance(value, (int, float)) else -math.inf
