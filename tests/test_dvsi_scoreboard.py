@@ -537,6 +537,14 @@ def check_decoder_identity(board):
         (second / "libmbe-neo.so.2").write_bytes(b"library 1")
         (second / "mbe_quality_eval").write_bytes(b"other evaluator")
         assert board.decoder_identity(first) != board.decoder_identity(second)
+        # A Windows build: the evaluator is an .exe and the MSVC library mbe-neo.dll.
+        windows = Path(directory) / "windows"
+        windows.mkdir()
+        (windows / "mbe_quality_eval.exe").write_bytes(b"evaluator")
+        (windows / "mbe-neo.dll").write_bytes(b"library 1")
+        before = board.decoder_identity(windows)
+        (windows / "mbe-neo.dll").write_bytes(b"library 2")
+        assert board.decoder_identity(windows) != before
 
     # Encoder deltas are measured only when one decoder decoded both runs' encodings.
     def run_with(identity):

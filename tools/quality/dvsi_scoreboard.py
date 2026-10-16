@@ -436,10 +436,15 @@ def load_json(path):
 
 
 def decoder_identity(tools):
-    """SHA-256 over a build's mbe_quality_eval and the mbelib-neo libraries beside it (the decoder it runs)."""
+    """SHA-256 over a build's mbe_quality_eval and the mbelib-neo libraries beside it (the decoder it runs):
+    libmbe-neo* where GCC and Clang build them, mbe-neo*.dll for MSVC."""
     digest = hashlib.sha256()
     tools = Path(tools)
-    for path in [tools / "mbe_quality_eval"] + sorted(p for p in tools.glob("libmbe-neo*") if p.is_file()):
+    evaluator = tools / "mbe_quality_eval"
+    if not evaluator.is_file() and (tools / "mbe_quality_eval.exe").is_file():
+        evaluator = tools / "mbe_quality_eval.exe"
+    libraries = [p for pattern in ("libmbe-neo*", "mbe-neo*.dll") for p in tools.glob(pattern) if p.is_file()]
+    for path in [evaluator] + sorted(libraries):
         digest.update(path.name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 

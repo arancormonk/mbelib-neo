@@ -384,15 +384,16 @@ process_soft_row(const char* codec, const char* line, size_t n, size_t frame, fl
         fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
         exit(2);
     }
+    static const char hex_digits[] = "0123456789abcdef";
     mbe_soft_bit soft[184];
     memset(soft, 0, sizeof(soft));
     for (size_t i = 0; i < n; ++i) {
-        const char* digit = strchr("0123456789abcdef", line[i]);
+        const char* digit = strchr(hex_digits, line[i]);
         if (line[i] == '\0' || !digit) {
             fprintf(stderr, "frame %zu: expected lowercase hex digits\n", frame);
             exit(2);
         }
-        int v = (int)(digit - "0123456789abcdef");
+        int v = (int)(digit - hex_digits);
         int r = v >= 8 ? v - 8 : 7 - v;
         soft[i].bit = (uint8_t)(v >= 8);
         soft[i].reliability = (uint8_t)((2 * r + 1) * 16);
