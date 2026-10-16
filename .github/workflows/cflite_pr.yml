@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 name: ClusterFuzzLite PR fuzzing
 
 # Runs on every pull request so its checks can be required: a required check from a
@@ -9,52 +10,57 @@ on:
     branches: [main, master]
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    # Keep the revision local; actionlint does not yet recognize the $/ spelling.
+    uses: ./.github/workflows/ci-changes.yml # zizmor: ignore[self-repository] -- same-revision workflow; actionlint lacks $/ support
+
   pr-fuzzing:
+    needs: changes
+    if: ${{ !cancelled() }}
     name: PR fuzzing (${{ matrix.sanitizer }})
     runs-on: ubuntu-latest
     concurrency:
-      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       pull-requests: read
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
-        sanitizer: [address, undefined]
+        include:
+          - sanitizer: address
+            ci_group: ci-worker-12
+          - sanitizer: undefined
+            ci_group: ci-worker-13
+    env:
+      CI_RUN_CHECK: ${{ needs.changes.result != 'success' || needs.changes.outputs.fuzz_targets != '0' }}
     steps:
+      # Expand every matrix entry so required checks retain their exact names.
+      - name: No relevant changes
+        if: env.CI_RUN_CHECK != 'true'
+        run: echo "No relevant changes for this check."
       - name: Checkout repository
+        if: env.CI_RUN_CHECK == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      # Select on the pull request's own changes (base...head), as the former paths
-      # filter did, not on the merge commit that is checked out and fuzzed: an edit
-      # main already has would vanish from base...merge.
-      - name: Compute PR changed files
-        if: github.event_name == 'pull_request'
-        id: changed
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          tools/ci_changed_files.sh \
-            --base "${BASE_SHA}" \
-            --head "${HEAD_SHA}" \
-            --no-header-expansion
-
-      - name: Skip PR fuzzing
-        if: github.event_name == 'pull_request' && steps.changed.outputs.fuzz_targets == '0'
-        run: echo "No library, header, fuzz harness or fuzz build changes to fuzz."
-
       - name: Build fuzzers
+        if: env.CI_RUN_CHECK == 'true'
         id: build
-        if: github.event_name != 'pull_request' || steps.changed.outputs.fuzz_targets != '0'
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: c++
@@ -62,8 +68,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run fuzzers
+        if: env.CI_RUN_CHECK == 'true'
         id: run
-        if: github.event_name != 'pull_request' || steps.changed.outputs.fuzz_targets != '0'
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

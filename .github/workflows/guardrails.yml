@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 name: guardrails
 
 on:
@@ -18,9 +19,18 @@ permissions:
   pull-requests: read
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    # Keep the revision local; actionlint does not yet recognize the $/ spelling.
+    uses: ./.github/workflows/ci-changes.yml # zizmor: ignore[self-repository] -- same-revision workflow; actionlint lacks $/ support
+
   repository-guardrails:
     name: repository guardrails
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -35,6 +45,10 @@ jobs:
   script-lint:
     name: shell/workflow lint
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -87,49 +101,32 @@ jobs:
           retention-days: 7
 
   cmake-format:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.cmake_format_files != '0') }}
     name: cmake format
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Compute PR changed files
-        if: github.event_name == 'pull_request'
-        id: changed
-        run: |
-          tools/ci_changed_files.sh \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head HEAD \
-            --no-header-expansion
-
-      - name: Skip CMake format
-        if: github.event_name == 'pull_request' && steps.changed.outputs.cmake_format_files == '0'
-        run: echo "No CMake files to check."
-
       - name: Set up Python
-        if: github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
 
       - name: Install gersemi
-        if: github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0'
         run: python -m pip install --require-hashes -r .github/requirements/gersemi.txt
 
       - name: Check CMake formatting
-        if: github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0'
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            mapfile -t files < .ci/changed-files/cmake_format_files.txt
-            tools/cmake_format_check.sh -- "${files[@]}"
-          else
-            tools/cmake_format_check.sh
-          fi
+        run: tools/cmake_format_check.sh
 
       - name: Upload CMake format output
-        if: always() && (github.event_name != 'pull_request' || steps.changed.outputs.cmake_format_files != '0')
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cmake-format-report
@@ -140,6 +137,10 @@ jobs:
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       security-events: write
@@ -170,8 +171,14 @@ jobs:
           retention-days: 7
 
   zizmor:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.workflow_security_targets != '0') }}
     name: zizmor
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-2
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       security-events: write
@@ -180,31 +187,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute PR changed files
-        if: github.event_name == 'pull_request'
-        id: changed
-        run: |
-          tools/ci_changed_files.sh \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head HEAD \
-            --no-header-expansion
-
-      - name: Skip zizmor
-        if: github.event_name == 'pull_request' && steps.changed.outputs.workflow_security_targets == '0'
-        run: echo "No workflow security files to check."
-
       - name: Set up Python
-        if: github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
 
       - name: Install zizmor
-        if: github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0'
         run: python -m pip install --require-hashes -r .github/requirements/zizmor.txt
 
       - name: Run zizmor
-        if: github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0'
         env:
           MBE_ZIZMOR_SARIF_OUT: .zizmor.sarif
         run: tools/zizmor.sh
@@ -224,7 +215,7 @@ jobs:
           sarif_file: .zizmor.sarif
 
       - name: Upload zizmor output
-        if: always() && (github.event_name != 'pull_request' || steps.changed.outputs.workflow_security_targets != '0')
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zizmor-report
@@ -236,8 +227,14 @@ jobs:
           retention-days: 7
 
   osv-scan:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.dependency_scan_targets != '0') }}
     name: osv scan
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-fast-1
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       security-events: write
@@ -246,21 +243,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute PR changed files
-        if: github.event_name == 'pull_request'
-        id: changed
-        run: |
-          tools/ci_changed_files.sh \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head HEAD \
-            --no-header-expansion
-
-      - name: Skip OSV scan
-        if: github.event_name == 'pull_request' && steps.changed.outputs.dependency_scan_targets == '0'
-        run: echo "No dependency inputs to scan."
-
       - name: Run OSV scan
-        if: github.event_name != 'pull_request' || steps.changed.outputs.dependency_scan_targets != '0'
         env:
           MBE_OSV_SARIF_OUT: .osv-scanner.sarif
         run: tools/osv_scan.sh
@@ -273,7 +256,7 @@ jobs:
           sarif_file: .osv-scanner.sarif
 
       - name: Upload OSV output
-        if: always() && (github.event_name != 'pull_request' || steps.changed.outputs.dependency_scan_targets != '0')
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: osv-scan-report
@@ -284,8 +267,14 @@ jobs:
           retention-days: 7
 
   warnings-as-errors:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false') }}
     name: warnings as errors
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-03
+      cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

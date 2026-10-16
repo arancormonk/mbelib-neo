@@ -45,6 +45,83 @@ Branch protection must require the repository guardrail job for pull requests.
 Keep `repository guardrails` required whenever new repository-level security
 guardrails are added.
 
+## CI Runner Budget
+
+All runner jobs share 18 fixed, repository-wide concurrency groups. This leaves
+headroom below the account's 20-runner limit for dispatch and cancellation. It is
+an independent budget for mbelib-neo, not a reservation against dsd-neo's budget:
+GitHub concurrency groups do not coordinate between repositories. If both run at
+once, the account limit still applies.
+
+Each group runs one job and uses `cancel-in-progress: false` with `queue: max`,
+so a new main run does not replace pending PR jobs. GitHub allows up to 100 queued
+jobs per group; the queue is bounded, and dispatch order between groups is not
+guaranteed. See [GitHub's concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+Workflow-level concurrency still cancels an older run of the same workflow and
+PR/ref. Matrix `max-parallel` limits the largest bursts within a run; the fixed
+groups enforce the budget across workflows and overlapping PR/main runs.
+
+| Group | Jobs sharing the runner |
+| --- | --- |
+| `ci-worker-01` | Linux Debug, cppcheck, Clang Release, Linux release package |
+| `ci-worker-02` | Linux Release, optimized GCC tests, Linux install/consumer |
+| `ci-worker-03` | Linux NOTONES, consumer-defaults GCC tests, warnings build |
+| `ci-worker-04` | macOS Debug, macOS install/consumer, macOS release package |
+| `ci-worker-05` | macOS Release |
+| `ci-worker-06` | macOS NOTONES |
+| `ci-worker-07` | Windows Debug, Windows install/consumer, Windows release package |
+| `ci-worker-08` | Windows Release, ARM32 default-FPU tests |
+| `ci-worker-09` | Windows NOTONES, ARM32 NEON tests |
+| `ci-worker-10` | clang-tidy/IWYU/GCC analyzer, C/C++ CodeQL |
+| `ci-worker-11` | scan-build, ASAN/UBSAN tests |
+| `ci-worker-12` | optimized Clang tests, address-sanitizer fuzzing |
+| `ci-worker-13` | AVX-512 link check, undefined-behavior fuzzing |
+| `ci-fast-1` | PR classification, Semgrep, Lizard, OSV, Python CodeQL |
+| `ci-fast-2` | formatting, other guardrails, Actions CodeQL, dependency review, Scorecard, release publication |
+| `ci-control` | closed-PR cleanup, release-tag validation |
+| `aur-mbelib-neo-git`, `aur-mbelib-neo` | the existing AUR publication locks |
+
+`tools/workflow_lint.sh` also runs `tools/check_ci_concurrency.py`. Every runner
+job must use a fixed group from this table and a non-replacing queue. New matrix
+entries must declare `ci_group`; only the budgeted local classifier may be called
+as a reusable workflow. actionlint 1.7.12 does not recognize `queue` yet, so its
+exact unknown-key diagnostic is suppressed after the budget checker validates
+that setting. Other actionlint diagnostics still fail.
+
+PR workflows classify paths before allocating expensive jobs. Only known prose
+(`docs/*.md` and the root README, CHANGELOG, CONTRIBUTING, SECURITY and AGENTS
+Markdown files) skips native builds and their analysis. Unknown paths, source,
+build, tool and workflow inputs retain full coverage, including deletions and
+both sides of renames. Classification uses the PR's own base/head diff, even when
+main already contains an equivalent change. A failed classifier or missing
+output selects full checks. Main, tag, scheduled and manual runs retain their
+full checks; release validation, hardening and publication prerequisites remain.
+
+The six existing analysis gates still precede native builds. Standalone jobs can
+skip before allocating a runner. Required matrix jobs always expand when those
+gates permit them, with an explicit successful step for irrelevant changes, so
+every existing check name is reported. Relevant CMake formatting checks scan the
+whole tree. CodeQL, repository/script guardrails, Lizard, secret scanning and
+dependency review continue on every PR. Fuzzing retains its library/harness/build
+selection and also covers changes to the shared classifier.
+
+Closing or merging a PR starts `ci-cancel-closed-pr.yml`. Its small job has
+`actions: write` only for cancellation and executes the cleanup helper from the
+trusted default branch, never the PR. It snapshots active `pull_request` runs,
+matches the repository and PR identity (or source repository, branch and PR
+lifetime when GitHub clears the association after merge), and preserves open or
+reopened PRs. Push, release, scheduled and unrelated PR runs are excluded. This
+hook becomes active after the workflow is merged into the default branch.
+
+The October 2026 review found 39 PR jobs, including a burst of 20 build/test jobs
+after analysis. PR #133's CI continued for 37 minutes after merge, using about
+21 runner-minutes after closure. Its overlapping main CI took 37 minutes versus
+7 minutes for a quiet main run earlier that day. Native test steps were only
+5–27 seconds (about a minute under ARM emulation), so CTest remains serial.
+Scorecard already runs directly without a polling runner. After rollout, compare
+queue time and completion time for overlapping PR/main runs, confirm all 40
+required contexts appear, and confirm closed PRs stop consuming runners.
+
 ## Project-Specific Guardrails
 
 The repository intentionally blocks or flags patterns that are easy to reintroduce during large edits:

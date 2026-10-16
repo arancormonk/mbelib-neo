@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: ci-changes
+
+on:
+  workflow_call:
+    outputs:
+      native_needed:
+        value: ${{ jobs.changes.outputs.native_needed }}
+      cmake_format_files:
+        value: ${{ jobs.changes.outputs.cmake_format_files }}
+      workflow_security_targets:
+        value: ${{ jobs.changes.outputs.workflow_security_targets }}
+      dependency_scan_targets:
+        value: ${{ jobs.changes.outputs.dependency_scan_targets }}
+      fuzz_targets:
+        value: ${{ jobs.changes.outputs.fuzz_targets }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Classify PR changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ci-fast-1
+      cancel-in-progress: false
+      queue: max
+    outputs:
+      native_needed: ${{ steps.changes.outputs.native_needed }}
+      cmake_format_files: ${{ steps.changes.outputs.cmake_format_files }}
+      workflow_security_targets: ${{ steps.changes.outputs.workflow_security_targets }}
+      dependency_scan_targets: ${{ steps.changes.outputs.dependency_scan_targets }}
+      fuzz_targets: ${{ steps.changes.outputs.fuzz_targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changes
+        id: changes
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Use the PR head, even if main already has an equivalent change.
+          # These outputs need only paths, so no ripgrep/header expansion is needed.
+          tools/ci_changed_files.sh --base "$CI_BASE_SHA" --head "$CI_HEAD_SHA" \
+            --no-header-expansion --out-dir "$RUNNER_TEMP/ci-changes"

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Check which pull-request changes tools/ci_changed_files.sh counts as fuzz targets.
+"""Check native and fuzzing selection from tools/ci_changed_files.sh.
 
 PR fuzzing runs on every pull request so its checks can be required, and skips the
-fuzzers when this count is zero. It must count exactly what the workflow's former
-`paths:` filter matched: deletions, both sides of a rename and src/external/ included.
+fuzzers when this count is zero. It must retain the workflow's former `paths:`
+coverage, including deletions, both sides of a rename and src/external/, and cover
+the classifier that now makes this decision.
 """
 
 import os
@@ -119,11 +120,16 @@ def main():
 
         cases = [
             ("docs only", modify("docs/notes.md"), []),
+            ("deleted docs", delete("docs/notes.md"), []),
+            ("root prose", modify("README.md"), []),
+            ("unknown input", modify("new-build-input.conf"), []),
             ("library source", modify("src/core/mbelib.c"), ["src/core/mbelib.c"]),
             ("public header", modify("include/mbelib-neo/mbelib.h"), ["include/mbelib-neo/mbelib.h"]),
             ("fuzz harness", modify("fuzz/fuzz_frame.c"), ["fuzz/fuzz_frame.c"]),
             ("fuzz build script", modify(".clusterfuzzlite/build.sh"), [".clusterfuzzlite/build.sh"]),
             ("this workflow", modify(".github/workflows/cflite_pr.yml"), [".github/workflows/cflite_pr.yml"]),
+            ("classifier workflow", modify(".github/workflows/ci-changes.yml"), [".github/workflows/ci-changes.yml"]),
+            ("classifier helper", modify("tools/ci_changed_files.sh"), ["tools/ci_changed_files.sh"]),
             ("another workflow", modify(".github/workflows/other.yml"), []),
             ("top-level CMakeLists.txt", modify("CMakeLists.txt"), ["CMakeLists.txt"]),
             ("nested CMakeLists.txt", modify("sub/CMakeLists.txt"), []),
@@ -132,10 +138,20 @@ def main():
             ("deleted header", delete("include/mbelib-neo/mbelib.h"), ["include/mbelib-neo/mbelib.h"]),
         ]
         for label, change, expected in cases:
-            count, listed, _ = fuzz_targets(bash, git, script, repo, base, change)
+            count, listed, outputs = fuzz_targets(bash, git, script, repo, base, change)
             assert listed == expected, (label, listed, expected)
             assert count == len(expected), (label, count)
-            print(f"PASS {label}: fuzz_targets={count}")
+            native = "false" if label in ("docs only", "deleted docs", "root prose") else "true"
+            assert outputs["native_needed"] == native, (label, outputs)
+            print(f"PASS {label}: fuzz_targets={count}, native_needed={native}")
+
+        def rename_source_to_prose(repo_dir):
+            os.rename(os.path.join(repo_dir, "src/core/mbelib.c"), os.path.join(repo_dir, "docs/source.md"))
+
+        count, listed, outputs = fuzz_targets(bash, git, script, repo, base, rename_source_to_prose)
+        assert count == 1 and listed == ["src/core/mbelib.c"], outputs
+        assert outputs["native_needed"] == "true", outputs
+        print("PASS source renamed into prose retains native and fuzz coverage")
 
         for path in ("cmake/Pffft.cmake", "tools/ci-dependency-pins.env"):
             for change in (modify, delete):
