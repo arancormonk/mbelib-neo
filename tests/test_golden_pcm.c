@@ -38,21 +38,21 @@
 #define GOLDEN_AMBE_STRICT 1
 #ifdef MBELIB_TEST_BUILD_SIMD
 #if defined(__AVX2__)
-#define GOLDEN_AMBE2450_F32 0x1322F544u
+#define GOLDEN_AMBE2450_F32 0xD60FB5FBu
 #define GOLDEN_AMBE2450_S16 0x49E0330Du
-#define GOLDEN_AMBE2400_F32 0xCFD262A5u
-#define GOLDEN_AMBE2400_S16 0x20DDF2FEu
+#define GOLDEN_AMBE2400_F32 0x8FA145CAu
+#define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #else
-#define GOLDEN_AMBE2450_F32 0xE3249039u
+#define GOLDEN_AMBE2450_F32 0xF5AA7582u
 #define GOLDEN_AMBE2450_S16 0x49E0330Du
-#define GOLDEN_AMBE2400_F32 0x5D2A9F37u
-#define GOLDEN_AMBE2400_S16 0x95857EF3u
+#define GOLDEN_AMBE2400_F32 0x8FAD98C2u
+#define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #endif
 #else
-#define GOLDEN_AMBE2450_F32 0xF5C9AC89u
+#define GOLDEN_AMBE2450_F32 0xF9ACC898u
 #define GOLDEN_AMBE2450_S16 0xA4881DEBu
-#define GOLDEN_AMBE2400_F32 0xBDF09A69u
-#define GOLDEN_AMBE2400_S16 0x4E10F918u
+#define GOLDEN_AMBE2400_F32 0x174AFCEAu
+#define GOLDEN_AMBE2400_S16 0xEB36DEB9u
 #endif
 #else
 #define GOLDEN_AMBE_STRICT  0
@@ -126,12 +126,12 @@ main(void) {
      * output high-pass phase and voiced/unvoiced render gains, and an in-band
      * fixture (golden_fill_single_frame: L * w0 < pi). */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(GOLDEN_FLOAT_EXACT)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0x142F8A5Bu;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0xDDD283CAu;
 #ifdef MBELIB_TEST_BUILD_SIMD
 #if defined(__AVX2__)
-    const uint32_t X86_F32_FNV1A_SIMD = 0xD87C24D5u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x7F0B1440u;
 #else
-    const uint32_t X86_F32_FNV1A_SIMD = 0xCA7F2DC3u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x00280DA8u;
 #endif
 #endif
 #endif

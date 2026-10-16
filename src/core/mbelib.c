@@ -664,12 +664,14 @@ mbe_low_band_gain(float hz) {
 
 float
 mbe_low_band_phase(float hz) {
-    /* arg of H(s) = s^2 / (s^2 + sqrt2 s + 1) at s = j hz / corner. */
+    /* arg of H(s) = s^2 / (s^2 + sqrt2 s + 1) at s = j hz / corner, in double:
+     * atan2f's last bit differs between C libraries (glibc 2.39 and 2.44 render
+     * different PCM from it), while double atan2 rounded to float agrees. */
     if (!(hz > 0.0f)) {
         return 0.0f;
     }
-    const float x = hz / MBE_LOW_BAND_CORNER_HZ;
-    return (float)M_PI - atan2f((float)M_SQRT2 * x, 1.0f - (x * x));
+    const double x = (double)hz / (double)MBE_LOW_BAND_CORNER_HZ;
+    return (float)(M_PI - atan2(M_SQRT2 * x, 1.0 - (x * x)));
 }
 
 /* A model's decoded amplitudes and phases, kept while it is rendered. */
