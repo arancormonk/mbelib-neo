@@ -28,7 +28,37 @@
  * 1 dB per band. The encoder predicts with the same value so that its frames
  * reconstruct the intended envelope in DVSI decoders.
  */
-#define MBE_AMBE2400_PREDICTION_RHO 0.8f
+#define MBE_AMBE2400_PREDICTION_RHO  0.8f
+
+/*
+ * D-STAR's gain is absolute: gamma = SCALE * AmbePlusDg[b2] + OFFSET, with no
+ * term from the previous frame. mbelib carried over rate 33's differential law
+ * (TIA-102.BABA-1 eq 26, Dg[b2] + 0.5 gamma(-1)), whose steady state is the
+ * same 2 Dg, so levels matched on average while onsets after silence came out
+ * up to 2.6 log2 (16 dB) low. In DVSI's re-quantizations of its decoded
+ * D-STAR frames into rate 33, the gain implied for fully voiced frames sits a
+ * median 0.037 log2 from this law per index (0.35 from the differential one),
+ * and the offset is where the rate-33 gain indices agree best.
+ * The encoder quantizes the gain against the same levels.
+ */
+#define MBE_AMBE2400_GAIN_SCALE      2.0f
+#define MBE_AMBE2400_GAIN_OFFSET     (-0.09f)
+
+/*
+ * D-STAR mutes a hard-decision stream while its error rate (0.95 eps_R +
+ * 0.001064 eps_T, as rate 33 keeps it, with D-STAR's own counts) is above
+ * this. DVSI's AMBE-3000 mutes D-STAR at sustained channel error rates near
+ * 10% and never at 5% or below; on its 1-10% test vectors this threshold
+ * agrees with DVSI's muting on 100% of the loud frames at 1-5% and 93% at
+ * 10%, where it starts muting earlier than DVSI does (0.7 s into a constant
+ * 10% channel, against DVSI's 3.3 s). It approximates DVSI's rule,
+ * which integrates the errors more slowly than this rate does. Soft decisions
+ * do not mute on it: at 10% DVSI mutes 53% of the loud frames there, against
+ * 88% with hard decisions, and no rule tried reproduced that. A muted frame
+ * is synthesized as usual (model, phase, overlap and noise state all advance)
+ * and played as comfort noise.
+ */
+#define MBE_AMBE2400_MUTE_ERROR_RATE 0.042f
 
 /*
  * D-STAR pitch law: f0 = 2^(OFFSET - SLOPE * (b0 + 0.5)) cycles per sample.
@@ -39,8 +69,8 @@
  * and the pitch of the original input speech agree with them. The encoder
  * quantizes with the same law.
  */
-#define MBE_AMBE2400_LOG2_F0_OFFSET (-4.24738f)
-#define MBE_AMBE2400_LOG2_F0_SLOPE  0.0217705f
+#define MBE_AMBE2400_LOG2_F0_OFFSET  (-4.24738f)
+#define MBE_AMBE2400_LOG2_F0_SLOPE   0.0217705f
 
 /* Fundamental (cycles per sample) of pitch code b0. */
 static inline float

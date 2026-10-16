@@ -79,7 +79,7 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain);
  */
 #define MBE_HIGH_BAND_GAIN_IMBE     1.25892541f /* +2.0 dB */
 #define MBE_HIGH_BAND_GAIN_AMBE2450 1.33352143f /* +2.5 dB */
-#define MBE_HIGH_BAND_GAIN_AMBE2400 1.41253754f /* +3.0 dB */
+#define MBE_HIGH_BAND_GAIN_AMBE2400 1.33352143f /* +2.5 dB */
 
 /**
  * @brief Low-band roll-off synthesis renders at a harmonic frequency.
@@ -87,6 +87,13 @@ float mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain);
  * @return Amplitude gain of a second-order high-pass at 100 Hz.
  */
 float mbe_low_band_gain(float hz);
+
+/**
+ * @brief Phase (radians) of the same high-pass at a harmonic frequency.
+ * @param hz Harmonic frequency in Hz.
+ * @return arg H: pi toward DC, pi/2 at 100 Hz, near 0 far above; 0 for hz <= 0.
+ */
+float mbe_low_band_phase(float hz);
 
 /** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
 enum mbe_mute_noise {
@@ -134,6 +141,16 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
  * output levels.
  */
 #define MBE_SPEECH_OUTPUT_GAIN        (1.0f / 7.0f)
+
+/*
+ * Render gains of voiced and unvoiced harmonics (+0.3 dB and -0.4 dB), shared
+ * by every codec and applied with the low-band roll-off, so the model and
+ * adaptive smoothing see the decoded amplitudes. On identical bits DVSI's
+ * AMBE-3000 decoders play voiced frames 0.32-0.38 dB louder and unvoiced frames
+ * 0.32-0.40 dB quieter than this synthesis otherwise does, in all three modes.
+ */
+#define MBE_RENDER_VOICED_GAIN        1.03514217f /* +0.3 dB */
+#define MBE_RENDER_UNVOICED_GAIN      0.95499259f /* -0.4 dB */
 
 /**
  * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].

@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Testing Policy
 
 mbelib-neo uses automated tests, static analysis, sanitizers, and fuzzing to
@@ -354,6 +355,95 @@ parameter quantization; whole-frame decoding above establishes the gain
 from batching the noise generator. With Clang 23.1.1 SSE2 and IEEE math,
 the same replay comparisons took 6.6–7.9% less time.
 
+### PR #130 synthesis and ECC optimization
+
+The follow-up to the DVSI parity changes compares with PR #130 at `d2293ba`.
+It batches the spectral-envelope phase filter across independent harmonics
+using SSE2, AVX2 or NEON, keeping each harmonic's ten taps in order. Synthesis
+computes the high-pass phase only for voiced oscillators, including harmonics
+fading between different model lengths. On SIMD targets the gain loop is
+separate from the phase calls, allowing compiler vectorization. The scalar
+path retains its combined expression, including x87 rounding. The required
+phases still use the double-precision `atan2` law.
+
+AMBE+2's counted C1 path re-encodes the data from its first Golay decode to
+count parity errors, removing the second decode and, for soft input, the
+second codebook search. It saves the received word before packing output,
+preserving callers that put the 49 output bits at the start of the input
+frame. Encoder analysis, quantization, FFTs and oscillator kernels retain
+the implementations from the earlier SIMD work.
+
+These measurements use a Ryzen 9 5950X, GCC 16.2.1, Release with fast-math
+and LTO on both sides. Each figure is the median of five alternating
+baseline/candidate comparisons pinned to CPU 6. Each decode invocation uses
+`bench_replay hard|soft <codec> 10 5` on DVSI's `dam` stream; ProVoice uses
+the same speech encoded to IMBE parameter rows and reframed as ProVoice.
+Input loading, allocation and warm-up are outside the timer. Lower is better.
+
+| Complete frame decode | Target | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| D-STAR, hard | SSE2 | 4.541 us | 3.739 us | 17.7% |
+| AMBE+2, hard | SSE2 | 4.991 us | 4.130 us | 17.3% |
+| IMBE, hard | SSE2 | 4.957 us | 4.155 us | 16.2% |
+| ProVoice, hard | SSE2 | 5.314 us | 4.532 us | 14.7% |
+| AMBE+2, soft | SSE2 | 7.502 us | 5.819 us | 22.4% |
+| D-STAR, hard | AVX2 | 3.191 us | 2.964 us | 7.1% |
+| AMBE+2, hard | AVX2 | 3.519 us | 3.283 us | 6.7% |
+| IMBE, hard | AVX2 | 3.574 us | 3.349 us | 6.3% |
+| ProVoice, hard | AVX2 | 3.761 us | 3.555 us | 5.5% |
+| AMBE+2, soft | AVX2 | 5.948 us | 4.947 us | 16.8% |
+
+The other soft decoders take 8.5–12.8% less time on SSE2 and 2.5–4.7% less
+on AVX2. Scalar Release with IEEE math takes 8.1–9.3% less time for hard
+decoding. Encoder medians on SSE2 and AVX2 stay within 0.2% of baseline.
+With Clang 23.1.1, hard decoding takes 14.5–18.0% less time on SSE2/IEEE
+and 17.3–21.5% less on AVX2 with fast-math and LTO. Longer Clang AVX2
+encoder runs put AMBE medians within 0.5% of baseline, inside the observed
+timing spread, and IMBE 1.8% faster.
+Speedups depend on the compiler, target and speech; QEMU correctness checks
+do not establish native ARM performance.
+
+For each of six host build pairs, all three encoders produce identical
+parameter-bit rows on all 97 cached DVSI inputs: 296,772 encoded frames.
+The configurations are GCC scalar/IEEE, GCC SSE2/IEEE, GCC SSE2 and AVX2
+with fast-math and LTO, Clang SSE2/IEEE, and Clang AVX2 with fast-math and
+LTO. All 321 cached frame streams, including tones, synthetic inputs and
+hard/soft channel-error vectors, contribute 55,073,120 compared PCM samples
+per pair. Five configurations produce identical PCM. GCC SSE2 with
+fast-math changes 298 samples, each by one int16 unit, as the compiler
+vectorizes the gain calculation. There are no nonfinite samples, additional
+clips, or changed tone, erasure, repeat, silence, mute or error counts.
+
+For the changed SSE2 streams, scoring both outputs at the baseline's lag
+changes log-spectral distance by at most 0.000004 dB against the input and
+0.000002 dB against DVSI; envelope correlation changes by less than
+0.0000004. Tone detector agreement, wrong-tone fraction and steady-tone
+window counts are unchanged. The parity PR's existing tone-gate result
+remains as recorded in [DVSI parity](dvsi-parity.md#gates). The converted
+ProVoice fixture also produces identical PCM in all six host configurations.
+
+ARM32 and AArch64 NEON each compare the same 321 streams under QEMU.
+ARM32 PCM is identical. AArch64 changes 6,045 of the 55,073,120 samples,
+each by one int16 unit. Its fixed-lag log-spectral distance changes by less
+than 0.00004 dB against both the input and DVSI, and envelope correlation
+by less than 0.000003. Tone detector agreement, wrong-tone fraction and
+steady-tone window counts are unchanged; there are no additional PCM rail hits.
+
+The phase oracle covers every supported model length (1–56), mirrored and
+extrapolated envelope edges, zero magnitudes and both voicing classes. ECC
+checks cover 512 arbitrary received words with hard and soft decisions,
+including zero-reliability ties, and 32 in-place layouts. Scalar, SSE2 and
+AVX2 Debug golden hashes are unchanged. Checks include the full Debug and
+Release suites, scalar and AVX2 ASan/UBSan, NOTONES, x87 Debug, the six
+Release configurations above, ARM32 and AArch64 NEON numerical/API tests
+under QEMU with Android NDK Clang 18, and `tools/quality_preflight.sh`.
+ARM32 NDK builds disable hardening because that compiler accepts the
+stack-clash flag in CMake's probe but rejects it when compiling for ARM32.
+ARM32 QEMU runs use a PID namespace to stay within Bionic's 16-bit PID limit.
+Gitleaks history and worktree-diff scans are also clean; the history scan
+mounts the worktree's common Git directory as well as the worktree.
+DVSI inputs, audio, comparison reports and benchmark logs stay local.
+
 ## TETRA Conformance
 
 EN 300 395-4 tests a TETRA speech decoder bit for bit: TE1_46.CHD (138 little-endian 16-bit
@@ -706,7 +796,16 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
   9-byte rate-33 frames (MSB first, DMR interleave). It writes Framef rows for
   `mbe_quality_eval`. Bits are only deinterleaved, so the `_eN` channel-error
   variants still exercise FEC and repeat handling. A truncated final frame is
-  rejected, and so are the 4-bit soft-decision `*_sd.bit` files.
+  rejected.
+- The `_eN_hd` and `_eN_sd` variants carry the same channel errors, at bit
+  error rates of about 1.1, 2.2, 4.9 and 10.6% for `e1`, `e2`, `e5` and `e10`.
+  `_sd.bit` (DVSI's `-sdbits 4`) holds one 4-bit value per bit of the `_hd.bit`
+  file, two per byte, high nibble first, in that file's MSB-first bit order;
+  values 8 to 15 decide 1, so the `_hd` file is exactly their hard decisions.
+  `--from-dvsi` recognizes the `_sd.bit` name and writes one lowercase hex digit
+  per frame cell; `mbe_quality_eval --soft` decodes those rows through the
+  `*SoftFramef` APIs, with each value's distance from 7.5 as the reliability
+  (16 to 240).
 - Copy the inputs and DVSI's decoded files to `.raw` names before using them as
   `--ref` or `--decoded` operands. The evaluator selects the format by
   extension.
@@ -715,12 +814,19 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
 
 `tools/quality/dvsi_scoreboard.py` runs every speech vector of the D-STAR, P25
 and rate-33 sets through the tools above and writes `scoreboard.json` and
-`scoreboard.md` (needs NumPy):
+`scoreboard.md` (needs NumPy). A change is judged by scoring a baseline build
+and the candidate, each aligning freely, then both again at their joint lags,
+the candidate against the baseline:
 
 ```sh
-python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
-  --tools build/tools-debug --out build/quality/scoreboard/candidate \
-  --compare build/quality/scoreboard/baseline/scoreboard.json --gates pitch-law
+SB="python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors --decode-tools build/tools-debug"
+Q=build/quality/scoreboard
+$SB --tools build/baseline --out $Q/baseline-free
+$SB --tools build/tools-debug --out $Q/candidate-free
+JOINT=$Q/baseline-free/scoreboard.json,$Q/candidate-free/scoreboard.json
+$SB --tools build/baseline --out $Q/baseline --lags-from $JOINT
+$SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
+  --compare $Q/baseline/scoreboard.json --gates pitch-law
 ```
 
 - **Speech:** ours vs the input, DVSI's decoder vs the input, and ours vs
@@ -731,7 +837,8 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   decoder coded, by f0 band. A decoder that plays sharp or flat shows up as a
   ratio away from 1.
 - **Encoder:** our encoding of the input (D-STAR, IMBE and AMBE+2 encoders)
-  against DVSI's encoding of it, both decoded by this library: pitch error
+  against DVSI's encoding of it, both decoded by the `--decode-tools` build
+  (default `--tools`): pitch error
   against the input, octave errors, per-1 kHz-band voicing agreement, the speech
   metrics against the input, the same metrics of our decoded encoding against
   DVSI's (`encoder.vs_dvsi_bits.*`, with `encoder.level_gap_db` the unsigned
@@ -744,7 +851,13 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   `--compare` against a baseline that recorded them, `encoder.rows_changed_vectors`
   counts the vectors whose encoder bits changed. A build whose
   `mbe_quality_encode` does not offer a codec skips that encoder, so this
-  script can score a baseline built from an older checkout.
+  script can score a baseline built from an older checkout. Give the baseline
+  and the candidate run the same `--decode-tools`, so that only the encoders
+  differ (where a change moves both, decode with the candidate's decoder: it
+  stands for the decoders that will receive the bits). The run records that
+  decoder's identity (`decoder_identity`, a SHA-256 of its `mbe_quality_eval`
+  and the library beside it), and `--compare` refuses encoder deltas between
+  runs decoded by different or unrecorded decoders.
 - **Encoder tones (rate 33 and D-STAR):** our encoding of each tone vector
   against DVSI's bits, frame by frame at the best frame shift (of equally good
   shifts, the one where DVSI's encoder runs a frame behind ours, as on every
@@ -762,13 +875,34 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   fails the run. An encoding without one (one that is mostly silence frames,
   say) is left unscored, counted in `encoder.alignment_failures`, and fails
   any gate on its partition.
-- **Partitions** are by utterance, so `dam`'s level, overload and car-noise
-  variants sit with `dam`. `development` and `validation` were both examined
-  during earlier changes; `final` vectors are scored once per change set
-  (`--partitions final`). Not scored as speech: `xfer`, the DTX and
-  channel-error variants and the synthetic pulse trains and sweeps. The
-  `tones` partition covers the DTMF, single, KNOX, alert and call-progress
-  vectors.
+- **Channel errors** (`--partitions channel`): `dam`'s `_eN_hd` and `_eN_sd`
+  vectors, decoded as hard and as soft decisions, against DVSI's decode of the
+  same bits. A loud frame (RMS 300 or more in DVSI's decode of the clean bits)
+  is muted by DVSI when its decode of the errored bits is 30 dB or more below
+  that; ours is muted when the frame carries `MBE_PROCESS_FLAG_MUTE`. The
+  section reports, per vector, how often our mute decisions agree with DVSI's
+  on loud frames, the false and missed mute rates, the first loud frame each
+  mutes, our repeat rate, and the log-spectral distance from DVSI's output on
+  the loud frames with no muted frame at or next to them (a frame's spectra
+  reach into its neighbours), with our output aligned and level-matched by the
+  clean bits' comparison. Each run mutes its own frames, so `--compare`
+  measures that distance for both runs on the frames that count in both
+  (`channel.hd.lsd_common_db`) and reports their share of all the loud frames
+  DVSI plays (`coverage`), so frames a run did not measure count as lost. Soft
+  vectors need a baseline build whose tools read them (`--from-dvsi` of an
+  `_sd.bit` file and `mbe_quality_eval --soft`): for an older library, build it
+  with this checkout's `tools/quality` sources.
+- **Partitions** are by source recording. Several vectors are one recording
+  through different filters, noise or levels (found by matching 3 s blocks of
+  the inputs at any lag): `dam` and its variants (`lvl` among them),
+  `fambm22a`, `tambf22a`, `ucarm15a`, `ucarf15a` and `ucarm20a`, `tambf22b` and
+  `tambf32b`, and `tia11` and `p01mirs`. Each such group sits in one partition,
+  and the bootstrap intervals resample whole groups. `development` and
+  `validation` were both examined during earlier changes; `final` (`irstia`
+  and `mark`) is scored once per change set (`--partitions final`). Not scored
+  as speech: `xfer`, the DTX and channel-error variants and the synthetic
+  pulse trains and sweeps. The `tones` partition covers the DTMF, single,
+  KNOX, alert and call-progress vectors.
 - **Tones** are compared with one acoustic detector run on both outputs, on
   windows where DVSI's output is steady: level, frequencies, balance, how
   often both agree on the tone playing, and the fraction of windows playing a
@@ -778,10 +912,28 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   apart.
 - `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
   worst vector, and counts the baseline's speech vectors whose PCM changed
-  (a vector missing from the run counts as changed). `--gates` evaluates a gate set from
+  (a vector missing from the run counts as changed). Both runs are measured at
+  one lag per comparison, so a change that moves the evaluator's alignment
+  search does not also move the samples measured: `--lags-from` takes the lags
+  a scoreboard recorded (`lags` in each vector's entry, with the frame shift of
+  the encoder-tone comparison), or, given two, their joint lags. Where the two
+  free runs' searches disagree, the joint lag is that of the run whose
+  alignment reached the higher correlation (`alignment`), since a change can
+  let a decoder align where the old one could not: main's D-STAR gain law
+  played onsets up to 16 dB low and pulled its alignment with DVSI's output to
+  40-96 samples, where the corrected decoder aligns at -16 to 0 (P25 and rate
+  33 at -16 to +16 in both builds). Without `--lags-from`, `--compare` uses
+  the baseline's lags. A vector
+  whose recorded lags still differ from the baseline's is not paired.
+  `--gates` evaluates gate sets (a comma list) from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and
-  exits non-zero when a gate fails. A paired check fails when a metric was
-  measured for a vector in only one of the two runs.
+  exits non-zero when a gate fails. A gate set fails unless the run was scored
+  at fixed lags and both runs scored every vector of its partition in every
+  mode it gates, and a paired check fails when a metric was measured for a
+  vector in only one of the two runs.
+  `all_no_increase` and `all_no_decrease` hold every vector to the limit, not
+  just the mean, and a check's `min_coverage` fails it when its common frames
+  are too few.
 
 `mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
 `bits` (the frame's parameter bits after FEC), `decoded` (the frame's own
@@ -790,7 +942,12 @@ with its status), `history` (the prediction state after the frame) and `synth`
 (the enhanced model synthesized). Each holds `w0` (radians per sample), `L` and
 per-band `Vl`, `Ml` (linear amplitude as synthesized; for AMBE unvoiced bands
 it includes the unvoiced scale factor) and `log2Ml` (the codec's log2 spectral
-amplitude before that factor), plus `gamma`. Dumping does not change the PCM.
+amplitude before that factor), plus `gamma`. `synth` also holds `PHIl` and
+`PSIl`, the model's harmonic phases for the frame. Synthesis renders each voiced
+harmonic with `PHIl` plus the output high-pass's phase at its frequency
+(`mbe_low_band_phase()`: 180 degrees toward DC, 90 at 100 Hz, under 9 above
+1 kHz), so phase readbacks can be checked against the decoder itself. Dumping
+does not change the PCM.
 
 ### Encoder evaluation
 

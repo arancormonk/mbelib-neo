@@ -104,6 +104,10 @@ def verify(evaluator, reframer, root):
                 model = record[key]
                 assert 9 <= model["L"] <= 56 and model["w0"] > 0, record
                 assert all(len(model[field]) == model["L"] for field in ("Vl", "Ml", "log2Ml")), record
+            # The synthesized model also carries the phases it was rendered with.
+            synth = record["synth"]
+            assert all(len(synth[field]) == synth["L"] for field in ("PHIl", "PSIl")), record
+            assert "PHIl" not in record["history"] and "PHIl" not in record["decoded"], record
             decoded = record["decoded"]
             assert decoded["status"] == 0 and decoded["L"] == record["synth"]["L"], record
             assert abs(decoded["w0"] - record["history"]["w0"]) < 1e-9, record
@@ -137,19 +141,61 @@ def verify(evaluator, reframer, root):
         result = run(reframer, "--codec", codec, "--from-dvsi", vector, "--out", reframed, success=False)
         assert b"truncated DVSI frame" in result.stderr
         assert reframed.read_bytes() == before
-    # DVSI's 4-bit soft-decision files (*_sd.bit) have a whole number of hard
-    # frames too, so only the explicit rejection keeps them from importing as garbage.
+    # DVSI's 4-bit soft-decision files (*_sd.bit): four bytes per hard-frame byte,
+    # one hex digit per frame cell. A file that is not whole soft frames is refused
+    # and leaves the output untouched.
     soft = root / "dam_e1_sd.bit"
-    soft.write_bytes(bytes(36) * 2)
-    before = reframed.read_bytes()
-    result = run(reframer, "--codec", "ambe2400", "--from-dvsi", soft, "--out", reframed, success=False)
-    assert b"soft-decision" in result.stderr
-    assert reframed.read_bytes() == before
+    for codec, size, width in (("imbe7200", 18, 184), ("ambe2450", 9, 96), ("ambe2400", 9, 96)):
+        soft.write_bytes(bytes(range(4 * size)) * 2)
+        run(reframer, "--codec", codec, "--from-dvsi", soft, "--out", reframed)
+        rows = reframed.read_text().splitlines()
+        assert [len(row) for row in rows] == [width] * 2, rows
+        assert set("".join(rows)) <= set("0123456789abcdef"), rows
+        before = reframed.read_bytes()
+        soft.write_bytes(bytes(4 * size) + bytes(size))
+        result = run(reframer, "--codec", codec, "--from-dvsi", soft, "--out", reframed, success=False)
+        assert b"truncated DVSI frame" in result.stderr
+        assert reframed.read_bytes() == before
+    verify_soft_decode(evaluator, reframer, root)
     vector.write_bytes(bytes(168))
     run(reframer, "--codec", "imbe7100", "--from-dvsi", vector, "--out", reframed, success=False)
     run(reframer, "--codec", "ambe2400", "--from-dvsi", vector, "--in", parameters, "--out", reframed, success=False)
     vector.write_bytes(b"")
     run(reframer, "--codec", "ambe2400", "--from-dvsi", vector, "--out", reframed, success=False)
+
+
+def verify_soft_decode(evaluator, reframer, root):
+    """Fully confident soft values decode as their hard decisions; --soft is explicit."""
+    hard = root / "dam_e1_hd.bit"
+    soft = root / "dam_e1_sd.bit"
+    hard_rows, soft_rows = root / "hard.txt", root / "soft.txt"
+    hard_wav, soft_wav = root / "hard.wav", root / "soft.wav"
+    for codec, size in (("imbe7200", 18), ("ambe2450", 9), ("ambe2400", 9)):
+        channel = bytes((37 * i + 11) % 256 for i in range(size * 4))
+        hard.write_bytes(channel)
+        # Each hard bit (MSB first) as the soft value 0 or 15, two per byte.
+        bits = [(byte >> (7 - k)) & 1 for byte in channel for k in range(8)]
+        soft.write_bytes(bytes(((15 * bits[i]) << 4) | (15 * bits[i + 1]) for i in range(0, len(bits), 2)))
+        run(reframer, "--codec", codec, "--from-dvsi", hard, "--out", hard_rows)
+        run(reframer, "--codec", codec, "--from-dvsi", soft, "--out", soft_rows)
+        run(evaluator, "--codec", codec, "--frames", hard_rows, "--out", hard_wav)
+        run(evaluator, "--codec", codec, "--frames", soft_rows, "--out", soft_wav, "--soft")
+        assert soft_wav.read_bytes() == hard_wav.read_bytes(), codec
+        private_output(soft_wav)
+        # Soft rows need --soft, and --soft needs channel frames of hex digits.
+        result = run(evaluator, "--codec", codec, "--frames", soft_rows, "--out", soft_wav, success=False)
+        assert b"binary digits" in result.stderr
+        rows = soft_rows.read_text().splitlines()
+        soft_rows.write_text(rows[0][:-1] + "g\n")
+        result = run(evaluator, "--codec", codec, "--frames", soft_rows, "--out", soft_wav, "--soft", success=False)
+        assert b"hex digits" in result.stderr
+    soft_rows.write_text("0" * 49 + "\n")
+    result = run(evaluator, "--codec", "ambe2450", "--frames", soft_rows, "--out", soft_wav, "--soft", success=False)
+    assert b"length/codec mismatch" in result.stderr
+    soft_rows.write_text(("f" * 168 + "\n") * 2)
+    run(evaluator, "--codec", "imbe7100", "--frames", soft_rows, "--out", soft_wav, "--soft")
+    result = run(evaluator, "--decoded", hard_wav, "--soft", success=False)
+    assert b"--soft" in result.stderr
 
 
 def verify_dvsi_selection():

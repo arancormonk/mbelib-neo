@@ -244,7 +244,7 @@ ambe2400_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int b0, int L, float 
 }
 
 static void
-ambe2400_decode_gain(const char* ambe_d, mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+ambe2400_decode_gain(const char* ambe_d, mbe_parms* cur_mp) {
     int b2 = 0;
     b2 |= ambe_d[6] << 5;
     b2 |= ambe_d[7] << 4;
@@ -253,10 +253,9 @@ ambe2400_decode_gain(const char* ambe_d, mbe_parms* cur_mp, const mbe_parms* pre
     b2 |= ambe_d[42] << 1;
     b2 |= ambe_d[43];
 
-    float deltaGamma = AmbePlusDg[b2];
-    cur_mp->gamma = deltaGamma + ((float)0.5 * prev_mp->gamma);
+    cur_mp->gamma = (MBE_AMBE2400_GAIN_SCALE * AmbePlusDg[b2]) + MBE_AMBE2400_GAIN_OFFSET;
 #ifdef AMBE_DEBUG
-    fprintf(stderr, "b2: %i, deltaGamma: %f gamma: %f gamma-1: %f\n", b2, deltaGamma, cur_mp->gamma, prev_mp->gamma);
+    fprintf(stderr, "b2: %i, gamma: %f\n", b2, cur_mp->gamma);
 #endif
 }
 
@@ -531,7 +530,7 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     float unvc = (float)0.2046 / sqrtf(cur_mp->w0);
 
     ambe2400_decode_vuv(ambe_d, cur_mp, b0, L, f0);
-    ambe2400_decode_gain(ambe_d, cur_mp, prev_mp);
+    ambe2400_decode_gain(ambe_d, cur_mp);
     ambe2400_decode_ri(ambe_d, Ri);
     ambe2400_decode_cik(ambe_d, L, Ri, Cik, Ji);
     mbe_ambe2400_inverse_dct_tl(Cik, Ji, Tl);
@@ -695,12 +694,22 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
         mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+        if (((result->flags & MBE_PROCESS_FLAG_SOFT_INPUT) == 0u)
+            && (cur_mp->errorRate > MBE_AMBE2400_MUTE_ERROR_RATE)) {
+            mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
+            mbe_synthesizeComfortNoisef(aout_buf);
+        }
         return;
     }
 
+    /* The repeat limit restarts the model; the error rate keeps accumulating. */
+    const float error_rate = cur_mp->errorRate;
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
     mbe_synthesizeComfortNoisef(aout_buf);
     mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
+    cur_mp->errorRate = error_rate;
+    prev_mp->errorRate = error_rate;
+    prev_mp_enhanced->errorRate = error_rate;
 }
 
 static void

@@ -530,9 +530,19 @@ MBE_API int mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_resul
 MBE_API void mbe_dumpAmbe2450Data(const char* ambe_d);
 /** @brief Print a raw AMBE 3600x2450 frame to stderr (debug). */
 MBE_API void mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]);
-/** @brief ECC correction for AMBE 3600x2450 C0. */
+/**
+ * @brief ECC correction for AMBE 3600x2450 C0.
+ * @return Bit errors in C0 as TIA-102.BABA-1 5.5 counts them (received bits,
+ *         parity included, that differ from the corrected codeword, plus the
+ *         extended parity bit when it disagrees; 4 is detected but
+ *         uncorrectable), or a negative `MBE_STATUS_*` code.
+ */
 MBE_API int mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]);
-/** @brief ECC and parameter packing for AMBE 3600x2450. */
+/**
+ * @brief ECC and parameter packing for AMBE 3600x2450.
+ * @return Bit errors in C1, parity included (TIA-102.BABA-1 5.5), or a
+ *         negative `MBE_STATUS_*` code.
+ */
 MBE_API int mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d);
 /** AMBE 2450 frame type: voice frame; the only type that may be committed as prediction history. */
 #define MBE_AMBE2450_FRAME_VOICE   0

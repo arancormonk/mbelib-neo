@@ -38,21 +38,21 @@
 #define GOLDEN_AMBE_STRICT 1
 #ifdef MBELIB_TEST_BUILD_SIMD
 #if defined(__AVX2__)
-#define GOLDEN_AMBE2450_F32 0xFCE874CFu
-#define GOLDEN_AMBE2450_S16 0xDC06DCC3u
-#define GOLDEN_AMBE2400_F32 0x53825BD9u
-#define GOLDEN_AMBE2400_S16 0x195DC632u
+#define GOLDEN_AMBE2450_F32 0xD60FB5FBu
+#define GOLDEN_AMBE2450_S16 0x49E0330Du
+#define GOLDEN_AMBE2400_F32 0x8FA145CAu
+#define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #else
-#define GOLDEN_AMBE2450_F32 0x4C6D05B4u
-#define GOLDEN_AMBE2450_S16 0x81258D6Au
-#define GOLDEN_AMBE2400_F32 0xD6BC22FAu
-#define GOLDEN_AMBE2400_S16 0x195DC632u
+#define GOLDEN_AMBE2450_F32 0xF5AA7582u
+#define GOLDEN_AMBE2450_S16 0x49E0330Du
+#define GOLDEN_AMBE2400_F32 0x8FAD98C2u
+#define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #endif
 #else
-#define GOLDEN_AMBE2450_F32 0x60FCA5C7u
-#define GOLDEN_AMBE2450_S16 0x147E7D2Cu
-#define GOLDEN_AMBE2400_F32 0x36F4E246u
-#define GOLDEN_AMBE2400_S16 0x195DC632u
+#define GOLDEN_AMBE2450_F32 0xF9ACC898u
+#define GOLDEN_AMBE2450_S16 0xA4881DEBu
+#define GOLDEN_AMBE2400_F32 0x174AFCEAu
+#define GOLDEN_AMBE2400_S16 0xEB36DEB9u
 #endif
 #else
 #define GOLDEN_AMBE_STRICT  0
@@ -122,20 +122,21 @@ main(void) {
      * On other arches (e.g., AArch64/NEON), rounding order can differ; we use
      * determinism and sanity checks so CI remains green.
      */
-    /* Regenerated harmonic phase, the shared spec-exact WOLA window, and an
-     * in-band fixture (golden_fill_single_frame: L * w0 < pi). */
+    /* Regenerated harmonic phase, the shared spec-exact WOLA window, the
+     * output high-pass phase and voiced/unvoiced render gains, and an in-band
+     * fixture (golden_fill_single_frame: L * w0 < pi). */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(GOLDEN_FLOAT_EXACT)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0x3A84EEF4u;
+    const uint32_t X86_F32_FNV1A_SCALAR = 0xDDD283CAu;
 #ifdef MBELIB_TEST_BUILD_SIMD
 #if defined(__AVX2__)
-    const uint32_t X86_F32_FNV1A_SIMD = 0xC599F6F4u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x7F0B1440u;
 #else
-    const uint32_t X86_F32_FNV1A_SIMD = 0xDCDA0EE0u;
+    const uint32_t X86_F32_FNV1A_SIMD = 0x00280DA8u;
 #endif
 #endif
 #endif
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
-    const uint32_t X86_S16_FNV1A = 0x0A60361Eu;
+    const uint32_t X86_S16_FNV1A = 0x3EC7146Du;
 #endif
 
     float out_f[160];

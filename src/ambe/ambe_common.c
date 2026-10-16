@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "mbe_adaptive.h"
+#include "mbe_ecc.h"
 #include "mbelib-neo/mbelib.h"
 
 int
@@ -43,6 +44,83 @@ mbe_eccAmbe3600C0_common(char fr[4][24]) {
         }
     }
     return errs;
+}
+
+/* The Golay(23,12) codeword of the data bits a decode left in out[11..22]
+ * (MSB at 22). */
+static void
+ambe_golay23_codeword(const char out[23], char codeword[23]) {
+    char data[12];
+    for (int i = 0; i < 12; i++) {
+        data[i] = out[22 - i];
+    }
+    mbe_golay2312_encode(data, codeword);
+}
+
+/* That codeword, and how many of the received bits in[] differ from it. */
+static int
+ambe_golay23_errors(const char in[23], const char out[23], char codeword[23]) {
+    ambe_golay23_codeword(out, codeword);
+    int errs = 0;
+    for (int i = 0; i < 23; i++) {
+        errs += (codeword[i] & 1) != (in[i] & 1);
+    }
+    return errs;
+}
+
+int
+mbe_eccAmbe3600C0Counted_common(char fr[4][24]) {
+    char in[23], out[23], codeword[23];
+    for (int j = 0; j < 23; j++) {
+        in[j] = fr[0][j + 1];
+    }
+    (void)mbe_golay2312(in, out);
+    int errs = ambe_golay23_errors(in, out, codeword);
+    int parity = 0;
+    for (int j = 0; j < 23; j++) {
+        fr[0][j + 1] = codeword[j];
+        parity ^= codeword[j] & 1;
+    }
+    if ((fr[0][0] & 1) != parity) {
+        fr[0][0] = (char)parity;
+        errs++;
+    }
+    return errs;
+}
+
+/* Rounded reliability cost of the received soft bits in[] that disagree with
+ * codeword[], in units of a fully reliable bit. */
+static int
+ambe_soft_cost(const mbe_soft_bit* in, const char* codeword, int count, int extra) {
+    int cost = extra;
+    for (int i = 0; i < count; i++) {
+        if ((in[i].bit & 1u) != (unsigned)(codeword[i] & 1)) {
+            cost += in[i].reliability;
+        }
+    }
+    return (cost + 127) / 255;
+}
+
+int
+mbe_eccAmbe3600C0SoftCounted_common(mbe_soft_bit fr[4][24]) {
+    mbe_soft_bit in[23];
+    char out[23], codeword[23];
+    for (int j = 0; j < 23; j++) {
+        in[j] = fr[0][j + 1];
+    }
+    (void)mbe_golay2312Soft(in, out);
+    ambe_golay23_codeword(out, codeword);
+    int parity = 0;
+    for (int j = 0; j < 23; j++) {
+        fr[0][j + 1].bit = (uint8_t)(codeword[j] & 1);
+        parity ^= codeword[j] & 1;
+    }
+    int extra = 0;
+    if ((fr[0][0].bit & 1u) != (unsigned)parity) {
+        extra = fr[0][0].reliability;
+        fr[0][0].bit = (uint8_t)parity;
+    }
+    return ambe_soft_cost(in, codeword, 23, extra);
 }
 
 int
@@ -154,6 +232,32 @@ mbe_eccAmbe3600Data_common(char fr[4][24], char* out49) {
         ambe++;
     }
     return errs;
+}
+
+int
+mbe_eccAmbe3600DataCounted_common(char fr[4][24], char* out49) {
+    char in[23], codeword[23];
+    /* out49 may start at fr: packing C2 overwrites the received C1 parity. */
+    memcpy(in, fr[1], sizeof(in));
+    (void)mbe_eccAmbe3600Data_common(fr, out49);
+    /* C1's decoded data is already in out49[12..23], MSB first. Re-encode
+     * it to count parity errors too, without decoding the same word twice. */
+    mbe_golay2312_encode(out49 + 12, codeword);
+    int errs = 0;
+    for (int j = 0; j < 23; j++) {
+        errs += (codeword[j] & 1) != (in[j] & 1);
+    }
+    return errs;
+}
+
+int
+mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49) {
+    mbe_soft_bit in[23];
+    char codeword[23];
+    memcpy(in, fr[1], sizeof(in));
+    (void)mbe_eccAmbe3600DataSoft_common(fr, out49);
+    mbe_golay2312_encode(out49 + 12, codeword);
+    return ambe_soft_cost(in, codeword, 23, 0);
 }
 
 int

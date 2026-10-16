@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "ambe3600x2450_const.h"
+#include "ambe3600x2450_internal.h"
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
@@ -28,6 +29,57 @@
 #include "mbe_tone.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
+
+/*
+ * Bit positions of b0..b8 in ambe_d, most significant first, -1 ending each
+ * field: TIA-102.BABA-1 5.1 Tables 5-8 as DVSI's AMBE-3000 applies them.
+ * u3's bits 8..5 (ambe_d 40..43) carry b4(2), b4(1), b4(0) and then b3(0);
+ * the v1.0.5 text of Table 8 prints b3(0) first. DVSI's rate-34 frames carry
+ * the same 49-bit vector as this decoder reads, and with this assignment
+ * DVSI's own re-quantizations of a decoded model pick the PRBA vectors this
+ * library's quantizer picks (84-91% exact against 8-34% with the printed one).
+ */
+static const signed char ambe2450_layout[9][10] = {
+    {0, 1, 2, 3, 37, 38, 39, -1},
+    {4, 5, 6, 7, 35, -1},
+    {8, 9, 10, 11, 36, -1},
+    {12, 13, 14, 15, 16, 17, 18, 19, 43, -1},
+    {20, 21, 22, 23, 40, 41, 42, -1},
+    {24, 25, 26, 27, 44, -1},
+    {28, 29, 30, 45, -1},
+    {31, 32, 33, 46, -1},
+    {34, 47, 48, -1},
+};
+
+/* Quantizer value b<field> from ambe_d. */
+static int
+ambe2450_field(const char* ambe_d, int field) {
+    int value = 0;
+    for (int j = 0; ambe2450_layout[field][j] >= 0; j++) {
+        value = (value << 1) | (ambe_d[(int)ambe2450_layout[field][j]] & 1);
+    }
+    return value;
+}
+
+void
+mbe_ambe2450_unpack(const char ambe_d[49], int b[9]) {
+    for (int i = 0; i < 9; i++) {
+        b[i] = ambe2450_field(ambe_d, i);
+    }
+}
+
+void
+mbe_ambe2450_pack(const int b[9], char ambe_d[49]) {
+    for (int i = 0; i < 9; i++) {
+        int width = 0;
+        while (ambe2450_layout[i][width] >= 0) {
+            width++;
+        }
+        for (int j = 0; j < width; j++) {
+            ambe_d[(int)ambe2450_layout[i][j]] = (char)((b[i] >> (width - 1 - j)) & 1);
+        }
+    }
+}
 
 /**
  * @brief Thread-local cache for AMBE DCT cosine coefficients.
@@ -146,7 +198,9 @@ mbe_dumpAmbe3600x2450Frame(const char ambe_fr[4][24]) {
 /**
  * @brief Apply ECC to AMBE 3600x2450 C0 and update in-place.
  * @param ambe_fr Frame as 4x24 bitplanes.
- * @return Number of corrected errors in C0.
+ * @return Bit errors corrected or detected in C0, parity bits included
+ *         (TIA-102.BABA-1 5.5): 0..3, or 4 when the extended parity reveals
+ *         an uncorrectable pattern.
  */
 int
 mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]) {
@@ -154,14 +208,14 @@ mbe_eccAmbe3600x2450C0(char ambe_fr[4][24]) {
     if (ret < 0) {
         return ret;
     }
-    return mbe_eccAmbe3600C0_common(ambe_fr);
+    return mbe_eccAmbe3600C0Counted_common(ambe_fr);
 }
 
 /**
  * @brief Apply ECC to AMBE 3600x2450 data and pack parameter bits.
  * @param ambe_fr Frame as 4x24 bitplanes.
  * @param ambe_d  Output parameter bits (49).
- * @return Number of corrected errors in protected fields.
+ * @return Bit errors corrected in C1, parity bits included (TIA-102.BABA-1 5.5).
  */
 int
 mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
@@ -172,7 +226,7 @@ mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
     if (ret < 0) {
         return ret;
     }
-    return mbe_eccAmbe3600Data_common(ambe_fr, ambe_d);
+    return mbe_eccAmbe3600DataCounted_common(ambe_fr, ambe_d);
 }
 
 static void
@@ -199,12 +253,7 @@ ambe2450_read_u_fields(const char* ambe_d, int* u0, int* u1, int* u2, int* u3) {
 static void
 ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
     (void)b0;
-    int b1 = 0;
-    b1 |= ambe_d[4] << 4;
-    b1 |= ambe_d[5] << 3;
-    b1 |= ambe_d[6] << 2;
-    b1 |= ambe_d[7] << 1;
-    b1 |= ambe_d[35];
+    int b1 = ambe2450_field(ambe_d, 1);
 
     for (int l = 1; l <= L; l++) {
         int jl = (int)((float)l * (float)16.0 * f0);
@@ -225,28 +274,12 @@ ambe2450_decode_ri(const char* ambe_d, float Ri[9]) {
     float Gm[9];
     Gm[1] = 0;
 
-    int b3 = 0;
-    b3 |= ambe_d[12] << 8;
-    b3 |= ambe_d[13] << 7;
-    b3 |= ambe_d[14] << 6;
-    b3 |= ambe_d[15] << 5;
-    b3 |= ambe_d[16] << 4;
-    b3 |= ambe_d[17] << 3;
-    b3 |= ambe_d[18] << 2;
-    b3 |= ambe_d[19] << 1;
-    b3 |= ambe_d[40];
+    int b3 = ambe2450_field(ambe_d, 3);
     Gm[2] = AmbePRBA24[b3][0];
     Gm[3] = AmbePRBA24[b3][1];
     Gm[4] = AmbePRBA24[b3][2];
 
-    int b4 = 0;
-    b4 |= ambe_d[20] << 6;
-    b4 |= ambe_d[21] << 5;
-    b4 |= ambe_d[22] << 4;
-    b4 |= ambe_d[23] << 3;
-    b4 |= ambe_d[41] << 2;
-    b4 |= ambe_d[42] << 1;
-    b4 |= ambe_d[43];
+    int b4 = ambe2450_field(ambe_d, 4);
     Gm[5] = AmbePRBA58[b4][0];
     Gm[6] = AmbePRBA58[b4][1];
     Gm[7] = AmbePRBA58[b4][2];
@@ -286,29 +319,10 @@ ambe2450_decode_cik(const char* ambe_d, int L, const float Ri[9], float Cik[5][1
     Cik[4][1] = (float)0.5 * (Ri[7] + Ri[8]);
     Cik[4][2] = rconst * (Ri[7] - Ri[8]);
 
-    int b5 = 0;
-    b5 |= ambe_d[24] << 4;
-    b5 |= ambe_d[25] << 3;
-    b5 |= ambe_d[26] << 2;
-    b5 |= ambe_d[27] << 1;
-    b5 |= ambe_d[44];
-
-    int b6 = 0;
-    b6 |= ambe_d[28] << 3;
-    b6 |= ambe_d[29] << 2;
-    b6 |= ambe_d[30] << 1;
-    b6 |= ambe_d[45];
-
-    int b7 = 0;
-    b7 |= ambe_d[31] << 3;
-    b7 |= ambe_d[32] << 2;
-    b7 |= ambe_d[33] << 1;
-    b7 |= ambe_d[46];
-
-    int b8 = 0;
-    b8 |= ambe_d[34] << 2;
-    b8 |= ambe_d[47] << 1;
-    b8 |= ambe_d[48];
+    int b5 = ambe2450_field(ambe_d, 5);
+    int b6 = ambe2450_field(ambe_d, 6);
+    int b7 = ambe2450_field(ambe_d, 7);
+    int b8 = ambe2450_field(ambe_d, 8);
 
     Ji[1] = AmbeLmprbl[L][0];
     Ji[2] = AmbeLmprbl[L][1];
@@ -461,15 +475,7 @@ ambe2450_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const
 
 static int
 ambe2450_decode_b0(const char* ambe_d) {
-    int b0 = 0;
-    b0 |= ambe_d[0] << 6;
-    b0 |= ambe_d[1] << 5;
-    b0 |= ambe_d[2] << 4;
-    b0 |= ambe_d[3] << 3;
-    b0 |= ambe_d[37] << 2;
-    b0 |= ambe_d[38] << 1;
-    b0 |= ambe_d[39];
-    return b0;
+    return ambe2450_field(ambe_d, 0);
 }
 
 /** TIA-102.BABA-1 7: the frame is a tone frame when the first six bits of u0 equal 63. */
@@ -575,9 +581,9 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
     if (kind == MBE_AMBE2450_FRAME_SILENCE) {
         ambe2450_set_silence_model(cur_mp, L, f0, silence);
     } else if (kind == MBE_AMBE2450_FRAME_VOICE) {
-        *f0 = AmbeW0table[*b0];
+        *f0 = mbe_ambe2450_f0(*b0);
         cur_mp->w0 = *f0 * (float)2 * M_PI;
-        *L = AmbeLtable[*b0];
+        *L = mbe_ambe2450_harmonic_count(*b0);
         cur_mp->L = *L;
     }
     return kind;
@@ -628,12 +634,7 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
 
     // decode gain vector
     // load b2 from ambe_d
-    b2 = 0;
-    b2 |= ambe_d[8] << 4;
-    b2 |= ambe_d[9] << 3;
-    b2 |= ambe_d[10] << 2;
-    b2 |= ambe_d[11] << 1;
-    b2 |= ambe_d[36];
+    b2 = ambe2450_field(ambe_d, 2);
 
     deltaGamma = AmbeDg[b2];
     cur_mp->gamma = deltaGamma + ((float)0.5 * prev_mp->gamma);
@@ -749,9 +750,9 @@ mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
     }
 
     memcpy(fr, ambe_fr, sizeof(fr));
-    c0_errors = mbe_eccAmbe3600C0Soft_common(fr);
+    c0_errors = mbe_eccAmbe3600C0SoftCounted_common(fr);
     mbe_demodulateAmbe3600DataSoft_common(fr);
-    protected_errors = mbe_eccAmbe3600DataSoft_common(fr, ambe_d);
+    protected_errors = mbe_eccAmbe3600DataSoftCounted_common(fr, ambe_d);
 
     if (result) {
         result->c0_errors = c0_errors;
@@ -798,8 +799,13 @@ ambe2450_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
 static int
 ambe2450_repeat_required(const char ambe_d[49], int total_errors, int c0_errors, int c0_errors_valid) {
     if (c0_errors_valid) {
-        /* TIA-102.BABA-1 5.6 repeat criteria when C0 errors are known. */
-        return ((c0_errors >= 4) || ((c0_errors >= 2) && (total_errors >= 6)));
+        /* With the 5.5 counts a frame repeats only when C0 shows four errors
+         * (detected, uncorrectable). DVSI's AMBE-3000 does not apply eq
+         * 57-58's second condition (eps0 >= 2 and epsT >= 6): under channel
+         * errors its output repeats where eps0 is 4 and not where only that
+         * condition holds, and following it puts the frames it plays closer
+         * to both DVSI's output and the input speech. */
+        return c0_errors >= 4;
     }
 
     /* Dataf callers pass parameter bits only (no C0 context); keep the 2.1

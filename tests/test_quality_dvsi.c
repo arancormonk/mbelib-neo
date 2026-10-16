@@ -169,6 +169,64 @@ test_round_trip(const struct layout* l) {
     }
 }
 
+/* The soft value of the hard file's MSB-first bit n: DVSI writes one 4-bit
+ * value per bit, two per byte, high nibble first. */
+static int
+soft_nibble(const unsigned char* soft, int n) {
+    return (n & 1) ? (soft[n >> 1] & 15) : (soft[n >> 1] >> 4);
+}
+
+/* Each soft value lands, unchanged, in the frame cell of its hard bit, so the
+ * decisions (8..15 is 1) equal the hard import of the same channel bits. */
+static void
+test_soft_import(const struct layout* l) {
+    int cell_of[144];
+    one_hot_map(l, cell_of);
+    unsigned int seed = 777u;
+    for (int trial = 0; trial < 16; ++trial) {
+        unsigned char soft[72];
+        unsigned char hard[18] = {0};
+        for (int i = 0; i < l->bytes * 4; ++i) {
+            seed = (seed * 1103515245u) + 12345u;
+            soft[i] = (unsigned char)(seed >> 16);
+        }
+        for (int n = 0; n < l->bytes * 8; ++n) {
+            if (soft_nibble(soft, n) >= 8) {
+                hard[n >> 3] |= (unsigned char)(0x80u >> (n & 7));
+            }
+        }
+        unsigned char frame[184];
+        char hard_frame[184];
+        int count = mbe_quality_soft_frame_from_dvsi(l->codec, soft, (size_t)l->bytes * 4u, frame, sizeof(frame));
+        assert(count == l->rows * l->width);
+        assert(mbe_quality_frame_from_dvsi(l->codec, hard, (size_t)l->bytes, hard_frame, sizeof(hard_frame)) == count);
+        for (int c = 0; c < count; ++c) {
+            assert(frame[c] <= 15);
+            assert((frame[c] >= 8) == (hard_frame[c] == 1));
+        }
+        for (int n = 0; n < l->bytes * 8; ++n) {
+            /* one_hot_map numbers D-STAR's bits LSB first within a byte. */
+            int bit = l->lsb_first ? ((n & ~7) | (7 - (n & 7))) : n;
+            assert(frame[cell_of[bit]] == soft_nibble(soft, n));
+        }
+    }
+}
+
+static void
+test_soft_arguments(void) {
+    unsigned char soft[72] = {0};
+    unsigned char frame[184];
+    assert(mbe_quality_soft_frame_from_dvsi("imbe7100", soft, 72, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_quality_soft_frame_from_dvsi(NULL, soft, 72, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_quality_soft_frame_from_dvsi("imbe7200", soft, 18, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_quality_soft_frame_from_dvsi("ambe2400", NULL, 36, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(mbe_quality_soft_frame_from_dvsi("ambe2400", soft, 36, NULL, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    memset(frame, 7, sizeof(frame));
+    assert(mbe_quality_soft_frame_from_dvsi("imbe7200", soft, 72, frame, 183) == MBE_STATUS_INVALID_ARGUMENT);
+    assert(frame[0] == 7);
+    assert(mbe_quality_soft_frame_from_dvsi("ambe2450", soft, 36, frame, sizeof(frame)) == 96);
+}
+
 static void
 test_arguments(void) {
     unsigned char bytes[18] = {0};
@@ -188,7 +246,9 @@ main(void) {
     for (size_t i = 0; i < sizeof(layouts) / sizeof(layouts[0]); ++i) {
         test_bijection(&layouts[i]);
         test_round_trip(&layouts[i]);
+        test_soft_import(&layouts[i]);
     }
+    test_soft_arguments();
     test_p25_symbol_separation();
     test_arguments();
     puts("DVSI import: ok");

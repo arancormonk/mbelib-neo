@@ -46,7 +46,9 @@ ambe_enc_fit_floor_gain(struct ambe_enc_frame* q) {
 void
 ambe_enc_quantize_gain(struct ambe_enc_frame* q, const struct ambe_enc_tables* t, const mbe_parms* prev_mp) {
     float gamma_raw = q->mean_a + (0.5f * log2f((float)q->L));
-    float target = gamma_raw - (0.5f * prev_mp->gamma);
+    float base = t->dg_offset + (t->dg_history * prev_mp->gamma);
+    /* In table units: dg_scale > 0 keeps the nearest step the nearest level. */
+    float target = (gamma_raw - base) / t->dg_scale;
     int best = 0;
     float best_err = 1e30f;
 
@@ -58,7 +60,7 @@ ambe_enc_quantize_gain(struct ambe_enc_frame* q, const struct ambe_enc_tables* t
         }
     }
     q->b[2] = best;
-    q->gamma_q = t->dg[q->b[2]] + (0.5f * prev_mp->gamma);
+    q->gamma_q = (t->dg_scale * t->dg[q->b[2]]) + base;
     if (t->fit_floor_gain && target < t->dg[0]) {
         ambe_enc_fit_floor_gain(q);
     }

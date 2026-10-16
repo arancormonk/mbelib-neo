@@ -290,10 +290,11 @@ put_number(FILE* f, float value) {
 }
 
 /* One model as {"w0", "L", "Vl", "Ml", "log2Ml", "gamma"} over bands 1..L,
- * led by "status" when one is given. Without a usable L only the status is
- * written, or null. */
+ * led by "status" when one is given, and with "PHIl" and "PSIl" (the phase
+ * at the end of the frame and its integrated linear part) when phases is
+ * nonzero. Without a usable L only the status is written, or null. */
 static void
-put_model(FILE* f, const mbe_parms* mp, const int* status) {
+put_model(FILE* f, const mbe_parms* mp, const int* status, int phases) {
     if (mp->L < 1 || mp->L > 56) {
         if (status) {
             fprintf(f, "{\"status\":%d}", *status);
@@ -324,6 +325,19 @@ put_model(FILE* f, const mbe_parms* mp, const int* status) {
     }
     fputs("],\"gamma\":", f);
     put_number(f, mp->gamma);
+    if (phases) {
+        fputs(",\"PHIl\":[", f);
+        for (int l = 1; l <= mp->L; ++l) {
+            fputs(l > 1 ? "," : "", f);
+            put_number(f, mp->PHIl[l]);
+        }
+        fputs("],\"PSIl\":[", f);
+        for (int l = 1; l <= mp->L; ++l) {
+            fputs(l > 1 ? "," : "", f);
+            put_number(f, mp->PSIl[l]);
+        }
+        fputc(']', f);
+    }
     fputc('}', f);
 }
 
@@ -350,16 +364,118 @@ put_params(FILE* f, size_t frame, int imbe, int ambe2450, const char* data, cons
         fputc('0' + (data[i] & 1), f);
     }
     fputs("\",\"decoded\":", f);
-    put_model(f, &dcur, &status);
+    put_model(f, &dcur, &status, 0);
     fputs(",\"history\":", f);
-    put_model(f, prev, NULL);
+    put_model(f, prev, NULL, 0);
     fputs(",\"synth\":", f);
-    put_model(f, enhanced, NULL);
+    put_model(f, enhanced, NULL, 1);
     fputs("}\n", f);
 }
 
+/* One row of DVSI soft values (hex digit 0..15 per frame cell, 8..15 decide 1)
+ * through a public soft Frame API. Reliability is the distance from the
+ * decision threshold 7.5, scaled to 16..240. Returns the API's status. */
+static int
+process_soft_row(const char* codec, const char* line, size_t n, size_t frame, float* audio, mbe_process_result* result,
+                 char* data, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced, const char** api) {
+    const int imbe7200 = !strcmp(codec, "imbe7200"), imbe7100 = !strcmp(codec, "imbe7100");
+    const size_t width = imbe7200 ? 184 : (imbe7100 ? 168 : 96);
+    if (n != width) {
+        fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
+        exit(2);
+    }
+    static const char hex_digits[] = "0123456789abcdef";
+    mbe_soft_bit soft[184];
+    memset(soft, 0, sizeof(soft));
+    for (size_t i = 0; i < n; ++i) {
+        const char* digit = strchr(hex_digits, line[i]);
+        if (line[i] == '\0' || !digit) {
+            fprintf(stderr, "frame %zu: expected lowercase hex digits\n", frame);
+            exit(2);
+        }
+        int v = (int)(digit - hex_digits);
+        int r = v >= 8 ? v - 8 : 7 - v;
+        soft[i].bit = (uint8_t)(v >= 8);
+        soft[i].reliability = (uint8_t)((2 * r + 1) * 16);
+    }
+    if (imbe7200) {
+        *api = "mbe_processImbe7200x4400SoftFramef";
+        return mbe_processImbe7200x4400SoftFramef(audio, result, (const mbe_soft_bit(*)[23])soft, data, cur, prev,
+                                                  enhanced);
+    }
+    if (imbe7100) {
+        *api = "mbe_processImbe7100x4400SoftFramef";
+        return mbe_processImbe7100x4400SoftFramef(audio, result, (const mbe_soft_bit(*)[24])soft, data, cur, prev,
+                                                  enhanced);
+    }
+    if (!strcmp(codec, "ambe2450")) {
+        *api = "mbe_processAmbe3600x2450SoftFramef";
+        return mbe_processAmbe3600x2450SoftFramef(audio, result, (const mbe_soft_bit(*)[24])soft, data, cur, prev,
+                                                  enhanced);
+    }
+    *api = "mbe_processAmbe3600x2400SoftFramef";
+    return mbe_processAmbe3600x2400SoftFramef(audio, result, (const mbe_soft_bit(*)[24])soft, data, cur, prev,
+                                              enhanced);
+}
+
+/* One row of literal binary digits: 88/49 parameter bits through a Data API
+ * or a rectangular protected frame through a Frame API. Returns the status. */
+static int
+process_hard_row(const char* codec, const char* line, size_t n, size_t frame, float* audio, mbe_process_result* result,
+                 char* data, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced, const char** api) {
+    const int imbe7200 = !strcmp(codec, "imbe7200"), imbe7100 = !strcmp(codec, "imbe7100");
+    const int ambe2450 = !strcmp(codec, "ambe2450"), ambe2400 = !strcmp(codec, "ambe2400");
+    /* Width identifies parameter bits versus a rectangular protected frame.
+     * Reject incompatible rows before casting the buffer for a Frame API. */
+    int valid_width;
+    if (imbe7200) {
+        valid_width = n == 88 || n == 184;
+    } else if (imbe7100) {
+        valid_width = n == 168;
+    } else {
+        valid_width = (ambe2450 || ambe2400) && (n == 49 || n == 96);
+    }
+    if (!valid_width) {
+        fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
+        exit(2);
+    }
+    char bits[184] = {0};
+    for (size_t i = 0; i < n; ++i) {
+        if (line[i] != '0' && line[i] != '1') {
+            fprintf(stderr, "frame %zu: expected literal binary digits\n", frame);
+            exit(2);
+        }
+        bits[i] = (char)(line[i] - '0');
+    }
+    if (n <= 88) {
+        memcpy(data, bits, n);
+    }
+    if (imbe7200 && n == 88) {
+        *api = "mbe_processImbe4400Dataf";
+        return mbe_processImbe4400Dataf(audio, result, bits, cur, prev, enhanced);
+    } else if (imbe7200 && n == 184) {
+        *api = "mbe_processImbe7200x4400Framef";
+        return mbe_processImbe7200x4400Framef(audio, result, (const char (*)[23])bits, data, cur, prev, enhanced);
+    } else if (imbe7100 && n == 168) {
+        *api = "mbe_processImbe7100x4400Framef";
+        return mbe_processImbe7100x4400Framef(audio, result, (const char (*)[24])bits, data, cur, prev, enhanced);
+    } else if (ambe2450 && n == 96) {
+        *api = "mbe_processAmbe3600x2450Framef";
+        return mbe_processAmbe3600x2450Framef(audio, result, (const char (*)[24])bits, data, cur, prev, enhanced);
+    } else if (ambe2400 && n == 96) {
+        *api = "mbe_processAmbe3600x2400Framef";
+        return mbe_processAmbe3600x2400Framef(audio, result, (const char (*)[24])bits, data, cur, prev, enhanced);
+    } else if (ambe2450 && n == 49) {
+        *api = "mbe_processAmbe2450Dataf";
+        return mbe_processAmbe2450Dataf(audio, result, bits, cur, prev, enhanced);
+    } else {
+        *api = "mbe_processAmbe2400Dataf";
+        return mbe_processAmbe2400Dataf(audio, result, bits, cur, prev, enhanced);
+    }
+}
+
 static Signal
-decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, FILE* params) {
+decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, FILE* params, int soft) {
     FILE* f = open_file(path, "rb");
     Signal s = {0};
     mbe_parms cur, prev, enhanced;
@@ -367,8 +483,8 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, F
      * stream, and seed once so repeated evaluations produce the same PCM. */
     mbe_initMbeParms(&cur, &prev, &enhanced);
     mbe_setThreadRngSeed(seed);
-    const int imbe7200 = !strcmp(codec, "imbe7200"), imbe7100 = !strcmp(codec, "imbe7100");
-    const int ambe2450 = !strcmp(codec, "ambe2450"), ambe2400 = !strcmp(codec, "ambe2400");
+    const int imbe = !strcmp(codec, "imbe7200") || !strcmp(codec, "imbe7100");
+    const int ambe2450 = !strcmp(codec, "ambe2450");
     char line[187];
     size_t frame = 0;
     int ch;
@@ -383,28 +499,6 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, F
         while (n && (line[n - 1] == '\r' || line[n - 1] == '\n')) {
             --n;
         }
-        /* Width identifies parameter bits versus a rectangular protected frame.
-         * Reject incompatible rows before casting the buffer for a Frame API. */
-        int valid_width;
-        if (imbe7200) {
-            valid_width = n == 88 || n == 184;
-        } else if (imbe7100) {
-            valid_width = n == 168;
-        } else {
-            valid_width = (ambe2450 || ambe2400) && (n == 49 || n == 96);
-        }
-        if (!valid_width) {
-            fprintf(stderr, "frame %zu: length/codec mismatch\n", frame);
-            exit(2);
-        }
-        char bits[184] = {0};
-        for (size_t i = 0; i < n; ++i) {
-            if (line[i] != '0' && line[i] != '1') {
-                fprintf(stderr, "frame %zu: expected literal binary digits\n", frame);
-                exit(2);
-            }
-            bits[i] = (char)(line[i] - '0');
-        }
         float audio[160];
         short pcm[160];
         mbe_process_result result;
@@ -413,40 +507,13 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, F
         const char* api;
         /* Parameter bits of this frame: the row itself, or what the Frame API extracts. */
         char data[88] = {0};
-        if (n <= sizeof(data)) {
-            memcpy(data, bits, n);
-        }
         mbe_parms cur_before, prev_before;
         if (params) {
             cur_before = cur;
             prev_before = prev;
         }
-        if (imbe7200 && n == 88) {
-            api = "mbe_processImbe4400Dataf";
-            status = mbe_processImbe4400Dataf(audio, &result, bits, &cur, &prev, &enhanced);
-        } else if (imbe7200 && n == 184) {
-            api = "mbe_processImbe7200x4400Framef";
-            status =
-                mbe_processImbe7200x4400Framef(audio, &result, (const char (*)[23])bits, data, &cur, &prev, &enhanced);
-        } else if (imbe7100 && n == 168) {
-            api = "mbe_processImbe7100x4400Framef";
-            status =
-                mbe_processImbe7100x4400Framef(audio, &result, (const char (*)[24])bits, data, &cur, &prev, &enhanced);
-        } else if (ambe2450 && n == 96) {
-            api = "mbe_processAmbe3600x2450Framef";
-            status =
-                mbe_processAmbe3600x2450Framef(audio, &result, (const char (*)[24])bits, data, &cur, &prev, &enhanced);
-        } else if (ambe2400 && n == 96) {
-            api = "mbe_processAmbe3600x2400Framef";
-            status =
-                mbe_processAmbe3600x2400Framef(audio, &result, (const char (*)[24])bits, data, &cur, &prev, &enhanced);
-        } else if (ambe2450 && n == 49) {
-            api = "mbe_processAmbe2450Dataf";
-            status = mbe_processAmbe2450Dataf(audio, &result, bits, &cur, &prev, &enhanced);
-        } else {
-            api = "mbe_processAmbe2400Dataf";
-            status = mbe_processAmbe2400Dataf(audio, &result, bits, &cur, &prev, &enhanced);
-        }
+        status = soft ? process_soft_row(codec, line, n, frame, audio, &result, data, &cur, &prev, &enhanced, &api)
+                      : process_hard_row(codec, line, n, frame, audio, &result, data, &cur, &prev, &enhanced, &api);
         if (status < 0) {
             fprintf(stderr, "frame %zu: process status %d\n", frame, status);
             exit(3);
@@ -456,8 +523,7 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, F
         }
         stats->input_api = api;
         if (params) {
-            put_params(params, frame, imbe7200 || imbe7100, ambe2450, data, &cur_before, &prev_before, &prev, &enhanced,
-                       &result);
+            put_params(params, frame, imbe, ambe2450, data, &cur_before, &prev_before, &prev, &enhanced, &result);
         }
         stats->tone += (result.flags & MBE_PROCESS_FLAG_TONE) != 0;
         stats->erasure += (result.flags & MBE_PROCESS_FLAG_ERASURE) != 0;
@@ -885,7 +951,20 @@ int
 main(int argc, char** argv) {
     const char *codec = NULL, *frames = NULL, *out = NULL, *ref = NULL, *json = NULL, *pcm = NULL, *params = NULL;
     uint32_t seed = 0x12345678u;
-    int have_seed = 0, have_lag = 0, lag = 0;
+    int have_seed = 0, have_lag = 0, lag = 0, soft = 0;
+    /* --soft takes no value: drop it before pairing the --key value options. */
+    int kept = 1;
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--soft")) {
+            if (soft) {
+                fail("duplicate option");
+            }
+            soft = 1;
+        } else {
+            argv[kept++] = argv[i];
+        }
+    }
+    argc = kept;
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc || !*argv[i + 1]) {
             fail("options require nonempty --key value pairs");
@@ -933,15 +1012,15 @@ main(int argc, char** argv) {
         }
     }
     if (pcm) {
-        if (codec || frames || out || have_seed || params) {
-            fail("--decoded rejects --codec, --frames, --out, --seed, and --params");
+        if (codec || frames || out || have_seed || params || soft) {
+            fail("--decoded rejects --codec, --frames, --out, --seed, --params, and --soft");
         }
     } else if (!codec || !frames || !out
                || (strcmp(codec, "imbe7200") != 0 && strcmp(codec, "imbe7100") != 0 && strcmp(codec, "ambe2400") != 0
                    && strcmp(codec, "ambe2450") != 0)) {
         fail("usage: mbe_quality_eval --codec imbe7200|imbe7100|ambe2400|ambe2450 --frames file --out decoded.wav "
              "[--ref speech.raw|speech.wav] [--seed uint32] [--lag-samples -160..800] [--json metrics.json] "
-             "[--params frames.jsonl]\n"
+             "[--params frames.jsonl] [--soft]\n"
              "   or: mbe_quality_eval --decoded input.raw|input.wav [--ref speech.raw|speech.wav] "
              "[--lag-samples -160..800] [--json metrics.json]");
     }
@@ -957,7 +1036,7 @@ main(int argc, char** argv) {
     reject_alias(params, json);
     DecodeStats stats = {0};
     FILE* pf = params ? open_file(params, "w") : NULL;
-    Signal decoded = pcm ? read_reference(pcm) : decode(codec, frames, seed, &stats, pf);
+    Signal decoded = pcm ? read_reference(pcm) : decode(codec, frames, seed, &stats, pf, soft);
     if (pf && (ferror(pf) || fclose(pf))) {
         fail("parameter dump write failed");
     }

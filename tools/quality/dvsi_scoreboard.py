@@ -35,18 +35,19 @@ import sys
 from pathlib import Path
 
 MODES = {"dstar": "ambe2400", "p25": "imbe7200", "r33": "ambe2450"}
-# Partitions by original utterance. Development and validation were both examined
-# while earlier changes were made, so they are retrospective; "final" vectors are
-# scored once per change set and never used for tuning. dam's level, overload and
-# car-noise variants stay with dam. Not scored as speech: xfer (not speech), the
-# *_dtx, *_eN_hd and *_eN_sd variants, and the synthetic ptrain*/sine*/zero/grbge.
+# Partitions by source recording (RECORDINGS): vectors made from one recording sit in one
+# partition. Development and validation were both examined while earlier changes were
+# made, so they are retrospective; "final" vectors are scored once per change set and
+# never used for tuning. Not scored as speech: xfer (not speech), the *_dtx variants and
+# the synthetic ptrain*/sine*/zero/grbge.
 PARTITIONS = {
     "development": (
         "dam", "dam10", "dam20", "dam40", "dam80", "dam_10ov", "damcar", "lvl",
         "clean", "noisy", "fambf22c", "fambm22a", "t01", "t02", "tia11", "tambf22a", "ucarm15a",
+        "ucarf15a", "ucarm20a", "p01mirs",
     ),
-    "validation": ("t03", "t04", "tambf22b", "tambf32b", "tambf32e", "ucarf15a", "ucarm20a"),
-    "final": ("irstia", "p01mirs", "mark"),
+    "validation": ("t03", "t04", "tambf22b", "tambf32b", "tambf32e"),
+    "final": ("irstia", "mark"),
     # Not speech: scored with the tone detector against DVSI's decoder only.
     "tones": tuple(
         ["alert", "alltone", "cp0", "cp1", "cp2", "cp31", "cpvbad"]
@@ -55,8 +56,23 @@ PARTITIONS = {
         + [f"dtone_{i}" for i in range(1, 17)]
         + [f"knox_{i}" for i in range(1, 17)]
     ),
+    # dam's bits with channel errors (about 1.1, 2.2, 4.9 and 10.6% bit errors), as hard decisions and
+    # as 4-bit soft decisions: our muting and output against DVSI's decoder on the same bits.
+    "channel": tuple(f"dam_e{rate}_{kind}" for rate in (1, 2, 5, 10) for kind in ("hd", "sd")),
 }
 SPEECH_PARTITIONS = ("development", "validation", "final")
+# Vectors made from one source recording, found by matching 3 s blocks of the inputs at any lag (envelope
+# correlation 0.85 or more and waveform coherence 0.8 or more over 300-3400 Hz): fambm22a, tambf22a,
+# ucarm15a, ucarf15a and ucarm20a are one recording through different filters and car noise, tambf22b and
+# tambf32b one recording 1680 samples apart, and p01mirs is tia11 through another filter. No other pair of
+# speech vectors shares a block. dam's variants (level, overload, noise and level steps in lvl) follow dam's
+# envelope at lag 0, and its channel-error vectors are its bits.
+RECORDINGS = {
+    "dam": ("dam", "dam10", "dam20", "dam40", "dam80", "dam_10ov", "damcar", "lvl") + PARTITIONS["channel"],
+    "fambm22a": ("fambm22a", "tambf22a", "ucarm15a", "ucarf15a", "ucarm20a"),
+    "tambf22b": ("tambf22b", "tambf32b"),
+    "tia11": ("tia11", "p01mirs"),
+}
 BAND_KEYS = tuple(
     f"band_delta_db_{band}"
     for band in ("0_250", "0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
@@ -78,6 +94,14 @@ def partition_of(name):
         if name in names:
             return partition
     return None
+
+
+def utterance_group(name):
+    """The recording a vector was made from (RECORDINGS), else the vector itself."""
+    for group, names in RECORDINGS.items():
+        if name in names:
+            return group
+    return name
 
 
 # --------------------------------------------------------------------------------------------
@@ -411,6 +435,64 @@ def load_json(path):
     return json.loads(Path(path).read_text())
 
 
+def decoder_identity(tools):
+    """SHA-256 over a build's mbe_quality_eval and the mbelib-neo libraries beside it (the decoder it runs):
+    libmbe-neo* where GCC and Clang build them, mbe-neo*.dll for MSVC."""
+    digest = hashlib.sha256()
+    tools = Path(tools)
+    evaluator = tools / "mbe_quality_eval"
+    if not evaluator.is_file() and (tools / "mbe_quality_eval.exe").is_file():
+        evaluator = tools / "mbe_quality_eval.exe"
+    libraries = [p for pattern in ("libmbe-neo*", "mbe-neo*.dll") for p in tools.glob(pattern) if p.is_file()]
+    for path in [evaluator] + sorted(libraries):
+        digest.update(path.name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def lag_option(lags, key):
+    """The evaluator's --lag-samples for comparison `key` when `lags` fixes it; else it searches."""
+    return ["--lag-samples", lags[key]] if lags and lags.get(key) is not None else []
+
+
+def joint_lags(baseline, candidate):
+    """Per vector both runs scored, one lag per comparison both measured: their common lag, or where their
+    alignment searches disagree, the lag of the run that aligned with the higher correlation. Equal
+    correlations, and keys with none recorded (the encoder-tone frame shift), keep the baseline's. A
+    change can let a decoder align where the old one could not, as when a gain law that played onsets
+    16 dB low pulled the old decoder's alignment off by up to about 100 samples, so neither run's lag is
+    right by default."""
+    def quality(result, key):
+        value = (result.get("alignment") or {}).get(key)
+        return value if isinstance(value, (int, float)) else -math.inf
+
+    other = {(result["mode"], result["name"]): result for result in candidate["vectors"]}
+    joint = {}
+    for result in baseline["vectors"]:
+        twin = other.get((result["mode"], result["name"]))
+        if twin is None or not result.get("lags") or not twin.get("lags"):
+            continue
+        lags = {}
+        for key in result["lags"].keys() & twin["lags"].keys():
+            mine, theirs = result["lags"][key], twin["lags"][key]
+            if mine == theirs or quality(result, key) >= quality(twin, key):
+                lags[key] = mine
+            else:
+                lags[key] = theirs
+        joint[(result["mode"], result["name"])] = lags
+    return joint
+
+
+def load_lag_source(paths):
+    """Lags to score at: one scoreboard.json's own, or two runs' joint_lags() (baseline first)."""
+    reports = [load_json(path) for path in paths]
+    if len(reports) == 1:
+        return {(result["mode"], result["name"]): result["lags"] for result in reports[0]["vectors"]
+                if result.get("lags")}
+    if len(reports) == 2:
+        return joint_lags(*reports)
+    raise ValueError("lags come from one scoreboard.json, or two to join")
+
+
 def alignment_ok(metrics):
     """True when the evaluator found an alignment inside its lag search (not none, and not at a limit)."""
     corr = metrics.get("alignment_corr")
@@ -435,8 +517,12 @@ def load_records(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line]
 
 
-def score_vector(tools, vectors, mode, name, work, encoder):
-    """All measurements of one vector in one mode."""
+def score_vector(tools, vectors, mode, name, work, encoder, decode_tools=None, lags=None):
+    """All measurements of one vector in one mode.
+
+    `lags` (a baseline's recorded lags) fixes each comparison's alignment, so that both runs measure the
+    same samples; `decode_tools` decodes the bits of the encoder comparisons (default `tools`).
+    """
     codec = MODES[mode]
     source = vectors / mode / f"{name}.bit"
     base = work / f"{mode}_{name}"
@@ -447,10 +533,11 @@ def score_vector(tools, vectors, mode, name, work, encoder):
     shutil.copyfile(vectors / mode / f"{name}.pcm", dvsi_pcm)
     run([tools / "mbe_quality_reframe", "--codec", codec, "--from-dvsi", source, "--out", f"{base}.frames"])
     run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ours.wav",
-         "--ref", speech, "--json", f"{base}_ours.json", "--params", f"{base}_ours.jsonl"])
-    run([tools / "mbe_quality_eval", "--decoded", dvsi_pcm, "--ref", speech, "--json", f"{base}_dvsi.json"])
+         "--ref", speech, "--json", f"{base}_ours.json", "--params", f"{base}_ours.jsonl"] + lag_option(lags, "ours"))
+    run([tools / "mbe_quality_eval", "--decoded", dvsi_pcm, "--ref", speech, "--json", f"{base}_dvsi.json"]
+        + lag_option(lags, "dvsi"))
     run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
-         "--json", f"{base}_vs_dvsi.json"])
+         "--json", f"{base}_vs_dvsi.json"] + lag_option(lags, "vs_dvsi"))
     ours, dvsi, versus = (aligned(load_json(f"{base}_{tag}.json"), f"{base.name}_{tag}")
                           for tag in ("ours", "dvsi", "vs_dvsi"))
     records = load_records(f"{base}_ours.jsonl")
@@ -460,6 +547,9 @@ def score_vector(tools, vectors, mode, name, work, encoder):
         "ours": {key: ours.get(key) for key in SPEECH_KEYS + ("pcm_fnv1a",)},
         "dvsi": {key: dvsi.get(key) for key in SPEECH_KEYS},
         "vs_dvsi": {key: versus.get(key) for key in SPEECH_KEYS},
+        "lags": {"ours": ours["lag_samples"], "dvsi": dvsi["lag_samples"], "vs_dvsi": versus["lag_samples"]},
+        "alignment": {"ours": ours["alignment_corr"], "dvsi": dvsi["alignment_corr"],
+                      "vs_dvsi": versus["alignment_corr"]},
     }
     pairs = {
         "ours": pitch_ratios(records, ours_pcm, 0),
@@ -469,7 +559,8 @@ def score_vector(tools, vectors, mode, name, work, encoder):
     result["pitch"] = {source: summarize_ratios(values) for source, values in pairs.items()}
     result["pitch_pairs"] = pairs
     if encoder and codec in encoder_codecs(tools):
-        result["encoder"] = score_encoder(tools, mode, speech, base, records, ours, speech_samples)
+        result["encoder"] = score_encoder(tools, decode_tools or tools, mode, speech, base, speech_samples,
+                                          lags, result["lags"], result["alignment"])
     return result
 
 
@@ -479,14 +570,25 @@ def tone_frame_rate(records):
     return sum(1 for record in records if record["flags"] & tone_or_silence) / len(records) if records else None
 
 
-def score_encoder(tools, mode, speech, base, dvsi_records, dvsi_eval, speech_samples):
-    """Our encoding of the input against DVSI's, both decoded by this library."""
+def score_encoder(tools, decode_tools, mode, speech, base, speech_samples, lags, measured, quality):
+    """Our encoding of the input (by `tools`) against DVSI's, both decoded by `decode_tools`.
+
+    One decoder for a baseline's and a candidate's encodings leaves only the encoders' difference. The
+    lags this uses (fixed by `lags` when given) are added to `measured`, and the correlation each
+    comparison's own alignment search reached to `quality`.
+    """
     codec = MODES[mode]
+    run([decode_tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ref.wav",
+         "--ref", speech, "--json", f"{base}_ref.json", "--params", f"{base}_ref.jsonl"] + lag_option(lags, "ref"))
+    dvsi_eval = aligned(load_json(f"{base}_ref.json"), f"{base.name}_ref")
+    dvsi_records = load_records(f"{base}_ref.jsonl")
+    measured["ref"], quality["ref"] = dvsi_eval["lag_samples"], dvsi_eval["alignment_corr"]
     run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
-    run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows",
+    run([decode_tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows",
          "--out", f"{base}_enc.wav", "--ref", speech, "--json", f"{base}_enc.json",
-         "--params", f"{base}_enc.jsonl"])
+         "--params", f"{base}_enc.jsonl"] + lag_option(lags, "enc"))
     encoded = load_json(f"{base}_enc.json")
+    measured["enc"], quality["enc"] = encoded.get("lag_samples"), encoded.get("alignment_corr")
     if not alignment_ok(encoded):
         # Our encoding cannot be aligned with the input (say, it is mostly silence frames), so nothing
         # measured through that alignment is scored. The count still reaches the summary and the gates.
@@ -497,10 +599,11 @@ def score_encoder(tools, mode, speech, base, dvsi_records, dvsi_eval, speech_sam
     # DVSI's encoding as the reference (its active frames, its level).
     delayed = Path(f"{base}_enc_delayed.raw")
     write_delayed(delayed, read_pcm(f"{base}_enc.wav"), ENCODER_COMPARE_DELAY[mode])
-    run([tools / "mbe_quality_eval", "--decoded", delayed, "--ref", f"{base}_ours.wav",
-         "--json", f"{base}_enc_vs_dvsi.json"])
+    run([decode_tools / "mbe_quality_eval", "--decoded", delayed, "--ref", f"{base}_ref.wav",
+         "--json", f"{base}_enc_vs_dvsi.json"] + lag_option(lags, "enc_vs_dvsi"))
     failures = []
     versus = load_json(f"{base}_enc_vs_dvsi.json")
+    measured["enc_vs_dvsi"], quality["enc_vs_dvsi"] = versus.get("lag_samples"), versus.get("alignment_corr")
     if not alignment_ok(versus):
         print(f"warning: {base.name}_enc_vs_dvsi: no usable alignment; not scored", file=sys.stderr)
         failures.append(f"{base.name}_enc_vs_dvsi")
@@ -564,14 +667,14 @@ ENCODER_TONE_FIELDS = {
 }
 
 
-def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
+def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33", shift=None):
     """Our encoder's tone frames against DVSI's, at the frame shift where the most agree (of equals, the
-    one nearest ENCODER_TONE_SHIFT).
+    one nearest ENCODER_TONE_SHIFT), or at `shift` when given (a baseline's).
 
     Returns the fraction of DVSI's tone frames we send as the same tone, the fraction of all compared
-    frames we send as a tone where DVSI sends voice, and the mean absolute level difference, in the
-    mode's level steps (AD, or D-STAR's volume), where the tones agree. When DVSI sends no tone frame
-    only the second is defined.
+    frames we send as a tone where DVSI sends voice, the mean absolute level difference, in the
+    mode's level steps (AD, or D-STAR's volume), where the tones agree, and the shift used. When DVSI
+    sends no tone frame only the second is defined.
     """
     fields, level_key = ENCODER_TONE_FIELDS[mode]
     ours = [fields(record.get("bits", "")) for record in encoded]
@@ -587,8 +690,9 @@ def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
     def agreeing(shift):
         return [index for index in tone_frames if mine(index, shift) and mine(index, shift)[0] == theirs[index][0]]
 
-    shift = max(range(-max_shift, max_shift + 1),
-                key=lambda candidate: (len(agreeing(candidate)), -abs(candidate - ENCODER_TONE_SHIFT)))
+    if shift is None:
+        shift = max(range(-max_shift, max_shift + 1),
+                    key=lambda candidate: (len(agreeing(candidate)), -abs(candidate - ENCODER_TONE_SHIFT)))
     compared = [index for index in range(len(theirs)) if 0 <= index + shift < len(ours)]
     extra = [index for index in compared if theirs[index] is None and mine(index, shift)]
     same = agreeing(shift)
@@ -596,12 +700,13 @@ def encoder_tone_agreement(encoded, reference, max_shift=3, mode="r33"):
         "encoder_agreement": len(same) / len(tone_frames),
         "encoder_extra_rate": len(extra) / len(compared) if compared else 0.0,
         level_key: mean([abs(mine(index, shift)[1] - theirs[index][1]) for index in same]),
+        "shift": shift,
     }
 
 
-def score_tone_vector(tools, vectors, mode, name, work, encoder=False):
+def score_tone_vector(tools, vectors, mode, name, work, encoder=False, decode_tools=None, lags=None):
     """Our decode of DVSI's bits for a tone vector against DVSI's decoded output, and for rate 33 and
-    D-STAR our encoding of the input against DVSI's."""
+    D-STAR our encoding of the input against DVSI's (decoded by `decode_tools`, default `tools`)."""
     codec = MODES[mode]
     base = work / f"{mode}_{name}"
     dvsi_pcm = Path(f"{base}_dvsi.raw")
@@ -611,21 +716,174 @@ def score_tone_vector(tools, vectors, mode, name, work, encoder=False):
     run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ours.wav",
          "--params", f"{base}_ours.jsonl"])
     run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
-         "--json", f"{base}_vs_dvsi.json"])
+         "--json", f"{base}_vs_dvsi.json"] + lag_option(lags, "vs_dvsi"))
     versus = aligned(load_json(f"{base}_vs_dvsi.json"), f"{base.name}_vs_dvsi")
     records = load_records(f"{base}_ours.jsonl")
     metrics = compare_tones(read_pcm(f"{base}_ours.wav"), read_pcm(dvsi_pcm), versus.get("lag_samples") or 0)
     metrics["tone_frames"] = sum(1 for record in records if record["flags"] & 0x0010)
     metrics["frames"] = len(records)
     metrics["alignment_corr"] = versus.get("alignment_corr")
+    used = {"vs_dvsi": versus["lag_samples"]}
     if encoder and mode in ENCODER_TONE_FIELDS and codec in encoder_codecs(tools):
         speech = work / f"{name}_input.raw"
         shutil.copyfile(vectors / f"{name}.pcm", speech)
         run([tools / "mbe_quality_encode", "--codec", codec, "--in", speech, "--out", f"{base}_enc.rows"])
-        run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows", "--out", f"{base}_enc.wav",
-             "--params", f"{base}_enc.jsonl"])
-        metrics.update(encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records, mode=mode) or {})
-    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics}
+        run([(decode_tools or tools) / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}_enc.rows",
+             "--out", f"{base}_enc.wav", "--params", f"{base}_enc.jsonl"])
+        agreement = encoder_tone_agreement(load_records(f"{base}_enc.jsonl"), records, mode=mode,
+                                           shift=(lags or {}).get("encoder_tone_shift"))
+        if "shift" in agreement:
+            used["encoder_tone_shift"] = agreement.pop("shift")
+        metrics.update(agreement)
+    return {"mode": mode, "name": name, "partition": "tones", "tone": metrics, "lags": used,
+            "alignment": {"vs_dvsi": versus["alignment_corr"]}}
+
+
+# --------------------------------------------------------------------------------------------
+# Channel errors
+
+LOUD_FRAME_ENERGY = FRAME * 300.0 ** 2  # a frame of DVSI's clean decode at RMS 300 or more
+MUTED_ENERGY_RATIO = 1e-3  # DVSI's decode of the errored bits 30 dB or more below its clean decode
+MUTE_FLAG, REPEAT_FLAG = 0x0080, 0x0040  # MBE_PROCESS_FLAG_MUTE, MBE_PROCESS_FLAG_REPEAT
+
+
+def channel_frames(clean, errored):
+    """Per frame of DVSI's output, (loud, muted): its clean decode is loud, its decode of the errored bits
+    is muted (meaningful on loud frames only)."""
+    import numpy as np
+
+    clean, errored = np.asarray(clean, dtype=np.float64), np.asarray(errored, dtype=np.float64)
+    loud, muted = [], []
+    for f in range(min(len(clean), len(errored)) // FRAME):
+        energy = float(np.sum(clean[f * FRAME:(f + 1) * FRAME] ** 2))
+        loud.append(energy >= LOUD_FRAME_ENERGY)
+        muted.append(float(np.sum(errored[f * FRAME:(f + 1) * FRAME] ** 2)) < MUTED_ENERGY_RATIO * max(energy, 1.0))
+    return loud, muted
+
+
+def mute_metrics(loud, dvsi_muted, muted):
+    """Our mute decisions against DVSI's on loud frames, frame for frame (frame f of both outputs comes from
+    the same bits)."""
+    frames = [f for f in range(min(len(loud), len(dvsi_muted), len(muted))) if loud[f]]
+
+    def share(test):
+        return sum(1 for f in frames if test(f)) / len(frames) if frames else None
+
+    return {
+        "loud_frames": len(frames),
+        "mute_agreement": share(lambda f: bool(muted[f]) == bool(dvsi_muted[f])),
+        "false_mute_rate": share(lambda f: muted[f] and not dvsi_muted[f]),
+        "missed_mute_rate": share(lambda f: dvsi_muted[f] and not muted[f]),
+        "mute_rate": share(lambda f: muted[f]),
+        "dvsi_mute_rate": share(lambda f: dvsi_muted[f]),
+        "first_mute_frame": next((f for f in frames if muted[f]), None),
+        "dvsi_first_mute_frame": next((f for f in frames if dvsi_muted[f]), None),
+    }
+
+
+def frame_lsd(decoded, reference, lag, gain):
+    """Per frame of `reference`, the mean log-spectral distance (dB) of `decoded` from it.
+
+    Reference sample n is compared with decoded sample n + lag scaled by `gain`, on mbe_quality_eval's
+    spectra: 256-sample Hann windows every 80 samples, bins 2 to 118, floored 60 dB below the reference's
+    strongest bin, each counted in the frame holding its centre. None where no spectrum is centred.
+    """
+    import numpy as np
+
+    d = np.asarray(decoded, dtype=np.float64) * gain
+    r = np.asarray(reference, dtype=np.float64)
+    count = len(r) // FRAME
+    positions = [p for p in range(0, len(r) - 255, 80) if p + lag >= 0 and p + lag + 256 <= len(d)]
+    if not positions:
+        return [None] * count
+    window = np.hanning(256)
+    ref = np.abs(np.fft.rfft(np.stack([r[p:p + 256] for p in positions]) * window, axis=1)) ** 2
+    dec = np.abs(np.fft.rfft(np.stack([d[p + lag:p + lag + 256] for p in positions]) * window, axis=1)) ** 2
+    floor = max(float(ref.max()) * 1e-6, 1e-20)
+    delta = 10.0 * np.log10(np.maximum(ref[:, 2:119] + floor, 1e-20) / np.maximum(dec[:, 2:119] + floor, 1e-20))
+    sums, counts = [0.0] * count, [0] * count
+    for position, distance in zip(positions, np.sqrt(np.mean(delta * delta, axis=1))):
+        frame = (position + 128) // FRAME
+        if frame < count:
+            sums[frame] += float(distance)
+            counts[frame] += 1
+    return [total / n if n else None for total, n in zip(sums, counts)]
+
+
+def covered_unmuted(muted, lag, count):
+    """Per reference frame g, whether all our samples under it (from 160 g + lag) come from frames we did
+    not mute."""
+    cover = []
+    for g in range(count):
+        first, last = (FRAME * g + lag) // FRAME, (FRAME * g + FRAME - 1 + lag) // FRAME
+        cover.append(first >= 0 and last < len(muted) and not any(muted[first:last + 1]))
+    return cover
+
+
+def channel_lsd(*runs):
+    """(mean LSD of each run, coverage) on the frames that count in every run of one channel vector: loud
+    in DVSI's clean decode, not muted by DVSI, measured by every run, and with no muted frame at or
+    next to them (a frame's spectra reach into its neighbours): neither a loud frame DVSI mutes nor one
+    under a frame a run muted. Coverage is their share of all the loud frames DVSI leaves unmuted, so
+    frames a run did not measure count as lost; LSD is None without any such frame."""
+    frames = runs[0]["frames"]
+    count = len(frames["loud"])
+    eligible = [frames["loud"][g] and not frames["dvsi_muted"][g] for g in range(count)]
+    clear = [not (frames["loud"][g] and frames["dvsi_muted"][g]) for g in range(count)]
+    for run in runs:
+        cover = covered_unmuted(run["frames"]["muted"], run["lags"]["clean_vs_dvsi"], count)
+        clear = [ok and covered for ok, covered in zip(clear, cover)]
+
+    def measured(run, g):
+        values = run["frames"]["lsd"]
+        return g < len(values) and values[g] is not None
+
+    chosen = [g for g in range(count) if eligible[g] and all(clear[max(0, g - 1):g + 2])
+              and all(measured(run, g) for run in runs)]
+    coverage = len(chosen) / sum(eligible) if any(eligible) else None
+    if not chosen:
+        return [None] * len(runs), coverage
+    return [sum(run["frames"]["lsd"][g] for g in chosen) / len(chosen) for run in runs], coverage
+
+
+@functools.lru_cache(maxsize=None)
+def channel_reference(tools, vectors, mode, work, lag):
+    """(lag, gain, alignment correlation) aligning and level-matching our decodes of dam's bits with
+    DVSI's, from the clean bits; `lag` fixes the lag when not None."""
+    codec = MODES[mode]
+    base = work / f"{mode}_channel_dam"
+    dvsi_pcm = Path(f"{base}_dvsi.raw")
+    shutil.copyfile(vectors / mode / "dam.pcm", dvsi_pcm)
+    run([tools / "mbe_quality_reframe", "--codec", codec, "--from-dvsi", vectors / mode / "dam.bit",
+         "--out", f"{base}.frames"])
+    run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ours.wav"])
+    run([tools / "mbe_quality_eval", "--decoded", f"{base}_ours.wav", "--ref", dvsi_pcm,
+         "--json", f"{base}_vs_dvsi.json"] + lag_option({"clean": lag}, "clean"))
+    versus = aligned(load_json(f"{base}_vs_dvsi.json"), f"{base.name}_vs_dvsi")
+    return versus["lag_samples"], 10.0 ** (-versus["level_offset_db"] / 20.0), versus["alignment_corr"]
+
+
+def score_channel_vector(tools, vectors, mode, name, work, lags=None):
+    """Our decode of one of dam's channel-error vectors against DVSI's decode of the same bits."""
+    codec = MODES[mode]
+    kind = name.rsplit("_", 1)[1]
+    lag, gain, corr = channel_reference(tools, vectors, mode, work, (lags or {}).get("clean_vs_dvsi"))
+    base = work / f"{mode}_{name}"
+    run([tools / "mbe_quality_reframe", "--codec", codec, "--from-dvsi", vectors / mode / f"{name}.bit",
+         "--out", f"{base}.frames"])
+    run([tools / "mbe_quality_eval", "--codec", codec, "--frames", f"{base}.frames", "--out", f"{base}_ours.wav",
+         "--params", f"{base}_ours.jsonl"] + (["--soft"] if kind == "sd" else []))
+    records = load_records(f"{base}_ours.jsonl")
+    dvsi_errored = read_pcm(vectors / mode / f"{name}.pcm")
+    loud, dvsi_muted = channel_frames(read_pcm(vectors / mode / "dam.pcm"), dvsi_errored)
+    muted = [bool(record["flags"] & MUTE_FLAG) for record in records]
+    metrics = mute_metrics(loud, dvsi_muted, muted)
+    metrics["repeat_rate"] = sum(1 for r in records if r["flags"] & REPEAT_FLAG) / len(records) if records else None
+    metrics["errors_per_frame"] = mean([record["errors"] for record in records])
+    return {"mode": mode, "name": name, "partition": "channel", "kind": kind, "channel": metrics,
+            "lags": {"clean_vs_dvsi": lag}, "alignment": {"clean_vs_dvsi": corr},
+            "frames": {"loud": loud, "dvsi_muted": dvsi_muted, "muted": muted,
+                       "lsd": frame_lsd(read_pcm(f"{base}_ours.wav"), dvsi_errored, lag, gain)}}
 
 
 # --------------------------------------------------------------------------------------------
@@ -642,6 +900,13 @@ def flatten(result):
     flat = {}
     if "tone" in result:
         return {f"tone.{key}": value for key, value in result["tone"].items()}
+    if "channel" in result:
+        prefix = f"channel.{result['kind']}."
+        flat = {prefix + key: value for key, value in result["channel"].items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)}
+        (lsd,), coverage = channel_lsd(result)
+        flat[prefix + "lsd_db"], flat[prefix + "lsd_coverage"] = lsd, coverage
+        return flat
     for group in ("ours", "dvsi", "vs_dvsi"):
         for key, value in result[group].items():
             if isinstance(value, (int, float)):
@@ -692,6 +957,10 @@ def aggregate(results):
             keys = sorted({key for flat in flats for key in flat})
             entry = {"vectors": [result["name"] for result in group],
                      "mean": {key: mean([flat.get(key) for flat in flats]) for key in keys}}
+            if partition == "channel":
+                entry["rows"] = {result["name"]: flat for result, flat in zip(group, flats)}
+                summary[f"{mode}/{partition}"] = entry
+                continue
             if partition == "tones":
                 # The worst tone vector decides: errors take the maximum, agreement the minimum. The
                 # encoder's tone metrics also get their mean over vectors, since the vectors of
@@ -761,23 +1030,55 @@ def add_pcm_changes(summary, candidate, baseline):
             summary.setdefault(group, {"vectors": [], "mean": {}})["mean"]["speech.pcm_changed_vectors"] = count
 
 
-def bootstrap_interval(deltas, replicates=2000, seed=0x5EED):
-    if len(deltas) < 2:
+def bootstrap_interval(groups, replicates=2000, seed=0x5EED):
+    """95% interval of the mean per-vector delta, resampling whole groups of deltas (the vectors of one
+    recording, utterance_group()), since those do not vary independently."""
+    if len(groups) < 2:
         return None
     rng = random.Random(seed)
-    means = sorted(sum(rng.choice(deltas) for _ in deltas) / len(deltas) for _ in range(replicates))
+    means = []
+    for _ in range(replicates):
+        sample = [delta for _ in groups for delta in rng.choice(groups)]
+        means.append(sum(sample) / len(sample))
+    means.sort()
     return means[int(0.025 * replicates)], means[int(0.975 * replicates) - 1]
+
+
+def check_encoder_decoders(candidate, baseline):
+    """Refuse encoder deltas unless one decoder (--decode-tools) decoded both runs' encodings."""
+    if not any("encoder" in result for result in candidate["vectors"]):
+        return
+    if not any("encoder" in result for result in baseline["vectors"]):
+        return
+    before, after = baseline.get("decoder_identity"), candidate.get("decoder_identity")
+    if before is None or before != after:
+        raise ValueError(f"the encoder comparisons were decoded by different decoders (baseline {before}, "
+                         f"this run {after}); score both runs with the same --decode-tools, or use --no-encoder")
 
 
 def compare(candidate, baseline):
     """Paired per-vector deltas (candidate - baseline) for every shared metric, by mode and partition."""
-    base = {(result["mode"], result["name"]): flatten(result) for result in baseline["vectors"]}
-    report, unpaired = {}, {}
+    check_encoder_decoders(candidate, baseline)
+    raw = {(result["mode"], result["name"]): result for result in baseline["vectors"]}
+    base = {key: flatten(result) for key, result in raw.items()}
+    report, unpaired, coverage = {}, {}, {}
     for result in candidate["vectors"]:
         before = base.get((result["mode"], result["name"]), {})
         after = flatten(result)
         name = f"{result['mode']}/{result['partition']}"
         group = report.setdefault(name, {})
+        twin = raw.get((result["mode"], result["name"]))
+        if candidate.get("lags_from") and twin is not None and result.get("lags") != twin.get("lags"):
+            # Measured at other lags than the baseline's: not a pair.
+            for key in sorted(set(after) | set(before)):
+                unpaired.setdefault(name, {}).setdefault(key, []).append(result["name"])
+            continue
+        if "channel" in result and twin is not None and "channel" in twin:
+            # LSD against DVSI on the frames that count in both runs, since each run mutes its own frames.
+            key = f"channel.{result['kind']}.lsd_common_db"
+            (value, previous), share = channel_lsd(result, twin)
+            after[key], before = value, dict(before, **{key: previous})
+            coverage.setdefault(name, {}).setdefault(key, []).append(share)
         for key in sorted(set(after) | set(before)):
             value, previous = after.get(key), before.get(key)
             if value is not None and previous is not None:
@@ -801,10 +1102,52 @@ def compare(candidate, baseline):
         for key in sorted(set(metrics) | set(unpaired.get(group, {}))):
             items = metrics.get(key, [])
             deltas = [delta for _, delta in items]
-            summary[group][key] = {"mean": mean(deltas), "ci95": bootstrap_interval(deltas),
+            recordings = {}
+            for name, delta in items:
+                recordings.setdefault(utterance_group(name), []).append(delta)
+            summary[group][key] = {"mean": mean(deltas), "ci95": bootstrap_interval(list(recordings.values())),
                                    "worst": max(items, key=lambda item: abs(item[1])) if items else None,
-                                   "n": len(items), "unpaired": unpaired.get(group, {}).get(key, [])}
+                                   "min": min(deltas) if deltas else None, "max": max(deltas) if deltas else None,
+                                   "n": len(items), "groups": len(recordings),
+                                   "unpaired": unpaired.get(group, {}).get(key, [])}
+            shares = coverage.get(group, {}).get(key)
+            if shares is not None:
+                summary[group][key]["coverage"] = None if None in shares else min(shares)
     return summary
+
+
+def unscored_vectors(gates, *runs):
+    """(mode, name) of the gate set's partition, for every mode it gates, that one of `runs` did not score:
+    a gate measured on part of its partition says nothing about the rest."""
+    modes = {mode for check in gates["checks"]
+             for mode in (check["mode"] if isinstance(check["mode"], list) else [check["mode"]])}
+    missing = set()
+    for run in runs:
+        scored = {(result["mode"], result["name"]) for result in run["vectors"]}
+        missing |= {(mode, name) for mode in modes for name in PARTITIONS[gates["partition"]]
+                    if (mode, name) not in scored}
+    return sorted(missing)
+
+
+def evaluate_gate_sets(names, declared, candidate_summary, comparison, runs):
+    """Every named gate set of `declared`: its checks, every vector of its partition scored in each of
+    `runs` (the candidate and the baseline), and the candidate scored at fixed lags, so that compare()
+    paired only vectors measured at the baseline's lags. Returns (passed, lines)."""
+    passed, lines = True, []
+    for name in names:
+        if name not in declared:
+            raise ValueError(f"unknown gate set {name!r}")
+        ok, set_lines = check_gates(declared[name], candidate_summary, comparison)
+        missing = unscored_vectors(declared[name], *runs)
+        if missing:
+            ok = False
+            set_lines.append(f"FAIL {declared[name]['partition']}: not scored in both runs: {missing}")
+        if not runs[0].get("lags_from"):
+            ok = False
+            set_lines.append(f"FAIL {declared[name]['partition']}: not scored at fixed lags (--lags-from)")
+        lines += set_lines + [f"gate set {name}: {'PASS' if ok else 'FAIL'}"]
+        passed &= ok
+    return passed, lines
 
 
 def check_gates(gates, candidate_summary, comparison):
@@ -847,6 +1190,16 @@ def evaluate_check(check, metric, means, deltas):
         return False, f"unpaired vectors {entry['unpaired']}"
     delta, interval = entry["mean"], entry["ci95"]
     detail = f"mean delta={delta:+.4g} ci95={interval} worst={entry['worst']}"
+    if "min_coverage" in check:
+        # A delta on too few common frames (say, both runs mute most of a vector) does not count.
+        share = entry.get("coverage")
+        if share is None or share < check["min_coverage"]:
+            return False, f"{detail} coverage={share} below {check['min_coverage']}"
+        detail += f" coverage={share:.3f}"
+    if rule == "all_no_increase":
+        return entry["max"] <= check.get("value", 0.0), f"{detail} max={entry['max']:+.4g}"
+    if rule == "all_no_decrease":
+        return entry["min"] >= -check.get("value", 0.0), f"{detail} min={entry['min']:+.4g}"
     if rule == "decrease":
         return interval is not None and interval[1] < 0 and delta <= -check.get("value", 0.0), detail
     if rule == "increase":
@@ -865,6 +1218,17 @@ def markdown(summary):
     for group, entry in summary.items():
         means = entry["mean"]
         lines.append(f"### {group} ({len(entry['vectors'])} vectors)\n")
+        if group.endswith("/channel"):
+            columns = ("mute_agreement", "false_mute_rate", "missed_mute_rate", "mute_rate", "dvsi_mute_rate",
+                       "first_mute_frame", "dvsi_first_mute_frame", "repeat_rate", "lsd_db", "lsd_coverage")
+            lines.append("| Vector | " + " | ".join(columns) + " |")
+            lines.append("|---" * (len(columns) + 1) + "|")
+            for name, flat in entry.get("rows", {}).items():
+                prefix = f"channel.{name.rsplit('_', 1)[1]}."
+                cells = [flat.get(prefix + column) for column in columns]
+                lines.append(f"| {name} | " + " | ".join("" if v is None else f"{v:.4g}" for v in cells) + " |")
+            lines.append("")
+            continue
         if group.endswith("/tones"):
             lines.append("| Metric | Worst vector |")
             lines.append("|---|---|")
@@ -909,8 +1273,16 @@ def main():
     parser.add_argument("--partitions", default="development,validation",
                         help="comma list; include 'final' only once per change set")
     parser.add_argument("--no-encoder", action="store_true", help="skip the encoder comparisons")
-    parser.add_argument("--compare", type=Path, help="baseline scoreboard.json for paired deltas")
-    parser.add_argument("--gates", help="gate set from dvsi_gates.json to evaluate against --compare")
+    parser.add_argument("--decode-tools", type=Path,
+                        help="build whose decoder decodes both encodings in the encoder comparisons (default "
+                             "--tools); give a baseline and a candidate run the same one")
+    parser.add_argument("--compare", type=Path,
+                        help="baseline scoreboard.json for paired deltas; its recorded lags fix this run's "
+                             "alignments unless --lags-from is given")
+    parser.add_argument("--lags-from",
+                        help="scoreboard.json whose lags fix this run's alignments, or two (baseline,candidate; "
+                             "comma-separated) to score at their joint lags")
+    parser.add_argument("--gates", help="comma list of gate sets from dvsi_gates.json to evaluate against --compare")
     args = parser.parse_args()
 
     if importlib.util.find_spec("numpy") is None:
@@ -919,26 +1291,48 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     work = args.out / "work"
     work.mkdir(exist_ok=True)
+    baseline = load_json(args.compare) if args.compare else None
+    # Both runs measure the same samples: each comparison at one lag for both.
+    sources = [Path(path) for path in args.lags_from.split(",")] if args.lags_from else (
+        [args.compare] if args.compare else [])
+    try:
+        frozen = load_lag_source(sources) if sources else {}
+    except ValueError as error:
+        sys.exit(str(error))
+    if sources and not frozen:
+        print("warning: no lags recorded there, so each comparison searches its own", file=sys.stderr)
+    encoder = not args.no_encoder
+    decode_tools = args.decode_tools or args.tools
     results = []
     for mode in args.modes.split(","):
         if mode not in MODES:
             sys.exit(f"unknown mode {mode!r}")
         for partition in args.partitions.split(","):
             for name in PARTITIONS[partition]:
-                needed = (vectors / mode / f"{name}.bit", vectors / mode / f"{name}.pcm", vectors / f"{name}.pcm")
+                needed = [vectors / mode / f"{name}.bit", vectors / mode / f"{name}.pcm"]
+                # A channel-error vector is measured against DVSI's decode of the clean bits.
+                needed += ([vectors / mode / "dam.bit", vectors / mode / "dam.pcm"] if partition == "channel"
+                           else [vectors / f"{name}.pcm"])
                 if not all(path.is_file() for path in needed):
                     print(f"skip {mode}/{name}: not fetched", file=sys.stderr)
                     continue
-                if partition == "tones":
-                    results.append(score_tone_vector(args.tools, vectors, mode, name, work, not args.no_encoder))
+                lags = frozen.get((mode, name))
+                if partition == "channel":
+                    results.append(score_channel_vector(args.tools, vectors, mode, name, work, lags))
+                elif partition == "tones":
+                    results.append(score_tone_vector(args.tools, vectors, mode, name, work, encoder, decode_tools, lags))
                 else:
-                    results.append(score_vector(args.tools, vectors, mode, name, work, not args.no_encoder))
+                    results.append(score_vector(args.tools, vectors, mode, name, work, encoder, decode_tools, lags))
                 print(f"scored {mode}/{name}", file=sys.stderr)
     summary = aggregate(results)
-    report = {"schema_version": 1, "vectors": results, "summary": summary}
-    if args.compare:
-        baseline = load_json(args.compare)
-        report["comparison"] = compare(report, baseline)
+    report = {"schema_version": 2, "tools_identity": decoder_identity(args.tools),
+              "decoder_identity": decoder_identity(decode_tools) if encoder else None,
+              "lags_from": ",".join(map(str, sources)) if frozen else None, "vectors": results, "summary": summary}
+    if baseline:
+        try:
+            report["comparison"] = compare(report, baseline)
+        except ValueError as error:
+            sys.exit(str(error))
         add_pcm_changes(summary, report, baseline)
         add_encoder_row_changes(summary, report, baseline)
     (args.out / "scoreboard.json").write_text(json.dumps(report, indent=1) + "\n")
@@ -947,10 +1341,13 @@ def main():
     if args.gates:
         if not args.compare:
             sys.exit("--gates needs --compare")
-        gates = load_json(Path(__file__).with_name("dvsi_gates.json"))[args.gates]
-        passed, lines = check_gates(gates, summary, report["comparison"])
+        declared = load_json(Path(__file__).with_name("dvsi_gates.json"))
+        try:
+            passed, lines = evaluate_gate_sets(args.gates.split(","), declared, summary, report["comparison"],
+                                               (report, baseline))
+        except ValueError as error:
+            sys.exit(str(error))
         print("\n".join(lines))
-        print(f"gate set {args.gates}: {'PASS' if passed else 'FAIL'}")
         return 0 if passed else 1
     return 0
 

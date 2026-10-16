@@ -848,5 +848,193 @@
         "worst": 0.0
       }
     ]
+  },
+  "dvsi-parity-development": {
+    "description": "DVSI parity (D-STAR absolute gain and shelf; rate-33 bit layout, pitch law and error counts; output high-pass phase; voiced and unvoiced render gains): our decode of DVSI's bits is no further from DVSI's decoder, the IMBE encoder's bits are unchanged, and the D-STAR and rate-33 encoders' output, decoded by one decoder, is no further from DVSI's encoding.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "dvsi-parity-validation": {
+    "description": "DVSI parity (D-STAR absolute gain and shelf; rate-33 bit layout, pitch law and error counts; output high-pass phase; voiced and unvoiced render gains): our decode of DVSI's bits is no further from DVSI's decoder, the IMBE encoder's bits are unchanged, and the D-STAR and rate-33 encoders' output, decoded by one decoder, is no further from DVSI's encoding.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "dvsi-parity-final": {
+    "description": "DVSI parity (D-STAR absolute gain and shelf; rate-33 bit layout, pitch law and error counts; output high-pass phase; voiced and unvoiced render gains): our decode of DVSI's bits is no further from DVSI's decoder, the IMBE encoder's bits are unchanged, and the D-STAR and rate-33 encoders' output, decoded by one decoder, is no further from DVSI's encoding.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "dvsi-parity-tones": {
+    "description": "DVSI parity: no tone vector's tone output agrees less often with DVSI's decoder, plays a wrong tone more often, or has its encoder tone frames agree less often with DVSI's.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "all_no_decrease"
+      }
+    ]
+  },
+  "dvsi-parity-channel": {
+    "description": "DVSI parity under channel errors (dam at 1.1-10.6% bit errors): at no error rate do our mute decisions agree less often with DVSI's, for hard or soft decisions, and on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) our hard-decision output is no further from DVSI's.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
   }
 }

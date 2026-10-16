@@ -24,6 +24,11 @@
 struct ambe_enc_tables {
     const float* dg; /* gain steps */
     int dg_count;
+    /* Decoded gain = dg_scale * dg[b2] + dg_offset + dg_history * gamma(-1):
+     * AMBE+2 1, 0, 0.5 (TIA-102.BABA-1 eq 26); D-STAR's absolute 2, -0.09, 0. */
+    float dg_scale;
+    float dg_offset;
+    float dg_history;
     const float (*prba24)[3];
     const float (*prba58)[4];
     const float (*hoc[4])[4]; /* b5..b8 */
@@ -49,9 +54,10 @@ struct ambe_enc_frame {
 void ambe_enc_mean_amplitude(struct ambe_enc_frame* q);
 
 /*
- * b2: the gain step nearest gamma - gamma(-1) / 2 (TIA-102.BABA-1 eqs 9-10),
- * and gamma_q. With fit_floor_gain, a frame whose target lies below the first
- * step has its envelope flattened toward the level that step can play
+ * b2: the gain level nearest the frame's gamma (for AMBE+2 the step nearest
+ * gamma - gamma(-1) / 2, TIA-102.BABA-1 eqs 9-10), and gamma_q. With
+ * fit_floor_gain, a frame whose target lies below the lowest level has its
+ * envelope flattened toward the level that level can play
  * (mbe_encoder_fit_floor()).
  */
 void ambe_enc_quantize_gain(struct ambe_enc_frame* q, const struct ambe_enc_tables* t, const mbe_parms* prev_mp);
@@ -78,7 +84,7 @@ int ambe_enc_fec(const char ambe_d[49], char ambe_fr[4][24]);
 /*
  * AMBE+2 steps exposed for the tests (ambe3600x2450_enc.c). b0 is a voice
  * pitch code (0..119) and m and a are indexed by harmonic 1..L of its
- * AmbeLtable count.
+ * mbe_ambe2450_harmonic_count().
  *
  * mbe_ambe2450_quantize_vuv: b1 for amplitudes m and the band decisions of
  * mbe_analysis_band_voicing() (TIA-102.BABA-1 4.2).
@@ -86,6 +92,9 @@ int ambe_enc_fec(const char ambe_d[49], char ambe_fr[4][24]);
  * decoder's domain (its log2Ml, eq 8 less 0.5 log2 L) against prev_mp, and
  * all 49 bits packed.
  */
+/* D-STAR's quantizer tables (ambe3600x2400_enc.c), exposed for the tests. */
+const struct ambe_enc_tables* mbe_ambe2400_enc_tables(void);
+
 int mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[12]);
 void mbe_ambe2450_quantize_amplitudes(int b0, int b1, const float a[57], const mbe_parms* prev_mp, char ambe_d[49]);
 
