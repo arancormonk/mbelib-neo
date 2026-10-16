@@ -724,11 +724,16 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
 
 `tools/quality/dvsi_scoreboard.py` runs every speech vector of the D-STAR, P25
 and rate-33 sets through the tools above and writes `scoreboard.json` and
-`scoreboard.md` (needs NumPy):
+`scoreboard.md` (needs NumPy). A change is judged by scoring a baseline build
+and then the candidate against it:
 
 ```sh
 python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
-  --tools build/tools-debug --out build/quality/scoreboard/candidate \
+  --tools build/baseline --decode-tools build/tools-debug \
+  --out build/quality/scoreboard/baseline
+python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
+  --tools build/tools-debug --decode-tools build/tools-debug \
+  --out build/quality/scoreboard/candidate \
   --compare build/quality/scoreboard/baseline/scoreboard.json --gates pitch-law
 ```
 
@@ -740,7 +745,8 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   decoder coded, by f0 band. A decoder that plays sharp or flat shows up as a
   ratio away from 1.
 - **Encoder:** our encoding of the input (D-STAR, IMBE and AMBE+2 encoders)
-  against DVSI's encoding of it, both decoded by this library: pitch error
+  against DVSI's encoding of it, both decoded by the `--decode-tools` build
+  (default `--tools`): pitch error
   against the input, octave errors, per-1 kHz-band voicing agreement, the speech
   metrics against the input, the same metrics of our decoded encoding against
   DVSI's (`encoder.vs_dvsi_bits.*`, with `encoder.level_gap_db` the unsigned
@@ -753,7 +759,13 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   `--compare` against a baseline that recorded them, `encoder.rows_changed_vectors`
   counts the vectors whose encoder bits changed. A build whose
   `mbe_quality_encode` does not offer a codec skips that encoder, so this
-  script can score a baseline built from an older checkout.
+  script can score a baseline built from an older checkout. Give the baseline
+  and the candidate run the same `--decode-tools`, so that only the encoders
+  differ (where a change moves both, decode with the candidate's decoder: it
+  stands for the decoders that will receive the bits). The run records that
+  decoder's identity (`decoder_identity`, a SHA-256 of its `mbe_quality_eval`
+  and the library beside it), and `--compare` refuses encoder deltas between
+  runs decoded by different or unrecorded decoders.
 - **Encoder tones (rate 33 and D-STAR):** our encoding of each tone vector
   against DVSI's bits, frame by frame at the best frame shift (of equally good
   shifts, the one where DVSI's encoder runs a frame behind ours, as on every
@@ -771,13 +783,30 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   fails the run. An encoding without one (one that is mostly silence frames,
   say) is left unscored, counted in `encoder.alignment_failures`, and fails
   any gate on its partition.
-- **Partitions** are by utterance, so `dam`'s level, overload and car-noise
-  variants sit with `dam`. `development` and `validation` were both examined
-  during earlier changes; `final` vectors are scored once per change set
-  (`--partitions final`). Not scored as speech: `xfer`, the DTX and
-  channel-error variants and the synthetic pulse trains and sweeps. The
-  `tones` partition covers the DTMF, single, KNOX, alert and call-progress
-  vectors.
+- **Channel errors** (`--partitions channel`): `dam`'s `_eN_hd` and `_eN_sd`
+  vectors, decoded as hard and as soft decisions, against DVSI's decode of the
+  same bits. A loud frame (RMS 300 or more in DVSI's decode of the clean bits)
+  is muted by DVSI when its decode of the errored bits is 30 dB or more below
+  that; ours is muted when the frame carries `MBE_PROCESS_FLAG_MUTE`. The
+  section reports, per vector, how often our mute decisions agree with DVSI's
+  on loud frames, the false and missed mute rates, the first loud frame each
+  mutes, our repeat rate, and the log-spectral distance from DVSI's output on
+  the loud frames neither decoder mutes, with our output aligned and
+  level-matched by the clean bits' comparison. Each run mutes its own frames,
+  so `--compare` measures that distance for both runs on the frames that count
+  in both (`channel.hd.lsd_common_db`) and reports their share of the frames
+  DVSI plays (`coverage`).
+- **Partitions** are by source recording. Several vectors are one recording
+  through different filters, noise or levels (found by matching 3 s blocks of
+  the inputs at any lag): `dam` and its variants (`lvl` among them),
+  `fambm22a`, `tambf22a`, `ucarm15a`, `ucarf15a` and `ucarm20a`, `tambf22b` and
+  `tambf32b`, and `tia11` and `p01mirs`. Each such group sits in one partition,
+  and the bootstrap intervals resample whole groups. `development` and
+  `validation` were both examined during earlier changes; `final` (`irstia`
+  and `mark`) is scored once per change set (`--partitions final`). Not scored
+  as speech: `xfer`, the DTX and channel-error variants and the synthetic
+  pulse trains and sweeps. The `tones` partition covers the DTMF, single,
+  KNOX, alert and call-progress vectors.
 - **Tones** are compared with one acoustic detector run on both outputs, on
   windows where DVSI's output is steady: level, frequencies, balance, how
   often both agree on the tone playing, and the fraction of windows playing a
@@ -787,10 +816,16 @@ python3 tools/quality/dvsi_scoreboard.py --vectors ../dvsi-vectors \
   apart.
 - `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
   worst vector, and counts the baseline's speech vectors whose PCM changed
-  (a vector missing from the run counts as changed). `--gates` evaluates a gate set from
+  (a vector missing from the run counts as changed). Every comparison of the
+  run is measured at the lag the baseline recorded for it (`lags` in each
+  vector's entry), so a change that moves the evaluator's alignment search
+  does not also move the samples measured. `--gates` evaluates gate sets (a
+  comma list) from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and
   exits non-zero when a gate fails. A paired check fails when a metric was
-  measured for a vector in only one of the two runs.
+  measured for a vector in only one of the two runs. `all_no_increase` and
+  `all_no_decrease` hold every vector to the limit, not just the mean, and a
+  check's `min_coverage` fails it when its common frames are too few.
 
 `mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
 `bits` (the frame's parameter bits after FEC), `decoded` (the frame's own
