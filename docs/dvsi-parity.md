@@ -243,6 +243,49 @@ window plays a wrong tone, and the encoders' tone frames are identical. On D-STA
 whose tones are voice frames, the level error against DVSI's output changes by -0.25 to +0.13 dB per
 vector (-0.02 dB on average over the 11 with steady tone windows).
 
+### Tone-gate investigation
+
+A fresh comparison of `ce62a89` with `58cbfb3` (including the SIMD optimization), using GCC 16.2.1,
+SSE2, Release, fast-math and LTO, reproduces the same six failures on all 104 tone vectors at joint
+lags. Counts of windows agreeing with DVSI's detector result are:
+
+| Codec / vector | Baseline | Candidate | Windows checked |
+|---|---:|---:|---:|
+| D-STAR / `knox_12` | 74 | 73 | 76 |
+| Rate 33 / `cpvbad` | 354 | 350 | 358 |
+| Rate 33 / `dtmf` | 4466 | 4465 | 4470 |
+| Rate 33 / `dtmf60` | 630 | 619 | 639 |
+| Rate 33 / `dtmf180` | 4474 | 4473 | 4477 |
+| Rate 33 / `dtmfvbad` | 1813 | 1811 | 1817 |
+
+The detector accepts any one or two sufficiently pure sinusoids; it does not require a valid DTMF or
+call-progress frequency pair. Its agreement denominator also includes windows where it detects no
+tone in DVSI's output and neither neighbour. On the five rate-33 vectors, all 21 newly disagreeing
+windows are additional detections in our speech-coded output where DVSI's output is not sufficiently
+sinusoidal for this detector. Two other windows regain agreement, leaving 19 fewer matches across
+those five vectors. Every newly disagreeing window contains only voice frames.
+
+The one D-STAR loss is a missed detection in `knox_12` at 2.16 s. The two strongest components hold
+90.0414% of the baseline window's spectral energy and 89.9669% of the candidate's, crossing the
+detector's 90% threshold; DVSI's window holds 91.0610%. The component frequencies remain close:
+739.2 and 1414.8 Hz in the candidate against 738.0 and 1412.5 Hz in DVSI's output.
+
+Diagnostic builds reverse one change at a time, keeping the same input bits and joint lags. Restoring
+the old rate-33 u3 field assignment alone recovers the baseline agreement counts on all five affected
+rate-33 vectors and removes 19 of the 21 individual added detections. Two windows need combined
+reversions: restoring the old field assignment, pitch table, output phase and voicing gains together
+removes all 21. Restoring D-STAR's old differential gain alone recovers its `knox_12` count. Reversing
+the output high-pass phase, voicing gains, rate-33 pitch table or D-STAR shelf individually does not
+recover those six counts. These experiments locate the changes responsible. With DVSI parity as the
+priority, the corrected field assignment, absolute gain law and synthesis changes are retained.
+
+Across the 52,400 decoded frames in the 104 vectors, frame flags and extracted parameter bits are
+unchanged. All 28,473 explicit tone frames (13,212 D-STAR and 15,261 rate 33) produce byte-identical
+int16 PCM: 4,555,680 samples. Wrong-tone detections remain zero in both runs, and encoder tone
+agreement is unchanged. The remaining discrepancy belongs to speech synthesis on voice-coded tone
+regions, whose spectral comparisons above have mixed results. The detector gate remains failing with
+its original threshold; improving DVSI waveform parity in those regions is the remaining work.
+
 ### Scoring history
 
 The final partition was scored twice, with the library unchanged in between. The first scoring fixed
