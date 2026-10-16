@@ -831,8 +831,9 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   alignment reached the higher correlation (`alignment`), since a change can
   let a decoder align where the old one could not: main's D-STAR gain law
   played onsets up to 16 dB low and pulled its alignment with DVSI's output to
-  40-96 samples, where the corrected decoder, P25 and rate 33 align at -16 to
-  0. Without `--lags-from`, `--compare` uses the baseline's lags. A vector
+  40-96 samples, where the corrected decoder aligns at -16 to 0 (P25 and rate
+  33 at -16 to +16 in both builds). Without `--lags-from`, `--compare` uses
+  the baseline's lags. A vector
   whose recorded lags still differ from the baseline's is not paired.
   `--gates` evaluates gate sets (a comma list) from
   `tools/quality/dvsi_gates.json`, declared before the change it judges, and

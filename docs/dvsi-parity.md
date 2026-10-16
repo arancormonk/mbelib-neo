@@ -24,8 +24,8 @@ appear here.
 - **Readback of DVSI's model.** On steady voiced frames, DVSI's harmonic amplitudes and phases
   are read from its output by fitting the harmonics of the coded fundamental at frame
   boundaries. The readback was validated on this library's own output first: it recovers our
-  rendered phases within a median 0.12-0.23 degrees on pulse trains (0.9-1.6 on speech) and our
-  amplitudes within 0.4% (3% on speech).
+  rendered phases within a median 0.12-0.23 degrees on pulse trains (0.9-1.6 on speech), and our
+  amplitudes with a ratio of 1.000 (interquartile range +-0.4% on pulse trains, +-3% on speech).
 - **Rate conversions as probes.** DVSI's rate-converted streams re-quantize DVSI's decoded model
   of one mode into another, so they show in the target mode's terms (pitch code, gain index,
   vector indices) what DVSI's decoder made of the source bits.
@@ -141,9 +141,10 @@ adaptive smoothing see the decoded amplitudes.
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 
-The P25 attenuation is not adopted: no reading of eq 112-116 explains it (as printed, eq 115
-cannot attenuate while `eps_T <= 15`), and under channel errors our output stays closer to the
-input speech than DVSI's (log-spectral distance at 10% bit errors 10.4 against 12.1 dB).
+The P25 attenuation is not adopted: no rule tried (eq 112-116 as printed, and instantaneous,
+clamped or leaky variants of it) explains it, and under channel errors our output stays closer to
+the input speech than DVSI's (log-spectral distance from the input at 10% bit errors 10.4 against
+12.1 dB).
 
 ## Known differences
 
@@ -238,8 +239,9 @@ energy, flips. In those windows our output is closer to DVSI's than main's on `d
 13.4 → 11.5 dB), `dtmf` (10.9 → 7.7) and `dtmfvbad` (10.4 → 10.1), and slightly further on `cpvbad`
 (6.5 → 6.7), `knox_12` (2.5 → 2.6, all three at the threshold) and `dtmf180` (20.9 → 21.1, at
 -50 dB). Tone frames play as before (level error on the DTMF vectors within 0.002 dB of main's), no
-window plays a wrong tone, and the encoders' tone frames are identical. The level of D-STAR's KNOX
-tones, which are voice frames, moves by -0.25 to +0.13 dB per vector (-0.01 dB on average).
+window plays a wrong tone, and the encoders' tone frames are identical. On D-STAR's KNOX vectors,
+whose tones are voice frames, the level error against DVSI's output changes by -0.25 to +0.13 dB per
+vector (-0.02 dB on average over the 11 with steady tone windows).
 
 ### Scoring history
 
@@ -248,8 +250,9 @@ every comparison at the lag the baseline's own alignment search had found, as th
 required. That failed the D-STAR checks on every partition (envelope correlation 0.02-0.04 lower,
 final LSD 0.10 dB worse) because main's D-STAR decoder had aligned with DVSI's output at 40-96
 samples (correlation 0.970-0.993): its gain law played onsets up to 16 dB low, which pulled the
-envelope correlation off. The corrected decoder aligns at -16 to 0 samples, as P25 and rate 33
-always did, with higher correlation on every speech vector (0.980-0.997), and main's own decode
+envelope correlation off. The corrected decoder aligns at -16 to 0 samples, as P25 (-16 to +16) and
+rate 33 (-16 to -8) do in both builds, with higher correlation on every speech vector
+(0.980-0.997), and main's own decode
 comes closer to DVSI's at those lags too (development LSD 4.48 dB against 4.97 at its own). Both
 runs are now scored at joint lags: each comparison at the lag of whichever run aligned with the
 higher correlation
