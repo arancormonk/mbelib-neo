@@ -236,26 +236,28 @@ mbe_eccAmbe3600Data_common(char fr[4][24], char* out49) {
 
 int
 mbe_eccAmbe3600DataCounted_common(char fr[4][24], char* out49) {
-    char gin[23], gout[23], codeword[23];
-    for (int j = 0; j < 23; j++) {
-        gin[j] = fr[1][j];
-    }
+    char in[23], codeword[23];
+    /* out49 may start at fr: packing C2 overwrites the received C1 parity. */
+    memcpy(in, fr[1], sizeof(in));
     (void)mbe_eccAmbe3600Data_common(fr, out49);
-    (void)mbe_golay2312(gin, gout);
-    return ambe_golay23_errors(gin, gout, codeword);
+    /* C1's decoded data is already in out49[12..23], MSB first. Re-encode
+     * it to count parity errors too, without decoding the same word twice. */
+    mbe_golay2312_encode(out49 + 12, codeword);
+    int errs = 0;
+    for (int j = 0; j < 23; j++) {
+        errs += (codeword[j] & 1) != (in[j] & 1);
+    }
+    return errs;
 }
 
 int
 mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49) {
-    mbe_soft_bit gin[23];
-    char gout[23], codeword[23];
-    for (int j = 0; j < 23; j++) {
-        gin[j] = fr[1][j];
-    }
+    mbe_soft_bit in[23];
+    char codeword[23];
+    memcpy(in, fr[1], sizeof(in));
     (void)mbe_eccAmbe3600DataSoft_common(fr, out49);
-    (void)mbe_golay2312Soft(gin, gout);
-    ambe_golay23_codeword(gout, codeword);
-    return ambe_soft_cost(gin, codeword, 23, 0);
+    mbe_golay2312_encode(out49 + 12, codeword);
+    return ambe_soft_cost(in, codeword, 23, 0);
 }
 
 int

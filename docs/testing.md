@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Testing Policy
 
 mbelib-neo uses automated tests, static analysis, sanitizers, and fuzzing to
@@ -353,6 +354,95 @@ packing took 17–19% less time (about 14–15 ns/frame), and IMBE took 5–9% l
 parameter quantization; whole-frame decoding above establishes the gain
 from batching the noise generator. With Clang 23.1.1 SSE2 and IEEE math,
 the same replay comparisons took 6.6–7.9% less time.
+
+### PR #130 synthesis and ECC optimization
+
+The follow-up to the DVSI parity changes compares with PR #130 at `d2293ba`.
+It batches the spectral-envelope phase filter across independent harmonics
+using SSE2, AVX2 or NEON, keeping each harmonic's ten taps in order. Synthesis
+computes the high-pass phase only for voiced oscillators, including harmonics
+fading between different model lengths. On SIMD targets the gain loop is
+separate from the phase calls, allowing compiler vectorization. The scalar
+path retains its combined expression, including x87 rounding. The required
+phases still use the double-precision `atan2` law.
+
+AMBE+2's counted C1 path re-encodes the data from its first Golay decode to
+count parity errors, removing the second decode and, for soft input, the
+second codebook search. It saves the received word before packing output,
+preserving callers that put the 49 output bits at the start of the input
+frame. Encoder analysis, quantization, FFTs and oscillator kernels retain
+the implementations from the earlier SIMD work.
+
+These measurements use a Ryzen 9 5950X, GCC 16.2.1, Release with fast-math
+and LTO on both sides. Each figure is the median of five alternating
+baseline/candidate comparisons pinned to CPU 6. Each decode invocation uses
+`bench_replay hard|soft <codec> 10 5` on DVSI's `dam` stream; ProVoice uses
+the same speech encoded to IMBE parameter rows and reframed as ProVoice.
+Input loading, allocation and warm-up are outside the timer. Lower is better.
+
+| Complete frame decode | Target | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| D-STAR, hard | SSE2 | 4.541 us | 3.739 us | 17.7% |
+| AMBE+2, hard | SSE2 | 4.991 us | 4.130 us | 17.3% |
+| IMBE, hard | SSE2 | 4.957 us | 4.155 us | 16.2% |
+| ProVoice, hard | SSE2 | 5.314 us | 4.532 us | 14.7% |
+| AMBE+2, soft | SSE2 | 7.502 us | 5.819 us | 22.4% |
+| D-STAR, hard | AVX2 | 3.191 us | 2.964 us | 7.1% |
+| AMBE+2, hard | AVX2 | 3.519 us | 3.283 us | 6.7% |
+| IMBE, hard | AVX2 | 3.574 us | 3.349 us | 6.3% |
+| ProVoice, hard | AVX2 | 3.761 us | 3.555 us | 5.5% |
+| AMBE+2, soft | AVX2 | 5.948 us | 4.947 us | 16.8% |
+
+The other soft decoders take 8.5–12.8% less time on SSE2 and 2.5–4.7% less
+on AVX2. Scalar Release with IEEE math takes 8.1–9.3% less time for hard
+decoding. Encoder medians on SSE2 and AVX2 stay within 0.2% of baseline.
+With Clang 23.1.1, hard decoding takes 14.5–18.0% less time on SSE2/IEEE
+and 17.3–21.5% less on AVX2 with fast-math and LTO. Longer Clang AVX2
+encoder runs put AMBE medians within 0.5% of baseline, inside the observed
+timing spread, and IMBE 1.8% faster.
+Speedups depend on the compiler, target and speech; QEMU correctness checks
+do not establish native ARM performance.
+
+For each of six host build pairs, all three encoders produce identical
+parameter-bit rows on all 97 cached DVSI inputs: 296,772 encoded frames.
+The configurations are GCC scalar/IEEE, GCC SSE2/IEEE, GCC SSE2 and AVX2
+with fast-math and LTO, Clang SSE2/IEEE, and Clang AVX2 with fast-math and
+LTO. All 321 cached frame streams, including tones, synthetic inputs and
+hard/soft channel-error vectors, contribute 55,073,120 compared PCM samples
+per pair. Five configurations produce identical PCM. GCC SSE2 with
+fast-math changes 298 samples, each by one int16 unit, as the compiler
+vectorizes the gain calculation. There are no nonfinite samples, additional
+clips, or changed tone, erasure, repeat, silence, mute or error counts.
+
+For the changed SSE2 streams, scoring both outputs at the baseline's lag
+changes log-spectral distance by at most 0.000004 dB against the input and
+0.000002 dB against DVSI; envelope correlation changes by less than
+0.0000004. Tone detector agreement, wrong-tone fraction and steady-tone
+window counts are unchanged. The parity PR's existing tone-gate result
+remains as recorded in [DVSI parity](dvsi-parity.md#gates). The converted
+ProVoice fixture also produces identical PCM in all six host configurations.
+
+ARM32 and AArch64 NEON each compare the same 321 streams under QEMU.
+ARM32 PCM is identical. AArch64 changes 6,045 of the 55,073,120 samples,
+each by one int16 unit. Its fixed-lag log-spectral distance changes by less
+than 0.00004 dB against both the input and DVSI, and envelope correlation
+by less than 0.000003. Tone detector agreement, wrong-tone fraction and
+steady-tone window counts are unchanged; there are no additional PCM rail hits.
+
+The phase oracle covers every supported model length (1–56), mirrored and
+extrapolated envelope edges, zero magnitudes and both voicing classes. ECC
+checks cover 512 arbitrary received words with hard and soft decisions,
+including zero-reliability ties, and 32 in-place layouts. Scalar, SSE2 and
+AVX2 Debug golden hashes are unchanged. Checks include the full Debug and
+Release suites, scalar and AVX2 ASan/UBSan, NOTONES, x87 Debug, the six
+Release configurations above, ARM32 and AArch64 NEON numerical/API tests
+under QEMU with Android NDK Clang 18, and `tools/quality_preflight.sh`.
+ARM32 NDK builds disable hardening because that compiler accepts the
+stack-clash flag in CMake's probe but rejects it when compiling for ARM32.
+ARM32 QEMU runs use a PID namespace to stay within Bionic's 16-bit PID limit.
+Gitleaks history and worktree-diff scans are also clean; the history scan
+mounts the worktree's common Git directory as well as the worktree.
+DVSI inputs, audio, comparison reports and benchmark logs stay local.
 
 ## TETRA Conformance
 

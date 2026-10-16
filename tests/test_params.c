@@ -531,6 +531,54 @@ test_low_band_edge_cases(void) {
     }
 }
 
+/* An independent sample of the mirrored/extrapolated log envelope. Keeping
+ * this scalar checks vector lanes at both edges for every supported length. */
+static float
+phase_envelope(const mbe_parms* mp, int l) {
+    if (l < 0) {
+        l = -l;
+    }
+    if (l == 0) {
+        return 0.0f;
+    }
+    if (l > mp->L) {
+        return log2f(fmaxf(mp->Ml[mp->L], 1e-6f)) - 0.72f * (float)(l - mp->L);
+    }
+    return log2f(fmaxf(mp->Ml[l], 1e-6f));
+}
+
+static void
+test_harmonic_phase_filter(void) {
+    uint32_t rng = 0xb13209f7u;
+    for (int L = 1; L <= 56; ++L) {
+        mbe_parms cur, prev, enhanced;
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        cur.L = L;
+        cur.w0 = 0.003f;
+        for (int l = 1; l <= L; ++l) {
+            rng = rng * 1664525u + 1013904223u;
+            cur.Ml[l] = l % 7 == 0 ? 0.0f : (float)(rng >> 16) / 8192.0f;
+            cur.Vl[l] = l % 2;
+        }
+        prev = cur;
+        float want[57];
+        for (int l = 1; l <= 56; ++l) {
+            double sum = 0.0;
+            for (int m = 1; m <= 19; m += 2) {
+                sum += ((double)phase_envelope(&cur, l + m) - phase_envelope(&cur, l - m)) / m;
+            }
+            want[l] = (float)(0.44 * sum);
+        }
+        float out[160];
+        /* A repeat skips adaptive smoothing, so the oracle sees precisely
+         * the amplitudes used to regenerate the phases, including zeros. */
+        mbe_synthesizeRepeatedSpeechf(out, &cur, &prev);
+        for (int l = 1; l <= 56; ++l) {
+            assert(fabsf(cur.PHIl[l] - cur.PSIl[l] - want[l]) < 4e-6f * (1.0f + fabsf(want[l])));
+        }
+    }
+}
+
 /* Rate-33 bit layout of DVSI's AMBE-3000: each of the 49 parameter bits lands
  * in exactly one quantizer value at the listed bit. DVSI sends b4's three low
  * bits at 40-42 and b3's LSB at 43; TIA-102.BABA-1 v1.0.5 Table 8 prints b3(0)
@@ -847,6 +895,7 @@ main(void) {
     test_render_voicing_gains();
     test_render_aliased_model();
     test_low_band_edge_cases();
+    test_harmonic_phase_filter();
     test_high_band_shelf_shape();
     test_high_band_shelf_per_codec();
 

@@ -30,6 +30,7 @@
 #include "mbe_compiler.h"
 #include "mbe_voiced.h"
 #if defined(MBELIB_ENABLE_SIMD)
+#include "mbe_simd.h"
 #if defined(MBE_SIMD_TARGET_SSE2)
 #include <emmintrin.h>
 #endif
@@ -683,7 +684,7 @@ struct mbe_render_saved {
 /* Give Ml[1..56] and PHIl[1..56] what the output renders: the low-band
  * roll-off's magnitude and phase and the voiced or unvoiced gain. */
 static void
-mbe_render_prepare(mbe_parms* mp, struct mbe_render_saved* saved) {
+mbe_render_prepare(mbe_parms* restrict mp, struct mbe_render_saved* restrict saved, int maxl) {
     const float hz_per_harmonic = mp->w0 * (8000.0f / (2.0f * (float)M_PI));
     for (int l = 1; l <= 56; l++) {
         const float hz = hz_per_harmonic * (float)l;
@@ -691,8 +692,24 @@ mbe_render_prepare(mbe_parms* mp, struct mbe_render_saved* saved) {
         saved->Ml[l] = mp->Ml[l];
         saved->PHIl[l] = mp->PHIl[l];
         mp->Ml[l] *= mbe_low_band_gain(hz) * (voiced ? MBE_RENDER_VOICED_GAIN : MBE_RENDER_UNVOICED_GAIN);
-        mp->PHIl[l] += mbe_low_band_phase(hz);
+#if !defined(MBE_VF_WIDTH)
+        /* Preserve the scalar expression's rounding, including x87 excess
+         * precision; only skip phases that no oscillator will read. */
+        if (l <= maxl && mp->Vl[l] == 1) {
+            mp->PHIl[l] += mbe_low_band_phase(hz);
+        }
+#endif
     }
+#if defined(MBE_VF_WIDTH)
+    /* Only voiced oscillators read PHIl; the unvoiced FFT uses Ml. Keep
+     * the transcendental calls separate so the amplitude loop can vectorize.
+     * Include harmonics fading between different model lengths. */
+    for (int l = 1; l <= maxl; l++) {
+        if (mp->Vl[l] == 1) {
+            mp->PHIl[l] += mbe_low_band_phase(hz_per_harmonic * (float)l);
+        }
+    }
+#endif
 }
 
 static void
@@ -979,6 +996,19 @@ mbe_regenerate_harmonic_phases(const mbe_parms* cur_mp, float phi[57]) {
     for (int l = 1; l <= D; ++l) {
         B[D - l] = B[D + l];
     }
+#if defined(MBE_VF_WIDTH)
+    /* Independent harmonics in each lane: retain each phase's tap order
+     * instead of horizontally reducing (and reassociating) its ten terms. */
+    for (int l = 1; l <= 56; l += MBE_VF_WIDTH) {
+        mbe_vf acc = mbe_vf_set(0.0f);
+        for (int k = 0; k < 10; ++k) {
+            int m = 2 * k + 1;
+            mbe_vf delta = mbe_vf_sub(mbe_vf_load(B + D + l + m), mbe_vf_load(B + D + l - m));
+            acc = mbe_vf_add(acc, mbe_vf_mul(delta, mbe_vf_set(inv_odd[k])));
+        }
+        mbe_vf_store(phi + l, mbe_vf_mul(mbe_vf_set(MBE_PHASE_KERNEL_SCALE), acc));
+    }
+#else
     for (int l = 1; l <= 56; ++l) {
         float acc = 0.0f;
         for (int k = 0; k < 10; ++k) {
@@ -987,6 +1017,7 @@ mbe_regenerate_harmonic_phases(const mbe_parms* cur_mp, float phi[57]) {
         }
         phi[l] = MBE_PHASE_KERNEL_SCALE * acc;
     }
+#endif
 }
 
 static int
@@ -1210,9 +1241,9 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
      * both frames: prepare it once. */
     struct mbe_render_saved cur_saved, prev_saved;
     const int shared_model = prev_mp == cur_mp;
-    mbe_render_prepare(cur_mp, &cur_saved);
+    mbe_render_prepare(cur_mp, &cur_saved, maxl);
     if (!shared_model) {
-        mbe_render_prepare(prev_mp, &prev_saved);
+        mbe_render_prepare(prev_mp, &prev_saved, maxl);
     }
 
     /* Synthesize voiced components

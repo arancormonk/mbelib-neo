@@ -872,8 +872,74 @@ test_ambe2450_soft_error_counts(void) {
     }
 }
 
+/* Count disagreement with the returned data's complete codewords. Exercise
+ * arbitrary received words, including soft ties and uncorrectable inputs,
+ * so C1's parity count cannot accidentally use received or C0 data bits. */
+static void
+test_ambe2450_counted_codewords(void) {
+    uint32_t rng = 0x631927a5u;
+    for (int trial = 0; trial < 512; ++trial) {
+        char frame[4][24], data[49], dstar[49], corrected[4][24];
+        mbe_soft_bit soft[4][24];
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 24; ++j) {
+                rng = rng * 1664525u + 1013904223u;
+                frame[i][j] = (char)(rng >> 31);
+                soft[i][j].bit = (uint8_t)frame[i][j];
+                soft[i][j].reliability = trial % 3 == 0 ? 0u : (uint8_t)(rng >> 16);
+            }
+        }
+        for (int use_soft = 0; use_soft < 2; ++use_soft) {
+            mbe_process_result result;
+            if (use_soft) {
+                assert(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, data, &result) >= 0);
+                assert(mbe_decodeAmbe3600x2400SoftFrame((const mbe_soft_bit(*)[24])soft, dstar, NULL) >= 0);
+            } else {
+                assert(mbe_decodeAmbe3600x2450Frame((const char (*)[24])frame, data, &result) >= 0);
+                assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, dstar, NULL) >= 0);
+            }
+            assert(memcmp(data, dstar, sizeof(data)) == 0);
+            assert(mbe_encodeAmbe3600x2450Frame(data, corrected) == 0);
+            int cost[2] = {0, 0};
+            for (int i = 0; i < 2; ++i) {
+                for (int j = 0; j < 24 - i; ++j) {
+                    if (frame[i][j] != corrected[i][j]) {
+                        cost[i] += use_soft ? soft[i][j].reliability : 255;
+                    }
+                }
+                cost[i] = (cost[i] + 127) / 255;
+            }
+            assert(result.c0_errors == cost[0]);
+            assert(result.total_errors == cost[0] + cost[1]);
+        }
+    }
+}
+
+/* The legacy in-place layout puts the 49 output bits at the frame's start.
+ * Packing C2 then overwrites received C1 parity, so counting must retain the
+ * original word even though its data was decoded only once. */
+static void
+test_ambe2450_ecc_alias(void) {
+    uint32_t rng = 0xd3b6e8a1u;
+    for (int trial = 0; trial < 32; ++trial) {
+        char frame[4][24], aliased[4][24], data[49];
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 24; ++j) {
+                rng = rng * 1664525u + 1013904223u;
+                frame[i][j] = (char)(rng >> 31);
+            }
+        }
+        memcpy(aliased, frame, sizeof(frame));
+        int errors = mbe_eccAmbe3600x2450Data(frame, data);
+        assert(mbe_eccAmbe3600x2450Data(aliased, (char*)aliased) == errors);
+        assert(memcmp(data, aliased, sizeof(data)) == 0);
+    }
+}
+
 int
 main(void) {
+    test_ambe2450_ecc_alias();
+    test_ambe2450_counted_codewords();
     test_ambe_error_counts();
     test_ambe2450_soft_error_counts();
     test_ambe2400_frame_paths();
