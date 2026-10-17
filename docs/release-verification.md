@@ -113,6 +113,14 @@ archive, and verifies extraction, build, tests, installation and static/shared
 consumers in a network-disabled namespace. Source ordering, ownership, modes
 and timestamps are normalized; `SOURCE-IDENTITY.json` records content hashes.
 
+SPDX file checksums and the package verification code retain SHA-1 for
+[SPDX 2.3 compatibility](https://spdx.github.io/spdx-spec/v2.3.1/package-information/#79-package-verification-code-field).
+They are inventory identifiers, not the release's cryptographic integrity
+check. Archive, SBOM and source-identity verification uses SHA-256, together
+with signed tags and attestations. The single `spdx_sha1` helper has a narrow,
+documented scanner exception; the SHA-1 security rule remains enabled elsewhere.
+Source staging compares archived contents directly with the Git blob bytes.
+
 Verify both the source and its SBOM before building, for example:
 
 ```sh

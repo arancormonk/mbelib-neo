@@ -21,6 +21,7 @@ AGGREGATE = "SPDXRef-Package-mbelib-neo"
 def spdx_sha1(content):
     # SPDX 2.3 package verification codes require SHA1. Security checks and
     # release attestations use the separate SHA256 checksums.
+    # https://spdx.github.io/spdx-spec/v2.3.1/package-information/#79-package-verification-code-field
     # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
     return hashlib.sha1(content, usedforsecurity=False).hexdigest()
 

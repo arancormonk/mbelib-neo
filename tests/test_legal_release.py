@@ -154,6 +154,19 @@ class SourceBundle(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "validated commit"):
             source_bundle.create(self.repo, self.tag, "0" * 40, self.root, self.dependency)
 
+    def test_archive_attributes_cannot_change_tag_contents(self):
+        (self.repo / "README.md").write_text("Release commit: $Format:%H$\n")
+        (self.repo / ".gitattributes").write_text("README.md export-subst\n")
+        self.command("add", ".")
+        self.command("-c", "commit.gpgsign=false", "commit", "-qm", "archive substitution")
+        with self.assertRaisesRegex(ValueError, "changed tracked source"):
+            source_bundle.tracked_source(self.repo, self.command("rev-parse", "HEAD").strip())
+        (self.repo / ".gitattributes").write_text("docs/dependencies.md export-ignore\n")
+        self.command("add", ".")
+        self.command("-c", "commit.gpgsign=false", "commit", "-qm", "archive omission")
+        with self.assertRaisesRegex(ValueError, "every tracked source file"):
+            source_bundle.tracked_source(self.repo, self.command("rev-parse", "HEAD").strip())
+
     def test_missing_notice_and_forbidden_tracked_data_fail(self):
         (self.repo / "LICENSES/ISC.txt").unlink()
         self.command("add", "-u")

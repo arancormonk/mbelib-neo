@@ -61,10 +61,8 @@ def tracked_source(root, commit):
     if files.keys() != tracked.keys():
         raise ValueError("Archive must contain every tracked source file")
     for name, (data, _) in files.items():
-        # Git blob identity only; SHA256 verifies every delivered source file.
-        # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
-        blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data, usedforsecurity=False).hexdigest()
-        if blob != tracked[name][0]:
+        # Compare bytes directly; archive attributes must not alter tag content.
+        if data != git(root, "cat-file", "blob", tracked[name][0]):
             raise ValueError(f"Git archive changed tracked source: {name}")
         # Git archive's tar.umask is user configurable; use the tree mode so
         # two builders do not emit different permissions for the same tag.
