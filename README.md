@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # mbelib-neo
 
 Performance‑enhanced IMBE/AMBE vocoder primitives and a TETRA ACELP speech decoder, with a modern CMake build, installable headers, and pkg-config/CMake package integration.
@@ -10,30 +11,25 @@ Project homepage: https://github.com/arancormonk/mbelib-neo
 
 ## Patent Notice
 
-```
-This source code is provided for educational purposes only. It
-is a written description of how certain voice encoding/decoding
-algorithms could be implemented. Executable objects compiled or
-derived from this package may be covered by one or more patents.
-Readers are strongly advised to check for any patent restrictions
-or licensing requirements before compiling or using this source code.
-```
-
-This notice is advisory and does not modify the license. See `LICENSE` for terms.
-
-TETRA speech codec: a search of ETSI's IPR database exports on 2026-10-15 located two
-declarations bearing on the TETRA speech codec (ISLD-200101-005 against EN 300 395-2, and
-ISLD-190001-073 for the TETRA project). For every patent family they list, the individually
-checked family members have passed their anticipated expiration (Google Patents: 2007-2014).
-The database also holds general declarations that name no patents, and ETSI does not guarantee
-that it is complete. The search is recorded in `docs/tetra-acelp.md`.
+Use and distribution of the vocoders may implicate patents. The project has
+not established third-party patent clearance; educational or research use is
+not asserted as an exemption. AMBE+2 and TETRA remain enabled with the open
+questions recorded in [the dated patent review](legal/patents.md).
 
 ## License
 
-- mbelib-neo is distributed under GPL-2.0-or-later (`LICENSE`). All compiled binaries and source distributions fall under that license, except the TETRA codebook data below.
-- `src/tetra/tetra_acelp_codebooks.c` holds the two codebooks of the TETRA speech codec, numeric data copied from the C code archive attached to ETSI EN 300 395-2, (C) ETSI. That data is not covered by the GPL grant. It is carried for a decoder that passes the standard's decoder test bit for bit, the use ETSI's IPR Policy (clause 9.2.2) licenses for software contributed to its standards ("in any compliant implementation"); whether that grant reaches these 1995 contributions has not been established, and it does not make the data available under the GPL. The file carries the `LicenseRef-ETSI-EN-300-395-2-data` identifier, whose text, `LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`, is installed with the other license files. Redistributors should make their own assessment of it.
-- Portions originate from the original ISC-licensed mbelib; the retained ISC notice is in `docs/upstream-mbelib-attribution.md` for attribution and clarity. Those contributions are redistributed under GPL-2.0-or-later as permitted by the ISC terms.
-- Project-maintained source files carry SPDX identifiers. Downloaded PFFFT sources retain their upstream license headers; installation includes its license and compiled-source notices.
+The project's contributions are GPL-2.0-or-later; original ISC mbelib notices
+and PFFFT's exact license texts are retained. The source-only OP25 quality patch
+is GPL-3.0-or-later. TETRA codebook data retains its ETSI attribution, while
+redistribution permission and GPL compatibility remain unresolved. No blanket
+license conclusion is asserted for the combined distribution.
+
+Read the [component inventory](legal/component-table.md) and
+[licensing status and retained-component exception](legal/status.md). Starting
+with 2.6.0, releases include a **complete corresponding-source archive** with
+the pinned PFFFT source, build inputs, tests and notices alongside the binaries.
+See [offline source builds](docs/source-build.md) and
+[release verification](docs/release-verification.md).
 
 ## Overview
 
@@ -54,7 +50,8 @@ Requirements
 - On non‑Windows platforms, links against `-lm` automatically.
 - The first configure downloads a fixed PFFFT fork revision and verifies its SHA-256. No submodule or C++ compiler is needed.
 
-For a fresh offline build, supply a checkout or extracted archive of the pinned
+Release source bundles automatically use their hash-verified PFFFT archive.
+For a fresh offline build from a Git checkout, supply an extracted copy of the pinned
 fork (see [dependency updates](docs/dependencies.md)):
 
 ```sh
@@ -135,7 +132,7 @@ Typical release flow:
 ```
 # Update project(mbelib-neo VERSION X.Y.Z ...) first, commit, and push.
 
-git tag -a vX.Y.Z -m "mbelib-neo X.Y.Z"
+git tag -s vX.Y.Z -m "mbelib-neo X.Y.Z"
 git push origin vX.Y.Z
 ```
 
@@ -323,7 +320,7 @@ Notes
 
 ## Audio Quality Improvements
 
-mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing and FFT-based unvoiced synthesis:
+mbelib-neo combines regenerated MBE voiced phase with TIA-102.BABA smoothing and FFT-based unvoiced synthesis:
 
 - **FFT-based unvoiced synthesis** (Algorithms #117-126): Uses 256-point FFT with band-level scaling instead of the legacy oscillator bank approach. Provides cleaner, more natural unvoiced sounds with proper spectral shaping.
 
@@ -333,14 +330,14 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **Regenerated voiced phase**: The odd log-magnitude kernel from [US 5,701,390, Eqs. 7–9](https://patents.google.com/patent/US5701390A/en) derives harmonic phase from the enhanced, smoothed spectral envelope. The shared synthesizer applies it to all four codecs without changing the public API or parameter layout. Existing phase/amplitude interpolation remains in place; fully voiced output no longer depends on the unvoiced-noise RNG seed.
 
-- **Codec-specific frame repeat/muting**: IMBE and D-STAR follow JMBE's repeat rules. IMBE mutes on max repeats or the error-rate threshold, and IMBE prolonged repeat headroom resets to a default model state. D-STAR mutes on max repeats and, for hard-decision input, while its error rate is above 0.042, which approximates the muting of DVSI's AMBE-3000 under sustained channel errors (it starts sooner; see [DVSI parity](docs/dvsi-parity.md#d-star-muting-under-channel-errors)). In every codec, a repeated frame keeps its own error accounting and continues the unvoiced-noise sequence; only the model is repeated.
+- **Codec-specific frame repeat/muting**: IMBE mutes on max repeats or the error-rate threshold, and IMBE prolonged repeat headroom resets to a default model state. D-STAR mutes on max repeats and, for hard-decision input, while its error rate is above 0.042, which approximates the muting of DVSI's AMBE-3000 under sustained channel errors (it starts sooner; see [DVSI parity](docs/dvsi-parity.md#d-star-muting-under-channel-errors)). In every codec, a repeated frame keeps its own error accounting and continues the unvoiced-noise sequence; only the model is repeated.
 
-- **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum), replacing earlier JMBE parity:
-  - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, §4.4.1 eq. 26, §4.4.3 eq. 43). JMBE's model scaled π/32 by 2π, which put harmonics 6–15 above Nyquist.
+- **AMBE 3600x2450 frame types per TIA-102.BABA-1** (P25 Half-Rate Vocoder Addendum):
+  - **Silence frames** (b0 124/125) use ω₀ = 2π/32, L = 14 and all bands unvoiced (§4.1). They are synthesized but never used for prediction, so gain and log-magnitude history stay with the last voice frame (§4.3, §4.4.1 eq. 26, §4.4.3 eq. 43).
   - **Error counts** (§5.5): every bit of the received C0 and C1 codewords, parity bits included, that differs from the corrected codeword, plus C0's extended parity bit when it disagrees with the corrected codeword (4 marks a detected, uncorrectable C0). Soft decisions count each such bit by its reliability.
   - **Repeats** (§5.6): erasure (b0 120–123), or C0 errors ≥ 4. DVSI's AMBE-3000 does not apply eq. 57–58's second condition (C0 ≥ 2 with ≥ 6 total), and neither does this library. These criteria apply to every frame, before tone classification. A repeat replays the last synthesized frame unchanged (no re-enhancement or adaptive smoothing) and leaves the history untouched.
   - **Departures followed from DVSI's AMBE-3000**: the pitch law log2 f0 = −4.322605 − 0.0220427 b0 in place of the Annex A table (12 harmonics, not 11, at b0 17), and u3's bits 8–5 carrying b4(2), b4(1), b4(0), b3(0) where the v1.0.5 text of Table 8 prints b3(0) first; DVSI's decoder and encoder both use them ([DVSI parity](docs/dvsi-parity.md)).
-  - **Tones** (§7, §7.3): a frame whose first six bits of u0 equal 63 is a tone frame, whatever its b0 would read as (a single tone can read as silence). An invalid tone index is an erasure (flagged `ERASURE` and `TONE`), and so is a tone frame whose redundant tone fields disagree (JMBE's consistency check; the spec leaves this to the decoder). Tone ID 255 is a zero-amplitude tone. Each tone component plays at the §7.2 level, 0.711 dB per AD step from +3.17 dBm0 at AD 127 (at the reference DVSI's decoder uses), and dual tones carry both components at that level. Frequencies are the nominal values of the tone table; DVSI's decoder approximates dual tones as two harmonics of one fundamental, up to 3% off nominal.
+  - **Tones** (§7, §7.3): a frame whose first six bits of u0 equal 63 is a tone frame, whatever its b0 would read as (a single tone can read as silence). An invalid tone index is an erasure (flagged `ERASURE` and `TONE`), and so is a tone frame whose redundant tone fields disagree (a local consistency check; the spec leaves this to the decoder). Tone ID 255 is a zero-amplitude tone. Each tone component plays at the §7.2 level, 0.711 dB per AD step from +3.17 dBm0 at AD 127 (at the reference DVSI's decoder uses), and dual tones carry both components at that level. Frequencies are the nominal values of the tone table; DVSI's decoder approximates dual tones as two harmonics of one fundamental, up to 3% off nominal.
   - **Muting** (§5.7): when the error rate exceeds 0.096, or instead of the 4th consecutive repeat, output uniform noise in [−5, 5] on the synthesized-speech scale.
   - **Recovery after mutes and tones**: a mute or a tone frame also silences the last synthesized frame, so the next synthesized frame fades in instead of overlapping the speech from before it, and a repeat right after either replays silence. The spec doesn't define the synthesis state across these frames.
 
@@ -348,9 +345,9 @@ mbelib-neo combines regenerated MBE voiced phase with JMBE-compatible smoothing 
 
 - **D-STAR tones**: single tones 5–122 as AMBE+2, DTMF 128–143 (128 + 4 × column + row) and call-progress tones 144–147, at the level the 8-bit tone volume gives on DVSI's decoder. The zero-volume frame (b0 127, tone index 128) that earlier versions of this library's encoder sent for silence plays comfort noise and resets the decoder.
 
-- **LCG noise generator with buffer overlap**: JMBE-compatible Linear Congruential Generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
+- **LCG noise generator with buffer overlap**: TIA-102.BABA §11.2 linear congruential generator for deterministic noise, with 96-sample overlap for smooth continuity between frames.
 
-- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] at the int16 output (±5/7 in the float output, which is int16 / 7; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers keep JMBE's comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
+- **Mute noise**: P25 IMBE and AMBE 3600x2450 mute with the spec level, uniform in [−5, 5] at the int16 output (±5/7 in the float output, which is int16 / 7; TIA-102.BABA §7.8, TIA-102.BABA-1 §5.7). D-STAR, ProVoice (not a TIA-102 codec; the 7100x4400 frame APIs, or the IMBE 4400 data API given a result carrying `MBE_PROCESS_FLAG_PROVOICE`) and direct `mbe_synthesizeSpeechf()` callers use the library comfort-noise level (`0.003` gain semantics, also used by `mbe_synthesizeComfortNoisef()`). All of them draw from a Java `Random`-compatible per-thread RNG.
 
 - **Nyquist guard**: the shared synthesizer skips voiced harmonics at or above Nyquist (`l * w0 >= pi`) instead of rendering them as aliases. Decoded models never contain such harmonics; the guard protects caller-supplied models.
 
@@ -365,7 +362,7 @@ The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evalu
 - `mbe_versionString()` returns a const pointer to the version string.
 - Processing APIs return an `int` error total and use `mbe_process_result` for decode/synthesis status.
 - Soft-decision ECC helpers are public for Golay(23,12), Hamming(15,11), and the IMBE 7100x4400 Hamming mapping.
-- Unvoiced synthesis uses a JMBE-style LCG state carried in `mbe_parms` (`noiseSeed`/`noiseOverlap`), with per-thread cold-start seeding via `mbe_setThreadRngSeed(uint32_t)`.
+- Unvoiced synthesis uses the TIA-102.BABA §11.2 LCG state carried in `mbe_parms` (`noiseSeed`/`noiseOverlap`), with per-thread cold-start seeding via `mbe_setThreadRngSeed(uint32_t)`.
 - ABI: v2.0.0 breaks ABI from v1. The shared library `SOVERSION` follows the project major version; minor updates within a major version aim to remain ABI compatible.
 
 ### Determinism & RNG
@@ -374,7 +371,7 @@ The opt-in [encode/decode quality pipeline](docs/testing.md#speech-quality-evalu
 - `mbe_setThreadRngSeed(0)` is accepted and remapped internally to a non-zero seed. Use an explicit non-zero seed when exact reproducibility matters across builds.
 - Unvoiced noise progression after cold start is driven by the per-frame LCG state in `mbe_parms`, so deterministic playback requires carrying frame state forward consistently.
 - Runtime synthesis helpers (RNG state and FFT plan) are thread-local; do not share mutable decode state (`mbe_parms`) across threads unless you synchronize externally.
-- Frame handling differs per codec: IMBE uses JMBE's error-rate muting and repeat-headroom reset behavior (with the TIA-102.BABA mute-noise level for P25, JMBE's comfort noise for ProVoice), D-STAR uses JMBE's repeat-driven muting plus an error-rate mute for hard-decision input, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
+- Frame handling differs per codec: IMBE uses error-rate muting and a repeat-headroom reset (with the TIA-102.BABA mute-noise level for P25, library comfort noise for ProVoice), D-STAR uses repeat-driven muting plus an error-rate mute for hard-decision input, and AMBE 3600x2450 follows TIA-102.BABA-1 (see Audio Quality Improvements).
 - Enabling `MBELIB_ENABLE_SIMD=ON` selects vectorized math when the compiler target supports it, with
   scalar fallback otherwise. This can change
   floating‑point rounding at the bit level. Tests enforce exactness for int16 on x86 in Debug, and
@@ -445,7 +442,7 @@ Project documentation and policies:
 - Public headers: `include/mbelib-neo/`
 - Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`, `src/tetra/`
 - Internal headers: `src/internal/`
-- External libraries: pinned PFFFT fork populated by `cmake/Pffft.cmake` (BSD-like license)
+- External libraries: pinned PFFFT fork populated by `cmake/Pffft.cmake` (retained texts: `LicenseRef-PFFFT`)
 - Tests: `tests/` • Examples: `examples/` • Benchmarks: `bench/`
 - Developer tooling and CI parity scripts: `tools/`
 

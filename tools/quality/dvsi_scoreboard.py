@@ -1265,6 +1265,8 @@ def markdown(summary):
 
 
 def main():
+    from reference_provenance import retain_dataset
+
     parser = argparse.ArgumentParser(description="Score this library against DVSI's AMBE-3000 test vectors.")
     parser.add_argument("--vectors", type=Path, required=True, help="directory holding tv-rc/ from fetch_dvsi_vectors")
     parser.add_argument("--tools", type=Path, required=True, help="build directory with mbe_quality_* tools")
@@ -1289,6 +1291,10 @@ def main():
         sys.exit("dvsi_scoreboard.py needs NumPy")
     vectors = args.vectors / "tv-rc" if (args.vectors / "tv-rc").is_dir() else args.vectors
     args.out.mkdir(parents=True, exist_ok=True)
+    acquisition_manifest = args.vectors / "dvsi-manifest.json"
+    if not acquisition_manifest.exists() and args.vectors.name == "tv-rc":
+        acquisition_manifest = args.vectors.parent / "dvsi-manifest.json"
+    reference_data = retain_dataset(acquisition_manifest, args.out)
     work = args.out / "work"
     work.mkdir(exist_ok=True)
     baseline = load_json(args.compare) if args.compare else None
@@ -1326,6 +1332,7 @@ def main():
                 print(f"scored {mode}/{name}", file=sys.stderr)
     summary = aggregate(results)
     report = {"schema_version": 2, "tools_identity": decoder_identity(args.tools),
+              "reference_data": reference_data,
               "decoder_identity": decoder_identity(decode_tools) if encoder else None,
               "lags_from": ",".join(map(str, sources)) if frozen else None, "vectors": results, "summary": summary}
     if baseline:

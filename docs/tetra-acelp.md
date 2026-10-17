@@ -242,16 +242,10 @@ en_30039502v010303p0.zip (V1.3.3), whose C-CODE members are identical, reads tho
 only, and writes `src/tetra/tetra_acelp_codebooks.c` with the archive and member hashes;
 `--check` compares instead of writing. The file carries `LicenseRef-ETSI-EN-300-395-2-data`: the
 values are (C) ETSI and they are not covered by the project's GPL grant
-(`LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`). They are carried for an implementation of the
-standard that passes its decoder test bit for bit: ETSI's IPR Policy (clause 9.2.2, with SOFTWARE
-defined in clause 15, definition 14, to include codec code and data) grants implementers a
-royalty-free licence to software contributed to a standard "for the purpose of using the SOFTWARE
-in any compliant implementation". Whether that grant reaches these 1995 contributions has not been
-established, a contributor could have chosen fair, reasonable and non-discriminatory terms instead
-(clause 9.2.2(ii)), and the grant is limited to that purpose, so it does not make the data
-available under the GPL; no licence that does is known. Other open-source decoders of standardized
-speech codecs, for example FFmpeg's AMR and G.729 decoders, carry their standards' tables in the
-same way.
+(`LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt`). Redistribution permission and GPL compatibility remain unresolved. The
+[ETSI-RETAIN-1 disclosure](../legal/status.md#etsi-retain-1) records historical-policy,
+contributor-rights and compatibility questions. This notice is not a license grant;
+conformance and similar tables in other projects do not establish authorization.
 
 Everything else is computed from formulas by `tools/tetra/gen_acelp_constants.py` into
 `src/internal/tetra_acelp_constants.h` (log2/pow2 tables, interpolation filters, gamma powers);

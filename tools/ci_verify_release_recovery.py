@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from release_assets import collect, needs_source
+
 REPO = "arancormonk/mbelib-neo"
 WORKFLOW = ".github/workflows/ci.yml"
 SPDX = "https://spdx.dev/Document"
@@ -34,9 +36,7 @@ def validate_run(run, jobs, tag, commit):
 
 
 def verify_assets(directory, tag, commit):
-    packages = sorted([*directory.glob("*.tar.gz"), *directory.glob("*.zip")])
-    if len(packages) != 3:
-        raise ValueError("Expected three release packages")
+    packages, _ = collect(directory, tag[1:])
     for package in packages:
         arguments = ("attestation", "verify", str(package), "--repo", REPO,
                      "--signer-workflow", f"{REPO}/{WORKFLOW}", "--source-ref", f"refs/tags/{tag}",
@@ -46,6 +46,11 @@ def verify_assets(directory, tag, commit):
         sbom = json.loads(Path(str(package) + ".spdx.json").read_text(encoding="utf-8"))
         if not any(item["verificationResult"]["statement"]["predicate"] == sbom for item in verified):
             raise ValueError(f"Downloaded SBOM differs from the signed predicate for {package.name}")
+        if needs_source(tag[1:]):
+            # New releases also attest the SBOM file as a provenance subject.
+            gh_json("attestation", "verify", str(package) + ".spdx.json", "--repo", REPO,
+                    "--signer-workflow", f"{REPO}/{WORKFLOW}", "--source-ref", f"refs/tags/{tag}",
+                    "--source-digest", commit, "--deny-self-hosted-runners", "--format=json")
         print(f"Verified original tag provenance and SBOM: {package.name}")
 
 

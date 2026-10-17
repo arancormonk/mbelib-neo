@@ -12,8 +12,9 @@ REPO = "https://github.com/arancormonk/pffft"
 PACKAGE_ID = "SPDXRef-Package-mbelib-pffft"
 
 
-def read_pins(path=PINS):
-    text = path.read_text(encoding="utf-8")
+def read_pins(path=PINS, *, text=None):
+    if text is None:
+        text = path.read_text(encoding="utf-8")
     result = {}
     for name, size in (("PFFFT_SHA", 40), ("PFFFT_ARCHIVE_SHA256", 64)):
         values = re.findall(rf"^{name}=(.*)$", text, re.MULTILINE)
@@ -24,6 +25,8 @@ def read_pins(path=PINS):
 
 
 def add_spdx(document, pins):
+    from legal_inventory import load
+    component = next(c for c in load()["components"] if c["id"] == "pffft")
     sha = pins["PFFFT_SHA"]
     packages = document.setdefault("packages", [])
     if any(package.get("SPDXID") == PACKAGE_ID for package in packages):
@@ -32,7 +35,7 @@ def add_spdx(document, pins):
         "name": "pffft", "SPDXID": PACKAGE_ID, "versionInfo": sha,
         "downloadLocation": f"{REPO}/archive/{sha}.tar.gz",
         "homepage": REPO, "filesAnalyzed": False,
-        "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION",
+        "licenseConcluded": component["license_concluded"], "licenseDeclared": component["license_declared"],
         "copyrightText": "NOASSERTION",
         "sourceInfo": f"Compiled into mbelib-neo from {REPO} at commit {sha}",
         "checksums": [{"algorithm": "SHA256", "checksumValue": pins["PFFFT_ARCHIVE_SHA256"]}],
@@ -42,6 +45,10 @@ def add_spdx(document, pins):
     document.setdefault("relationships", []).append({
         "spdxElementId": document["SPDXID"], "relationshipType": "DESCRIBES",
         "relatedSpdxElement": PACKAGE_ID,
+    })
+    document.setdefault("hasExtractedLicensingInfos", []).append({
+        "licenseId": component["license_declared"], "name": "PFFFT retained notices",
+        "extractedText": (PINS.parent.parent / component["notices"][0]).read_text(encoding="utf-8"),
     })
     return document
 

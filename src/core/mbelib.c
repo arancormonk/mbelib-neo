@@ -227,7 +227,7 @@ mbe_fill_voiced_cos_block4(float* restrict cblk, float* restrict c, float* restr
  *
  * Generates four consecutive cosine samples from the current oscillator state,
  * multiplies by window `W[0..3]` and gain `gain`, and accumulates into
- * `Ss[0..3]`. `gain` already includes the JMBE `2.0f` voiced multiplier.
+ * `Ss[0..3]`. `gain` already includes the TIA-102.BABA eq. 136 `2.0f` voiced multiplier.
  *
  * @param Ss Output sample pointer (adds to Ss[0..3]).
  * @param W  Window values for these four samples.
@@ -334,48 +334,39 @@ mbe_useLastMbeParms(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
  * @param prev_mp_enhanced Output: enhanced previous parameter state.
  */
 void
-mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-
-    if (!cur_mp || !prev_mp || !prev_mp_enhanced) {
+mbe_resetImbeModel(mbe_parms* mp) {
+    if (mp == NULL) {
         return;
     }
-
-    int l;
-    prev_mp->swn = 0;
-    prev_mp->tonePhase = 0;
-    /* Match JMBE IMBEModelParameters default (IMBEFundamentalFrequency.DEFAULT, index 134). */
-    prev_mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
-    prev_mp->L = (int)(0.9254 * (int)((M_PI / prev_mp->w0) + 0.25));
-    prev_mp->K = 12;
-    prev_mp->gamma = (float)0;
-    for (l = 0; l <= 56; l++) {
-        prev_mp->Ml[l] = 1.0f;
-        prev_mp->Vl[l] = 0;
-        prev_mp->log2Ml[l] = (float)0; // log2 of 1 == 0
-        prev_mp->PHIl[l] = (float)0;
-        /* JMBE previous-phase arrays start at 0.0f. */
-        prev_mp->PSIl[l] = 0.0f;
+    mp->w0 = (float)(4.0 * M_PI / (134.0 + 39.5));
+    mp->L = (int)floor(0.9254 * floor(M_PI / (double)mp->w0 + 0.25));
+    mp->K = 12;
+    mp->gamma = 0.0f;
+    for (int l = 0; l <= 56; ++l) {
+        mp->Ml[l] = 1.0f;
+        mp->Vl[l] = 0;
+        mp->log2Ml[l] = 0.0f;
     }
-    /* Initialize adaptive smoothing state */
-    prev_mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
-    prev_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-    prev_mp->errorRate = 0.0f;
-    prev_mp->errorCountTotal = 0;
-    prev_mp->errorCount4 = 0;
+    mp->swn = 0;
+    mp->tonePhase = 0;
+    mp->repeatCount = 0;
+    mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
+    mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+    mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
+}
 
-    /* Initialize frame repeat state */
-    prev_mp->repeatCount = 0;
-    prev_mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
-
-    /* Initialize FFT-based unvoiced synthesis state.
-     * Use seed<0 sentinel so first nextBuffer() returns JMBE's initial all-zero
-     * 256-sample buffer, then primes with MBE_LCG_DEFAULT_SEED. */
-    prev_mp->noiseSeed = -1.0f;
-    memset(prev_mp->noiseOverlap, 0, sizeof(prev_mp->noiseOverlap));
-    memset(prev_mp->previousUw, 0, sizeof(prev_mp->previousUw));
-
-    mbe_moveMbeParms(prev_mp, cur_mp);
-    mbe_moveMbeParms(prev_mp, prev_mp_enhanced);
+void
+mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    if (cur_mp == NULL || prev_mp == NULL || prev_mp_enhanced == NULL) {
+        return;
+    }
+    mbe_parms initial;
+    memset(&initial, 0, sizeof(initial));
+    mbe_resetImbeModel(&initial);
+    initial.noiseSeed = -1.0f;
+    memcpy(cur_mp, &initial, sizeof(initial));
+    memcpy(prev_mp, &initial, sizeof(initial));
+    memcpy(prev_mp_enhanced, &initial, sizeof(initial));
 }
 
 static void
@@ -754,82 +745,85 @@ mbe_spectralAmpEnhance(mbe_parms* cur_mp) {
     (void)mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
 }
 
-/* JMBE float-domain soft clip translated to this library's float scale. */
-#define MBE_AUDIO_SOFT_CLIP_FLOAT   ((32767.0f * 0.95f) / 7.0f)
-#define MBE_TONE_PHASE_SCALE        4294967296.0
-#define MBE_TONE_PHASE_RAD_PER_TICK ((2.0 * M_PI) / MBE_TONE_PHASE_SCALE)
+/* Library output headroom and phase-accumulator policies; independently implemented. */
+#define MBE_FLOAT_LIMIT ((32767.0f * 0.95f) / 7.0f)
 
-static inline float
+static float
 mbe_clipFloatSample(float sample) {
-    if (sample > MBE_AUDIO_SOFT_CLIP_FLOAT) {
-        return MBE_AUDIO_SOFT_CLIP_FLOAT;
-    }
-    if (sample < -MBE_AUDIO_SOFT_CLIP_FLOAT) {
-        return -MBE_AUDIO_SOFT_CLIP_FLOAT;
+    uint32_t bits;
+    uint32_t limit_bits;
+    const float limit = MBE_FLOAT_LIMIT;
+    memcpy(&bits, &sample, sizeof(bits));
+    memcpy(&limit_bits, &limit, sizeof(limit_bits));
+    /* Volatile integer classification remains observable under finite-math assumptions. */
+    const volatile uint32_t magnitude = bits & UINT32_C(0x7fffffff);
+    if (magnitude > limit_bits && magnitude <= UINT32_C(0x7f800000)) {
+        return (bits & UINT32_C(0x80000000)) != 0 ? -limit : limit;
     }
     return sample;
 }
 
 static void
 mbe_clipFloatBuffer(float* samples, int count) {
-    for (int i = 0; i < count; i++) {
+    if (samples == NULL || count <= 0) {
+        return;
+    }
+    for (int i = 0; i < count; ++i) {
         samples[i] = mbe_clipFloatSample(samples[i]);
     }
 }
 
 #ifndef DISABLE_AMBE_TONES
-static inline uint32_t
-mbe_tonePhaseStep(double freq_hz) {
-    double step = (freq_hz / 8000.0) * MBE_TONE_PHASE_SCALE;
-    if (step <= 0.0) {
-        return 0u;
-    }
-    return (uint32_t)(step + 0.5);
+static int
+finite_frequency(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (bits & UINT32_C(0x7fffffff)) <= UINT32_C(0x7f7fffff);
 }
 
-static inline float
-mbe_toneSampleFromPhase(uint32_t phase) {
-    float angle = (float)(((double)phase * MBE_TONE_PHASE_RAD_PER_TICK) - (M_PI / 2.0));
+static uint32_t
+frequency_increment(float frequency) {
+    const double fraction = fmod((double)frequency, 8000.0) / 8000.0;
+    return (uint32_t)(uint64_t)floor(fraction * 4294967296.0 + 0.5);
+}
+
+static float
+phase_sine(uint32_t phase) {
+    const float angle = (float)((double)phase * (2.0 * M_PI / 4294967296.0) - M_PI / 2.0);
     return sinf(angle);
 }
 
-/* Peak amplitude, on this library's float scale (int16 / 7), of a sinusoid
- * whose RMS is level_db relative to 32768. */
 static float
 mbe_toneAmplitude(double level_db) {
     return (float)(sqrt(2.0) * 32768.0 * pow(10.0, level_db / 20.0) / 7.0);
 }
 
-/* Render one or two sinusoids, each of peak amplitude `gain`, through the same
- * 0.95 full-scale limit as speech. */
 static void
-mbe_renderTonef(float* aout_buf, mbe_parms* cur_mp, float freq1, float freq2, float gain) {
-    if (!aout_buf || !cur_mp || freq1 <= 0.0f) {
-        mbe_synthesizeSilencef(aout_buf);
+mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain) {
+    if (out == NULL) {
         return;
     }
-
-    const int dual_tone = (freq2 > 0.0f) && (fabsf(freq2 - freq1) > 1e-6f);
-    const uint32_t step1 = mbe_tonePhaseStep((double)freq1);
-    const uint32_t step2 = dual_tone ? mbe_tonePhaseStep((double)freq2) : 0u;
-    uint32_t phase1 = (uint32_t)cur_mp->swn;
-    uint32_t phase2 = cur_mp->tonePhase;
-
-    for (int n = 0; n < 160; n++) {
-        phase1 += step1;
-        float s1 = mbe_toneSampleFromPhase(phase1);
-
-        if (dual_tone) {
-            phase2 += step2;
-            float s2 = mbe_toneSampleFromPhase(phase2);
-            aout_buf[n] = mbe_clipFloatSample((gain * s1) + (gain * s2));
-        } else {
-            aout_buf[n] = mbe_clipFloatSample(gain * s1);
-        }
+    if (mp == NULL || !finite_frequency(f1) || !finite_frequency(f2) || !finite_frequency(gain) || f1 <= 0.0f) {
+        memset(out, 0, 160 * sizeof(*out));
+        return;
     }
-
-    cur_mp->swn = (int)phase1;
-    cur_mp->tonePhase = phase2;
+    const int dual = f2 > 0.0f && fabsf(f2 - f1) > 1.0e-6f;
+    uint32_t phase1;
+    memcpy(&phase1, &mp->swn, sizeof(phase1));
+    uint32_t phase2 = mp->tonePhase;
+    const uint32_t step1 = frequency_increment(f1);
+    const uint32_t step2 = dual ? frequency_increment(f2) : 0;
+    for (int n = 0; n < 160; ++n) {
+        phase1 += step1;
+        float value = gain * phase_sine(phase1);
+        if (dual) {
+            phase2 += step2;
+            value += gain * phase_sine(phase2);
+        }
+        out[n] = mbe_clipFloatSample(value);
+    }
+    memcpy(&mp->swn, &phase1, sizeof(phase1));
+    mp->tonePhase = phase2;
 }
 #endif
 
@@ -1198,22 +1192,20 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         return;
     }
 
-    /* Apply adaptive smoothing (Algorithms #111-116) before muting checks.
-     * JMBE computes/update smoothing state during parameter preparation even
-     * for frames that are subsequently muted. */
+    /* TIA-102.BABA equations 111-116: advance smoothing state before the
+     * mute decision so a muted frame retains its parameter progression. */
     if (smoothing == MBE_SMOOTHING_PRE_ENH_RM0) {
         mbe_applyAdaptiveSmoothingWithRm0(cur_mp, prev_mp, pre_enh_rm0);
     } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
 
-    /* Frame muting:
-     * - JMBE IMBE path mutes on max repeats OR error-rate threshold.
-     * - JMBE AMBE path mutes on max repeats only (error-rate muting is not applied in AMBE synth path). */
+    /* The shared core checks repeat count and the IMBE error-rate threshold.
+     * AMBE codec paths apply their own additional muting rules. */
     if (mbe_should_mute_speech(cur_mp)) {
         /* Muted frames output noise while preserving model progression: P25
          * IMBE uses the TIA-102.BABA 7.8 level ([-5, 5] on s(n)); D-STAR,
-         * ProVoice and direct callers keep JMBE's comfort-noise level. */
+         * ProVoice and direct callers use the library comfort-noise level. */
         if (mute_noise == MBE_MUTE_NOISE_SPEC) {
             mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
         } else {
@@ -1253,7 +1245,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     mbe_render_voiced_speech(aout_buf, cur_mp, prev_mp, maxl, N);
 
     /* Synthesize unvoiced components from the same per-frame noise buffer
-     * (JMBE Algorithms #117-126). */
+     * (TIA-102.BABA equations 117-126). */
     mbe_fft_plan* plan = mbe_get_fft_plan();
     if (plan) {
         mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
@@ -1264,8 +1256,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_render_restore(prev_mp, &prev_saved);
     }
 
-    /* s(n) to output scale, then JMBE's float-path soft clip, which should
-     * now only catch genuine overloads. */
+    /* Convert s(n) to output scale, then limit overloads to 95% headroom. */
     for (int i = 0; i < N; i++) {
         aout_buf[i] *= MBE_SPEECH_OUTPUT_GAIN;
     }

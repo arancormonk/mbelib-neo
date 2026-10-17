@@ -3,7 +3,7 @@
  * Copyright (C) 2025 by arancormonk <180709949+arancormonk@users.noreply.github.com>
  *
  * Internal header for FFT-based unvoiced synthesis.
- * Implements JMBE Algorithms #117-126 for high-quality unvoiced audio.
+ * Implements TIA-102.BABA equations 117-126 for high-quality unvoiced audio.
  */
 
 #ifndef MBEINT_MBE_UNVOICED_FFT_H
@@ -27,12 +27,12 @@
 /* 256 / (2 * PI) constant for bin frequency calculation */
 #define MBE_256_OVER_2PI         (256.0f / (2.0f * 3.14159265358979323846f))
 
-/* LCG constants for JMBE-compatible noise generation */
+/* LCG constants from TIA-102.BABA equation 117 */
 #define MBE_LCG_A                171.0f
 #define MBE_LCG_B                11213.0f
 #define MBE_LCG_M                53125.0f
 
-/* Default LCG seed - matches JMBE's MBENoiseSequenceGenerator initial value */
+/* Default LCG seed from TIA-102.BABA Annex A */
 #define MBE_LCG_DEFAULT_SEED     3147.0f
 
 /* Noise buffer overlap size for continuity between frames */
@@ -104,7 +104,7 @@ int mbe_acf_compute(mbe_acf_plan* plan, const float* x, int len, float* r, int l
 /**
  * @brief Generate LCG noise samples for unvoiced synthesis.
  *
- * Implements JMBE-compatible Linear Congruential Generator.
+ * Implements the TIA-102.BABA equation 117 linear congruential generator.
  * Uses x' = (171*x + 11213) mod 53125.
  *
  * @param buffer Output buffer for noise samples.
@@ -123,14 +123,14 @@ void mbe_generate_noise_lcg(float* buffer, int count, float* seed);
 void mbe_seedUnvoicedNoiseLcg(uint32_t seed);
 
 /**
- * @brief Generate the next JMBE-style 256-sample noise buffer.
+ * @brief Generate the next overlapping 256-sample noise buffer.
  *
  * State is encoded in existing public fields to preserve ABI:
  * - overlap[0..95] stores current buffer samples [0..95]
  * - seed stores the current tail generator state for samples [96..255]
  *
- * Cold-start convention: seed < 0 emits an all-zero buffer (JMBE's initial
- * current buffer), then primes state for the next call with MBE_LCG_DEFAULT_SEED.
+ * Library cold-start policy: seed < 0 emits an all-zero buffer,
+ * then primes state for the next call with MBE_LCG_DEFAULT_SEED.
  *
  * @param buffer Output buffer of 256 samples.
  * @param seed In/out LCG state.
@@ -141,7 +141,7 @@ void mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap)
 /**
  * @brief Synthesize unvoiced speech using FFT method.
  *
- * Implements JMBE Algorithms #117-126:
+ * Implements TIA-102.BABA equations 117-126:
  * - Generate noise buffer (with overlap continuity)
  * - Apply synthesis window
  * - FFT -> scale unvoiced bins -> IFFT
@@ -158,8 +158,8 @@ void mbe_synthesizeUnvoicedFFT(float* output, mbe_parms* cur_mp, const mbe_parms
  * @brief Synthesize unvoiced speech using a pre-generated noise buffer.
  *
  * Same as mbe_synthesizeUnvoicedFFT but uses the provided noise buffer
- * instead of generating new noise. This allows sharing the noise buffer
- * with voiced phase calculation for JMBE compatibility.
+ * instead of generating new noise. The caller controls per-frame noise
+ * consumption independently of the other synthesis stages.
  *
  * @param output Output buffer of 160 samples (added to existing content).
  * @param cur_mp Current frame parameters.

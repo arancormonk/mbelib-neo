@@ -1,5 +1,6 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Upstream attribution (not the project license)
-# mbelib-neo is distributed under GPL-2.0-or-later; see LICENSE for terms.
+# Project contributions use GPL-2.0-or-later; see legal/status.md for component scope.
 
 Copyright (C) 2010 mbelib Author
 GPG Key ID: 0xEA5EFE2C (9E7A 5527 9CDC EBF7 BF1B  D772 4F98 E863 EA5E FE2C)

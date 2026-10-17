@@ -1,0 +1,278 @@
+{
+  "SPDX-License-Identifier": "GPL-2.0-or-later",
+  "schema_version": 1,
+  "review_date": "2026-10-17",
+  "release": "2.6.0",
+  "aggregate_license_concluded": "NOASSERTION",
+  "components": [
+    {
+      "id": "first-party",
+      "name": "mbelib-neo contributions",
+      "paths": [
+        "*"
+      ],
+      "distribution": [
+        "source",
+        "binary"
+      ],
+      "origin": "https://github.com/arancormonk/mbelib-neo",
+      "revision": "release-commit",
+      "license_declared": "GPL-2.0-or-later",
+      "license_concluded": "GPL-2.0-or-later",
+      "notices": [
+        "LICENSE",
+        "LICENSES/GPL-2.0-or-later.txt"
+      ],
+      "copyright_permission": "project-grant",
+      "gpl_compatibility": "declared",
+      "patent_status": "unresolved",
+      "assessment": "Project contributions only; does not relicense embedded data or dependencies. Independent DSP review is recorded separately.",
+      "sources": [
+        "legal/implementation-provenance.md",
+        "legal/patents.md"
+      ],
+      "review_date": "2026-10-17",
+      "exclude": [
+        "src/tetra/tetra_acelp_codebooks.c",
+        "tools/quality/op25_mbelib_gain.patch",
+        "LICENSES/*",
+        "LICENSE",
+        "third_party/*"
+      ],
+      "notice_sha256": {
+        "LICENSE": "640d90f6ee401241ff62834d0d1b33f83049e99b8bfdfa04ed1b0a1635dde3e7",
+        "LICENSES/GPL-2.0-or-later.txt": "ef9b99873dc3ddf8e5bebf5710b2f3852aa3cae578c6e061f041ce4f58aee0c1"
+      }
+    },
+    {
+      "id": "isc-origins",
+      "name": "Original mbelib contributions",
+      "paths": [
+        "src/core/mbelib.c",
+        "src/internal/ambe3600x2450_const.h",
+        "src/imbe/imbe7200x4400.c",
+        "src/internal/ambe3600x2400_internal.h",
+        "src/imbe/imbe7100x4400.c",
+        "src/ambe/ambe3600x2450.c",
+        "src/ecc/ecc.c",
+        "src/ecc/ecc_const.c",
+        "src/ambe/ambe3600x2400_enc.c",
+        "src/ambe/ambe3600x2400.c",
+        "src/internal/ambe3600x2400_const.h",
+        "src/ambe/dstar_frame.c",
+        "src/internal/mbelib_const.h",
+        "src/internal/ecc_const.h",
+        "src/internal/imbe7200x4400_const.h"
+      ],
+      "distribution": [
+        "source",
+        "binary"
+      ],
+      "origin": "https://github.com/szechyjs/mbelib",
+      "revision": "Inherited via lwvmobile/mbelib; retained 2010 mbelib Author notice",
+      "license_declared": "ISC",
+      "license_concluded": "ISC",
+      "notices": [
+        "LICENSES/ISC.txt",
+        "docs/upstream-mbelib-attribution.md"
+      ],
+      "copyright_permission": "notice-retained",
+      "gpl_compatibility": "compatible",
+      "patent_status": "unresolved",
+      "assessment": "Overlapping provenance layer: identified original contributions, not an ISC grant for subsequent work in these files.",
+      "sources": [
+        "docs/upstream-mbelib-attribution.md",
+        "https://github.com/lwvmobile/mbelib"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {
+        "LICENSES/ISC.txt": "632cba6a8358807859d62b042fe74e0c31b98ff94915220360f7aafe3ed841c2",
+        "docs/upstream-mbelib-attribution.md": "356f6ac5fa35b22182c2a92115bc8286e49b404816537beeeca8a7b1e4eae0bb"
+      }
+    },
+    {
+      "id": "pffft",
+      "name": "PFFFT",
+      "paths": [
+        "third_party/pffft-*.tar.gz"
+      ],
+      "distribution": [
+        "source",
+        "binary"
+      ],
+      "origin": "https://github.com/arancormonk/pffft",
+      "revision": "PFFFT_SHA in tools/ci-dependency-pins.env",
+      "license_declared": "LicenseRef-PFFFT",
+      "license_concluded": "LicenseRef-PFFFT",
+      "notices": [
+        "LICENSES/LicenseRef-PFFFT.txt"
+      ],
+      "copyright_permission": "notice-retained",
+      "gpl_compatibility": "compatible",
+      "patent_status": "not-assessed",
+      "assessment": "Compiled backends retain mixed upstream notices; exact texts are recorded instead of a blanket BSD classification. Original pinned source archive accompanies corresponding source.",
+      "sources": [
+        "cmake/Pffft.cmake",
+        "tools/ci-dependency-pins.env",
+        "docs/dependencies.md"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {
+        "LICENSES/LicenseRef-PFFFT.txt": "4a8e500e4f6da7135ec0a887b1314ccdce600cbcddde35a56afb0e1fcf1c2cc0"
+      }
+    },
+    {
+      "id": "etsi-data",
+      "name": "ETSI TETRA codebook data",
+      "paths": [
+        "src/tetra/tetra_acelp_codebooks.c"
+      ],
+      "distribution": [
+        "source",
+        "binary"
+      ],
+      "origin": "https://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.03_60/en_30039502v010303p0.zip",
+      "revision": "EN 300 395-2 V1.3.3; identical tables in V1.3.1",
+      "license_declared": "LicenseRef-ETSI-EN-300-395-2-data",
+      "license_concluded": "NOASSERTION",
+      "notices": [
+        "LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt"
+      ],
+      "copyright_permission": "unresolved",
+      "gpl_compatibility": "unresolved",
+      "patent_status": "unresolved",
+      "assessment": "Retained with explicit disclosure; attribution and conformance do not establish redistribution permission.",
+      "sources": [
+        "legal/status.md#etsi-retain-1",
+        "https://www.etsi.org/images/files/IPR/etsi-ipr-policy.pdf",
+        "docs/tetra-acelp.md"
+      ],
+      "review_date": "2026-10-17",
+      "exception": "ETSI-RETAIN-1",
+      "notice_sha256": {
+        "LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt": "32ffd03db4e25f1d86d9a7b9490b0a1d1301b46a94530f3507344060584c9a76"
+      }
+    },
+    {
+      "id": "op25-tooling",
+      "name": "OP25 quality encoder patch",
+      "paths": [
+        "tools/quality/op25_mbelib_gain.patch"
+      ],
+      "distribution": [
+        "source"
+      ],
+      "origin": "https://github.com/boatbod/op25",
+      "revision": "71abcd0ead32f86f51615ea6cc8a6a4dba4c949a",
+      "license_declared": "GPL-3.0-or-later",
+      "license_concluded": "GPL-3.0-or-later",
+      "notices": [
+        "LICENSES/GPL-3.0-or-later.txt",
+        "tools/quality/op25_mbelib_gain.patch"
+      ],
+      "copyright_permission": "notice-retained",
+      "gpl_compatibility": "separate-tool-only",
+      "patent_status": "unresolved",
+      "assessment": "Derivative of Max H. Parke's encoder files; separate opt-in developer tooling, never linked into libmbe-neo. No GPLv2 grant is claimed for this patch.",
+      "sources": [
+        "tools/quality/build_op25_encoder.sh"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {
+        "LICENSES/GPL-3.0-or-later.txt": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0",
+        "tools/quality/op25_mbelib_gain.patch": "0f4f9fa0aa65f959bae70606f5fa8abdf7ae2d53b6471c722c49c9bcf4e12e40"
+      }
+    },
+    {
+      "id": "license-texts",
+      "name": "License and attribution documents",
+      "paths": [
+        "LICENSE",
+        "LICENSES/*"
+      ],
+      "distribution": [
+        "source"
+      ],
+      "origin": "Respective licensors",
+      "revision": "Retained texts",
+      "license_declared": "NOASSERTION",
+      "license_concluded": "NOASSERTION",
+      "notices": [
+        "LICENSE"
+      ],
+      "copyright_permission": "notice-retained",
+      "gpl_compatibility": "notice-documents",
+      "patent_status": "not-applicable",
+      "assessment": "License documents retain their own copying terms; project SPDX header rules do not alter them.",
+      "sources": [
+        "legal/status.md"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {
+        "LICENSE": "640d90f6ee401241ff62834d0d1b33f83049e99b8bfdfa04ed1b0a1635dde3e7"
+      }
+    },
+    {
+      "id": "dvsi-reference",
+      "name": "DVSI AMBE-3000 reference vectors",
+      "paths": [],
+      "distribution": [],
+      "origin": "https://www.dvsinc.com/dlapps/appsoft.shtml",
+      "revision": "Per-acquisition SHA-256 manifest",
+      "license_declared": "NOASSERTION",
+      "license_concluded": "NOASSERTION",
+      "notices": [],
+      "copyright_permission": "unresolved",
+      "gpl_compatibility": "not-distributed",
+      "patent_status": "unresolved",
+      "assessment": "Optional local measurement only. No redistribution authorization is inferred from availability or intended use.",
+      "sources": [
+        "legal/reference-data.md"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {}
+    },
+    {
+      "id": "etsi-reference",
+      "name": "ETSI reference archives and conformance vectors",
+      "paths": [],
+      "distribution": [],
+      "origin": "https://www.etsi.org/deliver/etsi_en/300300_300399/30039504/",
+      "revision": "Per-acquisition SHA-256 manifest",
+      "license_declared": "NOASSERTION",
+      "license_concluded": "NOASSERTION",
+      "notices": [],
+      "copyright_permission": "unresolved",
+      "gpl_compatibility": "not-distributed",
+      "patent_status": "unresolved",
+      "assessment": "External local inputs only; clean-room rules exclude program code. Extracted tables are tracked separately.",
+      "sources": [
+        "legal/reference-data.md",
+        "docs/tetra-acelp.md"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {}
+    },
+    {
+      "id": "speech-corpora",
+      "name": "Codec2 samples and CMU ARCTIC speech",
+      "paths": [],
+      "distribution": [],
+      "origin": "https://github.com/drowe67/codec2; http://festvox.org/cmu_arctic/",
+      "revision": "Codec2 310777b1c6f1af0bc7c72f5b32f80f6fd9136962; ARCTIC asset hashes",
+      "license_declared": "NOASSERTION",
+      "license_concluded": "NOASSERTION",
+      "notices": [],
+      "copyright_permission": "per-asset-review",
+      "gpl_compatibility": "not-distributed",
+      "patent_status": "not-assessed",
+      "assessment": "Corpus notices and hashes accompany local reports/listening packs. Unknown sample-specific permissions remain unknown even when repository software is licensed.",
+      "sources": [
+        "legal/reference-data.md",
+        "tools/quality/fetch_speech_corpus.py"
+      ],
+      "review_date": "2026-10-17",
+      "notice_sha256": {}
+    }
+  ]
+}

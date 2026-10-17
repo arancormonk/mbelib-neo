@@ -1538,25 +1538,16 @@ jobs:
           name: release-package-${{ runner.os }}-${{ runner.arch }}
           path: ${{ steps.package.outputs.archive_path }}
           retention-days: 7
-      - name: Generate release package SBOM
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
-        with:
-          file: ${{ steps.package.outputs.archive_path }}
-          format: spdx-json
-          output-file: ${{ steps.package.outputs.archive_path }}.spdx.json
-          artifact-name: release-package-${{ runner.os }}-${{ runner.arch }}.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
-      - name: Include pinned PFFFT in release SBOM
+      - name: Generate component-aware release SBOM
         shell: bash
         env:
-          SBOM_PATH: ${{ steps.package.outputs.archive_path }}.spdx.json
+          PACKAGE_PATH: ${{ steps.package.outputs.archive_path }}
+          RELEASE_VERSION: ${{ needs.validate-release-tag.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.validate-release-tag.outputs.commit }}
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            python tools/pffft_metadata.py --spdx "$SBOM_PATH"
-          else
-            python3 tools/pffft_metadata.py --spdx "$SBOM_PATH"
-          fi
+          python tools/release_sbom.py --archive "$PACKAGE_PATH" --kind binary \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --epoch "$(git show -s --format=%ct "$RELEASE_COMMIT")"
       - name: Upload release SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -1567,13 +1558,58 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: ${{ steps.package.outputs.archive_path }}
+          subject-path: |
+            ${{ steps.package.outputs.archive_path }}
+            ${{ steps.package.outputs.archive_path }}.spdx.json
       - name: Attest release package SBOM
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.package.outputs.archive_path }}
           sbom-path: ${{ steps.package.outputs.archive_path }}.spdx.json
+
+      - name: Build corresponding source and SBOM
+        if: runner.os == 'Linux'
+        id: source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate-release-tag.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate-release-tag.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.validate-release-tag.outputs.commit }}
+        run: |
+          python3 tools/legal_inventory.py
+          source_path="$(python3 tools/source_bundle.py --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT")"
+          python3 tools/release_sbom.py --archive "$source_path" --kind source \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --epoch "$(git show -s --format=%ct "$RELEASE_COMMIT")"
+          echo "archive_path=$source_path" >> "$GITHUB_OUTPUT"
+      - name: Verify corresponding source without network access
+        if: runner.os == 'Linux'
+        env:
+          SOURCE_ARCHIVE: ${{ steps.source.outputs.archive_path }}
+        run: sudo unshare --net -- python3 tools/verify_source_bundle.py "$SOURCE_ARCHIVE"
+      - name: Upload corresponding source and SBOM
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-package-source
+          path: |
+            ${{ steps.source.outputs.archive_path }}
+            ${{ steps.source.outputs.archive_path }}.spdx.json
+          retention-days: 7
+      - name: Attest corresponding source provenance
+        if: runner.os == 'Linux'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.source.outputs.archive_path }}
+            ${{ steps.source.outputs.archive_path }}.spdx.json
+      - name: Attest corresponding source SBOM
+        if: runner.os == 'Linux'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.source.outputs.archive_path }}
+          sbom-path: ${{ steps.source.outputs.archive_path }}.spdx.json
 
   publish-release:
     name: publish release
@@ -1630,6 +1666,7 @@ jobs:
             dist/${{ needs.validate-release-tag.outputs.archive_prefix }}-*.spdx.json
             dist/SHA256SUMS.txt
           name: mbelib-neo ${{ needs.validate-release-tag.outputs.version }}
+          body_path: dist/RELEASE-NOTES.md
           generate_release_notes: true
           overwrite_files: true
           fail_on_unmatched_files: true

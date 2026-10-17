@@ -230,27 +230,6 @@ mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
 }
 
 static void
-ambe2450_read_u_fields(const char* ambe_d, int* u0, int* u1, int* u2, int* u3) {
-    *u0 = 0;
-    *u1 = 0;
-    *u2 = 0;
-    *u3 = 0;
-
-    for (int i = 0; i < 12; i++) {
-        *u0 = (*u0 << 1) | (int)ambe_d[i];
-    }
-    for (int i = 12; i < 24; i++) {
-        *u1 = (*u1 << 1) | (int)ambe_d[i];
-    }
-    for (int i = 24; i < 35; i++) {
-        *u2 = (*u2 << 1) | (int)ambe_d[i];
-    }
-    for (int i = 35; i < 49; i++) {
-        *u3 = (*u3 << 1) | (int)ambe_d[i];
-    }
-}
-
-static void
 ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
     (void)b0;
     int b1 = ambe2450_field(ambe_d, 1);
@@ -490,26 +469,21 @@ ambe2450_is_tone_frame(const char* ambe_d) {
 }
 
 /**
- * Consistency check on a tone frame's redundant fields (JMBE's; the spec
- * repeats the tone index but leaves checking it to the decoder, 7.2 Table 10):
+ * Independent local consistency check over the redundant tone fields in
+ * TIA-102.BABA-1 7.2 Table 10 (the spec leaves checking to the decoder):
  * the last four bits of u3 are 0, or u1's trailing copy of ID(7..4) matches.
  */
 static int
-ambe2450_tone_fields_consistent(const char* ambe_d) {
-    int u0, u1, u2, u3;
-    ambe2450_read_u_fields(ambe_d, &u0, &u1, &u2, &u3);
-    (void)u0;
-    (void)u2;
-
-    int u3_tone_check = (u3 & 0xf);
-    int u1_high_tone_verify = (u1 >> 8) & 0xf;
-    int u1_low_tone_verify = u1 & 0xf;
-
-#ifdef AMBE_DEBUG
-    fprintf(stderr, "TONECHK u3=%d u1h=%d u1l=%d ", u3_tone_check, u1_high_tone_verify, u1_low_tone_verify);
-#endif
-
-    return (u3_tone_check == 0) || (u1_high_tone_verify == u1_low_tone_verify);
+ambe2450_tone_fields_consistent(const char* bits) {
+    if ((bits[45] | bits[46] | bits[47] | bits[48]) == 0) {
+        return 1;
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (bits[12 + i] != bits[20 + i]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /** A verified tone frame: the tone identifier (7) plus consistent redundant fields. */
@@ -554,9 +528,7 @@ ambe2450_classify_frame(const char* ambe_d) {
 
 /* TIA-102.BABA-1 4.1 eqs 1-3: w0 = 2*pi/32, L = 14, all bands unvoiced, for
  * both silence b0 values (the encoder sends 124). The spectral amplitudes are
- * decoded like a voice frame's (4.4). JMBE's W124/W125 stored pi/32 where its
- * other entries hold f0 in cycles/sample, then scaled by 2*pi again, putting
- * harmonics 6..15 above Nyquist. */
+ * decoded like a voice frame's (4.4). */
 static void
 ambe2450_set_silence_model(mbe_parms* cur_mp, int* L, float* f0, int* silence) {
     *silence = 1;
@@ -835,8 +807,7 @@ ambe2450_repeat_required(const char ambe_d[49], int total_errors, int c0_errors,
  * frame whose output was not synthesized speech: a mute or a tone. Whatever
  * is synthesized next then fades in from silence instead of overlapping
  * speech from before that frame, and a repeat right after it replays silence.
- * The spec does not define the synthesis state across tone frames; JMBE
- * resets to init defaults after a mute.
+ * The spec does not define the synthesis state across tone frames.
  */
 static void
 ambe2450_silence_last_synthesized(mbe_parms* prev_mp_enhanced) {

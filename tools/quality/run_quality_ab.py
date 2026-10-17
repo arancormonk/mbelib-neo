@@ -307,6 +307,7 @@ class Runner:
             "label": metadata["label"] if metadata else "legacy/development" if legacy else "custom",
             "level": metadata["level"] if metadata else "native" if legacy else "unknown",
             "manifest": self.relative(copied_manifest) if copied_manifest else None,
+            "notices": [{**n, "path": "references/" + n["file"]} for n in (metadata or {}).get("notices", [])],
             "duplicates": [],
             "independent_references": [],
             "requested": self.args.corpus,

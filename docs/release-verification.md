@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Release Verification
 
 Official releases are published through GitHub Releases:
@@ -85,7 +86,7 @@ gh attestation verify SHA256SUMS.txt \
   --repo arancormonk/mbelib-neo
 ```
 
-Review the matching SPDX SBOM file when present:
+Review the matching SPDX SBOM file (required for every archive):
 
 ```sh
 less mbelib-neo-<version>-linux-<arch>.tar.gz.spdx.json
@@ -101,3 +102,33 @@ public release-signing keys documented above.
 Before publication, release packaging must pass the required CI checks for the
 tag, including signed-tag validation, build, test, static-analysis, sanitizer,
 install/consume, SBOM, attestation, and release validation jobs.
+
+## Complete source and legal review from 2.6.0
+
+A release requires three platform binary archives and one
+`mbelib-neo-<version>-source.tar.gz`, each with a matching `.spdx.json`.
+`SHA256SUMS.txt` covers all eight files. The Linux packaging job builds source
+from the validated tag's tracked tree, includes the original pinned PFFFT
+archive, and verifies extraction, build, tests, installation and static/shared
+consumers in a network-disabled namespace. Source ordering, ownership, modes
+and timestamps are normalized; `SOURCE-IDENTITY.json` records content hashes.
+
+Verify both the source and its SBOM before building, for example:
+
+```sh
+gh attestation verify mbelib-neo-2.6.0-source.tar.gz --repo arancormonk/mbelib-neo
+gh attestation verify mbelib-neo-2.6.0-source.tar.gz.spdx.json --repo arancormonk/mbelib-neo
+```
+
+See [source-build.md](source-build.md), the [component inventory](../legal/components.json),
+[licensing status](../legal/status.md) and [patent review](../legal/patents.md).
+Release preparation must update their dated research when codec behavior or
+evidence changes. The disclosed ETSI and patent questions remain open; passing
+these engineering gates is not legal clearance.
+
+Recovery requires four archives and their signed SBOMs for tags >=2.6.0;
+older validated tags retain their original three-package format. Recovery
+verifies every archive's provenance, exact signed SBOM predicate, and (for new
+releases) the SBOM file's provenance before publication. Checksums are rebuilt
+only after collection, and the manifest is attested. Existing historical tags
+and published release assets are not changed by this remediation.

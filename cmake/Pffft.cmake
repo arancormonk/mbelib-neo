@@ -36,9 +36,27 @@ endif()
 if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
 endif()
+set(_pffft_url
+    "https://codeload.github.com/arancormonk/pffft/tar.gz/${PFFFT_SHA}"
+)
+set(_pffft_bundle "${PROJECT_SOURCE_DIR}/third_party/pffft-${PFFFT_SHA}.tar.gz")
+set(_pffft_disconnected "${FETCHCONTENT_FULLY_DISCONNECTED}")
+if(NOT FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT AND EXISTS "${_pffft_bundle}")
+    file(SHA256 "${_pffft_bundle}" _pffft_bundle_hash)
+    if(NOT _pffft_bundle_hash STREQUAL PFFFT_ARCHIVE_SHA256)
+        message(
+            FATAL_ERROR
+            "Bundled PFFFT SHA256 does not match the dependency pin"
+        )
+    endif()
+    set(_pffft_url "${_pffft_bundle}")
+    # A fresh offline bundle still needs local extraction. No network URL is
+    # involved, even when the caller requests fully disconnected operation.
+    set(FETCHCONTENT_FULLY_DISCONNECTED OFF)
+endif()
 FetchContent_Declare(
     mbelib_pffft
-    URL "https://codeload.github.com/arancormonk/pffft/tar.gz/${PFFFT_SHA}"
+    URL "${_pffft_url}"
     URL_HASH "SHA256=${PFFFT_ARCHIVE_SHA256}"
     TLS_VERIFY TRUE
     # Supported since CMake 3.18: a directory without CMakeLists.txt populates
@@ -46,6 +64,7 @@ FetchContent_Declare(
     SOURCE_SUBDIR include
 )
 FetchContent_MakeAvailable(mbelib_pffft)
+set(FETCHCONTENT_FULLY_DISCONNECTED "${_pffft_disconnected}")
 
 set(MBELIB_PFFFT_SOURCE_DIR
     "${mbelib_pffft_SOURCE_DIR}"
