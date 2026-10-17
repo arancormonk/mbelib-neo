@@ -5,6 +5,7 @@
 import copy
 import importlib.util
 import pathlib
+import re
 import subprocess
 import unittest
 
@@ -53,6 +54,17 @@ RUN = {
 
 
 class BudgetTests(unittest.TestCase):
+    def test_release_jobs_ignore_skipped_ancestors_but_require_successful_checks(self):
+        jobs = budget.block((ROOT / ".github/workflows/ci.yml").read_text(), "jobs", 0)
+        for name in ("package-release", "update-aur-release"):
+            job = budget.block(jobs, name, 2)
+            condition = re.search(r"^    if: >-\n((?:      .+(?:\n|$))+)", job, re.MULTILINE)[1]
+            self.assertIn("!cancelled()", condition)
+            needs = re.search(r"^    needs: \[([^\]]+)\]$", job, re.MULTILINE)[1].split(",")
+            for dependency in needs:
+                with self.subTest(job=name, dependency=dependency):
+                    self.assertIn(f"needs.{dependency.strip()}.result == 'success'", condition)
+
     def test_repository_budget(self):
         used = set()
         for path in (ROOT / ".github/workflows").glob("*.y*ml"):

@@ -4,6 +4,7 @@
 
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -56,6 +57,56 @@ class Recovery(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "differs from the signed predicate"):
                     recovery.verify_assets(dist, self.tag, self.commit)
 
+    def test_rebuild_requires_every_original_tag_check(self):
+        with self.assertRaisesRegex(ValueError, "from 2.6.0"):
+            recovery.validate_run(self.run, self.jobs, self.tag, self.commit, rebuild=True)
+        self.tag = "v2.6.0"
+        self.run["head_branch"] = self.tag
+        jobs = [{"name": name, "conclusion": "success"} for name in recovery.TAG_CHECKS]
+        jobs.append({"name": "package release (${{ matrix.os }})", "conclusion": "skipped"})
+        recovery.validate_run(self.run, jobs, self.tag, self.commit, rebuild=True)
+        for name in recovery.TAG_CHECKS:
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                recovery.validate_run(self.run, [j for j in jobs if j["name"] != name],
+                                      self.tag, self.commit, rebuild=True)
+        for conclusion in ("failure", "skipped", "cancelled"):
+            invalid = [{**j, "conclusion": conclusion} if j["name"] == "clang-tidy" else j for j in jobs]
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                recovery.validate_run(self.run, invalid, self.tag, self.commit, rebuild=True)
+        with self.assertRaises(ValueError):
+            recovery.validate_run({**self.run, "head_sha": "b" * 40}, jobs, self.tag, self.commit, rebuild=True)
+
+    def test_rebuild_identity_requires_reviewed_main_workflow(self):
+        run = {"event": "workflow_dispatch", "head_branch": "main", "path": recovery.WORKFLOW, "head_sha": "b" * 40}
+        with patch.object(recovery, "gh_json", side_effect=[run, {"status": "ahead"}]):
+            self.assertEqual(recovery.rebuild_identity("123"), ("refs/heads/main", "b" * 40))
+        for field in run:
+            with self.subTest(field=field), patch.object(recovery, "gh_json", return_value={**run, field: "wrong"}), self.assertRaises(ValueError):
+                recovery.rebuild_identity("123")
+        with patch.object(recovery, "gh_json", side_effect=[run, {"status": "diverged"}]), self.assertRaises(ValueError):
+            recovery.rebuild_identity("123")
+        with self.assertRaises(ValueError):
+            recovery.rebuild_identity("not-a-run")
+
+    def test_rebuild_signed_sbom_binds_original_tag_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dist = Path(directory)
+            sbom = {"packages": [{"SPDXID": "SPDXRef-Package-mbelib-neo", "versionInfo": "2.6.0",
+                                  "sourceInfo": f"Release commit {self.commit}; see legal/status.md"}]}
+            for suffix in ("linux-x64.tar.gz", "macos-arm64.tar.gz", "windows-x64.zip", "source.tar.gz"):
+                archive = dist / ("mbelib-neo-2.6.0-" + suffix)
+                archive.touch()
+                Path(str(archive) + ".spdx.json").write_text(json.dumps(sbom))
+            verified = [{"verificationResult": {"statement": {"predicate": sbom}}}]
+            builder = ("refs/heads/main", "b" * 40)
+            with patch.object(recovery, "gh_json", return_value=verified) as gh:
+                recovery.verify_assets(dist, "v2.6.0", self.commit, builder)
+                self.assertEqual(gh.call_count, 12)
+                self.assertIn(builder[0], gh.call_args.args)
+                self.assertIn(builder[1], gh.call_args.args)
+                with self.assertRaisesRegex(ValueError, "validated release source"):
+                    recovery.verify_assets(dist, "v2.6.0", "c" * 40, builder)
+
 
 @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("bash"),
                      "Release publisher uses Linux Bash and sha256sum")
@@ -87,6 +138,15 @@ class ReleaseAssets(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Release recovery requires", result.stderr)
+
+    def test_rebuild_requires_explicit_main_dispatch(self):
+        for ref in ("refs/tags/v2.6.0", "refs/heads/unreviewed"):
+            result = subprocess.run(["bash", str(ROOT / "tools/ci_validate_release_tag.sh")],
+                                    env={**os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": ref,
+                                         "RELEASE_RECOVERY_TAG": "v2.6.0", "RELEASE_RECOVERY_RUN_ID": "123",
+                                         "RELEASE_REBUILD_PACKAGES": "true"}, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("reviewed workflow on main", result.stderr)
 
     def test_package_named_sboms_and_checksums(self):
         result = self.prepare()
