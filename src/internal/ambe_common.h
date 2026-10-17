@@ -104,8 +104,7 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
  * gamma(-1) = 0, L(-1) = 15 and a constant log magnitude (a constant cancels
  * exactly in eq 43, so 0 is equivalent to the spec's 1). The initial
  * fundamental is unspecified; the silence fundamental keeps every initial
- * harmonic below Nyquist (15 * 2*pi/32 < pi). JMBE's W124 default used
- * w0 = (pi/32) * 2*pi, which put harmonics 6..15 above Nyquist.
+ * harmonic below Nyquist (15 * 2*pi/32 < pi).
  */
 #define MBE_AMBE_INIT_W0    MBE_AMBE_SILENCE_W0
 #define MBE_AMBE_INIT_L     15
@@ -134,7 +133,7 @@ void mbe_setAmbeDefaultModel_common(mbe_parms* mp);
 void mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 /**
- * @brief Set AMBE parameters to JMBE-style ERASURE defaults (W120).
+ * @brief Set AMBE parameters to the library erasure defaults.
  *
  * Mirrors AMBEModelParameters.setDefaults(FrameType.ERASURE): w0=0,
  * L=9, unvoiced bands, unit amplitudes, zero gain term. Keeps phase and

@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Dependency Management
 
 mbelib-neo keeps runtime dependencies small and reviewable.
@@ -12,8 +13,9 @@ TLS verification, without configuring the dependency's C++ project.
 `PFFFT_SHA` and `PFFFT_ARCHIVE_SHA256` in `tools/ci-dependency-pins.env` are the
 source of truth. Builds never follow a branch or tag.
 
-Normal clones need no submodule commands. A first configure needs HTTPS access
-to codeload.github.com. For offline packaging, provide an extracted archive or
+Normal clones need no submodule commands. A first configure from a Git clone
+needs HTTPS access to codeload.github.com. Release source bundles instead use
+the included original archive in `third_party/`, verified against the same hash. For offline packaging, provide an extracted archive or
 checkout with `-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=/absolute/path/to/pffft`.
 This explicit override bypasses download/hash checking; the packager verifies
 its provenance and must use the compatible fork. It needs no Git metadata.
@@ -30,6 +32,10 @@ directory. No public PFFFT headers or external link requirements are installed.
 2. Run `python3 tools/update_pffft.py FULL_40_CHARACTER_COMMIT_SHA`. It downloads
    the commit archive, checks the production layout, computes SHA-256 and
    replaces both pins together. Review the fork diff and both pin changes.
+   Refresh `LICENSES/LicenseRef-PFFFT.txt` from the dependency's LICENSE.txt
+   and CMake-generated PFFFT-NOTICES.txt, preserving their full text. Update
+   its notice hash and review record in `legal/components.json`; regenerate
+   the component table with `python3 tools/legal_inventory.py --write-table`.
 3. Configure with downloads enabled and no local override. Run Debug scalar
    and SIMD, optimized GCC/Clang, sanitizer and NOTONES suites, allocation
    failure tests, quality preflight and OSV. Compare DVSI scores against a
@@ -39,8 +45,10 @@ directory. No public PFFFT headers or external link requirements are installed.
 
 ClusterFuzzLite checks out the same SHA with `tools/fetch-pinned-git.sh` during
 image preparation. `tools/pffft_metadata.py` generates OSV's explicit commit
-input from the pin and enriches release SPDX SBOMs with the fork URL, revision
-and archive checksum before upload and attestation. Pin and integration edits,
+input from the pin. `tools/release_sbom.py` uses `legal/components.json` to
+record embedded PFFFT with its revision, archive checksum and exact retained
+`LicenseRef-PFFFT` text before upload and attestation. Source-only OP25 tooling
+and unresolved ETSI license conclusions are recorded separately. Pin and integration edits,
 including deletions, trigger PR fuzzing and dependency scanning.
 
 System dependencies used by consumers are:

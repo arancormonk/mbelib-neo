@@ -16,6 +16,8 @@ import warnings
 from collections import defaultdict
 from pathlib import Path
 
+from reference_provenance import distribution
+
 import quality_audio as audio
 import quality_support as support
 
@@ -786,6 +788,7 @@ def report_run(run_dir, listening_results=None):
         "quality_audio.py",
         "quality_listening.py",
         "quality_support.py",
+        "reference_provenance.py",
         "analyze_quality.py",
     )
     sources = {}
@@ -798,6 +801,7 @@ def report_run(run_dir, listening_results=None):
         "schema_version": 2,
         "manifest_sha256": manifest_sha,
         "corpus": manifest["corpus"],
+        "reference_distribution": distribution(manifest),
         "duplicate_exclusions": excluded,
         "aggregation": "unweighted paired clip means; verified hts1a exact prefix excluded only from independent statistics; levels never pooled",
         "metric_authority": "immutable C evaluator metric snapshots; independent NumPy LSD cross-check only",

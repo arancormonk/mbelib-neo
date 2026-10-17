@@ -6,7 +6,7 @@
 DVSI publishes AMBE-3000 test vectors (input speech, DVSI-encoded bit streams and
 DVSI-decoded speech) on https://www.dvsinc.com/dlapps/appsoft.shtml. The site's
 terms grant no license to copy, modify, transfer or mirror its materials, so the
-files are fetched into the git-ignored build tree and must never be committed,
+files are fetched into a local sibling directory and must never be committed,
 redistributed or placed in published listening material. Only URLs, hashes and
 aggregate measurements belong in the repository.
 
@@ -15,6 +15,7 @@ range requests (via curl) and downloads only the requested members, verifying ea
 and recording SHA-256 digests in a manifest.
 """
 
+from datetime import datetime, timezone
 import argparse
 import fnmatch
 import hashlib
@@ -25,8 +26,11 @@ import sys
 import zlib
 from pathlib import Path, PurePosixPath
 
+from reference_provenance import acquisition
+
 ARCHIVE_URL = "https://www.dvsinc.com/get-usb/tv-rc.zip"
-DEFAULT_OUT = Path("build/quality/dvsi")
+DEFAULT_OUT = Path("../dvsi-vectors")
+TERMS_URL = "https://www.dvsinc.com/terms_of_use.shtml"
 # The modes this library decodes: D-STAR, P25 full rate with and without FEC,
 # and AMBE+2 rate 33 (with FEC) and rate 34 (without).
 SUPPORTED_MODES = ("dstar", "p25", "p25_nofec", "r33", "r34")
@@ -204,7 +208,21 @@ def main():
         print(f"{len(entries)} members, {sum(e['size'] for e in entries)} bytes", file=sys.stderr)
         return 0
 
+    args.out.mkdir(parents=True, exist_ok=True)
+    notice = subprocess.run(
+        ["curl", "--fail", "--silent", "--show-error", "--proto", "=https", "--max-time", "60", TERMS_URL],
+        capture_output=True, check=True,
+    ).stdout
+    if not notice.strip():
+        raise ValueError("DVSI terms response is empty")
+    (args.out / "terms-of-use.html").write_bytes(notice)
+    evidence = acquisition(
+        "https://www.dvsinc.com/dlapps/appsoft.shtml", TERMS_URL,
+        retrieved_at=datetime.now(timezone.utc).date().isoformat(), status="restricted",
+        notices=[{"file": "terms-of-use.html", "sha256": hashlib.sha256(notice).hexdigest(), "source_url": TERMS_URL}],
+    )
     manifest = {
+        "acquisition": evidence,
         "schema_version": 1,
         "url": ARCHIVE_URL,
         "archive_bytes": size,

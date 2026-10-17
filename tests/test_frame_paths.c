@@ -829,7 +829,7 @@ test_ambe_error_counts(void) {
         assert(((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0) == (c->want_c0 >= 4));
     }
 
-    /* D-STAR keeps JMBE's count: corrected data bits, plus the extended
+    /* D-STAR counts: corrected data bits, plus the extended
      * parity bit only when the codeword decodes clean. A data bit and a parity
      * bit in C0 count 1 there (2 under 5.5). */
     assert(mbe_encodeAmbe3600x2400Frame(ambe_d, clean) == 0);

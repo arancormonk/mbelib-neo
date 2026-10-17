@@ -174,7 +174,7 @@ typedef struct mbe_soft_bit {
 /**
  * Processing/result flag (context): the parameter bits come from an IMBE
  * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
- * data API, as for the C0/C4 context, and a muted frame gets JMBE's comfort
+ * data API, as for the C0/C4 context, and a muted frame gets library comfort
  * noise instead of the TIA-102.BABA 7.8 level, as in the ProVoice frame APIs.
  */
 #define MBE_PROCESS_FLAG_PROVOICE   0x0200u
@@ -799,7 +799,7 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  *
- * A muted frame outputs the TIA-102.BABA 7.8 noise (P25), or JMBE's comfort
+ * A muted frame outputs the TIA-102.BABA 7.8 noise (P25), or library comfort
  * noise when `result` carries `MBE_PROCESS_FLAG_PROVOICE` from a 7100x4400 decode.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
@@ -1123,7 +1123,7 @@ MBE_API void mbe_synthesizeComfortNoise(short* aout_buf);
 
 /**
  * @brief Apply adaptive smoothing to parameters based on error rates.
- *        Implements JMBE Algorithms #111-116.
+ *        Implements TIA-102.BABA equations 111-116.
  *
  * Invalid parameter state, including an out-of-range harmonic count `L` in
  * either parameter set, is ignored.

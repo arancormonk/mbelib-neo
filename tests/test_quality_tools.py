@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools/quality"))
+
 
 def run(executable, *args, success=True):
     result = subprocess.run(

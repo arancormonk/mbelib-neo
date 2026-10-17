@@ -3,6 +3,7 @@
 # Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
 """Prepare pinned development speech or untouched, independently held-out speech."""
 
+from datetime import datetime, timezone
 import argparse
 import hashlib
 import http.client
@@ -15,6 +16,8 @@ import tempfile
 import wave
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from reference_provenance import acquisition
 
 QUALITY = Path("build/quality")
 CODEC2_REVISION = "310777b1c6f1af0bc7c72f5b32f80f6fd9136962"
@@ -81,6 +84,19 @@ def prepare_legacy(staging):
     prepared = staging / "legacy"
     prepared.mkdir()
     references = []
+    notices = []
+    tree = run(["git", "-C", checkout, "ls-tree", "-r", "--name-only", CODEC2_REVISION]).decode().splitlines()
+    for name in tree:
+        if Path(name).name.upper().startswith(("COPYING", "LICENSE")) or name.startswith("raw/README"):
+            content = run(["git", "-C", checkout, "show", f"{CODEC2_REVISION}:{name}"])
+            relative = "notices/" + name.replace("/", "_")
+            target = prepared / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            notices.append({"file": relative, "sha256": digest(target),
+                            "source_url": f"https://github.com/drowe67/codec2/blob/{CODEC2_REVISION}/{name}"})
+    evidence = acquisition(CODEC2_URL, f"https://github.com/drowe67/codec2/tree/{CODEC2_REVISION}",
+                           notices=notices)
     # Read the pinned Git objects, not potentially edited checkout files.
     for name, expected_size in LEGACY.items():
         content = run(["git", "-C", checkout, "show", f"{CODEC2_REVISION}:raw/{name}.raw"])
@@ -96,6 +112,7 @@ def prepare_legacy(staging):
             raise ValueError(f"checkout asset differs from pinned Git object: {source_asset}")
         references.append(
             {
+                "acquisition": evidence,
                 "name": name,
                 "file": output.name,
                 "samples": len(content) // 2,
@@ -121,7 +138,7 @@ def prepare_legacy(staging):
             "label": "legacy/development",
             "level": "native",
             "references": references,
-            "notices": [],
+            "notices": notices,
             "duplicates": duplicates,
         },
     )
@@ -207,9 +224,11 @@ def prepare_heldout(staging):
         source_directory = QUALITY / "arctic-src" / speaker
         notice = source_directory / "COPYING"
         notice_url = f"{root}/COPYING"
+        notice_date = None if notice.exists() else datetime.now(timezone.utc).date().isoformat()
         fetch_asset(notice_url, notice, validate_notice)
         notices.append(
             {
+                "retrieved_at": notice_date,
                 "speaker": speaker,
                 "file": f"notices/{speaker}.COPYING",
                 "sha256": digest(notice),
@@ -220,8 +239,9 @@ def prepare_heldout(staging):
             filename = f"arctic_a{index:04d}.wav"
             source = source_directory / "wav" / filename
             url = f"{root}/wav/{filename}"
+            retrieval = None if source.exists() else datetime.now(timezone.utc).date().isoformat()
             fetch_asset(url, source, validate_wav)
-            assets.append((speaker, index, source, url))
+            assets.append((speaker, index, source, url, retrieval))
     native = staging / "heldout"
     reduced = staging / "heldout-minus12db"
     for directory in (native, reduced):
@@ -230,7 +250,7 @@ def prepare_heldout(staging):
             shutil.copyfile(QUALITY / "arctic-src" / notice["speaker"] / "COPYING", directory / notice["file"])
     native_references = []
     reduced_references = []
-    for speaker, index, source, url in assets:
+    for speaker, index, source, url, retrieval in assets:
         name = f"{speaker}_arctic_a{index:04d}"
         output = native / f"{name}.raw"
         argv = [
@@ -254,7 +274,10 @@ def prepare_heldout(staging):
         ]
         run(argv)
         attenuate(output, reduced / output.name)
+        speaker_notice = next(n for n in notices if n["speaker"] == speaker)
         reference = {
+            "acquisition": acquisition(url, speaker_notice["source_url"], retrieved_at=retrieval,
+                                       notices=[speaker_notice]),
             "name": name,
             "file": output.name,
             "samples": output.stat().st_size // 2,

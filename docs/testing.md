@@ -774,8 +774,9 @@ channel-error variants. They are the closest available stand-in for real
 hardware, and they let decoder output be compared with DVSI's own decoder on
 identical bits.
 
-The site grants no license to copy, modify, transfer or mirror its
-materials. Fetch the vectors only for local measurement. Never commit them,
+The [site terms](https://www.dvsinc.com/terms_of_use.shtml) grant no license to
+copy, modify, transfer or mirror its materials. Local measurement is the tool's
+intended use; it does not establish permission. Never commit the vectors,
 attach them to issues or pull requests, or use DVSI audio in published
 listening material. Only URLs, SHA-256 digests and aggregate numbers belong in
 this repository.
@@ -790,8 +791,11 @@ build/dev-debug/mbe_quality_reframe --codec ambe2400 \
 
 - The fetcher needs `curl`. It reads only the needed members of
   `get-usb/tv-rc.zip` through HTTPS range requests. It verifies each CRC-32 and writes
-  `dvsi-manifest.json` with SHA-256 digests into the output directory
-  (default `build/quality/dvsi`).
+  `dvsi-manifest.json` with SHA-256 digests, retrieval date, source/terms URLs,
+  notice hashes and restricted redistribution metadata into the output directory
+  (default `../dvsi-vectors`). Reports retain this evidence and the terms notice.
+  See [reference-data handling](../legal/reference-data.md) for corpus notices,
+  listening-pack checks and recording user-acquired ETSI inputs.
 - `tv-rc/*.pcm` are the inputs (s16le, 8 kHz). Each mode directory holds
   `X.bit` (DVSI encoder) and `X.pcm` (DVSI decoder). The fetcher takes the modes
   this library decodes: `dstar`, `p25`, `p25_nofec`, `r33` and `r34`.

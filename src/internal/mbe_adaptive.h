@@ -3,7 +3,7 @@
  * Copyright (C) 2025 by arancormonk <180709949+arancormonk@users.noreply.github.com>
  *
  * Internal header for adaptive smoothing algorithms.
- * Implements JMBE Algorithms #111-116 for error-based audio smoothing.
+ * Implements TIA-102.BABA equations 111-116 for error-based audio smoothing.
  */
 
 #ifndef MBEINT_MBE_ADAPTIVE_H
@@ -13,7 +13,7 @@
 
 #include "mbelib-neo/mbelib.h"
 
-/* Algorithm constants from JMBE specification */
+/* Algorithm constants from TIA-102.BABA sections 8 and 9 */
 
 /** Default local energy value (Algorithm #111). */
 #define MBE_DEFAULT_LOCAL_ENERGY        75000.0f
@@ -54,7 +54,7 @@
 /**
  * @brief Apply adaptive smoothing with caller-supplied pre-enhancement RM0.
  *
- * JMBE Algorithm #111 uses local energy derived from pre-enhanced spectral
+ * TIA-102.BABA equation 111 uses local energy derived from pre-enhanced spectral
  * amplitudes. Internal decode/synthesize paths pass that value explicitly so
  * the handoff cannot retain caller stack addresses.
  *
@@ -95,9 +95,12 @@ float mbe_low_band_gain(float hz);
  */
 float mbe_low_band_phase(float hz);
 
+/* Restore the library default voice model while retaining stream continuity. */
+void mbe_resetImbeModel(mbe_parms* mp);
+
 /** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
 enum mbe_mute_noise {
-    MBE_MUTE_NOISE_COMFORT, /**< JMBE comfort noise: D-STAR, ProVoice and the public synthesis API. */
+    MBE_MUTE_NOISE_COMFORT, /**< Library comfort noise: D-STAR, ProVoice and the public synthesis API. */
     MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE and AMBE 3600x2450 paths. */
 };
 
@@ -133,7 +136,7 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
 /**
  * Gain from the synthesized-speech scale s(n) to this library's float samples,
  * which mbe_floattoshort() multiplies by 7. s(n) is on the 16-bit scale of the
- * TIA-102 reference and JMBE, so 1/7 makes the short output match DVSI's
+ * TIA-102 reference, so 1/7 makes the short output match DVSI's
  * AMBE-3000 decoders on identical bits (within 0.5 dB). Without it, decoded
  * speech ran 17 dB hotter than the original and the soft clip limited 5-7% of
  * the samples of normally recorded speech. Speech and the 7.8 mute noise, both
@@ -156,7 +159,7 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
  * @brief Fill 160 float samples with uniform noise in [-amplitude, +amplitude].
  *
  * Draws from the same thread-local Java Random-compatible generator as
- * mbe_synthesizeComfortNoisef(), which delegates here with the JMBE gain.
+ * mbe_synthesizeComfortNoisef(), which delegates here with the library comfort gain.
  * The float domain is the synthesized-speech scale s(n) of TIA-102.BABA
  * (int16 output is 7x this), so amplitude 5 is the spec's [-5, 5] mute noise.
  *

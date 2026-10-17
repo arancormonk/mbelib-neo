@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.5.1 LANGUAGES C)
+project(mbelib-neo VERSION 2.6.0 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -730,6 +731,7 @@ install(
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${PROJECT_SOURCE_DIR}/LICENSES/GPL-2.0-or-later.txt"
         "${PROJECT_SOURCE_DIR}/LICENSES/ISC.txt"
+        "${PROJECT_SOURCE_DIR}/LICENSES/LicenseRef-PFFFT.txt"
         "${PROJECT_SOURCE_DIR}/LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt"
         "${PROJECT_SOURCE_DIR}/docs/upstream-mbelib-attribution.md"
     DESTINATION ${CMAKE_INSTALL_DOCDIR}
@@ -740,6 +742,14 @@ install(
     DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft
 )
 install(FILES "${PFFFT_NOTICES}" DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft)
+
+install(
+    DIRECTORY "${PROJECT_SOURCE_DIR}/legal/"
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}/legal
+    FILES_MATCHING
+    PATTERN "*.md"
+    PATTERN "*.json"
+)
 
 # Exported targets and CMake package config
 install(
@@ -857,9 +867,11 @@ if(MBELIB_BUILD_TESTS)
     get_directory_property(_SAN_LDFLAGS MBELIB_SANITIZER_LDFLAGS)
     if(_SAN_CFLAGS)
         target_compile_options(test_api PRIVATE ${_SAN_CFLAGS})
+        target_compile_options(gen_golden PRIVATE ${_SAN_CFLAGS})
     endif()
     if(_SAN_LDFLAGS)
         target_link_options(test_api BEFORE PRIVATE ${_SAN_LDFLAGS})
+        target_link_options(gen_golden BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     add_test(NAME test_api COMMAND test_api)
 
@@ -1031,7 +1043,7 @@ if(MBELIB_BUILD_TESTS)
                 PRIVATE ${_SAN_LDFLAGS}
             )
         endif()
-        foreach(allocation RANGE 1 13)
+        foreach(allocation RANGE 1 7)
             add_test(
                 NAME test_ambe2400_encoder_oom_${allocation}
                 COMMAND test_ambe2400_encoder_oom ${allocation}
@@ -1085,11 +1097,16 @@ if(MBELIB_BUILD_TESTS)
     endif()
     add_test(NAME test_params COMMAND test_params)
 
-    # The TETRA tests exercise private decoding stages and fixed-point operators.
+    # Private-stage tests include direct equation oracles and fixed-point operators.
     foreach(
         _mbelib_private_test
         IN
-        ITEMS test_fixed_point test_tetra_decoder test_tetra_simd
+        ITEMS
+            test_fixed_point
+            test_tetra_decoder
+            test_tetra_simd
+            test_dsp_equations
+            test_adaptive_equations
     )
         add_executable(${_mbelib_private_test} tests/${_mbelib_private_test}.c)
         target_link_libraries(${_mbelib_private_test} PRIVATE mbe-static)
@@ -1453,6 +1470,12 @@ if(MBELIB_BUILD_TESTS)
                 ${PROJECT_SOURCE_DIR}/tests/test_ci_scheduling.py
         )
         add_test(
+            NAME test_legal_release
+            COMMAND
+                ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/tests/test_legal_release.py
+        )
+        add_test(
             NAME test_release_assets
             COMMAND
                 ${Python3_EXECUTABLE}
@@ -1589,6 +1612,8 @@ if(MBELIB_BUILD_TESTS)
     add_test(NAME test_simd_numerics COMMAND test_simd_numerics)
 
     set(_MBELIB_TEST_TARGETS
+        test_dsp_equations
+        test_adaptive_equations
         test_assertions
         test_api
         test_tetra_shared_api

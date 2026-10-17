@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Supply-Chain Guardrails
 
 mbelib-neo keeps CI dependencies explicit so analyzer results and release artifacts are reproducible.
@@ -70,3 +71,19 @@ from project-owned analyzer findings. Fixes belong in the fork, with tests.
 - `tools/osv_scan.sh` runs OSV-Scanner source scanning for lockfiles, manifests, and explicit PFFFT commit metadata generated from the pin.
 - PR CI runs OSV when dependency inputs change; scheduled guardrails run a full repository scan.
 - If OSV reports a vulnerability that is not exploitable in mbelib-neo, add the narrowest possible `osv-scanner.toml` ignore with a reason and expiry date.
+
+## Corresponding source and license metadata
+
+Starting with 2.6.0, Linux packaging produces one corresponding-source archive
+in addition to the three platform packages. Source and binary SBOMs derive
+component declarations and conclusions from `legal/components.json`; custom
+identifiers carry their retained text. The source inventory rejects unexpected
+tracked inputs and never includes untracked local data. PFFFT's original archive
+must match the tag's SHA-256 pin. The offline build gate uses a network namespace
+with no network access and an empty build directory.
+
+Collection checks all four archives and SBOMs; checksums cover both. Recovery
+keeps the legacy three-package rule below 2.6.0 and verifies the original signed
+predicates and provenance. The retained ETSI exception is checked for disclosure,
+not treated as resolved. Release review must reassess licensing and patent
+records; dates alone never establish clearance.

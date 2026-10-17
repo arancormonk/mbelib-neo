@@ -12,6 +12,8 @@ import json
 import random
 from pathlib import Path
 
+from reference_provenance import carry_notices
+
 import numpy as np
 from quality_audio import normalized_signals, read_pcm, write_wav
 from quality_support import MODES, artifact_path, digest
@@ -239,7 +241,9 @@ def prepare_listening(run_dir, manifest, clips):
     private = root / "listening" / "private"
     presentation.mkdir(parents=True, exist_ok=True)
     private.mkdir(parents=True, exist_ok=True)
-    items, artifacts = [], []
+    items = []
+    artifacts = [(presentation / n).relative_to(root).as_posix()
+                 for n in carry_notices(root, manifest, presentation)]
     for clip, descriptor in selected:
         item_id = f"{rng.getrandbits(128):032x}"
         a_variant = "candidate" if rng.getrandbits(1) else "baseline"

@@ -47,42 +47,6 @@ struct imbe_dct_cache {
 static MBE_THREAD_LOCAL struct imbe_dct_cache imbe_cache = {0};
 
 /**
- * @brief Reset IMBE model state after excessive repeat headroom is exceeded.
- *
- * Matches JMBE IMBE behavior where repeat overflow falls back to a default
- * voice model instead of extending repeat/mute indefinitely. Per-frame error
- * metrics and synthesis continuity state are intentionally preserved.
- *
- * @param mp IMBE parameter state to reset.
- */
-static void
-imbe_reset_headroom_defaults(mbe_parms* mp) {
-    if (!mp) {
-        return;
-    }
-
-    mp->swn = 0;
-    mp->tonePhase = 0;
-    /* Match JMBE IMBEModelParameters.copy() overflow path:
-     * setMBEFundamentalFrequency(IMBEFundamentalFrequency.DEFAULT), then rebuild model arrays. */
-    mp->w0 = (float)((4.0 * M_PI) / (134.0 + 39.5));
-    mp->L = (int)(0.9254 * (int)((M_PI / mp->w0) + 0.25));
-    mp->K = 12;
-    mp->gamma = 0.0f;
-
-    for (int l = 0; l <= 56; l++) {
-        mp->Vl[l] = 0;
-        mp->Ml[l] = 1.0f;
-        mp->log2Ml[l] = 0.0f;
-    }
-
-    mp->repeatCount = 0;
-    mp->localEnergy = 75000.0f;
-    mp->amplitudeThreshold = 20480;
-    mp->mutingThreshold = MBE_MUTING_THRESHOLD_IMBE;
-}
-
-/**
  * @brief Initialize or return the thread-local IMBE DCT cache.
  *
  * Fills the cosine tables on first use. Because the cache is thread-local,
@@ -804,7 +768,7 @@ imbe4400_repeat_required(int bad, int total_errors, int c0_errors, int c0_errors
         return 1;
     }
     if (c0_errors_valid) {
-        /* JMBE IMBE repeat criteria when C0 errors are available from frame decode. */
+        /* TIA-102.BABA 7.7 equations 97-98 repeat criteria when C0 errors are available from frame decode. */
         return ((c0_errors >= 2) && ((float)total_errors >= repeat_threshold));
     }
 
@@ -821,8 +785,8 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
     }
 
     if (prev_mp->repeatCount > (MBE_MAX_FRAME_REPEATS - 1)) {
-        /* JMBE IMBE headroom behavior: reset to default model after prolonged repeats. */
-        imbe_reset_headroom_defaults(cur_mp);
+        /* Library repeat-headroom policy: reset to default model after prolonged repeats. */
+        mbe_resetImbeModel(cur_mp);
     } else {
         /* Repeat the previous model; this frame's error accounting and noise state continue. */
         mbe_repeat_load_model(cur_mp, prev_mp);
@@ -831,7 +795,7 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
 }
 
-/* P25 mutes with the TIA-102.BABA 7.8 noise; ProVoice, not a TIA-102 codec, keeps JMBE's comfort noise. */
+/* P25 mutes with the TIA-102.BABA 7.8 noise; ProVoice, not a TIA-102 codec, keeps library comfort noise. */
 static enum mbe_mute_noise
 imbe4400_mute_noise(const mbe_process_result* result) {
     const int provoice = result && ((result->flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);

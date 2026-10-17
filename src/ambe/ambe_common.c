@@ -31,7 +31,7 @@ mbe_eccAmbe3600C0_common(char fr[4][24]) {
     for (j = 0; j < 23; j++) {
         fr[0][j + 1] = out[j];
     }
-    /* JMBE C0 uses Golay24: when the protected 23-bit codeword has no
+    /* D-STAR C0 uses Golay24: when the protected 23-bit codeword has no
      * syndrome, enforce even parity by correcting the extra parity bit. */
     if (errs == 0) {
         int ones = 0;
@@ -294,81 +294,62 @@ mbe_eccAmbe3600DataSoft_common(mbe_soft_bit fr[4][24], char* out49) {
 
 void
 mbe_setAmbeDefaultModel_common(mbe_parms* mp) {
-    if (!mp) {
+    if (mp == NULL) {
         return;
     }
-
     mp->w0 = MBE_AMBE_INIT_W0;
     mp->L = MBE_AMBE_INIT_L;
     mp->K = 0;
     mp->gamma = 0.0f;
-    for (int l = 0; l <= 56; l++) {
+    for (int l = 0; l <= 56; ++l) {
         mp->Ml[l] = 1.0f;
         mp->Vl[l] = 0;
-        mp->log2Ml[l] = 0.0f; /* log2(1.0) */
+        mp->log2Ml[l] = 0.0f;
     }
 }
 
 void
 mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    if (!cur_mp || !prev_mp || !prev_mp_enhanced) {
+    if (cur_mp == NULL || prev_mp == NULL || prev_mp_enhanced == NULL) {
         return;
     }
-
-    prev_mp->swn = 0;
-    prev_mp->tonePhase = 0;
-    mbe_setAmbeDefaultModel_common(prev_mp);
-    for (int l = 0; l <= 56; l++) {
-        prev_mp->PHIl[l] = 0.0f;
-        prev_mp->PSIl[l] = 0.0f;
-    }
-
-    prev_mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
-    prev_mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-    prev_mp->errorRate = 0.0f;
-    prev_mp->errorCountTotal = 0;
-    prev_mp->errorCount4 = 0;
-
-    prev_mp->repeatCount = 0;
-    prev_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
-
-    prev_mp->noiseSeed = -1.0f;
-    memset(prev_mp->noiseOverlap, 0, sizeof(prev_mp->noiseOverlap));
-    memset(prev_mp->previousUw, 0, sizeof(prev_mp->previousUw));
-
-    *cur_mp = *prev_mp;
-    *prev_mp_enhanced = *prev_mp;
+    mbe_parms initial;
+    memset(&initial, 0, sizeof(initial));
+    mbe_setAmbeDefaultModel_common(&initial);
+    initial.noiseSeed = -1.0f;
+    initial.localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
+    initial.amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
+    initial.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+    memcpy(cur_mp, &initial, sizeof(initial));
+    memcpy(prev_mp, &initial, sizeof(initial));
+    memcpy(prev_mp_enhanced, &initial, sizeof(initial));
 }
 
 void
 mbe_setAmbeErasureParms_common(mbe_parms* mp, const mbe_parms* state_src) {
-    if (!mp) {
+    if (mp == NULL) {
         return;
     }
-
-    const mbe_parms* continuity = state_src ? state_src : mp;
-
-    mp->swn = 0;
-    mp->tonePhase = 0;
-    mp->w0 = 0.0f; /* JMBE AMBEFundamentalFrequency.W120..W123 */
+    if (state_src != NULL) {
+        memmove(mp->PHIl, state_src->PHIl, sizeof(mp->PHIl));
+        memmove(mp->PSIl, state_src->PSIl, sizeof(mp->PSIl));
+        mp->noiseSeed = state_src->noiseSeed;
+        memmove(mp->noiseOverlap, state_src->noiseOverlap, sizeof(mp->noiseOverlap));
+        memmove(mp->previousUw, state_src->previousUw, sizeof(mp->previousUw));
+    }
+    mp->w0 = 0.0f;
     mp->L = 9;
     mp->K = 0;
     mp->gamma = 0.0f;
-
-    for (int l = 0; l <= 56; l++) {
+    mp->swn = 0;
+    mp->tonePhase = 0;
+    for (int l = 0; l <= 56; ++l) {
         mp->Ml[l] = 1.0f;
         mp->Vl[l] = 0;
-        mp->log2Ml[l] = 0.0f; /* log2(1.0) */
-        mp->PHIl[l] = continuity->PHIl[l];
-        mp->PSIl[l] = continuity->PSIl[l];
+        mp->log2Ml[l] = 0.0f;
     }
-
     mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
     mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-
-    mp->noiseSeed = continuity->noiseSeed;
-    memcpy(mp->noiseOverlap, continuity->noiseOverlap, sizeof(mp->noiseOverlap));
-    memcpy(mp->previousUw, continuity->previousUw, sizeof(mp->previousUw));
 }
 
 void

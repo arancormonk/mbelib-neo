@@ -928,7 +928,7 @@ main(void) {
         }
     }
 
-    // JMBE parity: phase arrays initialize to zero
+    // Phase arrays initialize to zero
     {
         mbe_parms cur = {0}, prev = {0}, prev_enh = {0};
         mbe_initMbeParms(&cur, &prev, &prev_enh);
@@ -988,7 +988,7 @@ main(void) {
     }
 
     // Nyquist: every model the decoders can emit keeps all L harmonics below
-    // pi. JMBE's AMBE silence/initial model (w0 = pi^2/16, L = 15) did not.
+    // pi, including AMBE silence and initialization.
     {
         char ambe_d[49];
         char imbe_d[88];
@@ -1204,7 +1204,7 @@ main(void) {
 
     // AMBE 2450 tone and erasure frames (TIA-102.BABA-1 5.6, 7.3): the repeat
     // criteria apply before tone classification, and an erasure is a frame
-    // repeat of the last synthesized frame (not JMBE's W120 model).
+    // repeat of the last synthesized frame (without resetting to an erasure model).
     {
         char ambe_d[49];
         float out[160];
@@ -1325,17 +1325,17 @@ main(void) {
         cur.errorRate = 1.0f;
         cur.repeatCount = 0;
         float imbe_seed_before = cur.noiseSeed;
-        float jmbe_noise[160];
+        float comfort_noise[160];
         mbe_setThreadRngSeed(0x1234u);
         mbe_synthesizeSpeechf(out, &cur, &prev);
         assert(float_bits_equal(cur.noiseSeed, imbe_seed_before));
 
-        /* The public synthesizer cannot tell the codec, so it keeps JMBE's
+        /* The public synthesizer cannot tell the codec, so it uses library
          * comfort noise at either threshold (D-STAR: a max-repeat mute). */
         mbe_setThreadRngSeed(0x1234u);
-        mbe_synthesizeComfortNoisef(jmbe_noise);
+        mbe_synthesizeComfortNoisef(comfort_noise);
         for (int i = 0; i < 160; ++i) {
-            assert(float_bits_equal(out[i], jmbe_noise[i]));
+            assert(float_bits_equal(out[i], comfort_noise[i]));
         }
         seed_speech_params(&cur, &prev);
         cur.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
@@ -1343,13 +1343,13 @@ main(void) {
         mbe_setThreadRngSeed(0x1234u);
         mbe_synthesizeSpeechf(out, &cur, &prev);
         for (int i = 0; i < 160; ++i) {
-            assert(float_bits_equal(out[i], jmbe_noise[i]));
+            assert(float_bits_equal(out[i], comfort_noise[i]));
         }
     }
 
     // Error-rate mutes on the IMBE process paths: P25 (7200x4400 data path)
     // uses the TIA-102.BABA 7.8 noise, uniform in [-5, 5] on s(n); ProVoice
-    // (7100x4400, not a TIA-102 codec) keeps JMBE's comfort noise.
+    // (7100x4400, not a TIA-102 codec) uses library comfort noise.
     {
         float out[160];
         char imbe_d[88];
@@ -1418,7 +1418,7 @@ main(void) {
         }
     }
 
-    // Muted IMBE frames should still advance adaptive smoothing state (JMBE parity)
+    // Muted IMBE frames should still advance adaptive smoothing state
     {
         float out[160];
         mbe_parms cur = {0}, prev = {0};
@@ -1433,7 +1433,7 @@ main(void) {
         assert(float_bits_differ(cur.localEnergy, local_before));
     }
 
-    // JMBE parity: previous voiced phase is wrapped to [0, 2PI) before advancement
+    // Previous voiced phase is wrapped to [0, 2PI) before advancement
     {
         float out[160];
         mbe_parms cur = {0}, prev = {0};

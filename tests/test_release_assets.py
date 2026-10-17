@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
 SPEC = importlib.util.spec_from_file_location("recovery", ROOT / "tools/ci_verify_release_recovery.py")
 recovery = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(recovery)
@@ -42,7 +43,7 @@ class Recovery(unittest.TestCase):
     def test_sbom_must_equal_verified_signed_predicate(self):
         with tempfile.TemporaryDirectory() as directory:
             dist = Path(directory)
-            for name in ("linux.tar.gz", "macos.tar.gz", "windows.zip"):
+            for name in ("mbelib-neo-2.4.1-linux-x64.tar.gz", "mbelib-neo-2.4.1-macos-arm64.tar.gz", "mbelib-neo-2.4.1-windows-x64.zip"):
                 (dist / name).touch()
                 (dist / (name + ".spdx.json")).write_text('{}')
             verified = [{"verificationResult": {"statement": {"predicate": {}}}}]
@@ -51,7 +52,7 @@ class Recovery(unittest.TestCase):
                 self.assertEqual(gh.call_count, 6)
                 self.assertIn(self.commit, gh.call_args.args)
                 self.assertIn("refs/tags/" + self.tag, gh.call_args.args)
-                (dist / "linux.tar.gz.spdx.json").write_text('{"changed": true}')
+                (dist / "mbelib-neo-2.4.1-linux-x64.tar.gz.spdx.json").write_text('{"changed": true}')
                 with self.assertRaisesRegex(ValueError, "differs from the signed predicate"):
                     recovery.verify_assets(dist, self.tag, self.commit)
 
@@ -90,8 +91,9 @@ class ReleaseAssets(unittest.TestCase):
     def test_package_named_sboms_and_checksums(self):
         result = self.prepare()
         self.assertEqual(result.returncode, 0, result.stderr)
-        expected = "".join(f"{hashlib.sha256(name.encode()).hexdigest()}  {name}\n"
-                           for name in sorted(self.names))
+        names = sorted(self.names + [name + ".spdx.json" for name in self.names])
+        expected = "".join(f"{hashlib.sha256((self.dist / name).read_bytes()).hexdigest()}  {name}\n"
+                           for name in names)
         self.assertEqual((self.dist / "SHA256SUMS.txt").read_text(), expected)
         for name in self.names:
             self.assertEqual((self.dist / (name + ".spdx.json")).read_text(), "{}\n")
@@ -109,6 +111,28 @@ class ReleaseAssets(unittest.TestCase):
         (self.dist / (self.names[0] + ".spdx.json")).rename(self.dist / "unrelated.spdx.json")
         self.assertNotEqual(self.prepare().returncode, 0)
         self.assertFalse((self.dist / "SHA256SUMS.txt").exists())
+
+
+    def test_new_releases_require_source_and_all_sboms(self):
+        from release_assets import collect, prepare
+        for old in list(self.dist.iterdir()):
+            old.rename(old.with_name(old.name.replace("2.4.1", "2.6.0")))
+        with self.assertRaises(ValueError):
+            collect(self.dist, "2.6.0")
+        source = self.dist / "mbelib-neo-2.6.0-source.tar.gz"
+        source.write_bytes(b"source")
+        with self.assertRaises(ValueError):
+            collect(self.dist, "2.6.0")
+        Path(str(source) + ".spdx.json").write_text("{}")
+        packages, sboms = collect(self.dist, "2.6.0")
+        self.assertEqual((len(packages), len(sboms)), (4, 4))
+        self.assertEqual(len(prepare(self.dist, "2.6.0").splitlines()), 8)
+        with patch.object(recovery, "gh_json", return_value=[{"verificationResult": {"statement": {"predicate": {}}}}]) as gh:
+            recovery.verify_assets(self.dist, "v2.6.0", "a" * 40)
+            self.assertEqual(gh.call_count, 12)
+        with patch.object(recovery, "gh_json", side_effect=ValueError("tampered artifact")):
+            with self.assertRaisesRegex(ValueError, "tampered"):
+                recovery.verify_assets(self.dist, "v2.6.0", "a" * 40)
 
     def test_unsupported_architecture_fails(self):
         for suffix in ("", ".spdx.json"):
