@@ -24,6 +24,13 @@ verifies each package's provenance and signed SBOM before publishing. It then
 attests the checksum manifest normally. Recovery does not create or move tags.
 The artifacts expire after seven days; recover before that retention window ends.
 
+If packaging itself was skipped or failed, use the explicit `rebuild_packages`
+dispatch option from reviewed `main`. It requires all original signed-tag
+checks to have succeeded and builds the exact tag commit. Rebuild provenance
+names the reviewed main workflow; signed SBOMs bind the separate release-source
+commit. The publisher verifies both identities. See
+[release verification](release-verification.md#rebuilding-packages-for-an-unchanged-tag).
+
 ## Pinned CI Source Checkouts
 
 `tools/ci-dependency-pins.env` is the checked-in source of truth for the compiled PFFFT dependency and CI

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,12 +31,21 @@ tag="${GITHUB_REF_NAME:-}"
 event="${GITHUB_EVENT_NAME:-}"
 created="${RELEASE_TAG_CREATED:-${GITHUB_EVENT_CREATED:-}}"
 recovery=0
-if [[ -n "${RELEASE_RECOVERY_TAG:-}" || -n "${RELEASE_RECOVERY_RUN_ID:-}" ]]; then
+rebuild="${RELEASE_REBUILD_PACKAGES:-false}"
+if [[ "$rebuild" != true && "$rebuild" != false ]]; then
+  echo "Release rebuild must be true or false." >&2
+  exit 1
+fi
+if [[ -n "${RELEASE_RECOVERY_TAG:-}" || -n "${RELEASE_RECOVERY_RUN_ID:-}" || "$rebuild" == true ]]; then
   if [[ "${event}" != "workflow_dispatch" || ! "${RELEASE_RECOVERY_TAG:-}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ || ! "${RELEASE_RECOVERY_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
     echo "Release recovery requires workflow_dispatch with an existing tag and numeric source run ID." >&2
     exit 1
   fi
   recovery=1
+  if [[ "$rebuild" == true && "$ref" != refs/heads/main ]]; then
+    echo "Release package rebuilds require the reviewed workflow on main." >&2
+    exit 1
+  fi
   tag="${RELEASE_RECOVERY_TAG}"
   ref="refs/tags/${tag}"
 fi
@@ -138,7 +148,11 @@ if ! GNUPGHOME="${gnupg_home}" git verify-tag "${tag}" > /dev/null; then
 fi
 
 if [[ "$recovery" == 1 ]]; then
-  RELEASE_TAG="$tag" RELEASE_COMMIT="$tag_commit" python3 "${repo_root}/tools/ci_verify_release_recovery.py"
+  recovery_args=()
+  if [[ "$rebuild" == true ]]; then
+    recovery_args+=(--rebuild)
+  fi
+  RELEASE_TAG="$tag" RELEASE_COMMIT="$tag_commit" python3 "${repo_root}/tools/ci_verify_release_recovery.py" "${recovery_args[@]}"
 fi
 
 {

@@ -140,3 +140,23 @@ verifies every archive's provenance, exact signed SBOM predicate, and (for new
 releases) the SBOM file's provenance before publication. Checksums are rebuilt
 only after collection, and the manifest is attested. Existing historical tags
 and published release assets are not changed by this remediation.
+
+### Rebuilding packages for an unchanged tag
+
+If the original tag passed every analysis, native, optimized, sanitizer and
+consumer check but packaging was skipped or failed, dispatch `CI` from `main`
+with `release_tag`, that original `release_run_id`, and `rebuild_packages=true`.
+This option supports the component-aware release format from 2.6.0 onward.
+This path verifies the signed tag and original checks, reruns the current
+workflow gates, and checks out the tag's exact commit for all three package
+builds and their tests. It never creates or moves a tag.
+
+Rebuild attestations identify the reviewed workflow commit on `main`; the
+signed SBOMs and corresponding-source identity identify the original release
+commit. Publication verifies both identities, all package/SBOM attestations,
+and exact signed SBOM contents. Release notes link the rebuild run and record
+both commits. Using current verification tooling, pass `--builder-run-id RUN`
+to `tools/ci_verify_release_recovery.py --assets DIRECTORY` with `RELEASE_TAG`
+and `RELEASE_COMMIT` set to the unchanged release. A rebuild whose publication
+fails can rerun its failed publish job; ordinary publication-only recovery
+continues to require packages from an original tag build.

@@ -9,9 +9,13 @@ on:
         type: string
         default: ''
       release_run_id:
-        description: 'Original completed tag CI run with successful package attestations'
+        description: 'Original completed tag CI run; packages required unless rebuilding'
         type: string
         default: ''
+      rebuild_packages:
+        description: 'Rebuild exact signed tag after its original native checks passed; requires main'
+        type: boolean
+        default: false
   push:
     branches: [main, master]
     tags:
@@ -853,7 +857,7 @@ jobs:
 
   validate-release-tag:
     name: Validate release tag
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_tag != '' || inputs.release_run_id != ''))
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_tag != '' || inputs.release_run_id != '' || inputs.rebuild_packages))
     runs-on: ubuntu-latest
     concurrency:
       group: ci-control
@@ -878,6 +882,7 @@ jobs:
           RELEASE_TAG_CREATED: ${{ github.event.created }}
           RELEASE_RECOVERY_TAG: ${{ inputs.release_tag }}
           RELEASE_RECOVERY_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_REBUILD_PACKAGES: ${{ inputs.rebuild_packages && 'true' || 'false' }}
           GH_TOKEN: ${{ github.token }}
         run: tools/ci_validate_release_tag.sh
 
@@ -1114,7 +1119,14 @@ jobs:
     defaults:
       run:
         shell: bash
-    if: github.repository == 'arancormonk/mbelib-neo' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      !cancelled() && github.repository == 'arancormonk/mbelib-neo' &&
+      github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v') &&
+      needs.format-check.result == 'success' && needs.clang-tidy.result == 'success' &&
+      needs.cppcheck.result == 'success' && needs.lizard.result == 'success' &&
+      needs.scan-build.result == 'success' && needs.semgrep.result == 'success' &&
+      needs.build-test.result == 'success' && needs.sanitize-linux.result == 'success' &&
+      needs.validate-release-tag.result == 'success'
     steps:
       - name: Check AUR SSH key availability
         id: aur_key
@@ -1402,8 +1414,18 @@ jobs:
 
   package-release:
     name: package release (${{ matrix.os }})
-    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, lto-link-v4]
+    # The PR-only classifier is skipped on tags. Explicit result checks avoid
+    # success() propagating that skip through otherwise successful native jobs.
+    if: >-
+      !cancelled() && needs.validate-release-tag.result == 'success' &&
+      needs.build-test.result == 'success' && needs.clang-release-linux.result == 'success' &&
+      needs.cross-arm32.result == 'success' && needs.sanitize-linux.result == 'success' &&
+      needs.install-and-consume.result == 'success' && needs.install-and-consume-win.result == 'success' &&
+      needs.optimized-v3-ctest.result == 'success' && needs.optimized-v3-ctest-clang.result == 'success' &&
+      needs.consumer-release-gcc.result == 'success' && needs.lto-link-v4.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.rebuild_packages))
     runs-on: ${{ matrix.os }}
     concurrency:
       group: ${{ matrix.ci_group }}
@@ -1428,6 +1450,9 @@ jobs:
             ci_group: ci-worker-07
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate-release-tag.outputs.commit }}
+          fetch-depth: 0
       - name: Configure (dev-release preset)
         run: cmake --preset dev-release
       - name: Build (dev-release preset)
@@ -1555,14 +1580,12 @@ jobs:
           path: ${{ steps.package.outputs.archive_path }}.spdx.json
           retention-days: 7
       - name: Attest release package provenance
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ steps.package.outputs.archive_path }}
             ${{ steps.package.outputs.archive_path }}.spdx.json
       - name: Attest release package SBOM
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.package.outputs.archive_path }}
@@ -1623,7 +1646,8 @@ jobs:
       always() && !cancelled() && github.repository == 'arancormonk/mbelib-neo' &&
       needs.validate-release-tag.result == 'success' &&
       ((startsWith(github.ref, 'refs/tags/v') && needs.package-release.result == 'success') ||
-       (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_run_id != ''))
+       (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_run_id != '' &&
+        (!inputs.rebuild_packages || needs.package-release.result == 'success')))
     permissions:
       actions: read
       attestations: write
@@ -1634,7 +1658,7 @@ jobs:
       - name: Download release package artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          run-id: ${{ inputs.release_run_id || github.run_id }}
+          run-id: ${{ inputs.rebuild_packages && github.run_id || inputs.release_run_id || github.run_id }}
           github-token: ${{ github.token }}
           pattern: release-package-*
           path: dist
@@ -1651,7 +1675,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate-release-tag.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.validate-release-tag.outputs.commit }}
-        run: python3 tools/ci_verify_release_recovery.py --assets dist
+          RELEASE_REBUILD_PACKAGES: ${{ inputs.rebuild_packages && 'true' || 'false' }}
+        run: |
+          args=()
+          if [[ "$RELEASE_REBUILD_PACKAGES" == true ]]; then
+            args+=(--builder-run-id "$GITHUB_RUN_ID")
+          fi
+          python3 tools/ci_verify_release_recovery.py --assets dist "${args[@]}"
+      - name: Record rebuild provenance in release notes
+        if: inputs.rebuild_packages
+        env:
+          RELEASE_COMMIT: ${{ needs.validate-release-tag.outputs.commit }}
+        run: |
+          printf '\nRebuilt from unchanged signed source commit %s by [reviewed workflow](https://github.com/%s/actions/runs/%s) at %s. Attestations identify this builder; the signed SBOMs identify the release source.\n' \
+            "$RELEASE_COMMIT" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_SHA" >> dist/RELEASE-NOTES.md
       - name: Attest checksum manifest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
