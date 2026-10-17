@@ -32,18 +32,23 @@ event="${GITHUB_EVENT_NAME:-}"
 created="${RELEASE_TAG_CREATED:-${GITHUB_EVENT_CREATED:-}}"
 recovery=0
 rebuild="${RELEASE_REBUILD_PACKAGES:-false}"
-if [[ "$rebuild" != true && "$rebuild" != false ]]; then
-  echo "Release rebuild must be true or false." >&2
+aur_only="${RELEASE_AUR_ONLY:-false}"
+if [[ ("$rebuild" != true && "$rebuild" != false) || ("$aur_only" != true && "$aur_only" != false) ]]; then
+  echo "Release recovery options must be true or false." >&2
   exit 1
 fi
-if [[ -n "${RELEASE_RECOVERY_TAG:-}" || -n "${RELEASE_RECOVERY_RUN_ID:-}" || "$rebuild" == true ]]; then
+if [[ "$rebuild" == true && "$aur_only" == true ]]; then
+  echo "Choose either package rebuilding or AUR-only recovery." >&2
+  exit 1
+fi
+if [[ -n "${RELEASE_RECOVERY_TAG:-}" || -n "${RELEASE_RECOVERY_RUN_ID:-}" || "$rebuild" == true || "$aur_only" == true ]]; then
   if [[ "${event}" != "workflow_dispatch" || ! "${RELEASE_RECOVERY_TAG:-}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ || ! "${RELEASE_RECOVERY_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
     echo "Release recovery requires workflow_dispatch with an existing tag and numeric source run ID." >&2
     exit 1
   fi
   recovery=1
-  if [[ "$rebuild" == true && "$ref" != refs/heads/main ]]; then
-    echo "Release package rebuilds require the reviewed workflow on main." >&2
+  if [[ ("$rebuild" == true || "$aur_only" == true) && "$ref" != refs/heads/main ]]; then
+    echo "Release package rebuilding and AUR-only recovery require the reviewed workflow on main." >&2
     exit 1
   fi
   tag="${RELEASE_RECOVERY_TAG}"
@@ -149,7 +154,9 @@ fi
 
 if [[ "$recovery" == 1 ]]; then
   recovery_args=()
-  if [[ "$rebuild" == true ]]; then
+  if [[ "$aur_only" == true ]]; then
+    recovery_args+=(--aur-only)
+  elif [[ "$rebuild" == true ]]; then
     recovery_args+=(--rebuild)
   fi
   RELEASE_TAG="$tag" RELEASE_COMMIT="$tag_commit" python3 "${repo_root}/tools/ci_verify_release_recovery.py" "${recovery_args[@]}"

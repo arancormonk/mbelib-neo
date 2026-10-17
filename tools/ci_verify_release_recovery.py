@@ -34,22 +34,26 @@ def gh_json(*arguments):
     return json.loads(subprocess.check_output(["gh", *arguments], text=True))
 
 
-def validate_run(run, jobs, tag, commit, rebuild=False):
-    if rebuild and not needs_source(tag[1:]):
-        raise ValueError("Package rebuild requires the component-aware release format from 2.6.0")
+def validate_run(run, jobs, tag, commit, rebuild=False, aur_only=False):
+    if rebuild and aur_only:
+        raise ValueError("Choose either package rebuilding or AUR-only recovery")
+    recover_checks = rebuild or aur_only
+    if recover_checks and not needs_source(tag[1:]):
+        raise ValueError("Rebuilding and AUR-only recovery require the release format from 2.6.0")
     expected = {"event": "push", "head_branch": tag, "head_sha": commit,
                 "path": WORKFLOW, "status": "completed"}
     if any(run.get(key) != value for key, value in expected.items()):
         raise ValueError("Source run must be a completed CI push build of the signed tag commit")
     successful = {job["name"] for job in jobs if job.get("conclusion") == "success"}
-    if rebuild and not TAG_CHECKS.issubset(successful):
+    if recover_checks and not TAG_CHECKS.issubset(successful):
         raise ValueError("Source tag run lacks successful analysis, native, optimized, sanitizer or consumer checks")
-    if not rebuild and not REQUIRED_JOBS.issubset(successful):
+    if not recover_checks and not REQUIRED_JOBS.issubset(successful):
         raise ValueError("Source run lacks successful tag validation or all three attested packages")
     if any(job.get("conclusion") not in ("success", "skipped")
            for job in jobs if job["name"] != "publish release"
-           and not (rebuild and job["name"].startswith("package release ("))):
-        raise ValueError("Only the final publish job may have failed in the source run")
+           and not (recover_checks and job["name"].startswith("package release ("))
+           and not (aur_only and job["name"] == "Update AUR package (release)")):
+        raise ValueError("Source run has a failure outside the requested publication recovery")
 
 
 def rebuild_identity(run_id):
@@ -93,7 +97,9 @@ def verify_assets(directory, tag, commit, builder=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=Path)
-    parser.add_argument("--rebuild", action="store_true", help="Require original tag checks before rebuilding packages")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--rebuild", action="store_true", help="Require original tag checks before rebuilding packages")
+    mode.add_argument("--aur-only", action="store_true", help="Require original tag checks before retrying stable AUR")
     parser.add_argument("--builder-run-id", help="Verify a reviewed main-workflow rebuild and its signed source identity")
     args = parser.parse_args()
     tag = os.environ.get("RELEASE_TAG", "")
@@ -109,7 +115,7 @@ def main():
         endpoint = f"repos/{REPO}/actions/runs/{run_id}"
         run = gh_json("api", endpoint)
         pages = gh_json("api", f"{endpoint}/jobs?per_page=100", "--paginate", "--slurp")
-        validate_run(run, [job for page in pages for job in page["jobs"]], tag, commit, args.rebuild)
+        validate_run(run, [job for page in pages for job in page["jobs"]], tag, commit, args.rebuild, args.aur_only)
         print(f"Validated original release build {run_id} for {tag}")
 
 

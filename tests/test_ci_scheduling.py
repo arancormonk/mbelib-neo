@@ -3,10 +3,14 @@
 """Exercise runner-budget escapes and PR cleanup without contacting GitHub."""
 
 import copy
+import hashlib
 import importlib.util
+import os
 import pathlib
 import re
 import subprocess
+import tempfile
+import textwrap
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -54,6 +58,54 @@ RUN = {
 
 
 class BudgetTests(unittest.TestCase):
+    def test_dispatch_does_not_cancel_push_ci(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        concurrency = budget.block(workflow, "concurrency", 0)
+        self.assertIn("${{ github.event_name }}", concurrency)
+
+    @unittest.skipIf(os.name == "nt", "AUR metadata runs in the Linux job")
+    def test_aur_recovery_uses_validated_release_not_dispatch_branch(self):
+        jobs = budget.block((ROOT / ".github/workflows/ci.yml").read_text(), "jobs", 0)
+        aur = budget.block(jobs, "update-aur-release", 2)
+        self.assertIn("github.event_name == 'workflow_dispatch'", aur)
+        self.assertIn("github.ref == 'refs/heads/main'", aur)
+        self.assertIn("ref: ${{ needs.validate-release-tag.outputs.commit }}", aur)
+        self.assertIn("RELEASE_TAG: ${{ needs.validate-release-tag.outputs.tag }}", aur)
+        publisher = budget.block(jobs, "publish-release", 2)
+        self.assertIn("!inputs.update_aur_only", publisher)
+        step = aur.split("      - name: Compute release metadata\n", 1)[1].split("      - name:", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            curl = root / "curl"
+            curl.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$REQUEST_LOG\"\nprintf 'synthetic release source\\n'\n")
+            curl.chmod(0o755)
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "RELEASE_TAG": "v2.6.0", "GITHUB_REF_NAME": "main",
+                   "GITHUB_REPOSITORY": "arancormonk/mbelib-neo",
+                   "GITHUB_OUTPUT": str(root / "output"), "REQUEST_LOG": str(root / "request")}
+            subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, check=True, capture_output=True)
+            self.assertIn("/archive/refs/tags/v2.6.0.tar.gz", (root / "request").read_text())
+            self.assertEqual((root / "output").read_text(),
+                             "pkgver=2.6.0\nsha256=" + hashlib.sha256(b"synthetic release source\n").hexdigest() + "\n")
+
+    @unittest.skipIf(os.name == "nt", "AUR validation runs in the Linux job")
+    def test_invalid_aur_recovery_options_fail_before_network_access(self):
+        base = {**os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main",
+                "RELEASE_RECOVERY_TAG": "v2.6.0", "RELEASE_RECOVERY_RUN_ID": "123",
+                "RELEASE_REBUILD_PACKAGES": "false", "RELEASE_AUR_ONLY": "true"}
+        for overrides, message in (
+            ({"RELEASE_REBUILD_PACKAGES": "true"}, "either package rebuilding or AUR-only"),
+            ({"RELEASE_AUR_ONLY": "invalid"}, "must be true or false"),
+            ({"GITHUB_REF": "refs/heads/unreviewed"}, "reviewed workflow on main"),
+            ({"RELEASE_RECOVERY_TAG": ""}, "existing tag and numeric source run ID"),
+        ):
+            with self.subTest(overrides=overrides):
+                result = subprocess.run(["bash", str(ROOT / "tools/ci_validate_release_tag.sh")],
+                                        env={**base, **overrides}, capture_output=True, text=True, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
     def test_release_jobs_ignore_skipped_ancestors_but_require_successful_checks(self):
         jobs = budget.block((ROOT / ".github/workflows/ci.yml").read_text(), "jobs", 0)
         for name in ("package-release", "update-aur-release"):
