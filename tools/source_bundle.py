@@ -33,7 +33,9 @@ def check_path(name, inventory):
 
 def tracked_source(root, commit):
     # Read Git objects, never dirty/untracked working files or Git metadata.
-    payload = git(root, "archive", "--format=tar", commit)
+    # Git archive applies local EOL settings too, so pin them before comparing
+    # the result with the canonical blob bytes (including on Windows).
+    payload = git(root, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", commit)
     files = {}
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
         for entry in archive:

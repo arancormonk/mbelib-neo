@@ -70,7 +70,8 @@ class Evidence(unittest.TestCase):
         files["share/doc/mbelib-neo/pffft/PFFFT-NOTICES.txt"] = retained[retained.index(b"PFFFT: https://"):]
         release_sbom.validate_package(files, "binary")
         # Git and installation tools may use CRLF on Windows; notice text is retained.
-        release_sbom.validate_package({n: content.replace(b"\n", b"\r\n") for n, content in files.items()}, "binary")
+        release_sbom.validate_package(
+            {n: content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n") for n, content in files.items()}, "binary")
         for n in ("LICENSES/ISC.txt", "LICENSES/LicenseRef-PFFFT.txt", "LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt"):
             changed = dict(files)
             changed.pop("share/doc/mbelib-neo/" + n)
@@ -128,11 +129,13 @@ class SourceBundle(unittest.TestCase):
         return source_bundle.create(self.repo, self.tag, self.commit, self.root / output, self.dependency)
 
     def test_exact_reproducible_source_and_identity(self):
-        original = (self.repo / "README.md").read_bytes()
+        original = source_bundle.git(self.repo, "cat-file", "blob", f"{self.commit}:README.md")
         (self.repo / "README.md").write_text("dirty working copy")
         (self.repo / "private-audit.txt").write_text("must stay local")
         first = self.bundle()
         self.command("config", "tar.umask", "0077")
+        self.command("config", "core.autocrlf", "true")
+        self.command("config", "core.eol", "crlf")
         second = self.bundle("other")
         self.assertEqual(first.read_bytes(), second.read_bytes())
         files = release_sbom.package_files(first)
