@@ -16,6 +16,10 @@ on:
         description: 'Rebuild exact signed tag after its original native checks passed; requires main'
         type: boolean
         default: false
+      update_aur_only:
+        description: 'Recover only the stable AUR update for a validated release; requires main'
+        type: boolean
+        default: false
   push:
     branches: [main, master]
     tags:
@@ -24,7 +28,7 @@ on:
     branches: [main, master]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -857,7 +861,7 @@ jobs:
 
   validate-release-tag:
     name: Validate release tag
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_tag != '' || inputs.release_run_id != '' || inputs.rebuild_packages))
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (inputs.release_tag != '' || inputs.release_run_id != '' || inputs.rebuild_packages || inputs.update_aur_only))
     runs-on: ubuntu-latest
     concurrency:
       group: ci-control
@@ -883,6 +887,7 @@ jobs:
           RELEASE_RECOVERY_TAG: ${{ inputs.release_tag }}
           RELEASE_RECOVERY_RUN_ID: ${{ inputs.release_run_id }}
           RELEASE_REBUILD_PACKAGES: ${{ inputs.rebuild_packages && 'true' || 'false' }}
+          RELEASE_AUR_ONLY: ${{ inputs.update_aur_only && 'true' || 'false' }}
           GH_TOKEN: ${{ github.token }}
         run: tools/ci_validate_release_tag.sh
 
@@ -1116,12 +1121,15 @@ jobs:
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     env:
       AUR_MAKEPKG_USER: aurbuilder
+      RELEASE_TAG: ${{ needs.validate-release-tag.outputs.tag }}
     defaults:
       run:
         shell: bash
     if: >-
       !cancelled() && github.repository == 'arancormonk/mbelib-neo' &&
-      github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v') &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+        inputs.release_tag != '' && inputs.release_run_id != '')) &&
       needs.format-check.result == 'success' && needs.clang-tidy.result == 'success' &&
       needs.cppcheck.result == 'success' && needs.lizard.result == 'success' &&
       needs.scan-build.result == 'success' && needs.semgrep.result == 'success' &&
@@ -1155,6 +1163,7 @@ jobs:
         if: steps.aur_key.outputs.has_key == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.validate-release-tag.outputs.commit }}
           fetch-depth: 0
 
       - name: Mark workspace as safe
@@ -1185,7 +1194,7 @@ jobs:
           fi
           if printf '%s' "$probe_out" | grep -qi 'down due to maintenance'; then
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=AUR release update skipped::aur.archlinux.org is in maintenance mode; ${GITHUB_REF_NAME} was NOT published to the AUR. Re-run this job or update the package manually once maintenance lifts."
+            echo "::warning title=AUR release update skipped::aur.archlinux.org is in maintenance mode; ${RELEASE_TAG} was NOT published to the AUR. Re-run this job or update the package manually once maintenance lifts."
             exit 0
           fi
           echo "AUR SSH probe failed with exit $probe_rc for a reason other than maintenance." >&2
@@ -1202,8 +1211,8 @@ jobs:
         id: release_meta
         if: steps.aur_up.outputs.available == 'true'
         run: |
-          pkgver="${GITHUB_REF_NAME#v}"
-          source_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          pkgver="${RELEASE_TAG#v}"
+          source_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${RELEASE_TAG}.tar.gz"
           sha256="$(
             set -o pipefail
             curl -fsSL "$source_url" | sha256sum | awk '{print $1}'
@@ -1643,7 +1652,7 @@ jobs:
       cancel-in-progress: false
       queue: max
     if: >-
-      always() && !cancelled() && github.repository == 'arancormonk/mbelib-neo' &&
+      always() && !cancelled() && !inputs.update_aur_only && github.repository == 'arancormonk/mbelib-neo' &&
       needs.validate-release-tag.result == 'success' &&
       ((startsWith(github.ref, 'refs/tags/v') && needs.package-release.result == 'success') ||
        (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_run_id != '' &&

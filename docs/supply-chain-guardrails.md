@@ -31,6 +31,11 @@ names the reviewed main workflow; signed SBOMs bind the separate release-source
 commit. The publisher verifies both identities. See
 [release verification](release-verification.md#rebuilding-packages-for-an-unchanged-tag).
 
+Stable AUR updates also run during release recovery with the validated tag's
+checkout, version and dependency pins. The `update_aur_only` option validates
+the original tag checks and runs only that publication path, preserving existing
+GitHub assets. It requires reviewed `main` and cannot be combined with rebuilding.
+
 ## Pinned CI Source Checkouts
 
 `tools/ci-dependency-pins.env` is the checked-in source of truth for the compiled PFFFT dependency and CI

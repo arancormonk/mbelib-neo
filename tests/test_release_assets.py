@@ -88,6 +88,23 @@ class Recovery(unittest.TestCase):
         with self.assertRaises(ValueError):
             recovery.rebuild_identity("not-a-run")
 
+    def test_aur_recovery_accepts_failed_aur_but_requires_every_tag_check(self):
+        tag = "v2.6.0"
+        run = {**self.run, "head_branch": tag}
+        jobs = [{"name": name, "conclusion": "success"} for name in recovery.TAG_CHECKS]
+        jobs.append({"name": "Update AUR package (release)", "conclusion": "failure"})
+        recovery.validate_run(run, jobs, tag, self.commit, aur_only=True)
+        for name in recovery.TAG_CHECKS:
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                recovery.validate_run(run, [j for j in jobs if j["name"] != name], tag, self.commit, aur_only=True)
+        for conclusion in ("failure", "skipped", "cancelled"):
+            invalid = [{**j, "conclusion": conclusion} if j["name"] == "clang-tidy" else j for j in jobs]
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                recovery.validate_run(run, invalid, tag, self.commit, aur_only=True)
+        for options in ({"rebuild": True}, {"rebuild": True, "aur_only": True}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                recovery.validate_run(run, jobs, tag, self.commit, **options)
+
     def test_rebuild_signed_sbom_binds_original_tag_source(self):
         with tempfile.TemporaryDirectory() as directory:
             dist = Path(directory)

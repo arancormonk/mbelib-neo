@@ -160,3 +160,17 @@ to `tools/ci_verify_release_recovery.py --assets DIRECTORY` with `RELEASE_TAG`
 and `RELEASE_COMMIT` set to the unchanged release. A rebuild whose publication
 fails can rerun its failed publish job; ordinary publication-only recovery
 continues to require packages from an original tag build.
+
+### Recovering the stable AUR update
+
+Release recovery also runs the stable AUR job using the validated tag's version,
+source archive and dependency pins. If GitHub assets are already published and
+only AUR needs updating, dispatch `CI` from `main` with `release_tag`, the original
+successful tag-check `release_run_id`, and `update_aur_only=true`. This mode
+requires the same signed tag and original checks as package rebuilding, reruns
+the current native checks, and skips package creation and GitHub publication.
+Do not combine it with `rebuild_packages`. Check the AUR job's steps: missing
+credentials or AUR maintenance can leave an update skipped despite a green job.
+
+Manual CI and push CI use separate workflow concurrency groups, so starting
+release recovery does not cancel the normal `main` push checks.

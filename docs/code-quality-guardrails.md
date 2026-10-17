@@ -58,7 +58,8 @@ so a new main run does not replace pending PR jobs. GitHub allows up to 100 queu
 jobs per group; the queue is bounded, and dispatch order between groups is not
 guaranteed. See [GitHub's concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 Workflow-level concurrency still cancels an older run of the same workflow and
-PR/ref. Matrix `max-parallel` limits the largest bursts within a run; the fixed
+PR/ref. CI additionally separates event types, so manual release recovery cannot
+cancel the regular main push checks. Matrix `max-parallel` limits the largest bursts within a run; the fixed
 groups enforce the budget across workflows and overlapping PR/main runs.
 
 | Group | Jobs sharing the runner |
