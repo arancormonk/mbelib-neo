@@ -30,6 +30,8 @@ compile commands are read:
       family probes follow it.
   (i) off Apple platforms, a universal CMAKE_OSX_ARCHITECTURES list (which
       CMake ignores there) keeps the AVX2 dispatch.
+  (j) a diagnostic from the native-flag probe declines host tuning and
+      keeps the portable AVX2 dispatch available.
 
 The parent's CMAKE_OSX_ARCHITECTURES is forwarded to every nested configure,
 so an x86_64 build on Apple Silicon keeps its target and baseline ISA option.
@@ -432,6 +434,22 @@ def scenario_no_native(args, work, flag, name, *options, requested=""):
     return build, log
 
 
+def scenario_native_warning(args, work, flag):
+    """(j) A native flag accepted with a warning must not reach a -Werror build."""
+    if not flag or not flag.startswith("-m"):
+        print("note: no GNU-style native flag on this host; (j) skipped")
+        return
+    # Inject the diagnostic only into the native-flag probe, as Clang 18 does
+    # for AVX10/AVX-512 on some hosts. Other probes and library code stay clean.
+    header = work / "native warning.h"
+    header.write_text("#if defined(MBELIB_C_HAS_MARCH_NATIVE) || defined(MBELIB_C_HAS_MCPU_NATIVE)\n"
+                      "#warning native tuning diagnostic\n#endif\n", encoding="utf-8")
+    build, log = scenario_no_native(args, work, flag, "(j) native flag diagnostic",
+                                   f'-DCMAKE_REQUIRED_FLAGS=-include "{header.as_posix()}"')
+    check(f"rejects {flag}" in log, "(j) configure explains why the native flag is rejected")
+    check_dispatch(args, build, log, True, "(j) native flag diagnostic")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cmake", required=True)
@@ -467,6 +485,7 @@ def main():
         else:
             scenario_multi_config(args, work, "a-spaced-source", source=str(spaced))
         flag = scenario_release(args, work)
+        scenario_native_warning(args, work, flag)
         if args.user_isa:
             scenario_no_native(args, work, flag, "(c) user target ISA", f"-DCMAKE_C_FLAGS={args.user_isa}",
                                requested=args.user_isa)
