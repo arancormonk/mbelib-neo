@@ -60,9 +60,10 @@ instructions. 32-bit x86 builds, universal macOS builds (several
 dispatches only when its assembler accepts `-muse-unaligned-vector-move`
 (binutils 2.38 or later), since GCC does not align the Windows x64 stack for
 32-byte spills (MinGW and Cygwin). GCC's LTO link drops `-Wa` options when its
-inputs disagree on them, so with `MBELIB_ENABLE_LTO` those AVX2 copies are
-compiled without LTO and keep the option in the shipped objects, static
-library included. The configure log reports the decision
+inputs disagree on them, so those AVX2 copies are always compiled without LTO
+(`-fno-lto`), however LTO was enabled (`MBELIB_ENABLE_LTO`,
+`CMAKE_INTERPROCEDURAL_OPTIMIZATION` or `-flto` in `CMAKE_C_FLAGS`), and keep
+the option in the shipped objects, static library included. The configure log reports the decision
 (`AVX2 dispatch: ...`).
 
 In Debug builds the AVX2 copy produces exactly the output of a Debug build for
@@ -77,7 +78,9 @@ RelWithDebInfo and MinSizeRel configurations for the CPU of the build host:
 `-march=native` on x86 and `-mcpu=native` on ARM with GCC and Clang, and with
 MSVC or clang-cl on an x86/x64 host the highest of `/arch:AVX512`, `/arch:AVX2`
 and `/arch:AVX` that a configure-time CPUID/XGETBV probe finds the CPU and OS
-support (cached for the build directory). Debug configurations are never tuned,
+support (cached for the build directory and compiler) and that the compiler
+accepts; an ignored or rejected option (an older toolset without
+`/arch:AVX512`) falls back to the next lower level. Debug configurations are never tuned,
 so their golden hashes, sanitizers and coverage keep the baseline target. The
 flags stay private to the library targets (and the tests that select their
 kernels); they never reach the exported CMake targets or `libmbe-neo.pc`. In a
@@ -96,7 +99,8 @@ or not), when MSVC's `CL` or `_CL_` environment variable does, or when the
 compiler rejects the option. MinGW and Cygwin GCC are tuned only together with
 the assembler's `-muse-unaligned-vector-move`, for the same stack-alignment
 reason as the dispatch; since that option reaches every unit and would not
-survive an LTO link, such a tuned build leaves `MBELIB_ENABLE_LTO` off.
+survive an LTO link, such a tuned build compiles every unit without LTO,
+whatever enabled it.
 
 A binary built with the default runs only on CPUs with the build host's
 instruction set. **Packagers and CI that ship binaries pass

@@ -624,7 +624,13 @@ if(_mbelib_native_flags)
     set(_mbelib_native_config "${_mbelib_release_like_config}")
 endif()
 function(_mbelib_apply_native target)
-    foreach(_mbelib_native_flag IN LISTS _mbelib_native_flags)
+    set(_mbelib_native_target_flags ${_mbelib_native_flags})
+    if("-Wa,-muse-unaligned-vector-move" IN_LIST _mbelib_native_flags)
+        # As for the AVX2 copies: keep every tuned unit out of any LTO link,
+        # inherited or not, so the assembler option reaches its code.
+        list(APPEND _mbelib_native_target_flags -fno-lto)
+    endif()
+    foreach(_mbelib_native_flag IN LISTS _mbelib_native_target_flags)
         string(
             REPLACE ","
             "$<COMMA>"
@@ -709,6 +715,8 @@ if(NOT MBELIB_ENABLE_SIMD)
 elseif(_mbelib_osx_arch_count GREATER 1)
     set(_mbelib_avx2_reason "several CMAKE_OSX_ARCHITECTURES")
 else()
+    # Probed on every configure (see mbelib_native_probe_target()).
+    unset(MBELIB_TARGET_X86_64 CACHE)
     _mbelib_check_c_source_compiles_static(
       [=[
       #if !(defined(__x86_64__) || defined(_M_X64)) || defined(_M_ARM64EC)
@@ -781,13 +789,23 @@ if(MBELIB_AVX2_DISPATCH_FLAGS)
         )
     endforeach()
     set(_mbelib_avx2_options "")
-    foreach(_mbelib_flag IN LISTS MBELIB_AVX2_DISPATCH_FLAGS)
+    set(_mbelib_avx2_compile_flags ${MBELIB_AVX2_DISPATCH_FLAGS})
+    if("-Wa,-muse-unaligned-vector-move" IN_LIST MBELIB_AVX2_DISPATCH_FLAGS)
+        # GCC's LTO link drops -Wa options once its inputs disagree on them,
+        # also in a static-library consumer's link, so these units are always
+        # compiled to machine code, however LTO was enabled (MBELIB_ENABLE_LTO,
+        # CMAKE_INTERPROCEDURAL_OPTIMIZATION, -flto in CMAKE_C_FLAGS). Source
+        # options come last on the compile line.
+        list(APPEND _mbelib_avx2_compile_flags -fno-lto)
+    endif()
+    foreach(_mbelib_flag IN LISTS _mbelib_avx2_compile_flags)
         string(REPLACE "," "$<COMMA>" _mbelib_flag "${_mbelib_flag}")
         list(
             APPEND _mbelib_avx2_options
             "$<${_mbelib_avx2_dispatch_config}:${_mbelib_flag}>"
         )
     endforeach()
+    unset(_mbelib_avx2_compile_flags)
     set_property(
         SOURCE ${MBELIB_AVX2_DISPATCH_SOURCES}
         APPEND
@@ -927,16 +945,6 @@ elseif(MBELIB_ENABLE_LTO)
                 INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE
         )
         set(_mbelib_ipo_enabled ON)
-        if(_mbelib_windows_gcc AND MBELIB_AVX2_DISPATCH_FLAGS)
-            # The option comes after CMake's -flto on the compile line.
-            set_property(
-                SOURCE ${MBELIB_AVX2_DISPATCH_SOURCES}
-                APPEND
-                PROPERTY
-                    COMPILE_OPTIONS
-                        "$<$<AND:${_mbelib_avx2_dispatch_config},$<CONFIG:Release,RelWithDebInfo>>:-fno-lto>"
-            )
-        endif()
     else()
         message(STATUS "IPO/LTO not supported: ${_ipo_msg}")
     endif()

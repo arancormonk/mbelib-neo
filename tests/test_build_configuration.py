@@ -12,7 +12,8 @@ Then the source tree is configured, configure-only, with Ninja and Ninja
 Multi-Config, using the parent build's PFFFT sources, and the generated
 compile commands are read:
 
-  (a) Ninja Multi-Config, LTO on, with or without CMAKE_BUILD_TYPE: Release
+  (a) Ninja Multi-Config, LTO on, host tuning off, with or without
+      CMAKE_BUILD_TYPE: Release
       compiles with LTO and (64-bit targets) SIMD; Debug compiles with SIMD
       but without LTO.
   (b) Release: the libraries (and the tests that select their kernels) get
@@ -21,6 +22,12 @@ compile commands are read:
   (d) MBELIB_ENABLE_NATIVE=OFF: no native flag.
   (e) Ninja Multi-Config with only Debug targeting AVX2: Release still builds
       the AVX2 kernel copies.
+  (f) Release with host tuning and LTO: LTO stays on, except that tuned
+      MinGW/Cygwin GCC turns it off for its assembler option.
+  (g) one build directory reconfigured from x86-64 to -m32 and back: the
+      architecture probes follow the target.
+  (h) with Clang, one build directory reconfigured for AArch64: the target
+      family probes follow it.
 
 Where the configure log reports the run-time AVX2 dispatch, the AVX2 kernel
 copies compile with its flags and MBELIB_AVX2_KERNELS in untuned
@@ -55,6 +62,11 @@ RULES_SCRIPT = r'''
 include("${MBELIB_SOURCE_DIR}/cmake/MbeNativeArch.cmake")
 mbelib_native_arch_skip_reason(reason)
 message("REASON=[${reason}]")
+if(DEFINED MSVC_PROBED)
+    mbelib_native_arch_msvc_choose(flags why "${MSVC_PROBED}")
+    message("FLAGS=[${flags}]")
+    message("WHY=[${why}]")
+endif()
 if(DEFINED COMPOSE_FLAG)
     mbelib_native_arch_compose(flags why "${COMPOSE_FLAG}")
     message("FLAGS=[${flags}]")
@@ -144,6 +156,21 @@ def check_rules(args):
          r"^-march=native;-Wa,-muse-unaligned-vector-move$"),
         ({"WIN32": "1", "CMAKE_C_COMPILER_ID": "GNU", "MBELIB_C_HAS_UNALIGNED_VECTOR_MOVE": "0"}, r"^$"),
     ]
+    msvc_cases = [
+        ({"MSVC_PROBED": "AVX512", "MBELIB_C_HAS_ARCH_AVX512": "1"}, r"^/arch:AVX512$"),
+        # An older toolset ignores (D9002) or rejects /arch:AVX512: the next level.
+        ({"MSVC_PROBED": "AVX512", "MBELIB_C_HAS_ARCH_AVX512": "0", "MBELIB_C_HAS_ARCH_AVX2": "1"}, r"^/arch:AVX2$"),
+        ({"MSVC_PROBED": "AVX2", "MBELIB_C_HAS_ARCH_AVX2": "0", "MBELIB_C_HAS_ARCH_AVX": "1"}, r"^/arch:AVX$"),
+        ({"MSVC_PROBED": "AVX2", "MBELIB_C_HAS_ARCH_AVX2": "0", "MBELIB_C_HAS_ARCH_AVX": "0"}, r"^$"),
+        # Never a level above what the CPU has.
+        ({"MSVC_PROBED": "AVX", "MBELIB_C_HAS_ARCH_AVX512": "1", "MBELIB_C_HAS_ARCH_AVX": "0"}, r"^$"),
+        ({"MSVC_PROBED": ""}, r"^$"),
+    ]
+    for variables, expected in msvc_cases:
+        result = run_rules(args, **variables)
+        check(re.search(expected, result["FLAGS"]) is not None, f"MSVC level {variables}: {result}")
+        if expected == r"^$":
+            check(bool(result["WHY"]), f"MSVC level {variables} says why: {result['WHY']!r}")
     for variables, expected in compose_cases:
         result = run_rules(args, COMPOSE_FLAG="-march=native", **variables)
         check(re.search(expected, result["FLAGS"]) is not None, f"compose {variables}: {result}")
@@ -220,12 +247,17 @@ def check_dispatch(args, build, log, expect_copies, name, ninja_file=None):
         print(f"note: no run-time AVX2 dispatch for this target; {name} dispatch checks skipped")
         return
     tokens = tokens_of(compile_line(commands(args, build, "mbe-shared", ninja_file), AVX2_UNIT))
-    present = all(flag in tokens for flag in flags) and any("MBELIB_AVX2_KERNELS=1" in t for t in tokens)
-    absent = not any(flag in tokens for flag in flags) and not any("MBELIB_AVX2_KERNELS" in t for t in tokens)
+    # MBELIB_AVX2_KERNELS decides whether the copies have code. Host tuning may
+    # supply the same options for its own reasons (/arch:AVX2, MinGW's
+    # -Wa,-muse-unaligned-vector-move), so only a present copy needs them.
+    kernels = any(re.search(r"(^|[-/]D)MBELIB_AVX2_KERNELS=1$", t) for t in tokens)
     if expect_copies:
-        check(present, f"{name}: the AVX2 kernel copies compile with {' '.join(flags)}")
+        check(kernels and all(flag in tokens for flag in flags),
+              f"{name}: the AVX2 kernel copies compile with {' '.join(flags)}")
+        if "-Wa,-muse-unaligned-vector-move" in flags:
+            check("-fno-lto" in tokens, f"{name}: the AVX2 kernel copies compile without LTO")
     else:
-        check(absent, f"{name}: the AVX2 kernel copies compile empty")
+        check(not kernels, f"{name}: the AVX2 kernel copies compile empty")
 
 
 def native_flags_of(log):
@@ -239,8 +271,10 @@ def library_tokens(args, build, ninja_file=None):
 
 def scenario_multi_config(args, work, name, *options, source=None):
     build = work / name
+    # Host tuning stays off: on MinGW/Cygwin GCC it turns LTO off on purpose
+    # (scenario_native_lto checks that).
     log = configure(args, build, "Ninja Multi-Config", "-DMBELIB_ENABLE_LTO=ON", "-DMBELIB_BUILD_TESTS=OFF",
-                    *options, source=source)
+                    "-DMBELIB_ENABLE_NATIVE=OFF", *options, source=source)
     release = compile_line(commands(args, build, "mbe-shared", "build-Release.ninja"), "src/core/mbelib.c")
     debug = compile_line(commands(args, build, "mbe-shared", "build-Debug.ninja"), "src/core/mbelib.c")
     simd = pointer_size(build) == 8
@@ -252,8 +286,7 @@ def scenario_multi_config(args, work, name, *options, source=None):
     else:
         check(has_lto(release), f"({name}) multi-config Release compiles with LTO")
     check(not has_lto(debug), f"({name}) multi-config Debug compiles without LTO")
-    tuned = native_flags_of(log) is not None
-    check_dispatch(args, build, log, not tuned, f"({name}) multi-config Release", "build-Release.ninja")
+    check_dispatch(args, build, log, True, f"({name}) multi-config Release", "build-Release.ninja")
     check_dispatch(args, build, log, True, f"({name}) multi-config Debug", "build-Debug.ninja")
 
 
@@ -270,6 +303,70 @@ def scenario_debug_avx2_only(args, work):
         return
     check(dispatch_flags_of(log) is not None, "(e) the AVX2 dispatch stays on")
     check_dispatch(args, build, log, True, "(e) multi-config Release", "build-Release.ninja")
+
+
+def scenario_native_lto(args, work):
+    """(f) Host tuning with LTO: LTO stays on, except where tuning needs MinGW's assembler option."""
+    build = work / "native-lto"
+    log = configure(args, build, "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DMBELIB_BUILD_TESTS=OFF",
+                    "-DMBELIB_ENABLE_LTO=ON")
+    flags = native_flags_of(log) or []
+    tokens = library_tokens(args, build)
+    if "-Wa,-muse-unaligned-vector-move" in flags:
+        check("IPO/LTO off:" in log, "(f) tuned MinGW/Cygwin GCC reports LTO off")
+        check("-fno-lto" in tokens and tokens.index("-fno-lto") > max(
+            (i for i, t in enumerate(tokens) if t.startswith("-flto")), default=-1),
+            "(f) tuned MinGW/Cygwin GCC compiles without LTO")
+    elif "IPO/LTO not supported" in log:
+        print("note: the compiler does not support IPO; (f) skipped")
+    else:
+        check(has_lto(" ".join(tokens)), "(f) host tuning keeps LTO")
+
+
+def scenario_target_change(args, work):
+    """(g) Reconfiguring one build directory for another target probes the architecture again."""
+    if not args.user_isa.startswith("-march=x86-64"):
+        print("note: not an x86 GNU-style compiler; (g) skipped")
+        return
+    build = work / "target-change"
+    common = ("-DCMAKE_BUILD_TYPE=Debug", "-DMBELIB_BUILD_TESTS=OFF", "-DMBELIB_ENABLE_SIMD=ON")
+    first = configure(args, build, "Ninja", *common)
+    if pointer_size(build) != 8 or dispatch_flags_of(first) is None:
+        print("note: no 64-bit x86 dispatch to start from; (g) skipped")
+        return
+    command = [args.cmake, "-S", args.source, "-B", str(build), "-DCMAKE_C_FLAGS=-m32"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=600, env=ENV)
+    if result.returncode != 0:
+        print("note: no 32-bit multilib for this compiler; (g) skipped")
+        return
+    log = result.stdout + result.stderr
+    check("AVX2 dispatch: off (not an x86-64 target)" in log, "(g) a -m32 reconfigure turns the AVX2 dispatch off")
+    check_dispatch(args, build, log, False, "(g) -m32 reconfigure")
+    log = configure(args, build, "Ninja", *common, "-DCMAKE_C_FLAGS=")
+    check(dispatch_flags_of(log) is not None, "(g) reconfiguring back to x86-64 turns it on again")
+
+
+def cache_value(build, name):
+    match = re.search(rf"^{re.escape(name)}:[A-Z]+=(.*)$", (build / "CMakeCache.txt").read_text(), re.M)
+    return match.group(1) if match else None
+
+
+def scenario_family_change(args, work):
+    """(h) Reconfiguring one build directory for another architecture family probes it again (Clang)."""
+    if not args.user_isa.startswith("-march=x86-64") or "clang" not in Path(args.c_compiler).name:
+        print("note: not Clang on x86; (h) skipped")
+        return
+    build = work / "family-change"
+    configure(args, build, "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DMBELIB_BUILD_TESTS=OFF")
+    check(cache_value(build, "MBELIB_NATIVE_TARGET_X86") == "1", "(h) the first configure probes x86")
+    command = [args.cmake, "-S", args.source, "-B", str(build), "-DCMAKE_C_FLAGS=--target=aarch64-linux-gnu"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=600, env=ENV)
+    if result.returncode != 0:
+        print("note: this Clang cannot configure for AArch64; (h) skipped")
+        return
+    check(cache_value(build, "MBELIB_NATIVE_TARGET_X86") != "1"
+          and cache_value(build, "MBELIB_NATIVE_TARGET_ARM") == "1",
+          "(h) an AArch64 reconfigure probes the ARM family")
 
 
 def scenario_release(args, work):
@@ -296,12 +393,16 @@ def scenario_release(args, work):
     return flag
 
 
-def scenario_no_native(args, work, flag, name, *options):
+def scenario_no_native(args, work, flag, name, *options, requested=""):
     build = work / re.sub(r"\W+", "-", name)
     log = configure(args, build, "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DMBELIB_BUILD_TESTS=OFF", *options)
     check(native_flags_of(log) is None, f"{name}: configure reports no native flag")
     if flag:
-        check(flag not in library_tokens(args, build), f"{name}: library compiles without {flag}")
+        # The user may request the very option tuning would add (/arch:AVX on
+        # an AVX-only host): only the requested copies may be there.
+        expected = tokens_of(requested).count(flag)
+        count = library_tokens(args, build).count(flag)
+        check(count == expected, f"{name}: library compiles with {flag} {count} times, as requested ({expected})")
     return build, log
 
 
@@ -340,15 +441,20 @@ def main():
             scenario_multi_config(args, work, "a-spaced-source", source=str(spaced))
         flag = scenario_release(args, work)
         if args.user_isa:
-            scenario_no_native(args, work, flag, "(c) user target ISA", f"-DCMAKE_C_FLAGS={args.user_isa}")
+            scenario_no_native(args, work, flag, "(c) user target ISA", f"-DCMAKE_C_FLAGS={args.user_isa}",
+                               requested=args.user_isa)
             scenario_no_native(args, work, flag, "(c) ISA in the compiler command",
-                               f"-DCMAKE_C_COMPILER_ARG1={args.c_compiler_arg1} {args.user_isa}")
+                               f"-DCMAKE_C_COMPILER_ARG1={args.c_compiler_arg1} {args.user_isa}",
+                               requested=args.user_isa)
         else:
             print("note: no known baseline target ISA option for this compiler; (c) skipped")
         build, log = scenario_no_native(args, work, flag, "(d) MBELIB_ENABLE_NATIVE=OFF",
                                         "-DMBELIB_ENABLE_NATIVE=OFF")
         check_dispatch(args, build, log, True, "(d) MBELIB_ENABLE_NATIVE=OFF")
         scenario_debug_avx2_only(args, work)
+        scenario_native_lto(args, work)
+        scenario_target_change(args, work)
+        scenario_family_change(args, work)
     return 0
 
 

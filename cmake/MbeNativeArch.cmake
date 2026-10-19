@@ -128,6 +128,39 @@ function(mbelib_native_arch_skip_reason out_var)
     set(${out_var} "${_reason}" PARENT_SCOPE)
 endfunction()
 
+# mbelib_native_arch_msvc_choose(<flags_var> <reason_var> <probed>)
+#
+# The highest /arch: level at or below the probed one (/arch:AVX512,
+# /arch:AVX2 or /arch:AVX) that the compiler accepts: MBELIB_C_HAS_ARCH_<LEVEL>
+# holds each compile test (an ignored option, MSVC's D9002, counts as
+# rejected). An older toolset may lack /arch:AVX512 although the CPU has it.
+function(mbelib_native_arch_msvc_choose flags_var reason_var probed)
+    set(_flags "")
+    set(_reason "the host CPU probe found no /arch: level above the default")
+    set(_levels AVX512 AVX2 AVX)
+    list(FIND _levels "${probed}" _first)
+    if(_first GREATER_EQUAL 0)
+        set(_reason
+            "the compiler rejects /arch:${probed} and every lower level"
+        )
+        list(SUBLIST _levels ${_first} -1 _candidates)
+        foreach(_level IN LISTS _candidates)
+            if(MBELIB_C_HAS_ARCH_${_level})
+                set(_flags "/arch:${_level}")
+                set(_reason "host CPU probe")
+                if(NOT _level STREQUAL probed)
+                    set(_reason
+                        "host CPU probe; the compiler rejects /arch:${probed}"
+                    )
+                endif()
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(${flags_var} "${_flags}" PARENT_SCOPE)
+    set(${reason_var} "${_reason}" PARENT_SCOPE)
+endfunction()
+
 # mbelib_native_arch_compose(<flags_var> <reason_var> <flag>)
 #
 # The GNU-style host-tuning options for an accepted <flag>. MinGW and Cygwin
@@ -160,10 +193,13 @@ function(_mbelib_native_target_is out_var source)
     set(${out_var} "${${out_var}}" PARENT_SCOPE)
 endfunction()
 
-# mbelib_native_probe_target(): the target architecture family, probed once
-# per build directory: MBELIB_NATIVE_TARGET_X86 or MBELIB_NATIVE_TARGET_ARM
-# (both false elsewhere).
+# mbelib_native_probe_target(): the target architecture family,
+# MBELIB_NATIVE_TARGET_X86 or MBELIB_NATIVE_TARGET_ARM (both false elsewhere).
+# Probed on every configure: CMAKE_C_FLAGS, CMAKE_OSX_ARCHITECTURES or the
+# generator platform may have changed the target in this build directory.
 macro(mbelib_native_probe_target)
+    unset(MBELIB_NATIVE_TARGET_X86 CACHE)
+    unset(MBELIB_NATIVE_TARGET_ARM CACHE)
     _mbelib_native_target_is(MBELIB_NATIVE_TARGET_X86
       [=[
       #if !(defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)) || defined(_M_ARM64EC)
@@ -187,7 +223,9 @@ endmacro()
 # FMA, F16C, MOVBE, BMI1/2 and LZCNT; AVX512 needs F, CD, BW, DQ and VL as
 # well, and every level needs the OS to save the registers it uses (XCR0).
 function(_mbelib_native_msvc_probe out_var)
-    if(DEFINED MBELIB_NATIVE_MSVC_ARCH_PROBED)
+    # The CPU does not change, but the probe binary comes from the compiler,
+    # so a different compiler in this build directory probes again.
+    if(MBELIB_NATIVE_MSVC_ARCH_PROBED STREQUAL CMAKE_C_COMPILER)
         set(${out_var} "${MBELIB_NATIVE_MSVC_ARCH}" PARENT_SCOPE)
         return()
     endif()
@@ -263,11 +301,11 @@ main(void) {
     set(_arch "")
     if(_compile_result AND _run_result MATCHES "^[0-3]$")
         if(_run_result EQUAL 3)
-            set(_arch "/arch:AVX512")
+            set(_arch "AVX512")
         elseif(_run_result EQUAL 2)
-            set(_arch "/arch:AVX2")
+            set(_arch "AVX2")
         elseif(_run_result EQUAL 1)
-            set(_arch "/arch:AVX")
+            set(_arch "AVX")
         endif()
     endif()
     set(MBELIB_NATIVE_MSVC_ARCH
@@ -276,9 +314,9 @@ main(void) {
         "Highest /arch: level found by the configure-time CPU probe"
     )
     set(MBELIB_NATIVE_MSVC_ARCH_PROBED
-        ON
+        "${CMAKE_C_COMPILER}"
         CACHE INTERNAL
-        "The MSVC native-arch CPU probe has run"
+        "The compiler the MSVC native-arch CPU probe ran with"
     )
     set(${out_var} "${_arch}" PARENT_SCOPE)
 endfunction()
@@ -290,7 +328,10 @@ function(mbelib_native_arch_flags flags_var reason_var)
         set(${reason_var} "${_skip}" PARENT_SCOPE)
         return()
     endif()
-    mbelib_native_probe_target()
+    # The caller runs mbelib_native_probe_target() once per configure.
+    if(NOT DEFINED MBELIB_NATIVE_TARGET_X86)
+        mbelib_native_probe_target()
+    endif()
 
     if(MSVC)
         if(NOT MBELIB_NATIVE_TARGET_X86)
@@ -300,16 +341,25 @@ function(mbelib_native_arch_flags flags_var reason_var)
             )
             return()
         endif()
-        _mbelib_native_msvc_probe(_arch)
-        if(NOT _arch)
-            set(${reason_var}
-                "the host CPU probe found no /arch: level above the default"
-                PARENT_SCOPE
-            )
-            return()
+        _mbelib_native_msvc_probe(_level)
+        set(_levels AVX512 AVX2 AVX)
+        list(FIND _levels "${_level}" _first)
+        if(_first GREATER_EQUAL 0)
+            list(SUBLIST _levels ${_first} -1 _candidates)
+            foreach(_candidate IN LISTS _candidates)
+                unset(MBELIB_C_HAS_ARCH_${_candidate} CACHE)
+                check_c_compiler_flag(
+                    "/arch:${_candidate}"
+                    MBELIB_C_HAS_ARCH_${_candidate}
+                )
+                if(MBELIB_C_HAS_ARCH_${_candidate})
+                    break()
+                endif()
+            endforeach()
         endif()
-        set(${flags_var} "${_arch}" PARENT_SCOPE)
-        set(${reason_var} "host CPU probe" PARENT_SCOPE)
+        mbelib_native_arch_msvc_choose(_flags _reason "${_level}")
+        set(${flags_var} "${_flags}" PARENT_SCOPE)
+        set(${reason_var} "${_reason}" PARENT_SCOPE)
         return()
     endif()
 
@@ -333,6 +383,8 @@ function(mbelib_native_arch_flags flags_var reason_var)
         )
         return()
     endif()
+    # Probed again on every configure, like the target family.
+    unset(${_check} CACHE)
     check_c_compiler_flag("${_flag}" ${_check})
     if(NOT ${_check})
         set(${reason_var}
@@ -342,6 +394,7 @@ function(mbelib_native_arch_flags flags_var reason_var)
         return()
     endif()
     if((WIN32 OR CYGWIN) AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        unset(MBELIB_C_HAS_UNALIGNED_VECTOR_MOVE CACHE)
         check_c_compiler_flag(
             "-Wa,-muse-unaligned-vector-move"
             MBELIB_C_HAS_UNALIGNED_VECTOR_MOVE
