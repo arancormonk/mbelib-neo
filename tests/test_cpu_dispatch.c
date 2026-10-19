@@ -51,9 +51,13 @@ test_probe(void) {
                   && __builtin_cpu_supports("sse4.2") && __builtin_cpu_supports("popcnt")
                   && __builtin_cpu_supports("avx") && __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")
                   && __builtin_cpu_supports("bmi") && __builtin_cpu_supports("bmi2");
+    /* Older compilers cannot name the whole set; there the probe may still
+     * decline AVX2 for a feature they cannot see, but never claim it. */
+    int complete = 0;
 #if defined(__clang__)
 #if __clang_major__ >= 16
     builtin = builtin && __builtin_cpu_supports("x86-64-v3");
+    complete = 1;
 #endif
 #else
     /* GCC 11 added these names and GCC 12 the x86-64-v3 level; GCC 10 compares
@@ -62,13 +66,18 @@ test_probe(void) {
 #if __GNUC__ >= 11
     builtin = builtin && __builtin_cpu_supports("f16c") && __builtin_cpu_supports("movbe")
               && __builtin_cpu_supports("lzcnt") && __builtin_cpu_supports("lahf_lm");
+    complete = 1;
 #endif
 #if __GNUC__ >= 12
     builtin = builtin && __builtin_cpu_supports("x86-64-v3");
 #endif
 #endif
-    printf("probe: AVX2 set %d, compiler runtime %d\n", has, builtin);
-    assert(has == builtin);
+    printf("probe: AVX2 set %d, compiler runtime %d%s\n", has, builtin, complete ? "" : " (partial set)");
+    if (complete) {
+        assert(has == builtin);
+    } else {
+        assert(has <= builtin);
+    }
 #elif !defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_ARM64EC)
     assert(has == 0);
 #else
