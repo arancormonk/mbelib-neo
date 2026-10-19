@@ -174,7 +174,8 @@ frames, and reference silence reproduced within 2 LSB.
 ## SIMD optimization
 
 `MBELIB_ENABLE_SIMD` enables SSE2 on supported x86 targets and NEON on ARM32/AArch64.
-An explicit AVX2 compile target also enables eight-sample fractional-pitch interpolation.
+An AVX2 compile target, or a CPU with AVX2 running a portable x86-64 build (run-time dispatch),
+also uses eight-sample fractional-pitch interpolation.
 The public API, state layout, fixed-point scales and PCM are unchanged; there are no SIMD-specific
 golden hashes or audio tolerances.
 
@@ -215,7 +216,10 @@ GCC 16.2.1 and Clang 23.1.1, Release with fast-math and LTO. Each value is the m
 of three alternating baseline/candidate comparisons pinned to CPU 2, with three input
 repetitions and five measured runs per invocation after warm-up. The same replay executable
 loads each matched library; loading and reset are untimed, and every checksum agrees.
-AVX2 uses `-march=x86-64-v3` on both sides; the portable x86 build requires SSE2 only.
+AVX2 uses `-march=x86-64-v3` on both sides; the portable x86 build requires SSE2 only. Portable
+x86-64 builds now also carry the eight-lane adaptive-codebook kernel (`tetra_acelp_avx2.c`) and
+run it on CPUs with AVX2 through the run-time dispatch; it computes the same integers, so the
+stream hashes hold for either path.
 
 | Compiler / target | Input | Before | After | Time reduction |
 | --- | --- | ---: | ---: | ---: |

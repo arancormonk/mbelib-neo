@@ -62,6 +62,35 @@
 #endif
 
 /**
+ * @brief Keep a function out of line (cold paths such as one-time setup).
+ */
+#if defined(_MSC_VER) && !defined(__clang__)
+#define MBE_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define MBE_NOINLINE __attribute__((noinline))
+#else
+#define MBE_NOINLINE
+#endif
+
+/**
+ * @brief Relaxed (unordered but untorn) load and store of an aligned int.
+ *
+ * For state that several threads may compute and publish idempotently, such
+ * as a cached CPU-feature result: every writer stores the same value, so no
+ * ordering is needed, only a single access. The project is C99, so these use
+ * the GNU atomic builtins (GCC, Clang, clang-cl, MinGW) or, on MSVC, a
+ * volatile access, which is a single untorn access for an aligned int on
+ * every MSVC target.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define MBE_LOAD_RELAXED(p)     __atomic_load_n((p), __ATOMIC_RELAXED)
+#define MBE_STORE_RELAXED(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#else
+#define MBE_LOAD_RELAXED(p)     (*(volatile const int*)(p))
+#define MBE_STORE_RELAXED(p, v) ((void)(*(volatile int*)(p) = (v)))
+#endif
+
+/**
  * @brief Default cache line size for alignment.
  *
  * 64 bytes is standard for most modern x86 and ARM processors.

@@ -28,6 +28,23 @@ TAG_CHECKS = {
     "install + consume (CMake, Windows)",
     *(f"install + consume (pkg-config/CMake) ({platform}-latest)" for platform in ("ubuntu", "macos")),
 }
+# Checks package-release gained after a release: required only for the tag
+# revisions whose CI has them, so earlier releases stay recoverable.
+LATER_TAG_CHECKS = {
+    (2, 6, 1): {"linux • Debug • SIMD (SSE2 baseline + AVX2 dispatch)"},
+}
+
+
+def tag_checks(version):
+    """The original native, optimized, sanitizer and consumer checks a tag run of version X.Y.Z must have passed."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("Expected a numeric X.Y.Z release version")
+    release = tuple(map(int, version.split(".")))
+    checks = set(TAG_CHECKS)
+    for first, names in LATER_TAG_CHECKS.items():
+        if release >= first:
+            checks |= names
+    return checks
 
 
 def gh_json(*arguments):
@@ -45,7 +62,7 @@ def validate_run(run, jobs, tag, commit, rebuild=False, aur_only=False):
     if any(run.get(key) != value for key, value in expected.items()):
         raise ValueError("Source run must be a completed CI push build of the signed tag commit")
     successful = {job["name"] for job in jobs if job.get("conclusion") == "success"}
-    if recover_checks and not TAG_CHECKS.issubset(successful):
+    if recover_checks and not tag_checks(tag[1:]).issubset(successful):
         raise ValueError("Source tag run lacks successful analysis, native, optimized, sanitizer or consumer checks")
     if not recover_checks and not REQUIRED_JOBS.issubset(successful):
         raise ValueError("Source run lacks successful tag validation or all three attested packages")

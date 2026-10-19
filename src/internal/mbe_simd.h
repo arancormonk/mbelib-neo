@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Private compile-target vector operations; no runtime ISA requirement added. */
+/* Private compile-target vector operations. Each translation unit gets the
+ * width of the ISA it is compiled for; the AVX2 copies of the dispatched
+ * kernels (mbe_cpu.h) are compiled for AVX2 and run only on CPUs that have it. */
 #ifndef MBE_INTERNAL_SIMD_H
 #define MBE_INTERNAL_SIMD_H
 #include "mbe_compiler.h"

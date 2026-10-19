@@ -6,19 +6,54 @@
 /**
  * @file
  * @brief Utility: generate golden FNV-1a hashes for deterministic synthesis.
+ *
+ * Usage: gen_golden [auto|sse2|avx2]. The argument selects the kernel ISA of a
+ * build with run-time AVX2 dispatch (default auto: the CPU probe's choice); a
+ * build without dispatch accepts only its own ISA.
  */
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "golden_sequences.h"
+#include "mbe_cpu.h"
 #include "mbelib-neo/mbelib.h"
 
+static const char*
+isa_name(int isa) {
+    switch (isa) {
+        case MBE_CPU_ISA_SCALAR: return "scalar";
+        case MBE_CPU_ISA_SSE2: return "sse2";
+        case MBE_CPU_ISA_AVX2: return "avx2";
+        case MBE_CPU_ISA_NEON: return "neon";
+        default: return "unknown";
+    }
+}
+
 /**
- * @brief Program entry: prints float and int16 golden hashes to stdout.
+ * @brief Program entry: prints the kernel ISA and the float and int16 golden hashes to stdout.
  */
 int
-main(void) {
+main(int argc, char** argv) {
+    int isa = MBE_CPU_ISA_AUTO;
+    if (argc > 2
+        || (argc == 2 && strcmp(argv[1], "auto") != 0 && strcmp(argv[1], "sse2") != 0
+            && strcmp(argv[1], "avx2") != 0)) {
+        fprintf(stderr, "usage: %s [auto|sse2|avx2]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 2 && strcmp(argv[1], "sse2") == 0) {
+        isa = MBE_CPU_ISA_SSE2;
+    } else if (argc == 2 && strcmp(argv[1], "avx2") == 0) {
+        isa = MBE_CPU_ISA_AVX2;
+    }
+    if (mbe_cpu_select_isa(isa) != 0) {
+        fprintf(stderr, "%s: this build or CPU cannot run the %s kernels\n", argv[0], argv[1]);
+        return 1;
+    }
+    printf("ISA=%s\n", isa_name(mbe_cpu_isa()));
+
     float out_f[160];
     short out_s[160];
     mbe_parms cur, prev;

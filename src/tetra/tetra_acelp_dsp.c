@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "mbe_compiler.h"
+#include "mbe_cpu.h" // IWYU pragma: keep (MBE_AVX2_DISPATCH selects the run-time AVX2 path)
 #include "mbe_fixed_point.h"
 #include "tetra_acelp.h"
 #include "tetra_acelp_codebooks.h"
@@ -23,18 +24,14 @@
 #include "tetra_simd.h" // IWYU pragma: keep (TETRA_SIMD selects the integer vector kernels)
 
 /* Distance the LSPs on either side of a split-VQ boundary are widened towards (Q15 cosine). */
-#define TETRA_LSP_GAP_34       916
-#define TETRA_LSP_GAP_67       1244
-#define TETRA_SHARP            26216 /* 0.8 pitch sharpening factor (Q13 6554, scaled to Q15) */
-#define TETRA_PULSE1_AMP       23168 /* 1.4142 pulse amplitude (Q12 5792, scaled to Q14) */
+#define TETRA_LSP_GAP_34  916
+#define TETRA_LSP_GAP_67  1244
+#define TETRA_SHARP       26216 /* 0.8 pitch sharpening factor (Q13 6554, scaled to Q15) */
+#define TETRA_PULSE1_AMP  23168 /* 1.4142 pulse amplitude (Q12 5792, scaled to Q14) */
 /* Q8 log2 offset of both gains: the Q formats of the energies, of their mantissas and of the Q12
  * gains, resolved against the reference decoder. */
-#define TETRA_GAIN_OFFSET      4434
-#define TETRA_GAIN_P_MAX       4915 /* 1.2 in Q12 */
-/* Both interpolation filters' first 18 taps have an absolute sum <= 65535.
- * Their MAC prefixes cannot overflow int32 for any int16 samples. Later taps
- * can overflow and must saturate in order. test_tetra_simd checks this bound. */
-#define TETRA_INTERP_SAFE_TAPS 18
+#define TETRA_GAIN_OFFSET 4434
+#define TETRA_GAIN_P_MAX  4915 /* 1.2 in Q12 */
 
 /** Widen the LSP pair (i, i + 1) towards gap, moving each by half the shortfall rounded down (so the
  * gap ends at gap, or gap - 1 for an odd shortfall). */
@@ -333,31 +330,16 @@ tetra_decode_pitch(int subframe, int index, int t1, int* t0, int* frac) {
 }
 
 #if defined(TETRA_SIMD) && defined(__AVX2__) && defined(MBE_SIMD_TARGET_SSE2)
+/* An AVX2 target runs the eight-lane kernel unconditionally. */
 static int
-adaptive_avx2(int16_t* exc_cur, int t0, int first, const int16_t* taps) {
-    int n = 0;
-    if (t0 - (first + 31) < 8) {
-        return 0; /* Short lags need the four-lane kernel's earlier stores. */
-    }
-    for (; n + 8 <= TETRA_SUBFRAME; n += 8) {
-        __m256i acc = _mm256_setzero_si256();
-        int k;
-        for (k = 0; k < TETRA_INTERP_SAFE_TAPS; ++k) {
-            __m128i x = _mm_loadu_si128((const __m128i*)(exc_cur + n - t0 + first + k));
-            __m256i p = _mm256_mullo_epi32(_mm256_cvtepi16_epi32(x), _mm256_set1_epi32(taps[k]));
-            acc = _mm256_add_epi32(acc, p);
-        }
-        for (; k < 32; ++k) {
-            __m128i x = _mm_loadu_si128((const __m128i*)(exc_cur + n - t0 + first + k));
-            __m256i p = _mm256_mullo_epi32(_mm256_cvtepi16_epi32(x), _mm256_set1_epi32(taps[k]));
-            acc = tetra_vadds8(acc, p);
-        }
-        acc = tetra_vadds8(acc, acc);
-        acc = _mm256_srai_epi32(tetra_vadds8(acc, _mm256_set1_epi32(0x8000)), 16);
-        _mm_storeu_si128((__m128i*)(exc_cur + n),
-                         _mm_packs_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1)));
-    }
-    return n;
+adaptive_avx2_prefix(int16_t* exc_cur, int t0, int first, const int16_t* taps) {
+    return tetra_adaptive_avx2(exc_cur, t0, first, taps);
+}
+#elif defined(MBE_AVX2_DISPATCH)
+/* A baseline x86-64 build runs it where the CPU has AVX2 (mbe_cpu.h). */
+static int
+adaptive_avx2_prefix(int16_t* exc_cur, int t0, int first, const int16_t* taps) {
+    return mbe_cpu_use_avx2() ? tetra_adaptive_avx2(exc_cur, t0, first, taps) : 0;
 }
 #endif
 
@@ -368,9 +350,9 @@ tetra_adaptive_vector(int16_t* exc_cur, int t0, int frac) {
     int n;
     int k;
     n = 0;
-#if defined(TETRA_SIMD) && defined(__AVX2__) && defined(MBE_SIMD_TARGET_SSE2)
+#if (defined(TETRA_SIMD) && defined(__AVX2__) && defined(MBE_SIMD_TARGET_SSE2)) || defined(MBE_AVX2_DISPATCH)
     if (frac != 0) {
-        n = adaptive_avx2(exc_cur, t0, first, taps);
+        n = adaptive_avx2_prefix(exc_cur, t0, first, taps);
     }
 #endif
 #if defined(TETRA_SIMD)

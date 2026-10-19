@@ -16,17 +16,21 @@
 
 #include <stdint.h>
 
-#define TETRA_M          10 /* LP order */
-#define TETRA_SUBFRAME   60 /* samples per subframe */
-#define TETRA_SUBFRAMES  4
-#define TETRA_FRAME      240 /* samples per frame */
-#define TETRA_BITS       137 /* B1..B137 */
-#define TETRA_PIT_MIN    20
-#define TETRA_PIT_MAX    143
-#define TETRA_INTERP_LEN 16 /* filter half length in samples */
+#define TETRA_M                10 /* LP order */
+#define TETRA_SUBFRAME         60 /* samples per subframe */
+#define TETRA_SUBFRAMES        4
+#define TETRA_FRAME            240 /* samples per frame */
+#define TETRA_BITS             137 /* B1..B137 */
+#define TETRA_PIT_MIN          20
+#define TETRA_PIT_MAX          143
+#define TETRA_INTERP_LEN       16 /* filter half length in samples */
 /* Past excitation kept for the adaptive codebook: the largest lag (143 + 1 from a -1/3 fraction
  * on a clamped relative lag) plus the filter half length, rounded up. */
-#define TETRA_EXC_HIST   (TETRA_PIT_MAX + 1 + TETRA_INTERP_LEN + 1)
+#define TETRA_EXC_HIST         (TETRA_PIT_MAX + 1 + TETRA_INTERP_LEN + 1)
+/* Both interpolation filters' first 18 taps have an absolute sum <= 65535.
+ * Their MAC prefixes cannot overflow int32 for any int16 samples. Later taps
+ * can overflow and must saturate in order. test_tetra_simd checks this bound. */
+#define TETRA_INTERP_SAFE_TAPS 18
 
 /** Decoded parameters of one subframe (EN 300 395-2 table 3). */
 typedef struct tetra_subframe_params {
@@ -80,6 +84,10 @@ void tetra_codevector(const int16_t a[TETRA_M + 1], int t0, const tetra_subframe
 /** Write the adaptive codebook vector over exc_cur[0..59]; exc_cur[-TETRA_EXC_HIST..-1] is the past
  * excitation. Samples within the subframe are repeated for lags below the subframe length. */
 void tetra_adaptive_vector(int16_t* exc_cur, int t0, int frac);
+/** AVX2 part of tetra_adaptive_vector() for a fractional lag (tetra_acelp_avx2.c): writes the leading
+ * outputs eight at a time and returns how many, 0 when the lag is too short for it. Built only for x86-64
+ * with AVX2, either by the target or for the run-time dispatch. */
+int tetra_adaptive_avx2(int16_t* exc_cur, int t0, int first, const int16_t* taps);
 void tetra_log2(int32_t x, int16_t* exponent, int16_t* fraction);
 int32_t tetra_pow2(int16_t exponent, int16_t fraction);
 /** Pitch and code gains (Q12, the pitch gain limited to 1.2, the code gain kept to its low 16 bits) from

@@ -2,6 +2,7 @@
 #ifndef MBE_INTERNAL_VOICED_H
 #define MBE_INTERNAL_VOICED_H
 
+#include "mbe_cpu.h"  // IWYU pragma: keep (MBE_AVX2_DISPATCH declares the dispatched copies)
 #include "mbe_simd.h" // IWYU pragma: keep (selects MBE_VOICED_KERNELS)
 
 /* Samples per synthesized frame. The synthesis window Ws spans two frames. */
@@ -22,5 +23,17 @@ void mbe_voiced_windowed(float out[MBE_VOICED_FRAME], const float window[2 * MBE
                          const struct mbe_voiced_component* prev, const struct mbe_voiced_component* cur);
 void mbe_voiced_interpolated(float out[MBE_VOICED_FRAME], float phase, float prev_amp, float cur_amp, float frequency,
                              float pitch_delta, int harmonic);
+
+/* The baseline and AVX2 copies behind the run-time dispatch (mbe_cpu.h). */
+#if defined(MBE_AVX2_DISPATCH) || defined(MBE_KERNEL_AVX2)
+void mbe_voiced_windowed_sse2(float out[MBE_VOICED_FRAME], const float window[2 * MBE_VOICED_FRAME],
+                              const struct mbe_voiced_component* prev, const struct mbe_voiced_component* cur);
+void mbe_voiced_interpolated_sse2(float out[MBE_VOICED_FRAME], float phase, float prev_amp, float cur_amp,
+                                  float frequency, float pitch_delta, int harmonic);
+void mbe_voiced_windowed_avx2(float out[MBE_VOICED_FRAME], const float window[2 * MBE_VOICED_FRAME],
+                              const struct mbe_voiced_component* prev, const struct mbe_voiced_component* cur);
+void mbe_voiced_interpolated_avx2(float out[MBE_VOICED_FRAME], float phase, float prev_amp, float cur_amp,
+                                  float frequency, float pitch_delta, int harmonic);
+#endif
 #endif
 #endif
