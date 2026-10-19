@@ -385,6 +385,10 @@ function(mbelib_native_arch_flags flags_var reason_var)
     endif()
     # Probed again on every configure, like the target family.
     unset(${_check} CACHE)
+    # try_compile does not inherit the targets' -Werror. Clang 18 can accept
+    # -march=native with an AVX10/AVX-512 warning, then fail the real build.
+    # Decline tuning when the probe diagnoses the option as well.
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror")
     check_c_compiler_flag("${_flag}" ${_check})
     if(NOT ${_check})
         set(${reason_var}
