@@ -15,6 +15,7 @@
 
 #include "golden_sequences.h"
 #include "mbe_compiler.h"
+#include "mbe_cpu.h"
 #include "mbelib-neo/mbelib.h"
 
 /*
@@ -31,38 +32,45 @@
  * Error-free voice-only AMBE sequences (tests/golden_sequences.h). Exact hashes
  * are enforced only for x86-64 Debug builds outside MSVC: rounding differences
  * accumulate over 24 frames, so other targets check determinism and energy.
+ * The float hashes depend on the kernel ISA the library runs (mbe_cpu_isa():
+ * scalar, SSE2 or AVX2 vector width), whether the library was compiled for it
+ * or picked it at run time; the int16 hashes do not distinguish SSE2 and AVX2.
  * Regenerate with gen_golden (scalar: dev-debug; SIMD: Debug with
- * -DMBELIB_ENABLE_SIMD=ON).
+ * -DMBELIB_ENABLE_SIMD=ON, `gen_golden sse2` and `gen_golden avx2`).
  * PFFFT 0ac3d39 uses more accurate twiddle factors. These float hashes were
  * regenerated on Ubuntu 24.04 for scalar, SSE2 and AVX2; int16 hashes held.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
-#ifdef MBELIB_TEST_BUILD_SIMD
-#if defined(__AVX2__)
-#define GOLDEN_AMBE2450_F32 0xCC1BAC6Bu
-#define GOLDEN_AMBE2450_S16 0x49E0330Du
-#define GOLDEN_AMBE2400_F32 0x4349E7B9u
-#define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #else
-#define GOLDEN_AMBE2450_F32 0x0A6D887Cu
-#define GOLDEN_AMBE2450_S16 0x49E0330Du
-#define GOLDEN_AMBE2400_F32 0x54EC4DB4u
-#define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
+#define GOLDEN_AMBE_STRICT 0
 #endif
-#else
-#define GOLDEN_AMBE2450_F32 0xF25F0126u
-#define GOLDEN_AMBE2450_S16 0xA4881DEBu
-#define GOLDEN_AMBE2400_F32 0xA82FF1BDu
-#define GOLDEN_AMBE2400_S16 0xEB36DEB9u
-#endif
-#else
-#define GOLDEN_AMBE_STRICT  0
-#define GOLDEN_AMBE2450_F32 0u
-#define GOLDEN_AMBE2450_S16 0u
-#define GOLDEN_AMBE2400_F32 0u
-#define GOLDEN_AMBE2400_S16 0u
-#endif
+
+struct golden_ambe_expect {
+    uint32_t ambe2450_f32, ambe2450_s16, ambe2400_f32, ambe2400_s16;
+};
+
+static struct golden_ambe_expect
+golden_ambe_expected(int isa) {
+    struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
+    if (isa == MBE_CPU_ISA_AVX2) {
+        e.ambe2450_f32 = 0xCC1BAC6Bu;
+        e.ambe2450_s16 = 0x49E0330Du;
+        e.ambe2400_f32 = 0x4349E7B9u;
+        e.ambe2400_s16 = 0x8F10FA7Eu;
+    } else if (isa == MBE_CPU_ISA_SSE2) {
+        e.ambe2450_f32 = 0x0A6D887Cu;
+        e.ambe2450_s16 = 0x49E0330Du;
+        e.ambe2400_f32 = 0x54EC4DB4u;
+        e.ambe2400_s16 = 0x8F10FA7Eu;
+    } else {
+        e.ambe2450_f32 = 0xF25F0126u;
+        e.ambe2450_s16 = 0xA4881DEBu;
+        e.ambe2400_f32 = 0xA82FF1BDu;
+        e.ambe2400_s16 = 0xEB36DEB9u;
+    }
+    return e;
+}
 
 static int
 float_bits_equal(float a, float b) {
@@ -105,15 +113,53 @@ check_ambe_sequence(const char* name, golden_ambe_process_fn process, uint32_t s
     return 0;
 }
 
+/** Exit status of a test whose ISA this build or CPU cannot run (CTest SKIP_RETURN_CODE). */
+#define GOLDEN_SKIP 77
+
+/**
+ * @brief Select the kernel ISA from argv: [auto|sse2|avx2] [--require].
+ * @return 0 when selected, GOLDEN_SKIP when unavailable (1 with --require), 2 on a usage error.
+ */
+static int
+select_isa(int argc, char** argv) {
+    int isa = MBE_CPU_ISA_AUTO;
+    int require = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--require") == 0) {
+            require = 1;
+        } else if (strcmp(argv[i], "sse2") == 0) {
+            isa = MBE_CPU_ISA_SSE2;
+        } else if (strcmp(argv[i], "avx2") == 0) {
+            isa = MBE_CPU_ISA_AVX2;
+        } else if (strcmp(argv[i], "auto") != 0) {
+            fprintf(stderr, "usage: %s [auto|sse2|avx2] [--require]\n", argv[0]);
+            return 2;
+        }
+    }
+    if (mbe_cpu_select_isa(isa) != 0) {
+        fprintf(stderr, "requested kernel ISA unavailable (dispatch %s, CPU AVX2 %s, active ISA %d)\n",
+                mbe_cpu_dispatch_enabled() ? "on" : "off", mbe_cpu_has_avx2() ? "yes" : "no", mbe_cpu_isa());
+        return require ? 1 : GOLDEN_SKIP;
+    }
+    return 0;
+}
+
 /**
  * @brief Test entry: determinism + arch-specific exactness or sanity checks.
  */
 int
-main(void) {
-    if (check_ambe_sequence("ambe2450", mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, GOLDEN_AMBE2450_F32,
-                            GOLDEN_AMBE2450_S16)
-        || check_ambe_sequence("ambe2400", mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, GOLDEN_AMBE2400_F32,
-                               GOLDEN_AMBE2400_S16)) {
+main(int argc, char** argv) {
+    int status = select_isa(argc, argv);
+    if (status != 0) {
+        return status;
+    }
+    const int isa = mbe_cpu_isa();
+    printf("kernel ISA %d (dispatch %s)\n", isa, mbe_cpu_dispatch_enabled() ? "on" : "off");
+    const struct golden_ambe_expect ambe = golden_ambe_expected(isa);
+    if (check_ambe_sequence("ambe2450", mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, ambe.ambe2450_f32,
+                            ambe.ambe2450_s16)
+        || check_ambe_sequence("ambe2400", mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, ambe.ambe2400_f32,
+                               ambe.ambe2400_s16)) {
         return 1;
     }
 
@@ -128,14 +174,12 @@ main(void) {
      * output high-pass phase and voiced/unvoiced render gains, and an in-band
      * fixture (golden_fill_single_frame: L * w0 < pi). */
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(GOLDEN_FLOAT_EXACT)
-    const uint32_t X86_F32_FNV1A_SCALAR = 0xDDD283CAu;
-#ifdef MBELIB_TEST_BUILD_SIMD
-#if defined(__AVX2__)
-    const uint32_t X86_F32_FNV1A_SIMD = 0x7F0B1440u;
-#else
-    const uint32_t X86_F32_FNV1A_SIMD = 0x00280DA8u;
-#endif
-#endif
+    uint32_t x86_expected_f32 = 0xDDD283CAu; /* scalar */
+    if (isa == MBE_CPU_ISA_AVX2) {
+        x86_expected_f32 = 0x7F0B1440u;
+    } else if (isa == MBE_CPU_ISA_SSE2) {
+        x86_expected_f32 = 0x00280DA8u;
+    }
 #endif
 #if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
     const uint32_t X86_S16_FNV1A = 0x3EC7146Du;
@@ -181,10 +225,6 @@ main(void) {
      * sanity bounds for float but always enforce exact int16 hash.
      */
 #if defined(GOLDEN_FLOAT_EXACT)
-    uint32_t x86_expected_f32 = X86_F32_FNV1A_SCALAR;
-#ifdef MBELIB_TEST_BUILD_SIMD
-    x86_expected_f32 = X86_F32_FNV1A_SIMD;
-#endif
     if (hf1 != x86_expected_f32) {
         fprintf(stderr, "x86 float hash mismatch: got=0x%08X exp=0x%08X\n", (unsigned)hf1, (unsigned)x86_expected_f32);
         return 1;

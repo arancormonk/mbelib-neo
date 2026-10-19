@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/** @file Double-precision, bounded SIMD tone projection kernels. */
+/** @file Double-precision, bounded SIMD tone projection kernels.
+ *
+ * mbe_tone_fit_avx2.c builds this file a second time for AVX2/FMA (mbe_cpu.h). */
 #include <math.h>
+#include "mbe_cpu.h"
 #include "mbe_simd.h"
 #include "mbe_tone_fit.h"
 
@@ -163,7 +166,7 @@ tone_accumulate_two(const float* x, int n, const double hz[2], double gram[4][4]
 }
 
 double
-mbe_tone_fit(const float* samples, int n, const double hz[2], int count, double amplitude[2]) {
+MBE_KFN(mbe_tone_fit)(const float* samples, int n, const double hz[2], int count, double amplitude[2]) {
     if (!samples || !hz || !amplitude || n < 1 || n > 160 || count < 1 || count > 2) {
         return 0.0;
     }
@@ -192,3 +195,13 @@ mbe_tone_fit(const float* samples, int n, const double hz[2], int count, double 
     }
     return explained;
 }
+
+#if defined(MBE_AVX2_DISPATCH)
+double
+mbe_tone_fit(const float* samples, int n, const double hz[2], int count, double amplitude[2]) {
+    if (mbe_cpu_use_avx2()) {
+        return mbe_tone_fit_avx2(samples, n, hz, count, amplitude);
+    }
+    return mbe_tone_fit_sse2(samples, n, hz, count, amplitude);
+}
+#endif

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Private fixed-point SIMD for TETRA. Four independent samples per vector; no ISA dispatch. */
+/* Private fixed-point SIMD for TETRA. Four independent samples per vector; the
+ * eight-lane adaptive codebook kernel (tetra_acelp_avx2.c) is the only AVX2 code
+ * and the run-time dispatch (mbe_cpu.h) or an AVX2 target selects it. */
 #ifndef MBELIB_NEO_INTERNAL_TETRA_SIMD_H
 #define MBELIB_NEO_INTERNAL_TETRA_SIMD_H
 

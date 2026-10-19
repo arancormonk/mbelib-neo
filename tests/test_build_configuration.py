@@ -14,6 +14,11 @@ commands:
       native flag.
   (d) MBELIB_ENABLE_NATIVE=OFF: no native flag.
 
+Where the configure log reports the run-time AVX2 dispatch, the AVX2 kernel
+copies compile with its flags and MBELIB_AVX2_KERNELS in untuned
+configurations (Debug, MBELIB_ENABLE_NATIVE=OFF) and without them, empty, in
+tuned ones.
+
 Exits 77 (skip) when Ninja is not available.
 """
 
@@ -26,6 +31,8 @@ import tempfile
 from pathlib import Path
 
 NATIVE_RE = re.compile(r"MBELIB_ENABLE_NATIVE: release-like configurations use (\S+)")
+DISPATCH_RE = re.compile(r"AVX2 dispatch: (.+?) kernels chosen at run time")
+AVX2_UNIT = "src/core/mbe_voiced_avx2.c"
 LTO_FLAGS = ("-flto", "/GL")
 
 
@@ -85,6 +92,29 @@ def scenario_multi_config(args, work):
     else:
         check(has_lto(release), "(a) multi-config Release compiles with LTO")
     check(not has_lto(debug), "(a) multi-config Debug compiles without LTO")
+    tuned = native_flag_of(log) is not None
+    check_dispatch(args, build, log, not tuned, "(a) multi-config Release", "build-Release.ninja")
+    check_dispatch(args, build, log, True, "(a) multi-config Debug", "build-Debug.ninja")
+
+
+def dispatch_flags_of(log):
+    match = DISPATCH_RE.search(log)
+    return match.group(1).split() if match else None
+
+
+def check_dispatch(args, build, log, expect_copies, name, ninja_file=None):
+    flags = dispatch_flags_of(log)
+    if flags is None:
+        print(f"note: no run-time AVX2 dispatch for this target; {name} dispatch checks skipped")
+        return
+    line = compile_line(commands(args, build, "mbe-shared", ninja_file), AVX2_UNIT)
+    tokens = line.split()
+    present = all(flag in tokens for flag in flags) and any("MBELIB_AVX2_KERNELS=1" in t for t in tokens)
+    absent = not any(flag in tokens for flag in flags) and not any("MBELIB_AVX2_KERNELS" in t for t in tokens)
+    if expect_copies:
+        check(present, f"{name}: the AVX2 kernel copies compile with {' '.join(flags)}")
+    else:
+        check(absent, f"{name}: the AVX2 kernel copies compile empty")
 
 
 def native_flag_of(log):
@@ -106,13 +136,16 @@ def scenario_release(args, work):
         print(f"note: no native tuning on this host ({reason.group(1)})")
         return None
     check(flag in library_line(args, build).split(), f"(b) Release library compiles with {flag}")
+    check_dispatch(args, build, log, False, "(b) tuned Release")
     golden = compile_line(commands(args, build, "test_golden_pcm"), "tests/test_golden_pcm.c")
     check(flag in golden.split(), f"(b) Release test_golden_pcm compiles with {flag}")
     api = compile_line(commands(args, build, "test_api"), "tests/test_api.c")
     check(flag not in api.split(), f"(b) Release test_api compiles without {flag}")
     debug = work / "debug"
-    configure(args, debug, "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DMBELIB_BUILD_TESTS=OFF")
+    debug_log = configure(args, debug, "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DMBELIB_BUILD_TESTS=OFF",
+                          "-DMBELIB_ENABLE_SIMD=ON")
     check(flag not in library_line(args, debug).split(), f"(b) Debug library compiles without {flag}")
+    check_dispatch(args, debug, debug_log, True, "(b) Debug")
     return flag
 
 
@@ -122,6 +155,7 @@ def scenario_no_native(args, work, flag, name, *options):
     check(native_flag_of(log) is None, f"{name}: configure reports no native flag")
     if flag:
         check(flag not in library_line(args, build).split(), f"{name}: library compiles without {flag}")
+    return build, log
 
 
 def main():
@@ -145,7 +179,9 @@ def main():
             scenario_no_native(args, work, flag, "(c) user target ISA", f"-DCMAKE_C_FLAGS={args.user_isa}")
         else:
             print("note: no known target ISA option for this compiler; (c) skipped")
-        scenario_no_native(args, work, flag, "(d) MBELIB_ENABLE_NATIVE=OFF", "-DMBELIB_ENABLE_NATIVE=OFF")
+        build, log = scenario_no_native(args, work, flag, "(d) MBELIB_ENABLE_NATIVE=OFF",
+                                        "-DMBELIB_ENABLE_NATIVE=OFF")
+        check_dispatch(args, build, log, True, "(d) MBELIB_ENABLE_NATIVE=OFF")
     return 0
 
 

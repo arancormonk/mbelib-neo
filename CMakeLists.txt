@@ -99,6 +99,11 @@ option(
 )
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
 option(MBELIB_BUILD_TOOLS "Build developer quality-analysis tools" OFF)
+option(
+    MBELIB_TEST_REQUIRE_AVX2
+    "Fail, rather than skip, the AVX2 kernel tests when the build or CPU cannot run AVX2 kernels"
+    OFF
+)
 # Warnings
 if(MBELIB_ENABLE_WARNINGS)
     if(MSVC)
@@ -291,23 +296,29 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe_common.c
     src/ambe/ambe_encoder.c
     src/ecc/ecc_soft.c
+    src/ecc/ecc_soft_search.c
+    src/ecc/ecc_soft_search_avx2.c
     src/ecc/ecc.c
     src/ecc/ecc_const.c
     src/imbe/imbe7100x4400.c
     src/imbe/imbe7200x4400.c
     src/imbe/imbe7200x4400_enc.c
     src/core/mbelib.c
+    src/core/mbe_cpu.c
     src/core/mbe_voiced.c
+    src/core/mbe_voiced_avx2.c
     src/core/mbe_pcm_convert.c
     src/core/mbe_adaptive.c
     src/core/mbe_encoder.c
     src/core/mbe_speech_analysis.c
     src/core/mbe_tone_detect.c
     src/core/mbe_tone_fit.c
+    src/core/mbe_tone_fit_avx2.c
     src/core/mbe_unvoiced_fft.c
     src/tetra/tetra_acelp_codebooks.c
     src/tetra/tetra_acelp_decoder.c
     src/tetra/tetra_acelp_dsp.c
+    src/tetra/tetra_acelp_avx2.c
 )
 set(MBELIB_SOURCES ${MBELIB_FIRST_PARTY_SOURCES} ${PFFFT_SOURCES})
 
@@ -645,19 +656,161 @@ endif()
 # target options on Makefile/Ninja command lines; the Visual Studio generator
 # maps /fp:precise to the per-file floating-point model instead. The unit also
 # refuses to compile under fast-math (see src/core/mbe_pcm_convert.c).
-# The SIMD voiced kernels seed their oscillators from cos and sin of
-# caller-supplied phases of any size; a fast-math math library need not reduce
-# huge arguments exactly (MSVC /fp:fast returned values off the unit circle),
-# and the kernels themselves are explicit vector code.
+# The SIMD voiced kernels (and their AVX2 copy) seed their oscillators from
+# cos and sin of caller-supplied phases of any size; a fast-math math library
+# need not reduce huge arguments exactly (MSVC /fp:fast returned values off the
+# unit circle), and the kernels themselves are explicit vector code. Both units
+# refuse to compile under fast-math.
 if(_mbelib_ieee_math_options)
     set_source_files_properties(
         src/core/mbe_pcm_convert.c
         src/core/mbe_voiced.c
+        src/core/mbe_voiced_avx2.c
         PROPERTIES COMPILE_OPTIONS "${_mbelib_ieee_math_options}"
     )
 endif()
 unset(_mbelib_fast_math_options)
 unset(_mbelib_ieee_math_options)
+
+# Run-time AVX2/FMA dispatch (src/internal/mbe_cpu.h). A SIMD build for
+# baseline x86-64 compiles the kernels whose output depends on the vector
+# width, and the integer kernels that gain from AVX2, a second time with
+# AVX2/FMA code generation and picks one per call from a cached CPU probe. A
+# configuration whose target already has AVX2 calls its kernels directly, so
+# the AVX2 copies are compiled (and stay empty) only for configurations
+# without native tuning. The flags are appended after the IEEE options above.
+# 32-bit x86 and universal macOS builds do not dispatch. MinGW GCC does not
+# align the stack for 32-byte spills (GCC PR 54412), so it dispatches only
+# when the assembler can turn aligned vector moves into unaligned ones.
+set(MBELIB_AVX2_DISPATCH_SOURCES
+    src/core/mbe_voiced_avx2.c
+    src/core/mbe_tone_fit_avx2.c
+    src/ecc/ecc_soft_search_avx2.c
+    src/tetra/tetra_acelp_avx2.c
+)
+set(MBELIB_AVX2_DISPATCH_FLAGS "")
+set(_mbelib_avx2_reason "")
+list(LENGTH CMAKE_OSX_ARCHITECTURES _mbelib_osx_arch_count)
+if(NOT MBELIB_ENABLE_SIMD)
+    set(_mbelib_avx2_reason "MBELIB_ENABLE_SIMD is off")
+elseif(_mbelib_osx_arch_count GREATER 1)
+    set(_mbelib_avx2_reason "several CMAKE_OSX_ARCHITECTURES")
+else()
+    _mbelib_check_c_source_compiles_static(
+      [=[
+      #if !(defined(__x86_64__) || defined(_M_X64)) || defined(_M_ARM64EC)
+      #error not an x86-64 target
+      #endif
+      int mbelib_target_x86_64;
+    ]=]
+      MBELIB_TARGET_X86_64
+    )
+    _mbelib_check_c_source_compiles_static(
+      [=[
+      #if defined(__AVX2__)
+      #error the target already has AVX2
+      #endif
+      int mbelib_target_without_avx2;
+    ]=]
+      MBELIB_TARGET_WITHOUT_AVX2
+    )
+    if(NOT MBELIB_TARGET_X86_64)
+        set(_mbelib_avx2_reason "not an x86-64 target")
+    elseif(NOT MBELIB_TARGET_WITHOUT_AVX2)
+        set(_mbelib_avx2_reason "the target already has AVX2")
+    else()
+        set(_mbelib_avx2_candidate "")
+        if(MSVC)
+            set(_mbelib_avx2_candidate /arch:AVX2)
+        elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
+            set(_mbelib_avx2_candidate -mavx2 -mfma)
+            if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+                list(
+                    APPEND _mbelib_avx2_candidate
+                    -Wa,-muse-unaligned-vector-move
+                )
+            endif()
+        endif()
+        if(_mbelib_avx2_candidate)
+            list(JOIN _mbelib_avx2_candidate " " _mbelib_avx2_required_flags)
+            set(_mbelib_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+            set(CMAKE_REQUIRED_FLAGS
+                "${CMAKE_REQUIRED_FLAGS} ${_mbelib_avx2_required_flags}"
+            )
+            _mbelib_check_c_source_compiles_static(
+              [=[
+              #include <immintrin.h>
+              int mbelib_avx2_probe(const int* table, const float* x) {
+                  __m256i g = _mm256_i32gather_epi32(table, _mm256_set1_epi32(1), 4);
+                  __m256 f = _mm256_fmadd_ps(_mm256_loadu_ps(x), _mm256_set1_ps(2.0f), _mm256_set1_ps(1.0f));
+                  return _mm256_movemask_epi8(g) + _mm256_movemask_ps(f);
+              }
+            ]=]
+              MBELIB_C_HAS_AVX2_DISPATCH_FLAGS
+            )
+            set(CMAKE_REQUIRED_FLAGS "${_mbelib_saved_required_flags}")
+            unset(_mbelib_saved_required_flags)
+            unset(_mbelib_avx2_required_flags)
+            if(MBELIB_C_HAS_AVX2_DISPATCH_FLAGS)
+                set(MBELIB_AVX2_DISPATCH_FLAGS ${_mbelib_avx2_candidate})
+            else()
+                set(_mbelib_avx2_reason
+                    "the compiler rejects ${_mbelib_avx2_candidate}"
+                )
+            endif()
+        else()
+            set(_mbelib_avx2_reason "no AVX2 option for ${CMAKE_C_COMPILER_ID}")
+        endif()
+        unset(_mbelib_avx2_candidate)
+    endif()
+    # Probe again on every configure: CMAKE_C_FLAGS may have gained or lost a
+    # target ISA in this build directory.
+    unset(MBELIB_TARGET_WITHOUT_AVX2 CACHE)
+    unset(MBELIB_C_HAS_AVX2_DISPATCH_FLAGS CACHE)
+endif()
+unset(_mbelib_osx_arch_count)
+# Genex true for the configurations that build and call the AVX2 copies.
+set(_mbelib_avx2_dispatch_config "0")
+if(MBELIB_AVX2_DISPATCH_FLAGS)
+    set(_mbelib_avx2_dispatch_config "$<NOT:${_mbelib_native_config}>")
+    foreach(_target mbe-shared mbe-static)
+        target_compile_definitions(
+            ${_target}
+            PRIVATE "$<${_mbelib_avx2_dispatch_config}:MBELIB_AVX2_KERNELS=1>"
+        )
+    endforeach()
+    set(_mbelib_avx2_options "")
+    foreach(_mbelib_flag IN LISTS MBELIB_AVX2_DISPATCH_FLAGS)
+        string(REPLACE "," "$<COMMA>" _mbelib_flag "${_mbelib_flag}")
+        list(
+            APPEND _mbelib_avx2_options
+            "$<${_mbelib_avx2_dispatch_config}:${_mbelib_flag}>"
+        )
+    endforeach()
+    set_property(
+        SOURCE ${MBELIB_AVX2_DISPATCH_SOURCES}
+        APPEND
+        PROPERTY COMPILE_OPTIONS ${_mbelib_avx2_options}
+    )
+    unset(_mbelib_avx2_options)
+    unset(_mbelib_flag)
+    list(JOIN MBELIB_AVX2_DISPATCH_FLAGS " " _mbelib_avx2_flags_text)
+    if(_mbelib_native_flags)
+        message(
+            STATUS
+            "AVX2 dispatch: ${_mbelib_avx2_flags_text} kernels chosen at run time in configurations without native tuning"
+        )
+    else()
+        message(
+            STATUS
+            "AVX2 dispatch: ${_mbelib_avx2_flags_text} kernels chosen at run time"
+        )
+    endif()
+    unset(_mbelib_avx2_flags_text)
+else()
+    message(STATUS "AVX2 dispatch: off (${_mbelib_avx2_reason})")
+endif()
+unset(_mbelib_avx2_reason)
 
 # Sanitizers (Debug configuration only, for single- and multi-config
 # generators). Collect the flags once and apply them to the libraries and to
@@ -740,6 +893,7 @@ set_target_properties(
 
 # Optional LTO/IPO for the Release and RelWithDebInfo configurations, set per
 # configuration so multi-config generators get it too.
+set(_mbelib_ipo_enabled OFF)
 if(MBELIB_ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
@@ -751,6 +905,7 @@ if(MBELIB_ENABLE_LTO)
                 INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
                 INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE
         )
+        set(_mbelib_ipo_enabled ON)
     else()
         message(STATUS "IPO/LTO not supported: ${_ipo_msg}")
     endif()
@@ -912,11 +1067,15 @@ if(MBELIB_BUILD_TESTS)
 
     # Golden data generator tool (not a test): helpful for refreshing hashes
     add_executable(gen_golden tools/gen_golden.c)
-    target_link_libraries(gen_golden PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    # The kernel-ISA selection is private; link the static library.
+    target_link_libraries(gen_golden PRIVATE mbe-static)
     _mbelib_apply_hardening(gen_golden)
     target_include_directories(
         gen_golden
-        PRIVATE "${PROJECT_SOURCE_DIR}/include" "${PROJECT_SOURCE_DIR}/tests"
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+            "${PROJECT_SOURCE_DIR}/tests"
     )
     add_executable(test_api tests/test_api.c)
     target_link_libraries(test_api PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -1311,7 +1470,9 @@ if(MBELIB_BUILD_TESTS)
     add_test(NAME test_tones COMMAND test_tones)
 
     add_executable(test_golden_pcm tests/test_golden_pcm.c)
-    target_link_libraries(test_golden_pcm PRIVATE ${MBELIB_EXEC_LINK_TGT})
+    # The hashes follow the library's kernel ISA, which the private mbe_cpu
+    # interface reports and selects; link the static library for it.
+    target_link_libraries(test_golden_pcm PRIVATE mbe-static)
     target_include_directories(
         test_golden_pcm
         PRIVATE
@@ -1324,12 +1485,6 @@ if(MBELIB_BUILD_TESTS)
         PRIVATE
             $<$<CONFIG:Debug>:MBELIB_TEST_STRICT_FLOAT=1;MBELIB_TEST_STRICT_INT16=1>
     )
-    if(MBELIB_ENABLE_SIMD)
-        target_compile_definitions(
-            test_golden_pcm
-            PRIVATE MBELIB_TEST_BUILD_SIMD=1
-        )
-    endif()
     if(_SAN_CFLAGS)
         target_compile_options(test_golden_pcm PRIVATE ${_SAN_CFLAGS})
     endif()
@@ -1337,7 +1492,26 @@ if(MBELIB_BUILD_TESTS)
         target_link_options(test_golden_pcm BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
     _mbelib_apply_native(test_golden_pcm)
-    add_test(NAME test_golden_pcm COMMAND test_golden_pcm)
+    # test_golden_pcm runs the CPU probe's choice; the _sse2 and _avx2 variants
+    # force either kernel ISA and skip where the build or CPU cannot run it
+    # (MBELIB_TEST_REQUIRE_AVX2 turns the AVX2 skip into a failure).
+    set(_mbelib_golden_avx2_args avx2)
+    if(MBELIB_TEST_REQUIRE_AVX2)
+        list(APPEND _mbelib_golden_avx2_args --require)
+    endif()
+    add_test(NAME test_golden_pcm COMMAND test_golden_pcm auto)
+    add_test(NAME test_golden_pcm_sse2 COMMAND test_golden_pcm sse2)
+    add_test(
+        NAME test_golden_pcm_avx2
+        COMMAND test_golden_pcm ${_mbelib_golden_avx2_args}
+    )
+    set_tests_properties(
+        test_golden_pcm
+        test_golden_pcm_sse2
+        test_golden_pcm_avx2
+        PROPERTIES SKIP_RETURN_CODE 77
+    )
+    unset(_mbelib_golden_avx2_args)
 
     add_executable(
         test_simd_arch_detection_x64
@@ -1555,6 +1729,27 @@ if(MBELIB_BUILD_TESTS)
                 ${Python3_EXECUTABLE} -I
                 ${PROJECT_SOURCE_DIR}/tests/test_tetra_tables.py
         )
+        # The AVX2 units export only *_avx2 symbols (src/internal/mbe_cpu.h).
+        if(
+            CMAKE_SYSTEM_NAME STREQUAL "Linux"
+            AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+            AND CMAKE_NM
+            AND MBELIB_AVX2_DISPATCH_FLAGS
+        )
+            add_test(
+                NAME test_avx2_symbols
+                COMMAND
+                    ${Python3_EXECUTABLE} -I
+                    ${PROJECT_SOURCE_DIR}/tests/test_avx2_symbols.py ${CMAKE_NM}
+                    $<TARGET_FILE:mbe-static>
+                    "--expect-code=$<IF:${_mbelib_avx2_dispatch_config},1,0>"
+                    "--lto=$<IF:$<AND:$<BOOL:${_mbelib_ipo_enabled}>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>,1,0>"
+            )
+            set_tests_properties(
+                test_avx2_symbols
+                PROPERTIES SKIP_RETURN_CODE 77
+            )
+        endif()
         # Configure-only checks of the per-configuration SIMD, LTO, native and
         # dispatch settings, with Ninja and Ninja Multi-Config. MSVC needs its
         # developer environment for a Ninja configure, which a Visual Studio
@@ -1709,7 +1904,32 @@ if(MBELIB_BUILD_TESTS)
     _mbelib_apply_native(test_simd_numerics)
     add_test(NAME test_simd_numerics COMMAND test_simd_numerics)
 
+    add_executable(test_cpu_dispatch tests/test_cpu_dispatch.c)
+    # The kernel-ISA selection is private; link the static library for it.
+    target_link_libraries(test_cpu_dispatch PRIVATE mbe-static)
+    target_include_directories(
+        test_cpu_dispatch
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/include"
+            "${PROJECT_SOURCE_DIR}/src/internal"
+    )
+    # Declare the voiced kernels as the library's SIMD build does.
+    if(MBELIB_ENABLE_SIMD)
+        target_compile_definitions(
+            test_cpu_dispatch
+            PRIVATE MBELIB_ENABLE_SIMD=1
+        )
+    endif()
+    if(_SAN_CFLAGS)
+        target_compile_options(test_cpu_dispatch PRIVATE ${_SAN_CFLAGS})
+    endif()
+    if(_SAN_LDFLAGS)
+        target_link_options(test_cpu_dispatch BEFORE PRIVATE ${_SAN_LDFLAGS})
+    endif()
+    add_test(NAME test_cpu_dispatch COMMAND test_cpu_dispatch)
+
     set(_MBELIB_TEST_TARGETS
+        test_cpu_dispatch
         test_dsp_equations
         test_adaptive_equations
         test_assertions

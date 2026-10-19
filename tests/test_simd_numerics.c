@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Numerical oracles for private SIMD kernels, linked to the selected library. */
+/* Numerical oracles for private SIMD kernels, linked to the selected library.
+ * The kernels that a run-time AVX2 dispatch selects run under every kernel
+ * ISA this build and CPU can select. */
 #include <assert.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "ambe_encoder.h"
+#include "mbe_cpu.h"
 #include "mbe_tone_fit.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbe_voiced.h" // IWYU pragma: keep (MBE_VOICED_KERNELS selects the voiced checks)
@@ -277,15 +280,28 @@ test_large_phases(void) {
 }
 #endif
 
-int
-main(void) {
-    test_noise_sequence();
-    test_nearest_codebook();
+static void
+test_dispatched_kernels(void) {
     test_tone_fit();
 #if defined(MBE_VOICED_KERNELS)
     test_voiced_kernels();
     test_large_phases();
 #endif
+}
+
+int
+main(void) {
+    test_noise_sequence();
+    test_nearest_codebook();
+    test_dispatched_kernels();
+    const int forced[] = {MBE_CPU_ISA_SSE2, MBE_CPU_ISA_AVX2};
+    for (unsigned i = 0; i < sizeof(forced) / sizeof(forced[0]); ++i) {
+        if (mbe_cpu_select_isa(forced[i]) == 0) {
+            printf("kernel ISA %d\n", mbe_cpu_isa());
+            test_dispatched_kernels();
+        }
+    }
+    assert(mbe_cpu_select_isa(MBE_CPU_ISA_AUTO) == 0);
     puts("SIMD numerical oracles passed");
     return 0;
 }

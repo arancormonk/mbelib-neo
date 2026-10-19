@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/** @file Voiced oscillators: MBE_VF_WIDTH independent sample streams per SIMD vector. */
+/** @file Voiced oscillators: MBE_VF_WIDTH independent sample streams per SIMD vector.
+ *
+ * mbe_voiced_avx2.c builds this file a second time for AVX2/FMA (mbe_cpu.h). */
 #include "mbe_voiced.h"
+
+/* CMake builds this unit and its AVX2 copy with IEEE semantics: the oscillator
+ * seeds take cos and sin of caller-supplied phases of any size. */
+#if defined(__FAST_MATH__) || (defined(__FINITE_MATH_ONLY__) && __FINITE_MATH_ONLY__ != 0) || defined(_M_FP_FAST)
+#error "mbe_voiced.c requires IEEE floating-point semantics"
+#endif
 
 #if defined(MBE_VOICED_KERNELS)
 #include <math.h>
+#include "mbe_cpu.h"
 #include "mbe_math.h"
 #include "mbe_simd.h"
 
@@ -55,8 +64,8 @@ voiced_window_one(float out[FRAME], const float* window, const struct mbe_voiced
 }
 
 void
-mbe_voiced_windowed(float out[FRAME], const float window[2 * FRAME], const struct mbe_voiced_component* prev,
-                    const struct mbe_voiced_component* cur) {
+MBE_KFN(mbe_voiced_windowed)(float out[FRAME], const float window[2 * FRAME], const struct mbe_voiced_component* prev,
+                             const struct mbe_voiced_component* cur) {
     if (!prev->active) {
         if (cur->active) {
             voiced_window_one(out, window, cur);
@@ -102,8 +111,8 @@ voiced_chirp_init(float phase, float frequency, double b) {
 }
 
 void
-mbe_voiced_interpolated(float out[FRAME], float phase, float prev_amp, float cur_amp, float frequency,
-                        float pitch_delta, int harmonic) {
+MBE_KFN(mbe_voiced_interpolated)(float out[FRAME], float phase, float prev_amp, float cur_amp, float frequency,
+                                 float pitch_delta, int harmonic) {
     double b = (double)pitch_delta * harmonic / (2.0 * FRAME);
     struct voiced_oscillator o = voiced_chirp_init(phase, frequency, b);
     double rotation = (double)(2 * WIDTH * WIDTH) * b;
@@ -125,6 +134,28 @@ mbe_voiced_interpolated(float out[FRAME], float phase, float prev_amp, float cur
         n = mbe_vf_add(n, mbe_vf_set((float)WIDTH));
     }
 }
+
+#if defined(MBE_AVX2_DISPATCH)
+void
+mbe_voiced_windowed(float out[FRAME], const float window[2 * FRAME], const struct mbe_voiced_component* prev,
+                    const struct mbe_voiced_component* cur) {
+    if (mbe_cpu_use_avx2()) {
+        mbe_voiced_windowed_avx2(out, window, prev, cur);
+    } else {
+        mbe_voiced_windowed_sse2(out, window, prev, cur);
+    }
+}
+
+void
+mbe_voiced_interpolated(float out[FRAME], float phase, float prev_amp, float cur_amp, float frequency,
+                        float pitch_delta, int harmonic) {
+    if (mbe_cpu_use_avx2()) {
+        mbe_voiced_interpolated_avx2(out, phase, prev_amp, cur_amp, frequency, pitch_delta, harmonic);
+    } else {
+        mbe_voiced_interpolated_sse2(out, phase, prev_amp, cur_amp, frequency, pitch_delta, harmonic);
+    }
+}
+#endif
 #else
 /* Scalar targets keep the historical loops in mbelib.c. ISO C forbids an
  * empty translation unit. */

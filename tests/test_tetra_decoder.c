@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mbe_cpu.h"
 #include "mbelib-neo/mbelib.h"
 #include "tetra_acelp.h"
 #include "tetra_acelp_codebooks.h"
@@ -1120,5 +1121,14 @@ main(void) {
     test_api_bad_frame_payload_ignored();
     test_api_reset_and_reentrancy();
     test_regression_hashes();
+    /* The hashes hold for every kernel ISA a run-time AVX2 dispatch can select. */
+    const int forced[] = {MBE_CPU_ISA_SSE2, MBE_CPU_ISA_AVX2};
+    for (unsigned i = 0; i < sizeof(forced) / sizeof(forced[0]); ++i) {
+        if (mbe_cpu_select_isa(forced[i]) == 0) {
+            test_adaptive_vector();
+            test_regression_hashes();
+        }
+    }
+    assert(mbe_cpu_select_isa(MBE_CPU_ISA_AUTO) == 0);
     return 0;
 }
