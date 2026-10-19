@@ -68,11 +68,18 @@ option(
     ON
 )
 # Release builds of 64-bit targets default to SIMD. 32-bit targets stay
-# opt-in: x86 would require SSE2 and ARM needs an explicit -mfpu=neon.
+# opt-in: x86 would require SSE2 and ARM needs an explicit -mfpu=neon. A
+# multi-config generator (Ninja Multi-Config, Visual Studio, Xcode) picks the
+# configuration at build time, so without a build type it gets the Release
+# default; its Debug configuration is the hash-covered Debug + SIMD build.
+get_property(_mbelib_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 set(_mbelib_simd_default OFF)
 if(
-    CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo|MinSizeRel"
-    AND CMAKE_SIZEOF_VOID_P EQUAL 8
+    CMAKE_SIZEOF_VOID_P EQUAL 8
+    AND (
+        CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo|MinSizeRel"
+        OR (_mbelib_multi_config AND NOT CMAKE_BUILD_TYPE)
+    )
 )
     set(_mbelib_simd_default ON)
 endif()
@@ -601,55 +608,53 @@ endif()
 unset(_mbelib_fast_math_options)
 unset(_mbelib_ieee_math_options)
 
-# Sanitizers (Debug builds only)
-if(CMAKE_BUILD_TYPE MATCHES "Debug")
-    # Collect sanitizer flags once and apply to libraries and executables (tests/examples)
-    # so the sanitizer runtimes are linked into the final executables.
-    set(_mbelib_san_cflags "")
-    set(_mbelib_san_ldflags "")
-    if(MBELIB_ENABLE_ASAN AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
+# Sanitizers (Debug configuration only, for single- and multi-config
+# generators). Collect the flags once and apply them to the libraries and to
+# the executables (tests/examples) so the sanitizer runtimes are linked into
+# the final executables.
+set(_mbelib_san_cflags "")
+set(_mbelib_san_ldflags "")
+if(MBELIB_ENABLE_ASAN AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
+    list(
+        APPEND _mbelib_san_cflags
+        "$<$<CONFIG:Debug>:-fsanitize=address>"
+        "$<$<CONFIG:Debug>:-fno-omit-frame-pointer>"
+    )
+    # For Clang, enable stronger detection of stack use-after-scope
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         list(
             APPEND _mbelib_san_cflags
-            -fsanitize=address
-            -fno-omit-frame-pointer
+            "$<$<CONFIG:Debug>:-fsanitize-address-use-after-scope>"
         )
-        # For Clang, enable stronger detection of stack use-after-scope
-        if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-            list(APPEND _mbelib_san_cflags -fsanitize-address-use-after-scope)
-        endif()
-        list(APPEND _mbelib_san_ldflags -fsanitize=address)
     endif()
-    if(MBELIB_ENABLE_UBSAN AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
-        list(
-            APPEND _mbelib_san_cflags
-            -fsanitize=undefined
-            -fno-sanitize-recover=undefined
-        )
-        list(APPEND _mbelib_san_ldflags -fsanitize=undefined)
-    endif()
+    list(APPEND _mbelib_san_ldflags "$<$<CONFIG:Debug>:-fsanitize=address>")
+endif()
+if(MBELIB_ENABLE_UBSAN AND (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"))
+    list(
+        APPEND _mbelib_san_cflags
+        "$<$<CONFIG:Debug>:-fsanitize=undefined>"
+        "$<$<CONFIG:Debug>:-fno-sanitize-recover=undefined>"
+    )
+    list(APPEND _mbelib_san_ldflags "$<$<CONFIG:Debug>:-fsanitize=undefined>")
+endif()
 
-    if(_mbelib_san_cflags OR _mbelib_san_ldflags)
-        # Apply to core libraries first
-        foreach(tgt IN ITEMS mbe-shared mbe-static)
-            if(_mbelib_san_cflags)
-                target_compile_options(${tgt} PRIVATE ${_mbelib_san_cflags})
-            endif()
-            if(_mbelib_san_ldflags)
-                # Add sanitizer link flags before other options for correct ordering
-                target_link_options(
-                    ${tgt}
-                    BEFORE
-                    PRIVATE ${_mbelib_san_ldflags}
-                )
-            endif()
-        endforeach()
-        # Stash the flags for later targets (tests/examples) via directory properties
-        set_directory_properties(
-            PROPERTIES
-                MBELIB_SANITIZER_CFLAGS "${_mbelib_san_cflags}"
-                MBELIB_SANITIZER_LDFLAGS "${_mbelib_san_ldflags}"
-        )
-    endif()
+if(_mbelib_san_cflags OR _mbelib_san_ldflags)
+    # Apply to core libraries first
+    foreach(tgt IN ITEMS mbe-shared mbe-static)
+        if(_mbelib_san_cflags)
+            target_compile_options(${tgt} PRIVATE ${_mbelib_san_cflags})
+        endif()
+        if(_mbelib_san_ldflags)
+            # Add sanitizer link flags before other options for correct ordering
+            target_link_options(${tgt} BEFORE PRIVATE ${_mbelib_san_ldflags})
+        endif()
+    endforeach()
+    # Stash the flags for later targets (tests/examples) via directory properties
+    set_directory_properties(
+        PROPERTIES
+            MBELIB_SANITIZER_CFLAGS "${_mbelib_san_cflags}"
+            MBELIB_SANITIZER_LDFLAGS "${_mbelib_san_ldflags}"
+    )
 endif()
 
 include(GNUInstallDirs)
@@ -682,15 +687,18 @@ set_target_properties(
         INSTALL_NAME_DIR "@rpath"
 )
 
-# Optional LTO/IPO
-if(MBELIB_ENABLE_LTO AND CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo")
+# Optional LTO/IPO for the Release and RelWithDebInfo configurations, set per
+# configuration so multi-config generators get it too.
+if(MBELIB_ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
     if(_ipo_ok)
         set_target_properties(
             mbe-static
             mbe-shared
-            PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE
+            PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+                INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE
         )
     else()
         message(STATUS "IPO/LTO not supported: ${_ipo_msg}")
@@ -959,14 +967,10 @@ if(MBELIB_BUILD_TESTS)
     # written. Elsewhere the flags carry no guarantee: fast-math, optimization
     # without FENV_ACCESS (which GCC does not implement), or MSVC, whose
     # fenv_access is off by default.
-    if(
-        NOT MBELIB_ENABLE_FAST_MATH
-        AND NOT MSVC
-        AND CMAKE_BUILD_TYPE STREQUAL "Debug"
-    )
+    if(NOT MBELIB_ENABLE_FAST_MATH AND NOT MSVC)
         target_compile_definitions(
             test_ambe2400_encoder
-            PRIVATE MBELIB_TEST_FENV_OVERFLOW=1
+            PRIVATE $<$<CONFIG:Debug>:MBELIB_TEST_FENV_OVERFLOW=1>
         )
     endif()
     # The AMBE+2 and IMBE encoder tests drive private quantizer steps and the
@@ -1003,7 +1007,7 @@ if(MBELIB_BUILD_TESTS)
         AND NOT (
             MBELIB_ENABLE_LTO
             AND (
-                CMAKE_CONFIGURATION_TYPES
+                _mbelib_multi_config
                 OR CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo"
             )
         )
