@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-2.0-or-later -->
 # Licensing status
 
-Planned release **2.6.1**, retaining `SOVERSION 2`. The original licensing review
+Planned release **2.6.2**, retaining `SOVERSION 2`. The original licensing review
 was recorded on 2026-10-17 for release **2.6.0**.
 The project licenses its contributions under GPL-2.0-or-later. This objective
 does not establish permission for every component in the combined library.
