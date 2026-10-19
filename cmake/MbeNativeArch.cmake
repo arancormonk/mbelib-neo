@@ -72,7 +72,7 @@ function(mbelib_native_arch_skip_reason out_var)
 
     if(
         _reason STREQUAL ""
-        AND (APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        AND CMAKE_SYSTEM_NAME STREQUAL "Darwin"
         AND CMAKE_OSX_ARCHITECTURES
     )
         list(LENGTH CMAKE_OSX_ARCHITECTURES _count)

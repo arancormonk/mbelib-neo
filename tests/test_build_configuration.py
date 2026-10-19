@@ -117,6 +117,8 @@ def check_rules(args):
           "CMAKE_OSX_ARCHITECTURES": "x86_64"}, r"^$"),
         # CMake ignores CMAKE_OSX_ARCHITECTURES off Apple platforms.
         ({"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64"}, r"^$"),
+        # Script mode on a macOS host defines APPLE; the target system decides.
+        ({"APPLE": "1", "CMAKE_SYSTEM_NAME": "Linux", "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64"}, r"^$"),
         ({"CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_HOST_SYSTEM_PROCESSOR": "x86_64",
           "CMAKE_OSX_SYSROOT": "iphonesimulator"}, r"^CMAKE_OSX_SYSROOT selects iphonesimulator$"),
         ({"CMAKE_SYSTEM_NAME": "Darwin", "CMAKE_OSX_SYSROOT":
