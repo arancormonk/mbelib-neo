@@ -666,6 +666,7 @@ if(MBELIB_ENABLE_FAST_MATH AND _mbelib_fast_math_options)
     target_compile_options(mbe-shared PRIVATE ${_mbelib_fast_math_options})
     target_compile_options(mbe-static PRIVATE ${_mbelib_fast_math_options})
 endif()
+set(_mbelib_target_fast_math_options ${_mbelib_fast_math_options})
 
 # PCM conversion requires IEEE NaN/Inf handling regardless of the fast-math
 # option or externally supplied C flags. Per-source COMPILE_OPTIONS follow the
@@ -694,10 +695,13 @@ unset(_mbelib_ieee_math_options)
 # AVX2/FMA code generation and picks one per call from a cached CPU probe. A
 # configuration whose target already has AVX2 (CMAKE_C_FLAGS or a
 # CMAKE_C_FLAGS_<CONFIG>) calls its kernels directly: the preprocessor
-# (mbe_cpu.h) decides per translation unit, so the copies are built for every
-# configuration without native tuning, and those that do not need them leave
-# them unused. Natively tuned configurations compile them empty. The flags are
-# appended after the IEEE options above.
+# (mbe_cpu.h) decides per translation unit, so the copies have code in every
+# configuration without native tuning (MBELIB_AVX2_KERNELS), and those that do
+# not need them leave them unused. Natively tuned configurations compile them
+# empty, apart from the TETRA kernel an AVX2 host calls directly. The copies
+# form the object library mbe-avx2-kernels, whose target options may depend on
+# the configuration; source properties must not (Xcode cannot generate
+# configuration-dependent per-source options).
 # 32-bit x86 and universal macOS builds do not dispatch. MinGW and Cygwin GCC
 # do not align the stack for 32-byte spills (GCC PR 54412), so they dispatch
 # only when the assembler can turn aligned vector moves into unaligned ones.
@@ -709,7 +713,11 @@ set(MBELIB_AVX2_DISPATCH_SOURCES
 )
 set(MBELIB_AVX2_DISPATCH_FLAGS "")
 set(_mbelib_avx2_reason "")
-list(LENGTH CMAKE_OSX_ARCHITECTURES _mbelib_osx_arch_count)
+# CMake ignores CMAKE_OSX_ARCHITECTURES off Apple platforms.
+set(_mbelib_osx_arch_count 0)
+if(APPLE)
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _mbelib_osx_arch_count)
+endif()
 if(NOT MBELIB_ENABLE_SIMD)
     set(_mbelib_avx2_reason "MBELIB_ENABLE_SIMD is off")
 elseif(_mbelib_osx_arch_count GREATER 1)
@@ -750,6 +758,11 @@ else()
             _mbelib_check_c_source_compiles_static(
               [=[
               #include <immintrin.h>
+              /* An option that overrides the AVX2 one (_CL_=/arch:AVX)
+                 still compiles the intrinsics on MSVC. */
+              #if !defined(__AVX2__)
+              #error the AVX2 options do not select AVX2 code generation
+              #endif
               int mbelib_avx2_probe(const int* table, const float* x) {
                   __m256i g = _mm256_i32gather_epi32(table, _mm256_set1_epi32(1), 4);
                   __m256 f = _mm256_fmadd_ps(_mm256_loadu_ps(x), _mm256_set1_ps(2.0f), _mm256_set1_ps(1.0f));
@@ -788,31 +801,70 @@ if(MBELIB_AVX2_DISPATCH_FLAGS)
             PRIVATE "$<${_mbelib_avx2_dispatch_config}:MBELIB_AVX2_KERNELS=1>"
         )
     endforeach()
-    set(_mbelib_avx2_options "")
-    set(_mbelib_avx2_compile_flags ${MBELIB_AVX2_DISPATCH_FLAGS})
+    # The copies leave the libraries' own source lists for the object library.
+    add_library(mbe-avx2-kernels OBJECT ${MBELIB_AVX2_DISPATCH_SOURCES})
+    foreach(_target mbe-shared mbe-static)
+        get_target_property(_mbelib_target_sources ${_target} SOURCES)
+        list(REMOVE_ITEM _mbelib_target_sources ${MBELIB_AVX2_DISPATCH_SOURCES})
+        set_property(
+            TARGET ${_target}
+            PROPERTY SOURCES ${_mbelib_target_sources}
+        )
+        target_sources(${_target} PRIVATE $<TARGET_OBJECTS:mbe-avx2-kernels>)
+    endforeach()
+    unset(_mbelib_target_sources)
+    set_target_properties(
+        mbe-avx2-kernels
+        PROPERTIES C_VISIBILITY_PRESET hidden POSITION_INDEPENDENT_CODE ON
+    )
+    target_include_directories(
+        mbe-avx2-kernels
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
+            ${MBELIB_GENERATED_INCLUDE_DIR}
+            ${PROJECT_SOURCE_DIR}/src/internal
+    )
+    target_compile_definitions(
+        mbe-avx2-kernels
+        PRIVATE
+            MBELIB_ENABLE_SIMD=1
+            "$<${_mbelib_avx2_dispatch_config}:MBELIB_AVX2_KERNELS=1>"
+    )
+    if(MSVC)
+        target_compile_definitions(mbe-avx2-kernels PRIVATE _USE_MATH_DEFINES)
+    else()
+        # MSVC takes one /arch: per compile; its natively tuned
+        # configurations compile these units with /arch:AVX2 alone.
+        _mbelib_apply_native(mbe-avx2-kernels)
+    endif()
+    if(MBELIB_ENABLE_FAST_MATH AND _mbelib_target_fast_math_options)
+        target_compile_options(
+            mbe-avx2-kernels
+            PRIVATE ${_mbelib_target_fast_math_options}
+        )
+    endif()
+    target_compile_options(
+        mbe-avx2-kernels
+        PRIVATE ${MBELIB_AVX2_DISPATCH_FLAGS}
+    )
     if("-Wa,-muse-unaligned-vector-move" IN_LIST MBELIB_AVX2_DISPATCH_FLAGS)
         # GCC's LTO link drops -Wa options once its inputs disagree on them,
         # also in a static-library consumer's link, so these units are always
         # compiled to machine code, however LTO was enabled (MBELIB_ENABLE_LTO,
-        # CMAKE_INTERPROCEDURAL_OPTIMIZATION, -flto in CMAKE_C_FLAGS). Source
-        # options come last on the compile line.
-        list(APPEND _mbelib_avx2_compile_flags -fno-lto)
-    endif()
-    foreach(_mbelib_flag IN LISTS _mbelib_avx2_compile_flags)
-        string(REPLACE "," "$<COMMA>" _mbelib_flag "${_mbelib_flag}")
-        list(
-            APPEND _mbelib_avx2_options
-            "$<${_mbelib_avx2_dispatch_config}:${_mbelib_flag}>"
+        # CMAKE_INTERPROCEDURAL_OPTIMIZATION[_<CONFIG>], -flto in
+        # CMAKE_C_FLAGS): -fno-lto follows CMake's own LTO options.
+        target_compile_options(mbe-avx2-kernels PRIVATE -fno-lto)
+        set_target_properties(
+            mbe-avx2-kernels
+            PROPERTIES
+                INTERPROCEDURAL_OPTIMIZATION OFF
+                INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF
+                INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+                INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO OFF
+                INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL OFF
         )
-    endforeach()
-    unset(_mbelib_avx2_compile_flags)
-    set_property(
-        SOURCE ${MBELIB_AVX2_DISPATCH_SOURCES}
-        APPEND
-        PROPERTY COMPILE_OPTIONS ${_mbelib_avx2_options}
-    )
-    unset(_mbelib_avx2_options)
-    unset(_mbelib_flag)
+    endif()
+    _mbelib_apply_hardening(mbe-avx2-kernels)
     list(JOIN MBELIB_AVX2_DISPATCH_FLAGS " " _mbelib_avx2_flags_text)
     if(_mbelib_native_flags)
         message(
@@ -830,6 +882,7 @@ else()
     message(STATUS "AVX2 dispatch: off (${_mbelib_avx2_reason})")
 endif()
 unset(_mbelib_avx2_reason)
+unset(_mbelib_target_fast_math_options)
 
 # Sanitizers (Debug configuration only, for single- and multi-config
 # generators). Collect the flags once and apply them to the libraries and to
@@ -863,7 +916,11 @@ endif()
 
 if(_mbelib_san_cflags OR _mbelib_san_ldflags)
     # Apply to core libraries first
-    foreach(tgt IN ITEMS mbe-shared mbe-static)
+    set(_mbelib_san_targets mbe-shared mbe-static)
+    if(TARGET mbe-avx2-kernels)
+        list(APPEND _mbelib_san_targets mbe-avx2-kernels)
+    endif()
+    foreach(tgt IN LISTS _mbelib_san_targets)
         if(_mbelib_san_cflags)
             target_compile_options(${tgt} PRIVATE ${_mbelib_san_cflags})
         endif()
@@ -937,13 +994,21 @@ elseif(MBELIB_ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
     if(_ipo_ok)
+        set(_mbelib_ipo_targets mbe-static mbe-shared)
+        # The MinGW/Cygwin copies stay out of LTO (above).
+        if(
+            TARGET mbe-avx2-kernels
+            AND NOT "-Wa,-muse-unaligned-vector-move" IN_LIST MBELIB_AVX2_DISPATCH_FLAGS
+        )
+            list(APPEND _mbelib_ipo_targets mbe-avx2-kernels)
+        endif()
         set_target_properties(
-            mbe-static
-            mbe-shared
+            ${_mbelib_ipo_targets}
             PROPERTIES
                 INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
                 INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE
         )
+        unset(_mbelib_ipo_targets)
         set(_mbelib_ipo_enabled ON)
     else()
         message(STATUS "IPO/LTO not supported: ${_ipo_msg}")
@@ -1820,6 +1885,15 @@ if(MBELIB_BUILD_TESTS)
                     set(_mbelib_test_user_isa "-march=armv7-a")
                 endif()
             endif()
+            set(_mbelib_test_osx_architectures "")
+            if(APPLE)
+                string(
+                    REPLACE ";"
+                    ","
+                    _mbelib_test_osx_architectures
+                    "${CMAKE_OSX_ARCHITECTURES}"
+                )
+            endif()
             add_test(
                 NAME test_build_configuration
                 COMMAND
@@ -1829,6 +1903,7 @@ if(MBELIB_BUILD_TESTS)
                     --pffft-source ${MBELIB_PFFFT_SOURCE_DIR} --c-compiler
                     ${CMAKE_C_COMPILER}
                     "--c-compiler-arg1=${CMAKE_C_COMPILER_ARG1}"
+                    "--osx-architectures=${_mbelib_test_osx_architectures}"
                     "--ninja=${_mbelib_test_ninja}"
                     "--user-isa=${_mbelib_test_user_isa}"
             )
@@ -1838,6 +1913,7 @@ if(MBELIB_BUILD_TESTS)
             )
             unset(_mbelib_test_ninja)
             unset(_mbelib_test_user_isa)
+            unset(_mbelib_test_osx_architectures)
         endif()
         if(MBELIB_BUILD_TOOLS AND NOT CMAKE_CROSSCOMPILING)
             add_test(
@@ -2246,6 +2322,50 @@ if(MBELIB_BUILD_TOOLS)
         )
     endif()
 endif()
+
+# Xcode cannot generate configuration-dependent per-source options, so
+# configuration-dependent settings live on targets only (mbe-avx2-kernels for
+# the AVX2 copies). Refuse source properties that depend on the configuration.
+foreach(
+    _mbelib_target
+    mbe-shared
+    mbe-static
+    mbe-avx2-kernels
+    mbe-codeql-first-party
+)
+    if(NOT TARGET ${_mbelib_target})
+        continue()
+    endif()
+    get_target_property(_mbelib_sources ${_mbelib_target} SOURCES)
+    foreach(_mbelib_source IN LISTS _mbelib_sources)
+        if(_mbelib_source MATCHES "^\\$<")
+            continue()
+        endif()
+        foreach(
+            _mbelib_property
+            COMPILE_OPTIONS
+            COMPILE_DEFINITIONS
+            COMPILE_FLAGS
+        )
+            get_source_file_property(
+                _mbelib_value
+                "${_mbelib_source}"
+                ${_mbelib_property}
+            )
+            if(_mbelib_value MATCHES "CONFIG")
+                message(
+                    FATAL_ERROR
+                    "${_mbelib_source}: ${_mbelib_property} depends on the configuration (${_mbelib_value}); set it on a target instead"
+                )
+            endif()
+        endforeach()
+    endforeach()
+endforeach()
+unset(_mbelib_target)
+unset(_mbelib_sources)
+unset(_mbelib_source)
+unset(_mbelib_property)
+unset(_mbelib_value)
 
 # Uninstall target
 configure_file(

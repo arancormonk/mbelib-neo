@@ -56,8 +56,13 @@ test_probe(void) {
     builtin = builtin && __builtin_cpu_supports("x86-64-v3");
 #endif
 #else
+    /* GCC 11 added these names and GCC 12 the x86-64-v3 level; GCC 10 compares
+     * the features it can name, so a VM masking only MOVBE, F16C, LZCNT or
+     * LAHF is not caught there. */
+#if __GNUC__ >= 11
     builtin = builtin && __builtin_cpu_supports("f16c") && __builtin_cpu_supports("movbe")
               && __builtin_cpu_supports("lzcnt") && __builtin_cpu_supports("lahf_lm");
+#endif
 #if __GNUC__ >= 12
     builtin = builtin && __builtin_cpu_supports("x86-64-v3");
 #endif

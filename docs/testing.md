@@ -40,7 +40,9 @@ The CTest suite includes:
   from a source path with spaces, gets SIMD in both configurations (64-bit targets) and LTO only in
   Release; Release gets the native flag (when the host allows it) and Debug never does; a user
   `-march` or `MBELIB_ENABLE_NATIVE=OFF` turns it off; and a portable Release keeps its AVX2 copies
-  when only Debug targets AVX2. Exported build settings (`CFLAGS`, `CL`, `CMAKE_GENERATOR`, ...)
+  when only Debug targets AVX2; one build directory reconfigured for `-m32` or (Clang) AArch64 probes
+  the architecture again; a universal `CMAKE_OSX_ARCHITECTURES` off Apple keeps the dispatch; and the
+  parent's `CMAKE_OSX_ARCHITECTURES` is forwarded. Exported build settings (`CFLAGS`, `CL`, `CMAKE_GENERATOR`, ...)
   are removed from the nested configures' environment
 - quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 - quality-tool CLI alignment, accepted/rejected frame widths, and private output

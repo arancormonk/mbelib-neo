@@ -28,6 +28,11 @@ compile commands are read:
       architecture probes follow the target.
   (h) with Clang, one build directory reconfigured for AArch64: the target
       family probes follow it.
+  (i) off Apple platforms, a universal CMAKE_OSX_ARCHITECTURES list (which
+      CMake ignores there) keeps the AVX2 dispatch.
+
+The parent's CMAKE_OSX_ARCHITECTURES is forwarded to every nested configure,
+so an x86_64 build on Apple Silicon keeps its target and baseline ISA option.
 
 Where the configure log reports the run-time AVX2 dispatch, the AVX2 kernel
 copies compile with its flags and MBELIB_AVX2_KERNELS in untuned
@@ -191,6 +196,10 @@ def configure(args, build, generator, *options, source=None):
     # CMake keeps the rest of that command in ARG1.
     if args.c_compiler_arg1.strip():
         command.append(f"-DCMAKE_C_COMPILER_ARG1={args.c_compiler_arg1}")
+    # The parent's macOS architectures (x86_64 on Apple Silicon) pick the
+    # target the baseline ISA option was chosen for.
+    if args.osx_architectures:
+        command.append(f"-DCMAKE_OSX_ARCHITECTURES={args.osx_architectures.replace(',', ';')}")
     command += options
     result = subprocess.run(command, capture_output=True, text=True, timeout=600, env=ENV)
     log = result.stdout + result.stderr
@@ -346,6 +355,21 @@ def scenario_target_change(args, work):
     check(dispatch_flags_of(log) is not None, "(g) reconfiguring back to x86-64 turns it on again")
 
 
+def scenario_osx_architectures_elsewhere(args, work):
+    """(i) Off Apple platforms CMAKE_OSX_ARCHITECTURES is ignored: a universal list keeps the dispatch."""
+    if not args.user_isa.startswith("-march=x86-64") or args.osx_architectures or sys.platform == "darwin":
+        print("note: not a non-Apple x86 GNU-style compiler; (i) skipped")
+        return
+    build = work / "osx-architectures-elsewhere"
+    log = configure(args, build, "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DMBELIB_BUILD_TESTS=OFF",
+                    "-DMBELIB_ENABLE_NATIVE=OFF", "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64")
+    if pointer_size(build) != 8:
+        print("note: not a 64-bit target; (i) skipped")
+        return
+    check(dispatch_flags_of(log) is not None, "(i) a universal CMAKE_OSX_ARCHITECTURES off Apple keeps the dispatch")
+    check_dispatch(args, build, log, True, "(i) universal CMAKE_OSX_ARCHITECTURES off Apple")
+
+
 def cache_value(build, name):
     match = re.search(rf"^{re.escape(name)}:[A-Z]+=(.*)$", (build / "CMakeCache.txt").read_text(), re.M)
     return match.group(1) if match else None
@@ -413,6 +437,7 @@ def main():
     parser.add_argument("--pffft-source", required=True)
     parser.add_argument("--c-compiler", required=True)
     parser.add_argument("--c-compiler-arg1", default="")
+    parser.add_argument("--osx-architectures", default="", help="the parent's CMAKE_OSX_ARCHITECTURES, comma-separated (Apple)")
     parser.add_argument("--user-isa", default="", help="a baseline target ISA option the compiler accepts")
     parser.add_argument("--ninja", default="")
     args = parser.parse_args()
@@ -455,6 +480,7 @@ def main():
         scenario_native_lto(args, work)
         scenario_target_change(args, work)
         scenario_family_change(args, work)
+        scenario_osx_architectures_elsewhere(args, work)
     return 0
 
 

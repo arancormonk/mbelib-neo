@@ -63,8 +63,11 @@ dispatches only when its assembler accepts `-muse-unaligned-vector-move`
 inputs disagree on them, so those AVX2 copies are always compiled without LTO
 (`-fno-lto`), however LTO was enabled (`MBELIB_ENABLE_LTO`,
 `CMAKE_INTERPROCEDURAL_OPTIMIZATION` or `-flto` in `CMAKE_C_FLAGS`), and keep
-the option in the shipped objects, static library included. The configure log reports the decision
-(`AVX2 dispatch: ...`).
+the option in the shipped objects, static library included. The copies are built as the object library
+`mbe-avx2-kernels` inside both libraries; its target options carry everything
+that depends on the configuration, since the Xcode generator cannot generate
+configuration-dependent per-source options (configure refuses such source
+properties). The configure log reports the decision (`AVX2 dispatch: ...`).
 
 In Debug builds the AVX2 copy produces exactly the output of a Debug build for
 `-march=x86-64-v3` (both round every multiply and add separately), so the
