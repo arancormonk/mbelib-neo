@@ -76,6 +76,32 @@ class Recovery(unittest.TestCase):
         with self.assertRaises(ValueError):
             recovery.validate_run({**self.run, "head_sha": "b" * 40}, jobs, self.tag, self.commit, rebuild=True)
 
+    def test_recovery_requires_the_dispatch_check_from_the_release_that_has_it(self):
+        dispatch = "linux • Debug • SIMD (SSE2 baseline + AVX2 dispatch)"
+        self.assertNotIn(dispatch, recovery.tag_checks("2.6.0"))
+        self.assertIn(dispatch, recovery.tag_checks("2.6.1"))
+        self.assertIn(dispatch, recovery.tag_checks("3.0.0"))
+        with self.assertRaises(ValueError):
+            recovery.tag_checks("2.6")
+        for tag in ("v2.6.1", "v2.7.0"):
+            run = {**self.run, "head_branch": tag}
+            jobs = [{"name": name, "conclusion": "success"} for name in recovery.tag_checks(tag[1:])]
+            for options in ({"rebuild": True}, {"aur_only": True}):
+                with self.subTest(tag=tag, options=options):
+                    recovery.validate_run(run, jobs, tag, self.commit, **options)
+                    without = [j for j in jobs if j["name"] != dispatch]
+                    with self.assertRaisesRegex(ValueError, "lacks successful"):
+                        recovery.validate_run(run, without, tag, self.commit, **options)
+                    for conclusion in ("failure", "skipped", "cancelled"):
+                        invalid = [{**j, "conclusion": conclusion} if j["name"] == dispatch else j for j in jobs]
+                        with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                            recovery.validate_run(run, invalid, tag, self.commit, **options)
+        # Releases from before the check stay recoverable without it.
+        run = {**self.run, "head_branch": "v2.6.0"}
+        jobs = [{"name": name, "conclusion": "success"} for name in recovery.TAG_CHECKS]
+        recovery.validate_run(run, jobs, "v2.6.0", self.commit, rebuild=True)
+        recovery.validate_run(run, jobs, "v2.6.0", self.commit, aur_only=True)
+
     def test_rebuild_identity_requires_reviewed_main_workflow(self):
         run = {"event": "workflow_dispatch", "head_branch": "main", "path": recovery.WORKFLOW, "head_sha": "b" * 40}
         with patch.object(recovery, "gh_json", side_effect=[run, {"status": "ahead"}]):

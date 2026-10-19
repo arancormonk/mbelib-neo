@@ -26,7 +26,10 @@ The artifacts expire after seven days; recover before that retention window ends
 
 If packaging itself was skipped or failed, use the explicit `rebuild_packages`
 dispatch option from reviewed `main`. It requires all original signed-tag
-checks to have succeeded and builds the exact tag commit. Rebuild provenance
+checks to have succeeded and builds the exact tag commit. A check added to the
+release gate later (the AVX2 dispatch job, from 2.6.1) is required only for
+tags of that version and newer, so earlier releases stay recoverable
+(`tools/ci_verify_release_recovery.py`). Rebuild provenance
 names the reviewed main workflow; signed SBOMs bind the separate release-source
 commit. The publisher verifies both identities. See
 [release verification](release-verification.md#rebuilding-packages-for-an-unchanged-tag).
