@@ -167,3 +167,31 @@ exports are unchanged. A generated AUR recipe built with the local override
 and disconnected mode, and both release/VCS recipes generated the expected
 `.SRCINFO` with makepkg. Windows, macOS and ARM execution remains covered by
 the existing CI matrix and was not run on this Linux x86 host.
+
+### PFFFT update to 0ac3d39
+
+The update from `94d3c83` to `0ac3d39` includes upstream FFT accuracy and
+allocation fixes, more accurate twiddle factors, and fused ordered-transform
+layout passes. Both pins were regenerated from the immutable archive. The
+compiled-source notices now include the new complex and real implementation
+headers, and the retained PFFFT text and inventory hash were refreshed.
+
+The twiddle changes alter the six AMBE float golden hashes in Debug scalar,
+SSE2 and AVX2 builds. All int16 golden hashes and the single-frame float hashes
+stay unchanged. The replacement hashes agree between GCC 16 on the development
+host and GCC 13 with Ubuntu 24.04's glibc 2.39.
+
+Baseline and candidate Debug scalar/SSE2 builds were compared on 75 DVSI
+development/validation vectors each. Every alignment
+was unchanged. Out of 8,847,360 decoded samples per codec and configuration,
+scalar changed 81 D-STAR, 111 IMBE and 100 AMBE+2 samples; SSE2 changed 85, 107
+and 91 respectively. Every changed sample differs by one int16 unit. The
+maximum absolute per-vector log-spectral-distance change was 0.000015 dB
+against DVSI and 0.000005 dB against the input. Encoder comparisons and the
+final holdout partition were not rerun for this dependency update. Vectors,
+audio and detailed reports remain local under `build/pin-quality/`.
+
+Local suites passed for Debug scalar/SSE2/AVX2, optimized GCC/Clang with
+fast-math and LTO (Clang uses LLD), ASan/UBSan and NOTONES. The acquisition
+regressions, full quality preflight, license inventory, OSV and secret scans
+also passed.
