@@ -38,8 +38,16 @@ struct soft_tables {
  * bit b of received, for every v below 2^bits. Doubling the table per bit adds
  * that bit's weight, or takes it away when the received bit is set (the
  * arithmetic wraps modulo 2^16, but every true sum fits). */
+/* The longest code, Golay (23,12), has 23 bit positions. */
+#define SOFT_MAX_BITS 23u
+
 static void
 subset_costs(uint16_t* t, unsigned bits, const uint8_t* weight, uint32_t received) {
+    /* Callers pass at most SOFT_MAX_BITS; saying so keeps GCC's vectorizer
+     * (AVX-512 masked loads) from assuming reads past the weight arrays. */
+    if (bits > SOFT_MAX_BITS) {
+        bits = SOFT_MAX_BITS;
+    }
     unsigned sum = 0;
     for (unsigned b = 0; b < bits; ++b) {
         sum += ((received >> b) & 1u) * weight[b];
@@ -57,7 +65,7 @@ subset_costs(uint16_t* t, unsigned bits, const uint8_t* weight, uint32_t receive
 static void
 soft_tables_init(struct soft_tables* t, const struct mbe_soft_input* s, const struct mbe_soft_code* code) {
     /* Each enumeration index bit's weight and received value, in index order. */
-    uint8_t weight[23] = {0};
+    uint8_t weight[SOFT_MAX_BITS] = {0};
     uint32_t received = 0, data_bits = 0;
     for (unsigned b = 0; b < code->index_bits; ++b) {
         unsigned bit = code->data[b];
@@ -68,7 +76,7 @@ soft_tables_init(struct soft_tables* t, const struct mbe_soft_input* s, const st
     subset_costs(t->low, GROUP_BITS, weight, received);
     subset_costs(t->high, code->index_bits - GROUP_BITS, weight + GROUP_BITS, received >> GROUP_BITS);
 
-    uint8_t parity_weight[23] = {0};
+    uint8_t parity_weight[SOFT_MAX_BITS] = {0};
     unsigned parity_bits = 0;
     for (unsigned bit = 0; bit < (unsigned)code->width; ++bit) {
         if (!((data_bits >> bit) & 1u)) {
