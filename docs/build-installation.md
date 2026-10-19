@@ -59,7 +59,10 @@ instructions. 32-bit x86 builds, universal macOS builds (several
 `CMAKE_OSX_ARCHITECTURES`) and non-x86 targets do not dispatch; MinGW GCC
 dispatches only when its assembler accepts `-muse-unaligned-vector-move`
 (binutils 2.38 or later), since GCC does not align the Windows x64 stack for
-32-byte spills (MinGW and Cygwin). The configure log reports the decision
+32-byte spills (MinGW and Cygwin). GCC's LTO link drops `-Wa` options when its
+inputs disagree on them, so with `MBELIB_ENABLE_LTO` those AVX2 copies are
+compiled without LTO and keep the option in the shipped objects, static
+library included. The configure log reports the decision
 (`AVX2 dispatch: ...`).
 
 In Debug builds the AVX2 copy produces exactly the output of a Debug build for
@@ -92,7 +95,8 @@ architectures or another than the host's, when the compiler command
 or not), when MSVC's `CL` or `_CL_` environment variable does, or when the
 compiler rejects the option. MinGW and Cygwin GCC are tuned only together with
 the assembler's `-muse-unaligned-vector-move`, for the same stack-alignment
-reason as the dispatch.
+reason as the dispatch; since that option reaches every unit and would not
+survive an LTO link, such a tuned build leaves `MBELIB_ENABLE_LTO` off.
 
 A binary built with the default runs only on CPUs with the build host's
 instruction set. **Packagers and CI that ship binaries pass

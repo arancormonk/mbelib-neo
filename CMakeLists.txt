@@ -895,7 +895,27 @@ set_target_properties(
 # Optional LTO/IPO for the Release and RelWithDebInfo configurations, set per
 # configuration so multi-config generators get it too.
 set(_mbelib_ipo_enabled OFF)
-if(MBELIB_ENABLE_LTO)
+# MinGW and Cygwin GCC need the assembler's -muse-unaligned-vector-move on
+# every unit that can spill 32-byte vectors (GCC PR 54412), but GCC's LTO link
+# drops -Wa options as soon as its inputs disagree on them ("dropping all
+# '-Xassembler' and '-Wa' options"), which also happens in a static-library
+# consumer's own LTO link. Such units are therefore compiled to machine code
+# without LTO: the AVX2 copies of a dispatching configuration below, and, when
+# host tuning carries the option into every unit, the whole library.
+set(_mbelib_windows_gcc OFF)
+if((WIN32 OR CYGWIN) AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    set(_mbelib_windows_gcc ON)
+endif()
+if(
+    MBELIB_ENABLE_LTO
+    AND _mbelib_windows_gcc
+    AND "-Wa,-muse-unaligned-vector-move" IN_LIST _mbelib_native_flags
+)
+    message(
+        STATUS
+        "IPO/LTO off: the host tuning's -Wa,-muse-unaligned-vector-move would not survive a GCC LTO link"
+    )
+elseif(MBELIB_ENABLE_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
     if(_ipo_ok)
@@ -907,10 +927,21 @@ if(MBELIB_ENABLE_LTO)
                 INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE
         )
         set(_mbelib_ipo_enabled ON)
+        if(_mbelib_windows_gcc AND MBELIB_AVX2_DISPATCH_FLAGS)
+            # The option comes after CMake's -flto on the compile line.
+            set_property(
+                SOURCE ${MBELIB_AVX2_DISPATCH_SOURCES}
+                APPEND
+                PROPERTY
+                    COMPILE_OPTIONS
+                        "$<$<AND:${_mbelib_avx2_dispatch_config},$<CONFIG:Release,RelWithDebInfo>>:-fno-lto>"
+            )
+        endif()
     else()
         message(STATUS "IPO/LTO not supported: ${_ipo_msg}")
     endif()
 endif()
+unset(_mbelib_windows_gcc)
 
 # Generate pkg-config metadata
 configure_file(
