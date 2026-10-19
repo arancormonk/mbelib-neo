@@ -67,6 +67,7 @@ jobs:
           - os: ubuntu-latest
             preset: dev-release
             ci_group: ci-worker-02
+            require_avx2: true
           - os: ubuntu-latest
             preset: notones-debug
             ci_group: ci-worker-03
@@ -85,6 +86,7 @@ jobs:
           - os: windows-latest
             preset: dev-release
             ci_group: ci-worker-08
+            require_avx2: true
           - os: windows-latest
             preset: notones-debug
             ci_group: ci-worker-09
@@ -97,9 +99,13 @@ jobs:
         run: echo "No relevant changes for this check."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.CI_RUN_CHECK == 'true'
+      # The x86-64 dev-release legs are tuned for the runner (MBELIB_ENABLE_NATIVE),
+      # which always has AVX2, so the AVX2 golden test must run, not skip.
       - name: Configure (${{ matrix.preset }})
         if: env.CI_RUN_CHECK == 'true'
-        run: cmake --preset ${{ matrix.preset }} -DMBELIB_BUILD_TOOLS=ON
+        run: >-
+          cmake --preset ${{ matrix.preset }} -DMBELIB_BUILD_TOOLS=ON
+          -DMBELIB_TEST_REQUIRE_AVX2=${{ matrix.require_avx2 && 'ON' || 'OFF' }}
       - name: Build (${{ matrix.preset }})
         if: env.CI_RUN_CHECK == 'true'
         run: cmake --build --preset ${{ matrix.preset }} --parallel
@@ -165,10 +171,12 @@ jobs:
       - name: Test (dev-release)
         run: ctest --preset dev-release -V
 
-  # dev-release ships fast-math, LTO and SIMD, but the matrix builds it for
-  # baseline x86-64. This runs the whole suite, quality tools included, with
-  # AVX2/FMA code generation as well, so FMA contraction, auto-vectorization and
-  # optimizer-exposed undefined behaviour reach a test before a user.
+  # dev-release ships fast-math, LTO and SIMD; the release assets build it for
+  # baseline x86-64 (MBELIB_ENABLE_NATIVE=OFF, tested by install-and-consume)
+  # and the matrix for whatever the runner has. This runs the whole suite,
+  # quality tools included, with x86-64-v3 code generation for every unit, so
+  # FMA contraction, auto-vectorization and optimizer-exposed undefined
+  # behaviour reach a test before a user.
   # x86-64-v3 because every hosted x86_64 runner has it; AVX-512 (v4) is not
   # guaranteed, so the v4 job below only links.
   optimized-v3-ctest:
@@ -231,19 +239,56 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The AVX2 golden tests below must run, not skip.
+      - name: Require an x86-64-v3 runner
+        run: |
+          set -euo pipefail
+          /lib64/ld-linux-x86-64.so.2 --help | grep -F 'x86-64-v3 (supported'
       - name: Configure (Release, default options)
         run: |
           set -euo pipefail
           gcc --version
-          cmake -S . -B build/consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DMBELIB_BUILD_TESTS=ON
+          cmake -S . -B build/consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DMBELIB_BUILD_TESTS=ON \
+            -DMBELIB_TEST_REQUIRE_AVX2=ON | tee consumer-configure.log
           # The job exists for these defaults; fail if they change under it.
           grep -Fx 'MBELIB_ENABLE_SIMD:BOOL=ON' build/consumer/CMakeCache.txt
           grep -Fx 'MBELIB_ENABLE_FAST_MATH:BOOL=OFF' build/consumer/CMakeCache.txt
           grep -Fx 'MBELIB_WARNINGS_AS_ERRORS:BOOL=ON' build/consumer/CMakeCache.txt
+          grep -Fx 'MBELIB_ENABLE_NATIVE:BOOL=ON' build/consumer/CMakeCache.txt
+          grep -F 'MBELIB_ENABLE_NATIVE: release-like configurations use -march=native' consumer-configure.log
       - name: Build (Release, default options)
         run: cmake --build build/consumer --parallel
       - name: Test (Release, default options)
         run: ctest --test-dir build/consumer --output-on-failure
+      # The portable variant packagers build: baseline x86-64 code generation,
+      # with the AVX2 kernels dispatched at run time.
+      - name: Configure (Release, portable)
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/consumer-portable -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc \
+            -DMBELIB_BUILD_TESTS=ON -DMBELIB_ENABLE_NATIVE=OFF -DMBELIB_TEST_REQUIRE_AVX2=ON | tee portable-configure.log
+          grep -F 'MBELIB_ENABLE_NATIVE: off' portable-configure.log
+          grep -F 'AVX2 dispatch: -mavx2 -mfma kernels chosen at run time' portable-configure.log
+      - name: Build (Release, portable)
+        run: cmake --build build/consumer-portable --parallel
+      - name: Test (Release, portable)
+        run: ctest --test-dir build/consumer-portable --output-on-failure
+      # Multi-config generators pick the configuration at build time: SIMD,
+      # LTO and the native tuning must reach Release without a build type.
+      - name: Configure (Ninja Multi-Config, LTO)
+        run: |
+          set -euo pipefail
+          command -v ninja || { sudo apt-get update && sudo apt-get install -y ninja-build; }
+          cmake -S . -B build/multi-config -G "Ninja Multi-Config" -DCMAKE_C_COMPILER=gcc \
+            -DMBELIB_BUILD_TESTS=ON -DMBELIB_ENABLE_LTO=ON -DMBELIB_TEST_REQUIRE_AVX2=ON
+          grep -Fx 'MBELIB_ENABLE_SIMD:BOOL=ON' build/multi-config/CMakeCache.txt
+      - name: Build and test (Ninja Multi-Config Release and Debug)
+        run: |
+          set -euo pipefail
+          for config in Release Debug; do
+            cmake --build build/multi-config --config "$config" --parallel
+            ctest --test-dir build/multi-config -C "$config" --output-on-failure
+          done
 
   # The same suite built by a current Clang, the macOS toolchain's compiler
   # family, which treats fast-math more aggressively than GCC or Ubuntu's Clang:
@@ -410,6 +455,63 @@ jobs:
               -DCMAKE_C_FLAGS=-march=x86-64-v4
             cmake --build --preset dev-release --parallel
           '
+
+  # Portable SIMD builds for baseline x86-64 carry AVX2/FMA copies of the
+  # width-dependent kernels and pick them at run time. Debug pins both paths to
+  # the strict golden hashes, and the dispatched AVX2 path must reproduce a
+  # Debug -march=x86-64-v3 build exactly.
+  dispatch-debug:
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
+    name: linux • Debug • SIMD (SSE2 baseline + AVX2 dispatch)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-06
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A runner without the ISA would skip the AVX2 path; fail here with the
+      # reason instead.
+      - name: Require an x86-64-v3 runner
+        run: |
+          set -euo pipefail
+          /lib64/ld-linux-x86-64.so.2 --help | grep -F 'x86-64-v3 (supported'
+      - name: Configure (Debug, SIMD, portable)
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/dispatch -DCMAKE_BUILD_TYPE=Debug -DMBELIB_ENABLE_SIMD=ON \
+            -DMBELIB_TEST_REQUIRE_AVX2=ON | tee dispatch-configure.log
+          grep -F 'AVX2 dispatch: -mavx2 -mfma kernels chosen at run time' dispatch-configure.log
+      - name: Build (Debug, SIMD, portable)
+        run: cmake --build build/dispatch --parallel
+      - name: Test (Debug, SIMD, portable)
+        run: ctest --test-dir build/dispatch --output-on-failure
+      - name: Strict golden hashes on both dispatch paths
+        run: |
+          set -euo pipefail
+          build/dispatch/test_golden_pcm sse2 --require
+          build/dispatch/test_golden_pcm avx2 --require
+          build/dispatch/test_cpu_dispatch
+      - name: Dispatched AVX2 equals a Debug x86-64-v3 build
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/v3-debug -DCMAKE_BUILD_TYPE=Debug -DMBELIB_ENABLE_SIMD=ON \
+            -DCMAKE_C_FLAGS=-march=x86-64-v3 -DMBELIB_BUILD_EXAMPLES=OFF
+          cmake --build build/v3-debug --parallel --target gen_golden test_golden_pcm
+          build/v3-debug/test_golden_pcm avx2 --require
+          build/dispatch/gen_golden avx2 | tee dispatch-avx2.txt
+          build/v3-debug/gen_golden | tee v3.txt
+          diff -u v3.txt dispatch-avx2.txt
 
   cross-arm32:
     needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
@@ -1321,12 +1423,19 @@ jobs:
       - name: Ensure pkg-config is available (macOS)
         if: env.CI_RUN_CHECK == 'true' && (runner.os == 'macOS')
         run: brew update && brew install pkg-config
-      - name: Configure (dev-release preset)
+      # The release assets' configuration: portable code generation, with the
+      # AVX2 kernels dispatched at run time on x86-64 (the Linux runner has AVX2).
+      - name: Configure (dev-release preset, portable)
         if: env.CI_RUN_CHECK == 'true'
-        run: cmake --preset dev-release
+        run: >-
+          cmake --preset dev-release -DMBELIB_ENABLE_NATIVE=OFF
+          -DMBELIB_TEST_REQUIRE_AVX2=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
       - name: Build (dev-release preset)
         if: env.CI_RUN_CHECK == 'true'
         run: cmake --build --preset dev-release --parallel
+      - name: Test (dev-release preset, portable)
+        if: env.CI_RUN_CHECK == 'true'
+        run: ctest --preset dev-release --output-on-failure
       - name: Install
         if: env.CI_RUN_CHECK == 'true'
         run: cmake --install build/dev-release --prefix "$RUNNER_TEMP/mbe-install"
@@ -1390,10 +1499,14 @@ jobs:
       queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Configure (dev-release preset)
-        run: cmake --preset dev-release
+      # The release asset's configuration: portable code generation, with the
+      # AVX2 kernels (/arch:AVX2) dispatched at run time.
+      - name: Configure (dev-release preset, portable)
+        run: cmake --preset dev-release -DMBELIB_ENABLE_NATIVE=OFF -DMBELIB_TEST_REQUIRE_AVX2=ON
       - name: Build (dev-release preset)
         run: cmake --build --preset dev-release --parallel
+      - name: Test (dev-release preset, portable)
+        run: ctest --preset dev-release --output-on-failure
       - name: Install
         run: cmake --install build/dev-release --config Release --prefix "$env:RUNNER_TEMP\\mbe-install"
       - name: Test CMake package consumer (static link)
@@ -1423,7 +1536,7 @@ jobs:
 
   package-release:
     name: package release (${{ matrix.os }})
-    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, lto-link-v4]
+    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, lto-link-v4, dispatch-debug]
     # The PR-only classifier is skipped on tags. Explicit result checks avoid
     # success() propagating that skip through otherwise successful native jobs.
     if: >-
@@ -1433,6 +1546,7 @@ jobs:
       needs.install-and-consume.result == 'success' && needs.install-and-consume-win.result == 'success' &&
       needs.optimized-v3-ctest.result == 'success' && needs.optimized-v3-ctest-clang.result == 'success' &&
       needs.consumer-release-gcc.result == 'success' && needs.lto-link-v4.result == 'success' &&
+      needs.dispatch-debug.result == 'success' &&
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.rebuild_packages))
     runs-on: ${{ matrix.os }}
@@ -1462,8 +1576,8 @@ jobs:
         with:
           ref: ${{ needs.validate-release-tag.outputs.commit }}
           fetch-depth: 0
-      - name: Configure (dev-release preset)
-        run: cmake --preset dev-release
+      - name: Configure (dev-release preset, portable)
+        run: cmake --preset dev-release -DMBELIB_ENABLE_NATIVE=OFF
       - name: Build (dev-release preset)
         run: cmake --build --preset dev-release --parallel
       - name: Test (dev-release preset)

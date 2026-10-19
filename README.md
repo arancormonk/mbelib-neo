@@ -143,16 +143,18 @@ git push origin vX.Y.Z
 - `-DMBELIB_BUILD_EXAMPLES=ON` — Build `examples/` (default ON).
 - `-DMBELIB_ENABLE_WARNINGS=ON` — Enable common warnings (default ON).
 - `-DMBELIB_WARNINGS_AS_ERRORS=ON` — Treat warnings as errors (default ON).
-- `-DMBELIB_ENABLE_ASAN=ON` — Enable AddressSanitizer in Debug builds.
-- `-DMBELIB_ENABLE_UBSAN=ON` — Enable UndefinedBehaviorSanitizer in Debug builds.
+- `-DMBELIB_ENABLE_ASAN=ON` — Enable AddressSanitizer in the Debug configuration.
+- `-DMBELIB_ENABLE_UBSAN=ON` — Enable UndefinedBehaviorSanitizer in the Debug configuration.
 - `-DMBE_ENABLE_DEBUG_LOGS=ON` — Verbose debug logging in codec sources.
 - `-DMBELIB_BUILD_DOCS=ON` — Add `docs` target (requires Doxygen).
 - `-DMBELIB_ENABLE_FAST_MATH=ON` — Enable fast-math (`-ffast-math`/`/fp:fast`) on library targets.
   PCM conversion is always compiled with IEEE semantics so NaN/Inf handling is preserved.
-- `-DMBELIB_ENABLE_LTO=ON` — Enable IPO/LTO in Release builds when supported.
+- `-DMBELIB_ENABLE_LTO=ON` — Enable IPO/LTO for the Release and RelWithDebInfo configurations when supported (single- and multi-config generators).
 - `-DMBELIB_ENABLE_HARDENING=ON` — Enable supported Release-like compiler/linker hardening (default ON).
-- `-DMBELIB_ENABLE_SIMD=ON` — Enable SSE2/NEON routines when the compiler target provides them, otherwise use scalar routines. Defaults to ON for Release, RelWithDebInfo, and MinSizeRel builds of 64-bit targets, and OFF otherwise. The bundled FFT also falls back to scalar when its compiler target has no supported SIMD backend. On 32-bit ARM, pass `-DCMAKE_C_FLAGS=-mfpu=neon` to enable NEON; the option itself preserves the toolchain's FPU selection. Measure performance on your own core. On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability. See [SIMD target selection](docs/build-installation.md#simd-target-selection).
-- Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported.
+- `-DMBELIB_ENABLE_SIMD=ON` — Enable SSE2/AVX2/NEON routines when the compiler target provides them, otherwise use scalar routines. Defaults to ON for Release, RelWithDebInfo, and MinSizeRel builds of 64-bit targets (and for multi-config generators without a build type), and OFF otherwise. On baseline x86-64 the width-dependent kernels also get an AVX2/FMA copy that is chosen at run time on CPUs with AVX2. The bundled FFT also falls back to scalar when its compiler target has no supported SIMD backend. On 32-bit ARM, pass `-DCMAKE_C_FLAGS=-mfpu=neon` to enable NEON; the option itself preserves the toolchain's FPU selection. Measure performance on your own core. On 32-bit x86, this option compiles the library for SSE2 and therefore requires an SSE2-capable CPU; leave it OFF for baseline i386 portability. See [SIMD target selection](docs/build-installation.md#simd-target-selection).
+- `-DMBELIB_ENABLE_NATIVE=ON` — Tune the libraries' release-like configurations for the build host's CPU (`-march=native`/`-mcpu=native`, or a probed `/arch:` level for MSVC and clang-cl) when that is safe: not when cross-compiling, for Android/iOS/Emscripten, for foreign or several `CMAKE_OSX_ARCHITECTURES`, or when `CMAKE_C_FLAGS` already selects a target ISA (default ON). Debug is never tuned, and the flags never reach the exported targets or pkg-config. **Pass `-DMBELIB_ENABLE_NATIVE=OFF` to build portable binaries for distribution.** See [host tuning](docs/build-installation.md#host-tuning-mbelib_enable_native).
+- `-DMBELIB_TEST_REQUIRE_AVX2=ON` — Fail, rather than skip, `test_golden_pcm_avx2` when the build or CPU cannot run the AVX2 kernels (for CI on AVX2 runners).
+- Note: the `dev-release` preset enables SIMD, fast-math, and LTO by default when supported, and keeps the native default, so its binaries are tuned for the build host.
 - `-DMBELIB_BUILD_BENCHMARKS=ON` — Build optional local micro‑benchmarks (not run in CI): `bench_synth`, `bench_unvoiced`, `bench_convert`, and `bench_encode` (D-STAR, AMBE+2 and IMBE encoders).
 - `-DMBELIB_BUILD_TOOLS=ON` — Build the opt-in `mbe_quality_eval` public-API decoder and spectral analyzer, and the `mbe_tetra_decode` TETRA conformance-file decoder. See the [quality evaluation workflow](docs/testing.md#speech-quality-evaluation) and [TETRA conformance](docs/testing.md#tetra-conformance).
 

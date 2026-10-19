@@ -20,8 +20,22 @@ The CTest suite includes:
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)
 - float-to-int16 conversion parity checks
-- golden PCM hash regression checks
-- SIMD architecture detection checks
+- golden PCM hash regression checks, by kernel ISA: `test_golden_pcm` runs the CPU probe's choice,
+  `test_golden_pcm_sse2` and `test_golden_pcm_avx2` force either copy of a run-time AVX2 dispatch build
+  and skip (exit 77) where the build or CPU cannot run it; `MBELIB_TEST_REQUIRE_AVX2=ON` makes the AVX2
+  skip a failure
+- SIMD architecture detection checks, including where the AVX2 dispatch applies
+- run-time AVX2 dispatch (`test_cpu_dispatch`): the CPU probe against the compiler's CPU-feature
+  runtime, the ISA selection rules, voiced oscillators that differ between SSE2 and AVX2 only within
+  tolerance, tone fits within 1e-9, and soft ECC decoders and the TETRA adaptive codebook bit-identical
+  across ISAs; `test_simd_numerics`, `test_tetra_simd` and `test_tetra_decoder` repeat their oracles and
+  stream hashes under every ISA the build and CPU can select
+- the AVX2 translation units define only `*_avx2` externals, so no AVX2 code can be linked into a
+  baseline caller (`test_avx2_symbols`, Linux, non-LTO configurations)
+- configure-only checks of per-configuration settings (`test_build_configuration`, needs Ninja):
+  Ninja Multi-Config without a build type gets SIMD in both configurations and LTO only in Release,
+  Release gets the native flag (when the host allows it) and Debug never does, and a user `-march`
+  or `MBELIB_ENABLE_NATIVE=OFF` turns it off
 - quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 - quality-tool CLI alignment, accepted/rejected frame widths, and private output
   permissions (`test_quality_tools`, with tools enabled and Python 3 available)
@@ -90,12 +104,32 @@ with IEEE semantics as `mbe_pcm_convert.c` is.
 
 Consumers do not build a preset. dsd-neo's CI, distribution packages and the
 vcpkg port configure a plain `CMAKE_BUILD_TYPE=Release`, whose defaults are
-SIMD on, fast-math off and warnings as errors. The IEEE-only SIMD batches
+SIMD on, fast-math off, warnings as errors and host tuning
+(`MBELIB_ENABLE_NATIVE`) on; packagers that ship binaries pass
+`-DMBELIB_ENABLE_NATIVE=OFF`. The IEEE-only SIMD batches
 (`!defined(__FAST_MATH__)`, such as the AMBE codebook search) compile only
 there, so a fourth Linux job builds and tests exactly that configuration with
 the runner's GCC and fails if those defaults change. v2.5.0's codebook search
 failed to build under it (GCC 13 `-Waggressive-loop-optimizations` on an `int`
-row offset) while every preset job passed.
+row offset) while every preset job passed. The same job also builds and tests
+the portable variant (`-DMBELIB_ENABLE_NATIVE=OFF`), which keeps baseline x86-64
+code generation and dispatches the AVX2 kernels at run time.
+
+It then configures Ninja Multi-Config without a build type, with LTO, and runs
+the suite for Release and Debug, so a multi-config Release keeps SIMD, LTO and
+the host tuning.
+
+Release assets and the install-and-consume jobs build `dev-release` with
+`-DMBELIB_ENABLE_NATIVE=OFF`, so the shipped libraries need only x86-64 v1
+(SSE2) or the ARM64 baseline and use AVX2 through the run-time dispatch; the
+install-and-consume jobs also run that build's suite (on Linux and Windows
+with `MBELIB_TEST_REQUIRE_AVX2=ON`). The `dev-release` legs of the build matrix
+keep the native default and also require the AVX2 golden test on Linux and
+Windows. A Debug job builds a portable SIMD tree and checks the strict golden
+hashes for both dispatch paths (`test_golden_pcm_sse2`, `test_golden_pcm_avx2`
+with `MBELIB_TEST_REQUIRE_AVX2=ON`), then builds a Debug `-march=x86-64-v3`
+tree and requires its `gen_golden` output to equal the dispatched
+`gen_golden avx2`.
 
 Every required check runs on every pull request. A required check that a path
 filter keeps from starting never reports, so the pull request waits on it
@@ -199,9 +233,12 @@ loading, allocation and stream resets, and checks a checksum against its warm-up
 on every run. Repeats concatenate the input within a run; each run resets the
 encoder, parameter triplet and RNG. Checksumming is included in the timing.
 Pin runs to one CPU when possible and alternate matched baseline/candidate
-builds. Compare identical compiler, fast-math and LTO settings. `-march=x86-64-v3`
+builds. Compare identical compiler, fast-math, LTO and `MBELIB_ENABLE_NATIVE`
+settings: a default Release build is tuned for the build host, so pass
+`-DMBELIB_ENABLE_NATIVE=OFF` to measure the portable build. `-march=x86-64-v3`
 is a separate compile target; portable SIMD builds still require only SSE2 on
-x86 and use NEON only when enabled by the existing target selection. Native ARM
+x86 (running the dispatched kernels as AVX2 on AVX2 CPUs) and use NEON only
+when enabled by the existing target selection. Native ARM
 measurements are required before claiming NEON performance improvements.
 
 `bench_tetra [repeats=10] [runs=7]` applies the same in-memory replay method to
@@ -227,8 +264,10 @@ codewords that cost more, so the result is exactly that of a full scan, ties
 included. SIMD builds screen candidates in groups of four (SSE2) or eight (AVX2),
 then resolve surviving candidates in enumeration order with the same exact
 integer scores and tie rules. AVX2 gathers pairs of 16-bit parity costs without
-reading beyond the cost table. Other targets use the scalar search. There is no
-lazy initialization or shared mutable state. `test_ecc` checks every clean codeword, then compares
+reading beyond the cost table. Other targets use the scalar search. The search
+has no lazy initialization or shared mutable state; a portable x86-64 build
+only reads the run-time dispatch's cached ISA choice, which every thread
+computes identically. `test_ecc` checks every clean codeword, then compares
 1024 pseudo-random inputs per code against an independent oracle that scores
 every codeword, with zero, full, binary, single-bit, small tied, mostly
 confident and random confidences.
@@ -273,15 +312,23 @@ recurrence across three consecutive frames, including the overlap and next
 seed. This oracle also runs on ARM32 and AArch64 under QEMU.
 
 On AVX2 compile targets, float kernels process eight lanes, including voiced
-oscillators, unvoiced windowing/overlap and PCM conversion. Portable x86 builds
-still require only SSE2; selecting AVX2 requires an explicit compiler target
-such as `-DCMAKE_C_FLAGS=-march=x86-64-v3`. Debug AVX2 has its own float and AMBE
-sequence PCM goldens because wider oscillator recurrences change rounding.
-Regenerate them with `gen_golden` in a Debug SIMD build using that target.
+oscillators, unvoiced windowing/overlap and PCM conversion. Portable x86-64
+builds still require only SSE2; their voiced oscillators, tone fits, soft ECC
+search and TETRA adaptive codebook also have an AVX2/FMA copy that runs on
+CPUs with the x86-64-v3 set (see
+[run-time dispatch](build-installation.md#run-time-avx2fma-dispatch)); the
+other kernels keep SSE2 widths. Debug AVX2 has its own float and AMBE sequence
+PCM goldens because wider oscillator recurrences change rounding, and the
+dispatched AVX2 copy reproduces a Debug `-march=x86-64-v3` build exactly.
+Regenerate them in a Debug SIMD build with `gen_golden sse2` and
+`gen_golden avx2` (`auto`, the default, prints the probe's choice), and check
+`gen_golden avx2` against `gen_golden` from a Debug build with
+`-DCMAKE_C_FLAGS=-march=x86-64-v3`.
 
 `tools/bench_compare.sh` runs the encoder, PCM conversion, unvoiced synthesis
 and all six steady/gradual/jump mixed/voiced workloads in matching Release
-builds with explicit SIMD disabled/enabled. Compilers can still automatically
+builds with explicit SIMD disabled, enabled (both portable, so the SIMD build
+dispatches AVX2 on AVX2 CPUs) and enabled with host tuning. Compilers can still automatically
 vectorize C loops when explicit SIMD is disabled. Use `bench_replay` in those
 same trees for real speech, all four decoders, tone frames and channel errors;
 synthetic synthesis timings alone do not establish end-to-end gains. It also
