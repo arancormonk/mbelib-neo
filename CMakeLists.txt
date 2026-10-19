@@ -70,15 +70,16 @@ option(
 # Release builds of 64-bit targets default to SIMD. 32-bit targets stay
 # opt-in: x86 would require SSE2 and ARM needs an explicit -mfpu=neon. A
 # multi-config generator (Ninja Multi-Config, Visual Studio, Xcode) picks the
-# configuration at build time, so without a build type it gets the Release
-# default; its Debug configuration is the hash-covered Debug + SIMD build.
+# configuration at build time and ignores CMAKE_BUILD_TYPE, so it gets the
+# Release default; its Debug configuration is the hash-covered Debug + SIMD
+# build.
 get_property(_mbelib_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 set(_mbelib_simd_default OFF)
 if(
     CMAKE_SIZEOF_VOID_P EQUAL 8
     AND (
-        CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo|MinSizeRel"
-        OR (_mbelib_multi_config AND NOT CMAKE_BUILD_TYPE)
+        _mbelib_multi_config
+        OR CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo|MinSizeRel"
     )
 )
     set(_mbelib_simd_default ON)
@@ -593,13 +594,15 @@ endif()
 # golden hashes, sanitizers and coverage expect, and nothing reaches the
 # exported targets or pkg-config metadata.
 include(cmake/MbeNativeArch.cmake)
+mbelib_native_probe_target()
 set(_mbelib_native_flags "")
 if(MBELIB_ENABLE_NATIVE)
     mbelib_native_arch_flags(_mbelib_native_flags _mbelib_native_reason)
+    list(JOIN _mbelib_native_flags " " _mbelib_native_flags_text)
     if(_mbelib_native_flags)
         message(
             STATUS
-            "MBELIB_ENABLE_NATIVE: release-like configurations use ${_mbelib_native_flags} (${_mbelib_native_reason})"
+            "MBELIB_ENABLE_NATIVE: release-like configurations use ${_mbelib_native_flags_text} (${_mbelib_native_reason})"
         )
     else()
         message(
@@ -608,6 +611,7 @@ if(MBELIB_ENABLE_NATIVE)
         )
     endif()
     unset(_mbelib_native_reason)
+    unset(_mbelib_native_flags_text)
 else()
     message(
         STATUS
@@ -621,6 +625,12 @@ if(_mbelib_native_flags)
 endif()
 function(_mbelib_apply_native target)
     foreach(_mbelib_native_flag IN LISTS _mbelib_native_flags)
+        string(
+            REPLACE ","
+            "$<COMMA>"
+            _mbelib_native_flag
+            "${_mbelib_native_flag}"
+        )
         target_compile_options(
             ${target}
             PRIVATE "$<${_mbelib_native_config}:${_mbelib_native_flag}>"
@@ -676,12 +686,15 @@ unset(_mbelib_ieee_math_options)
 # baseline x86-64 compiles the kernels whose output depends on the vector
 # width, and the integer kernels that gain from AVX2, a second time with
 # AVX2/FMA code generation and picks one per call from a cached CPU probe. A
-# configuration whose target already has AVX2 calls its kernels directly, so
-# the AVX2 copies are compiled (and stay empty) only for configurations
-# without native tuning. The flags are appended after the IEEE options above.
-# 32-bit x86 and universal macOS builds do not dispatch. MinGW GCC does not
-# align the stack for 32-byte spills (GCC PR 54412), so it dispatches only
-# when the assembler can turn aligned vector moves into unaligned ones.
+# configuration whose target already has AVX2 (CMAKE_C_FLAGS or a
+# CMAKE_C_FLAGS_<CONFIG>) calls its kernels directly: the preprocessor
+# (mbe_cpu.h) decides per translation unit, so the copies are built for every
+# configuration without native tuning, and those that do not need them leave
+# them unused. Natively tuned configurations compile them empty. The flags are
+# appended after the IEEE options above.
+# 32-bit x86 and universal macOS builds do not dispatch. MinGW and Cygwin GCC
+# do not align the stack for 32-byte spills (GCC PR 54412), so they dispatch
+# only when the assembler can turn aligned vector moves into unaligned ones.
 set(MBELIB_AVX2_DISPATCH_SOURCES
     src/core/mbe_voiced_avx2.c
     src/core/mbe_tone_fit_avx2.c
@@ -705,26 +718,15 @@ else()
     ]=]
       MBELIB_TARGET_X86_64
     )
-    _mbelib_check_c_source_compiles_static(
-      [=[
-      #if defined(__AVX2__)
-      #error the target already has AVX2
-      #endif
-      int mbelib_target_without_avx2;
-    ]=]
-      MBELIB_TARGET_WITHOUT_AVX2
-    )
     if(NOT MBELIB_TARGET_X86_64)
         set(_mbelib_avx2_reason "not an x86-64 target")
-    elseif(NOT MBELIB_TARGET_WITHOUT_AVX2)
-        set(_mbelib_avx2_reason "the target already has AVX2")
     else()
         set(_mbelib_avx2_candidate "")
         if(MSVC)
             set(_mbelib_avx2_candidate /arch:AVX2)
         elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
             set(_mbelib_avx2_candidate -mavx2 -mfma)
-            if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            if((WIN32 OR CYGWIN) AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
                 list(
                     APPEND _mbelib_avx2_candidate
                     -Wa,-muse-unaligned-vector-move
@@ -765,7 +767,6 @@ else()
     endif()
     # Probe again on every configure: CMAKE_C_FLAGS may have gained or lost a
     # target ISA in this build directory.
-    unset(MBELIB_TARGET_WITHOUT_AVX2 CACHE)
     unset(MBELIB_C_HAS_AVX2_DISPATCH_FLAGS CACHE)
 endif()
 unset(_mbelib_osx_arch_count)
@@ -798,12 +799,12 @@ if(MBELIB_AVX2_DISPATCH_FLAGS)
     if(_mbelib_native_flags)
         message(
             STATUS
-            "AVX2 dispatch: ${_mbelib_avx2_flags_text} kernels chosen at run time in configurations without native tuning"
+            "AVX2 dispatch: ${_mbelib_avx2_flags_text} kernels chosen at run time in configurations without native tuning or an AVX2 target"
         )
     else()
         message(
             STATUS
-            "AVX2 dispatch: ${_mbelib_avx2_flags_text} kernels chosen at run time"
+            "AVX2 dispatch: ${_mbelib_avx2_flags_text} kernels chosen at run time in configurations without an AVX2 target"
         )
     endif()
     unset(_mbelib_avx2_flags_text)
@@ -1762,16 +1763,22 @@ if(MBELIB_BUILD_TESTS)
                 set(_mbelib_test_ninja "${CMAKE_MAKE_PROGRAM}")
             else()
                 find_program(MBELIB_NINJA_EXECUTABLE NAMES ninja ninja-build)
-                set(_mbelib_test_ninja "${MBELIB_NINJA_EXECUTABLE}")
+                set(_mbelib_test_ninja "")
+                if(MBELIB_NINJA_EXECUTABLE)
+                    set(_mbelib_test_ninja "${MBELIB_NINJA_EXECUTABLE}")
+                endif()
             endif()
             set(_mbelib_test_user_isa "")
             if(MSVC AND MBELIB_NATIVE_TARGET_X86)
                 set(_mbelib_test_user_isa "/arch:AVX")
             elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+                # A valid baseline target ISA for each architecture.
                 if(MBELIB_NATIVE_TARGET_X86)
                     set(_mbelib_test_user_isa "-march=x86-64")
-                elseif(MBELIB_NATIVE_TARGET_ARM)
-                    set(_mbelib_test_user_isa "-mcpu=generic")
+                elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+                    set(_mbelib_test_user_isa "-march=armv8-a")
+                elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv7")
+                    set(_mbelib_test_user_isa "-march=armv7-a")
                 endif()
             endif()
             add_test(
@@ -1781,7 +1788,9 @@ if(MBELIB_BUILD_TESTS)
                     ${PROJECT_SOURCE_DIR}/tests/test_build_configuration.py
                     --cmake ${CMAKE_COMMAND} --source ${PROJECT_SOURCE_DIR}
                     --pffft-source ${MBELIB_PFFFT_SOURCE_DIR} --c-compiler
-                    ${CMAKE_C_COMPILER} "--ninja=${_mbelib_test_ninja}"
+                    ${CMAKE_C_COMPILER}
+                    "--c-compiler-arg1=${CMAKE_C_COMPILER_ARG1}"
+                    "--ninja=${_mbelib_test_ninja}"
                     "--user-isa=${_mbelib_test_user_isa}"
             )
             set_tests_properties(

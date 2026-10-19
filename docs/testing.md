@@ -32,10 +32,16 @@ The CTest suite includes:
   stream hashes under every ISA the build and CPU can select
 - the AVX2 translation units define only `*_avx2` externals, so no AVX2 code can be linked into a
   baseline caller (`test_avx2_symbols`, Linux, non-LTO configurations)
-- configure-only checks of per-configuration settings (`test_build_configuration`, needs Ninja):
-  Ninja Multi-Config without a build type gets SIMD in both configurations and LTO only in Release,
-  Release gets the native flag (when the host allows it) and Debug never does, and a user `-march`
-  or `MBELIB_ENABLE_NATIVE=OFF` turns it off
+- the host-tuning rules in CMake script mode, then configure-only checks of per-configuration
+  settings (`test_build_configuration`; the configure checks need Ninja and skip when the forwarded
+  compiler command selects a target ISA): every skip rule of `cmake/MbeNativeArch.cmake` (including
+  a target ISA in the compiler command, quoted or tab-separated flags and MSVC's `CL`/`_CL_`) and the
+  MinGW/Cygwin assembler requirement; Ninja Multi-Config, with or without `CMAKE_BUILD_TYPE` and
+  from a source path with spaces, gets SIMD in both configurations (64-bit targets) and LTO only in
+  Release; Release gets the native flag (when the host allows it) and Debug never does; a user
+  `-march` or `MBELIB_ENABLE_NATIVE=OFF` turns it off; and a portable Release keeps its AVX2 copies
+  when only Debug targets AVX2. Exported build settings (`CFLAGS`, `CL`, `CMAKE_GENERATOR`, ...)
+  are removed from the nested configures' environment
 - quality-tool filesystem helper checks (`test_quality_fs`, built with `MBELIB_BUILD_TOOLS=ON`)
 - quality-tool CLI alignment, accepted/rejected frame widths, and private output
   permissions (`test_quality_tools`, with tools enabled and Python 3 available)

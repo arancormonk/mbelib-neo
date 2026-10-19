@@ -4,26 +4,154 @@
 # mbelib_native_arch_flags(<flags_var> <reason_var>) sets <flags_var> to the
 # compiler options that tune code generation for the build host, or to an
 # empty list, and <reason_var> to why. It never tunes when the result could
-# run on another machine or would override a target the user chose:
+# run on another machine or would override a target the user chose
+# (mbelib_native_arch_skip_reason()):
 #
-# - cross-compiling, or targeting Android, iOS (and the other Apple device
-#   platforms) or Emscripten;
+# - cross-compiling, CMAKE_C_COMPILER_TARGET set, or targeting Android, iOS
+#   (and the other Apple device platforms, also when only CMAKE_OSX_SYSROOT
+#   selects their SDK) or Emscripten;
 # - CMAKE_OSX_ARCHITECTURES naming more than one architecture, or one other
 #   than the host's;
-# - -march=, -mcpu= or /arch: already in CMAKE_C_FLAGS or a release-like
-#   CMAKE_C_FLAGS_<CONFIG> (distribution flags such as makepkg's
-#   -march=x86-64 included);
-# - a compiler that rejects the option.
+# - -march=, -mcpu=, /arch: or -arch already in the compiler command
+#   (CMAKE_C_COMPILER_ARG1, as for CC="gcc -march=x86-64"), CMAKE_C_FLAGS or a
+#   release-like CMAKE_C_FLAGS_<CONFIG> (distribution flags such as makepkg's
+#   -march=x86-64 included), or for MSVC-style compilers in the CL and _CL_
+#   environment variables;
+# - a compiler that rejects the option, or MinGW/Cygwin GCC without the
+#   assembler's -muse-unaligned-vector-move (GCC does not align the Windows
+#   x64 stack for 32-byte spills, GCC PR 54412).
 #
 # GNU-style compilers (GCC, Clang, AppleClang) get -march=native on x86 and
 # -mcpu=native on ARM. MSVC and clang-cl have no native option; on an x86 or
 # x64 host they get the highest of /arch:AVX512, /arch:AVX2 and /arch:AVX that
 # a CPUID and XGETBV probe run at configure time finds supported by the CPU and
 # the OS. The probe result is cached for the build directory.
+#
+# mbelib_native_arch_skip_reason() and mbelib_native_arch_compose() only read
+# variables, so tests run them in script mode (cmake -P).
 include_guard(GLOBAL)
 
 include(CheckCCompilerFlag)
 include(CheckCSourceCompiles)
+
+# Option forms that pick a target ISA, also when quoted, at the start or after
+# a space or tab. A user choice wins over host tuning.
+set(_MBELIB_NATIVE_USER_ISA_REGEX
+    "(^|[ \t])[\"']?(-march=|-mcpu=|[-/][Aa][Rr][Cc][Hh]:|-arch[ \t])"
+)
+
+# mbelib_native_arch_skip_reason(<out_var>)
+#
+# Sets <out_var> to why host tuning must not apply, or to "" when it may.
+function(mbelib_native_arch_skip_reason out_var)
+    set(_reason "")
+    if(CMAKE_CROSSCOMPILING)
+        set(_reason "cross-compiling")
+    elseif(
+        EMSCRIPTEN
+        OR CMAKE_SYSTEM_NAME
+            MATCHES
+            "^(Android|iOS|tvOS|watchOS|visionOS|Emscripten)$"
+    )
+        set(_reason "${CMAKE_SYSTEM_NAME} target")
+    elseif(CMAKE_C_COMPILER_TARGET)
+        set(_reason
+            "CMAKE_C_COMPILER_TARGET selects ${CMAKE_C_COMPILER_TARGET}"
+        )
+    endif()
+
+    # An iOS-family SDK can be selected through the sysroot alone, without
+    # CMAKE_SYSTEM_NAME; resolved SDK paths are mixed case (iPhoneOS.sdk).
+    string(TOLOWER "${CMAKE_OSX_SYSROOT}" _sysroot)
+    if(
+        _reason STREQUAL ""
+        AND _sysroot MATCHES "(iphone|appletv|watch|xr)(os|simulator)"
+    )
+        set(_reason "CMAKE_OSX_SYSROOT selects ${CMAKE_OSX_SYSROOT}")
+    endif()
+
+    if(
+        _reason STREQUAL ""
+        AND (APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        AND CMAKE_OSX_ARCHITECTURES
+    )
+        list(LENGTH CMAKE_OSX_ARCHITECTURES _count)
+        set(_host "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+        if(_host STREQUAL "aarch64")
+            set(_host arm64)
+        endif()
+        if(_count GREATER 1)
+            set(_reason
+                "CMAKE_OSX_ARCHITECTURES names several architectures (${CMAKE_OSX_ARCHITECTURES})"
+            )
+        elseif(NOT CMAKE_OSX_ARCHITECTURES STREQUAL _host)
+            set(_reason
+                "CMAKE_OSX_ARCHITECTURES (${CMAKE_OSX_ARCHITECTURES}) is not the host architecture (${_host})"
+            )
+        endif()
+    endif()
+
+    if(_reason STREQUAL "")
+        # CC="gcc -march=x86-64" keeps the option in CMAKE_C_COMPILER_ARG1.
+        foreach(
+            _var
+            IN
+            ITEMS
+                CMAKE_C_COMPILER_ARG1
+                CMAKE_C_FLAGS
+                CMAKE_C_FLAGS_RELEASE
+                CMAKE_C_FLAGS_RELWITHDEBINFO
+                CMAKE_C_FLAGS_MINSIZEREL
+        )
+            if("${${_var}}" MATCHES "${_MBELIB_NATIVE_USER_ISA_REGEX}")
+                set(_reason "${_var} already selects a target ISA")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    # MSVC and clang-cl also take options from the CL and _CL_ environment
+    # variables, which CMake does not copy into the flags above.
+    if(
+        _reason STREQUAL ""
+        AND (MSVC OR CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    )
+        foreach(_env IN ITEMS CL _CL_)
+            if("$ENV{${_env}}" MATCHES "${_MBELIB_NATIVE_USER_ISA_REGEX}")
+                set(_reason
+                    "the ${_env} environment variable already selects a target ISA"
+                )
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(${out_var} "${_reason}" PARENT_SCOPE)
+endfunction()
+
+# mbelib_native_arch_compose(<flags_var> <reason_var> <flag>)
+#
+# The GNU-style host-tuning options for an accepted <flag>. MinGW and Cygwin
+# GCC also need the assembler to turn aligned vector moves into unaligned ones
+# (MBELIB_C_HAS_UNALIGNED_VECTOR_MOVE); without it, tuning is declined.
+function(mbelib_native_arch_compose flags_var reason_var flag)
+    set(_flags "${flag}")
+    set(_reason "host CPU")
+    if((WIN32 OR CYGWIN) AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        if(MBELIB_C_HAS_UNALIGNED_VECTOR_MOVE)
+            list(APPEND _flags -Wa,-muse-unaligned-vector-move)
+            set(_reason
+                "host CPU; unaligned vector moves for the Windows stack"
+            )
+        else()
+            set(_flags "")
+            set(_reason
+                "MinGW/Cygwin GCC needs the assembler option -muse-unaligned-vector-move (binutils 2.38 or later) for wide vectors on the Windows x64 stack"
+            )
+        endif()
+    endif()
+    set(${flags_var} "${_flags}" PARENT_SCOPE)
+    set(${reason_var} "${_reason}" PARENT_SCOPE)
+endfunction()
 
 # Compile-only probe of the active compiler target.
 function(_mbelib_native_target_is out_var source)
@@ -32,45 +160,27 @@ function(_mbelib_native_target_is out_var source)
     set(${out_var} "${${out_var}}" PARENT_SCOPE)
 endfunction()
 
-function(_mbelib_native_user_isa out_var)
-    set(_found "")
-    foreach(
-        _flag_var
-        IN
-        ITEMS
-            CMAKE_C_FLAGS
-            CMAKE_C_FLAGS_RELEASE
-            CMAKE_C_FLAGS_RELWITHDEBINFO
-            CMAKE_C_FLAGS_MINSIZEREL
+# mbelib_native_probe_target(): the target architecture family, probed once
+# per build directory: MBELIB_NATIVE_TARGET_X86 or MBELIB_NATIVE_TARGET_ARM
+# (both false elsewhere).
+macro(mbelib_native_probe_target)
+    _mbelib_native_target_is(MBELIB_NATIVE_TARGET_X86
+      [=[
+      #if !(defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)) || defined(_M_ARM64EC)
+      #error not an x86 target
+      #endif
+      int mbelib_native_target_x86;
+    ]=]
     )
-        if("${${_flag_var}}" MATCHES "(-march=|-mcpu=|[/-]arch:)")
-            set(_found "${_flag_var} already selects a target ISA")
-            break()
-        endif()
-    endforeach()
-    set(${out_var} "${_found}" PARENT_SCOPE)
-endfunction()
-
-function(_mbelib_native_osx_mismatch out_var)
-    set(_mismatch "")
-    if(APPLE AND CMAKE_OSX_ARCHITECTURES)
-        list(LENGTH CMAKE_OSX_ARCHITECTURES _count)
-        set(_host "${CMAKE_HOST_SYSTEM_PROCESSOR}")
-        if(_host STREQUAL "aarch64")
-            set(_host arm64)
-        endif()
-        if(_count GREATER 1)
-            set(_mismatch
-                "CMAKE_OSX_ARCHITECTURES names several architectures (${CMAKE_OSX_ARCHITECTURES})"
-            )
-        elseif(NOT CMAKE_OSX_ARCHITECTURES STREQUAL _host)
-            set(_mismatch
-                "CMAKE_OSX_ARCHITECTURES (${CMAKE_OSX_ARCHITECTURES}) is not the host architecture (${_host})"
-            )
-        endif()
-    endif()
-    set(${out_var} "${_mismatch}" PARENT_SCOPE)
-endfunction()
+    _mbelib_native_target_is(MBELIB_NATIVE_TARGET_ARM
+      [=[
+      #if !(defined(__aarch64__) || defined(__arm__) || defined(_M_ARM64) || defined(_M_ARM) || defined(_M_ARM64EC))
+      #error not an ARM target
+      #endif
+      int mbelib_native_target_arm;
+    ]=]
+    )
+endmacro()
 
 # Highest /arch: level the build host supports: AVX512, AVX2, AVX or none.
 # AVX2 needs the whole x86-64-v3 set because clang-cl's /arch:AVX2 also emits
@@ -173,50 +283,14 @@ main(void) {
     set(${out_var} "${_arch}" PARENT_SCOPE)
 endfunction()
 
-# The target architecture family, probed once: MBELIB_NATIVE_TARGET_X86 or
-# MBELIB_NATIVE_TARGET_ARM (both false elsewhere).
-_mbelib_native_target_is(MBELIB_NATIVE_TARGET_X86
-  [=[
-  #if !(defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)) || defined(_M_ARM64EC)
-  #error not an x86 target
-  #endif
-  int mbelib_native_target_x86;
-]=]
-)
-_mbelib_native_target_is(MBELIB_NATIVE_TARGET_ARM
-  [=[
-  #if !(defined(__aarch64__) || defined(__arm__) || defined(_M_ARM64) || defined(_M_ARM) || defined(_M_ARM64EC))
-  #error not an ARM target
-  #endif
-  int mbelib_native_target_arm;
-]=]
-)
-
 function(mbelib_native_arch_flags flags_var reason_var)
     set(${flags_var} "" PARENT_SCOPE)
-    if(CMAKE_CROSSCOMPILING)
-        set(${reason_var} "cross-compiling" PARENT_SCOPE)
+    mbelib_native_arch_skip_reason(_skip)
+    if(_skip)
+        set(${reason_var} "${_skip}" PARENT_SCOPE)
         return()
     endif()
-    if(
-        EMSCRIPTEN
-        OR CMAKE_SYSTEM_NAME
-            MATCHES
-            "^(Android|iOS|tvOS|watchOS|visionOS|Emscripten)$"
-    )
-        set(${reason_var} "${CMAKE_SYSTEM_NAME} target" PARENT_SCOPE)
-        return()
-    endif()
-    _mbelib_native_osx_mismatch(_osx)
-    if(_osx)
-        set(${reason_var} "${_osx}" PARENT_SCOPE)
-        return()
-    endif()
-    _mbelib_native_user_isa(_user)
-    if(_user)
-        set(${reason_var} "${_user}" PARENT_SCOPE)
-        return()
-    endif()
+    mbelib_native_probe_target()
 
     if(MSVC)
         if(NOT MBELIB_NATIVE_TARGET_X86)
@@ -267,6 +341,13 @@ function(mbelib_native_arch_flags flags_var reason_var)
         )
         return()
     endif()
-    set(${flags_var} "${_flag}" PARENT_SCOPE)
-    set(${reason_var} "host CPU" PARENT_SCOPE)
+    if((WIN32 OR CYGWIN) AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        check_c_compiler_flag(
+            "-Wa,-muse-unaligned-vector-move"
+            MBELIB_C_HAS_UNALIGNED_VECTOR_MOVE
+        )
+    endif()
+    mbelib_native_arch_compose(_flags _reason "${_flag}")
+    set(${flags_var} "${_flags}" PARENT_SCOPE)
+    set(${reason_var} "${_reason}" PARENT_SCOPE)
 endfunction()

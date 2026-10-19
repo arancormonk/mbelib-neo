@@ -31,8 +31,8 @@ PCM in memory before writing the WAV header and data to stdout.
 provides those instructions, with scalar routines otherwise. The option defaults
 to ON for Release, RelWithDebInfo, and MinSizeRel builds of 64-bit targets, and
 for 64-bit targets under a multi-config generator (Ninja Multi-Config, Visual
-Studio, Xcode) configured without a build type; it defaults to OFF for Debug
-builds and 32-bit targets. The downloaded PFFFT library uses its own supported
+Studio, Xcode), which ignores `CMAKE_BUILD_TYPE`; it defaults to OFF for
+single-config Debug builds and 32-bit targets. The downloaded PFFFT library uses its own supported
 backends (including SSE and AltiVec); CMake explicitly selects scalar FFT code
 when none is available, even with SIMD ON. Warnings-as-errors remains enabled by
 default in either case.
@@ -46,6 +46,10 @@ the voiced copy with IEEE semantics like its baseline) and of the exact integer
 kernels that gain from AVX2 (the soft-decision ECC search and the TETRA
 adaptive codebook) with `-mavx2 -mfma`, or `/arch:AVX2` for MSVC and clang-cl,
 and the library picks one per call from a CPU probe cached on first use. The
+copies are built for every configuration without host tuning; a configuration
+whose compiler target already has AVX2 (also one set only in a
+`CMAKE_C_FLAGS_<CONFIG>`) leaves them unused, as the preprocessor decides per
+translation unit. The
 probe requires the whole x86-64-v3 set (AVX2, FMA, BMI1/2, LZCNT, MOVBE, F16C)
 and OS support for the YMM state. A build whose compiler target already has
 AVX2 (`-march=native` on an AVX2 host, `-march=x86-64-v3`, `/arch:AVX2`) calls
@@ -55,7 +59,8 @@ instructions. 32-bit x86 builds, universal macOS builds (several
 `CMAKE_OSX_ARCHITECTURES`) and non-x86 targets do not dispatch; MinGW GCC
 dispatches only when its assembler accepts `-muse-unaligned-vector-move`
 (binutils 2.38 or later), since GCC does not align the Windows x64 stack for
-32-byte spills. The configure log reports the decision (`AVX2 dispatch: ...`).
+32-byte spills (MinGW and Cygwin). The configure log reports the decision
+(`AVX2 dispatch: ...`).
 
 In Debug builds the AVX2 copy produces exactly the output of a Debug build for
 `-march=x86-64-v3` (both round every multiply and add separately), so the
@@ -77,11 +82,17 @@ tuned configuration the AVX2 copies are not built; an AVX2 host calls the AVX2
 kernels directly.
 
 CMake tunes nothing, and says why, when it would be unsafe or would override
-your choice: when cross-compiling, for Android, iOS or Emscripten targets, when
-`CMAKE_OSX_ARCHITECTURES` names several architectures or another than the
-host's, when `CMAKE_C_FLAGS` or a release-like `CMAKE_C_FLAGS_<CONFIG>` already
-contains `-march=`, `-mcpu=` or `/arch:` (distribution flags such as makepkg's
-`-march=x86-64` included), or when the compiler rejects the option.
+your choice: when cross-compiling or `CMAKE_C_COMPILER_TARGET` is set, for
+Android, iOS or Emscripten targets (also an Apple device SDK selected only by
+`CMAKE_OSX_SYSROOT`), when `CMAKE_OSX_ARCHITECTURES` names several
+architectures or another than the host's, when the compiler command
+(`CC="gcc -march=x86-64"`), `CMAKE_C_FLAGS` or a release-like
+`CMAKE_C_FLAGS_<CONFIG>` already contains `-march=`, `-mcpu=`, `/arch:` or
+`-arch` (distribution flags such as makepkg's `-march=x86-64` included, quoted
+or not), when MSVC's `CL` or `_CL_` environment variable does, or when the
+compiler rejects the option. MinGW and Cygwin GCC are tuned only together with
+the assembler's `-muse-unaligned-vector-move`, for the same stack-alignment
+reason as the dispatch.
 
 A binary built with the default runs only on CPUs with the build host's
 instruction set. **Packagers and CI that ship binaries pass
