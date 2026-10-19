@@ -168,6 +168,24 @@ and disconnected mode, and both release/VCS recipes generated the expected
 `.SRCINFO` with makepkg. Windows, macOS and ARM execution remains covered by
 the existing CI matrix and was not run on this Linux x86 host.
 
+### PFFFT update to 77a7ecd
+
+The update from `0ac3d39` to `77a7ecd` changes one compiled header,
+`src/pffft_real_impl.h`: the ordered real transform's copy of the high float
+pairs of two SIMD vectors now addresses their bytes (`unsigned char`
+pointers and a byte offset) instead of float pointers into the vector
+objects, which CodeQL reported. The copied bytes are the same, so the output
+is unchanged. The other changes are the fork's own CMake options (host-tuned
+defaults for its top-level builds, which never reach this library: it compiles
+PFFFT from its own source list and flags), CI, README and tests. Both pins
+were regenerated from the immutable archive; the compiled-source notices are
+unchanged, so only the pinned revision in the retained PFFFT text and its
+inventory hash changed.
+
+Every Debug golden hash is unchanged: `gen_golden` for scalar, SSE2 and AVX2
+(the dispatched copy and a `-march=x86-64-v3` build) matches the values in
+`tests/test_golden_pcm.c`.
+
 ### PFFFT update to 0ac3d39
 
 The update from `94d3c83` to `0ac3d39` includes upstream FFT accuracy and

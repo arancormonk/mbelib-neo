@@ -47,7 +47,7 @@ SOFTWARE.
 
 
 PFFFT: https://github.com/arancormonk/pffft
-Pinned revision: 0ac3d3907ca37226a0516bc97050aa4b80819804
+Pinned revision: 77a7ecda1f58f041168636c99be3e6e968d984d7
 
 src/pffft.c
 /* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
