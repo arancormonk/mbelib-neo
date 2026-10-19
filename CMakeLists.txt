@@ -89,6 +89,14 @@ option(
     ${_mbelib_simd_default}
 )
 unset(_mbelib_simd_default)
+# Release-like configurations of the libraries are tuned for the build host's
+# CPU unless that could misfire (cmake/MbeNativeArch.cmake lists the cases).
+# Packagers and CI that ship binaries pass -DMBELIB_ENABLE_NATIVE=OFF.
+option(
+    MBELIB_ENABLE_NATIVE
+    "Tune release-like library builds for the build host's CPU when safe"
+    ON
+)
 option(MBELIB_BUILD_BENCHMARKS "Build micro-benchmarks (not run in CI)" OFF)
 option(MBELIB_BUILD_TOOLS "Build developer quality-analysis tools" OFF)
 # Warnings
@@ -567,6 +575,49 @@ else()
     target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)
     target_compile_definitions(mbe-static PRIVATE PFFFT_SIMD_DISABLE=1)
 endif()
+
+# Host CPU tuning (MBELIB_ENABLE_NATIVE). The flags go PRIVATE to the
+# libraries, and to the tests that must pick the same compile-time kernels,
+# for release-like configurations only: Debug keeps the baseline target its
+# golden hashes, sanitizers and coverage expect, and nothing reaches the
+# exported targets or pkg-config metadata.
+include(cmake/MbeNativeArch.cmake)
+set(_mbelib_native_flags "")
+if(MBELIB_ENABLE_NATIVE)
+    mbelib_native_arch_flags(_mbelib_native_flags _mbelib_native_reason)
+    if(_mbelib_native_flags)
+        message(
+            STATUS
+            "MBELIB_ENABLE_NATIVE: release-like configurations use ${_mbelib_native_flags} (${_mbelib_native_reason})"
+        )
+    else()
+        message(
+            STATUS
+            "MBELIB_ENABLE_NATIVE: not tuning for the build host: ${_mbelib_native_reason}"
+        )
+    endif()
+    unset(_mbelib_native_reason)
+else()
+    message(
+        STATUS
+        "MBELIB_ENABLE_NATIVE: off; the libraries keep the compiler's default target"
+    )
+endif()
+# Genex true for the configurations that get the native flags.
+set(_mbelib_native_config "0")
+if(_mbelib_native_flags)
+    set(_mbelib_native_config "${_mbelib_release_like_config}")
+endif()
+function(_mbelib_apply_native target)
+    foreach(_mbelib_native_flag IN LISTS _mbelib_native_flags)
+        target_compile_options(
+            ${target}
+            PRIVATE "$<${_mbelib_native_config}:${_mbelib_native_flag}>"
+        )
+    endforeach()
+endfunction()
+_mbelib_apply_native(mbe-shared)
+_mbelib_apply_native(mbe-static)
 
 # Fast-math (optional). clang-cl only accepts GNU-style options behind /clang:.
 set(_mbelib_fast_math_options "")
@@ -1285,6 +1336,7 @@ if(MBELIB_BUILD_TESTS)
     if(_SAN_LDFLAGS)
         target_link_options(test_golden_pcm BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
+    _mbelib_apply_native(test_golden_pcm)
     add_test(NAME test_golden_pcm COMMAND test_golden_pcm)
 
     add_executable(
@@ -1503,6 +1555,47 @@ if(MBELIB_BUILD_TESTS)
                 ${Python3_EXECUTABLE} -I
                 ${PROJECT_SOURCE_DIR}/tests/test_tetra_tables.py
         )
+        # Configure-only checks of the per-configuration SIMD, LTO, native and
+        # dispatch settings, with Ninja and Ninja Multi-Config. MSVC needs its
+        # developer environment for a Ninja configure, which a Visual Studio
+        # generator build does not provide to its tests.
+        if(
+            NOT CMAKE_CROSSCOMPILING
+            AND NOT (MSVC AND NOT CMAKE_GENERATOR MATCHES "Ninja")
+        )
+            if(CMAKE_GENERATOR MATCHES "Ninja")
+                set(_mbelib_test_ninja "${CMAKE_MAKE_PROGRAM}")
+            else()
+                find_program(MBELIB_NINJA_EXECUTABLE NAMES ninja ninja-build)
+                set(_mbelib_test_ninja "${MBELIB_NINJA_EXECUTABLE}")
+            endif()
+            set(_mbelib_test_user_isa "")
+            if(MSVC AND MBELIB_NATIVE_TARGET_X86)
+                set(_mbelib_test_user_isa "/arch:AVX")
+            elseif(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+                if(MBELIB_NATIVE_TARGET_X86)
+                    set(_mbelib_test_user_isa "-march=x86-64")
+                elseif(MBELIB_NATIVE_TARGET_ARM)
+                    set(_mbelib_test_user_isa "-mcpu=generic")
+                endif()
+            endif()
+            add_test(
+                NAME test_build_configuration
+                COMMAND
+                    ${Python3_EXECUTABLE} -I
+                    ${PROJECT_SOURCE_DIR}/tests/test_build_configuration.py
+                    --cmake ${CMAKE_COMMAND} --source ${PROJECT_SOURCE_DIR}
+                    --pffft-source ${MBELIB_PFFFT_SOURCE_DIR} --c-compiler
+                    ${CMAKE_C_COMPILER} "--ninja=${_mbelib_test_ninja}"
+                    "--user-isa=${_mbelib_test_user_isa}"
+            )
+            set_tests_properties(
+                test_build_configuration
+                PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 900
+            )
+            unset(_mbelib_test_ninja)
+            unset(_mbelib_test_user_isa)
+        endif()
         if(MBELIB_BUILD_TOOLS AND NOT CMAKE_CROSSCOMPILING)
             add_test(
                 NAME test_tetra_decode_tool
@@ -1613,6 +1706,7 @@ if(MBELIB_BUILD_TESTS)
     if(_SAN_LDFLAGS)
         target_link_options(test_simd_numerics BEFORE PRIVATE ${_SAN_LDFLAGS})
     endif()
+    _mbelib_apply_native(test_simd_numerics)
     add_test(NAME test_simd_numerics COMMAND test_simd_numerics)
 
     set(_MBELIB_TEST_TARGETS
