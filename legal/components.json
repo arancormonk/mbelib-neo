@@ -116,9 +116,9 @@
         "tools/ci-dependency-pins.env",
         "docs/dependencies.md"
       ],
-      "review_date": "2026-10-17",
+      "review_date": "2026-10-18",
       "notice_sha256": {
-        "LICENSES/LicenseRef-PFFFT.txt": "4a8e500e4f6da7135ec0a887b1314ccdce600cbcddde35a56afb0e1fcf1c2cc0"
+        "LICENSES/LicenseRef-PFFFT.txt": "68ac9884ea2557847de0dbd6d27f8ef599c639f2cc7de327242589538cd7ff71"
       }
     },
     {

@@ -33,25 +33,27 @@
  * accumulate over 24 frames, so other targets check determinism and energy.
  * Regenerate with gen_golden (scalar: dev-debug; SIMD: Debug with
  * -DMBELIB_ENABLE_SIMD=ON).
+ * PFFFT 0ac3d39 uses more accurate twiddle factors. These float hashes were
+ * regenerated on Ubuntu 24.04 for scalar, SSE2 and AVX2; int16 hashes held.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
 #ifdef MBELIB_TEST_BUILD_SIMD
 #if defined(__AVX2__)
-#define GOLDEN_AMBE2450_F32 0xF362EA50u
+#define GOLDEN_AMBE2450_F32 0xCC1BAC6Bu
 #define GOLDEN_AMBE2450_S16 0x49E0330Du
-#define GOLDEN_AMBE2400_F32 0x25FF9F25u
+#define GOLDEN_AMBE2400_F32 0x4349E7B9u
 #define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #else
-#define GOLDEN_AMBE2450_F32 0xC7D7EB57u
+#define GOLDEN_AMBE2450_F32 0x0A6D887Cu
 #define GOLDEN_AMBE2450_S16 0x49E0330Du
-#define GOLDEN_AMBE2400_F32 0xB3957A58u
+#define GOLDEN_AMBE2400_F32 0x54EC4DB4u
 #define GOLDEN_AMBE2400_S16 0x8F10FA7Eu
 #endif
 #else
-#define GOLDEN_AMBE2450_F32 0xF9ACC898u
+#define GOLDEN_AMBE2450_F32 0xF25F0126u
 #define GOLDEN_AMBE2450_S16 0xA4881DEBu
-#define GOLDEN_AMBE2400_F32 0x174AFCEAu
+#define GOLDEN_AMBE2400_F32 0xA82FF1BDu
 #define GOLDEN_AMBE2400_S16 0xEB36DEB9u
 #endif
 #else
