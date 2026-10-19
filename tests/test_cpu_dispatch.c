@@ -42,10 +42,18 @@ test_probe(void) {
     assert(has == 0 || has == 1);
 #if defined(MBE_ARCH_X86_64) && !defined(MBE_ARCH_ARM64EC) && defined(__GNUC__)
     __builtin_cpu_init();
-    const int builtin = __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi")
-                        && __builtin_cpu_supports("bmi2") && __builtin_cpu_supports("avx")
-                        && __builtin_cpu_supports("popcnt") && __builtin_cpu_supports("sse4.2");
-    /* Every CPU with AVX2, FMA and BMI2 also has the rest of x86-64-v3 (LZCNT, MOVBE, F16C). */
+    /* The whole set the library requires, feature by feature: a virtual CPU may
+     * expose AVX2, FMA and BMI2 while masking MOVBE, F16C or LZCNT. */
+    int builtin = __builtin_cpu_supports("sse3") && __builtin_cpu_supports("ssse3") && __builtin_cpu_supports("sse4.1")
+                  && __builtin_cpu_supports("sse4.2") && __builtin_cpu_supports("popcnt")
+                  && __builtin_cpu_supports("avx") && __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")
+                  && __builtin_cpu_supports("bmi") && __builtin_cpu_supports("bmi2") && __builtin_cpu_supports("f16c")
+                  && __builtin_cpu_supports("movbe") && __builtin_cpu_supports("lzcnt")
+                  && __builtin_cpu_supports("lahf_lm");
+#if (defined(__clang__) && __clang_major__ >= 16) || (!defined(__clang__) && __GNUC__ >= 12)
+    /* The compiler's own x86-64-v3 level adds CMPXCHG16B and OS support. */
+    builtin = builtin && __builtin_cpu_supports("x86-64-v3");
+#endif
     printf("probe: AVX2 set %d, compiler runtime %d\n", has, builtin);
     assert(has == builtin);
 #elif !defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_ARM64EC)
