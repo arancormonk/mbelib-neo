@@ -49,7 +49,7 @@
  * 0.001064 eps_T, as rate 33 keeps it, with D-STAR's own counts) is above
  * this. DVSI's AMBE-3000 mutes D-STAR at sustained channel error rates near
  * 10% and never at 5% or below; on its 1-10% test vectors this threshold
- * agrees with DVSI's muting on 100% of the loud frames at 1-5% and 93% at
+ * agrees with DVSI's muting on 100% of the loud frames at 1-5% and 90% at
  * 10%, where it starts muting earlier than DVSI does (0.7 s into a constant
  * 10% channel, against DVSI's 3.3 s). It approximates DVSI's rule,
  * which integrates the errors more slowly than this rate does. Soft decisions

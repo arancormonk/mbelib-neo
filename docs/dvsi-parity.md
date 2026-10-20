@@ -55,7 +55,7 @@ levels, so that DVSI's decoders play our bits at the intended level.
 DVSI's decoder mutes D-STAR under sustained channel errors near 10% and never at 5% or below.
 With hard decisions this library now mutes a frame to comfort noise while the error rate it
 already keeps (`0.95 eps_R + 0.001064 eps_T`, with D-STAR's own error counts) is above 0.042.
-On DVSI's vectors that agrees with DVSI's mute decisions on all loud frames at 1-5% and on 93% at
+On DVSI's vectors that agrees with DVSI's mute decisions on all loud frames at 1-5% and on 90% at
 10%. It is an approximation: at 10% it starts muting 0.7 s into the stream, where DVSI starts at
 3.3 s, since DVSI's rule integrates the errors more slowly; reproducing it exactly needs per-stream
 state that `mbe_parms` cannot gain within a minor release. Soft decisions do not mute on it: at
@@ -63,6 +63,18 @@ state that `mbe_parms` cannot gain within a minor release. Soft decisions do not
 tried reproduced that. The repeat limit's reset keeps the error rate, so it keeps accumulating
 across the reset. A muted frame is synthesized as usual (model, phase, overlap and noise state
 advance) and played as comfort noise.
+
+Tone frames follow the same mute: a frame that reads as a playable tone is muted while the error
+rate is above the threshold, and one that fails the error check (2 C0 corrections, or 3 or more
+in all) is a lost frame, repeated with its error count kept. On `dam_e10_hd` a channel error read
+as a tone at frame 367 used to play at RMS 8497 inside a stretch DVSI keeps muted (0.5), and a
+rejected tone at frame 477 reset the decoder, clearing the error rate, so our output unmuted for
+the frames after it (RMS 370-562) where DVSI's stays muted (0.6). With both fixed, our mute
+decisions on `dam_e10_hd`'s loud frames agree with DVSI's on 89.6% (86.4% before; missed mutes
+4.1% to 1.0%, false mutes unchanged); no other vector's mute decisions change. Soft decisions do
+not mute on the error rate, so on `dam_e10_sd` the rejected tone at frame 477 now repeats and the
+frames after it follow the speech (RMS 2965, 2599, 1979; DVSI's decode of the clean bits 3151,
+2677, 2362) where the reset played 55, 345, 494; DVSI mutes there.
 
 ### D-STAR lost frames
 
@@ -241,6 +253,9 @@ of the loud frames):
 | P25 | soft | 0.985 → 0.985 | 1.5% | 0% | none / 76 |
 | Rate 33 | hard | 0.618 → 0.925 | 38% | 0% → 46% | none → 68 / 68 |
 | Rate 33 | soft | 0.969 → 0.969 | 3.1% | 0% | none / 109 |
+
+These are the figures measured for that change; the current D-STAR hard-decision agreement is in
+[D-STAR muting under channel errors](#d-star-muting-under-channel-errors).
 
 On the loud frames that neither run nor DVSI mutes, our output comes closer to DVSI's at every error
 rate: by 1.17 dB of LSD for D-STAR (hard decisions; 1.08 soft), 0.36 dB for rate 33 (0.34) and 0.02 dB

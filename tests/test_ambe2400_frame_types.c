@@ -106,6 +106,14 @@ make_result(mbe_process_result* r, int errors) {
     r->total_errors = errors;
 }
 
+/* A frame result with `c0` Golay corrections in C0 and `protected` elsewhere. */
+static void
+make_result_c0(mbe_process_result* r, int c0, int protected_errors) {
+    make_result(r, protected_errors);
+    r->c0_errors = c0;
+    r->total_errors = c0 + protected_errors;
+}
+
 /* Every b0 0..124 is voice; 125 is lost; a b0 126 tone frame plays exactly the
  * indexes D-STAR has a tone for, at any volume; b0 127 is lost. */
 static void
@@ -379,6 +387,107 @@ test_dtx_frame(void) {
     puts("DTX frame: silence handling and decoder reset kept");
 }
 
+/*
+ * A playable tone frame that fails the error check (2 C0 corrections, or 3 or
+ * more in all) plays as a lost frame with the same error count: sample for
+ * sample through the voice after it, with the error rate kept, where it used
+ * to play comfort noise and reset the decoder (clearing the error rate).
+ */
+static void
+test_rejected_tone_is_lost(void) {
+    char voice[NVOICE][49], tone[49], b125[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 76, 212);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    static const int errors[][2] = {{2, 0}, {0, 3}, {1, 2}, {0, 5}, {2, 4}};
+    for (size_t k = 0; k < sizeof(errors) / sizeof(errors[0]); ++k) {
+        float pcm[2][160 * (NVOICE + 1)];
+        unsigned flags[2] = {0u, 0u};
+        float rate[2] = {0.0f, 0.0f};
+        for (int run = 0; run < 2; ++run) {
+            mbe_parms cur, prev, enh;
+            mbe_process_result r;
+            int f = 0;
+            mbe_setThreadRngSeed(1);
+            mbe_initMbeParms(&cur, &prev, &enh);
+            for (int i = 0; i < 4; ++i, ++f) {
+                make_result(&r, 0);
+                assert(mbe_processAmbe2400Dataf(pcm[run] + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh)
+                       == 0);
+            }
+            make_result_c0(&r, errors[k][0], errors[k][1]);
+            assert(
+                mbe_processAmbe2400Dataf(pcm[run] + ((size_t)160 * (size_t)f), &r, run ? b125 : tone, &cur, &prev, &enh)
+                >= 0);
+            flags[run] = r.flags;
+            rate[run] = prev.errorRate;
+            ++f;
+            for (int i = 4; i < NVOICE; ++i, ++f) {
+                make_result(&r, 0);
+                assert(mbe_processAmbe2400Dataf(pcm[run] + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh)
+                       == 0);
+            }
+        }
+        assert(flags[0] == (flags[1] | MBE_PROCESS_FLAG_TONE));
+        assert((flags[0] & (MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT))
+               == (MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
+        assert(rate[0] > 0.0f);
+        assert_same_pcm(pcm[0], pcm[1], (size_t)160 * (NVOICE + 1), "rejected tone vs lost frame");
+    }
+    puts("rejected tones: a tone failing the error check plays as a lost frame, error rate kept");
+}
+
+/* While the error rate mutes hard-decision voice, a tone frame is muted too
+ * (DVSI's decoder stays silent on a channel error that reads as a tone). */
+static void
+test_tone_muted_by_error_rate(void) {
+    char voice[NVOICE][49], tone[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 76, 212);
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 40; ++i) {
+        make_result(&r, 3);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    }
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_MUTE));
+    float peak = 0.0f;
+    for (int i = 0; i < 160; ++i) {
+        peak = (out[i] > peak) ? out[i] : ((-out[i] > peak) ? -out[i] : peak);
+    }
+    assert(peak < 100.0f); /* comfort noise (float is int16 / 7), not a tone at volume 212 (peak ~1700) */
+    /* Soft decisions do not mute on the error rate, so the tone plays. */
+    mbe_soft_bit soft[4][24];
+    char fr[4][24], d[49];
+    air_frame(tone, fr);
+    soft_frame((const char (*)[24])fr, soft);
+    mbe_processAmbe3600x2400SoftFramef(out, &r, (const mbe_soft_bit(*)[24])soft, d, &cur, &prev, &enh);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
+    /* A muted tone still advances the tone state, as muted voice advances its
+     * synthesis: the tone after it continues exactly as after a played tone. */
+    mbe_parms mc = cur, mp = prev, me = enh, pc = cur, pp = prev, pe = enh;
+    pc.errorRate = 0.0f;
+    pp.errorRate = 0.0f;
+    float muted[160], played[160], after_muted[160], after_played[160];
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(muted, &r, tone, &mc, &mp, &me) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(played, &r, tone, &pc, &pp, &pe) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
+    assert(mbe_processAmbe3600x2400SoftFramef(after_muted, &r, (const mbe_soft_bit(*)[24])soft, d, &mc, &mp, &me) == 0);
+    assert(mbe_processAmbe3600x2400SoftFramef(after_played, &r, (const mbe_soft_bit(*)[24])soft, d, &pc, &pp, &pe)
+           == 0);
+    assert_same_pcm(after_muted, after_played, 160, "tone after a muted tone vs after a played tone");
+    puts("tones: muted with the error rate on hard decisions, tone state still advancing");
+}
+
 int
 main(void) {
     test_classes();
@@ -388,6 +497,8 @@ main(void) {
     test_frame_apis_agree();
     test_zero_volume_tone();
     test_tone_ends_repeat_run();
+    test_rejected_tone_is_lost();
+    test_tone_muted_by_error_rate();
     test_dtx_frame();
     return 0;
 }
