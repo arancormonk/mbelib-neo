@@ -1093,5 +1093,21 @@
         "value": 0
       }
     ]
+  },
+  "dstar-repeat-limit-mute": {
+    "description": "D-STAR's repeat-limit mute fades out, keeps the prediction history and mutes at DVSI's level: DVSI's clean speech bits, which never reach the repeat limit, decode unchanged in every mode.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }

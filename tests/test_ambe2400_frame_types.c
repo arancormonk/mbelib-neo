@@ -19,6 +19,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ambe3600x2400_internal.h"
@@ -265,7 +266,8 @@ test_frame_apis_agree(void) {
     memcpy(b125, voice[3], sizeof(b125));
     put_b0(b125, 125);
     pack_tone(unused, 126, 200, 180);
-    const char* seq[] = {voice[0], voice[1], voice[2], b125, unused, voice[4], voice[5]};
+    /* Five lost frames in a row pass the repeat limit, so the mute is covered too. */
+    const char* seq[] = {voice[0], voice[1], voice[2], b125, unused, b125, b125, unused, voice[4], voice[5]};
     const size_t n = sizeof(seq) / sizeof(seq[0]);
     mbe_parms c[3], p[3], e[3];
     for (int k = 0; k < 3; ++k) {
@@ -280,9 +282,13 @@ test_frame_apis_agree(void) {
         soft_frame((const char (*)[24])fr, soft);
         /* The frame encoder rewrites bit 24 (a parity bit), so decode the bits back. */
         assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r[0]) == 0);
+        /* Mute noise comes from a per-thread RNG: give each path the same draws. */
         make_result(&r[0], 0);
+        mbe_setThreadRngSeed((uint32_t)i + 1u);
         assert(mbe_processAmbe2400Dataf(out[0], &r[0], d, &c[0], &p[0], &e[0]) >= 0);
+        mbe_setThreadRngSeed((uint32_t)i + 1u);
         assert(mbe_processAmbe3600x2400Framef(out[1], &r[1], (const char (*)[24])fr, dh, &c[1], &p[1], &e[1]) >= 0);
+        mbe_setThreadRngSeed((uint32_t)i + 1u);
         assert(
             mbe_processAmbe3600x2400SoftFramef(out[2], &r[2], (const mbe_soft_bit(*)[24])soft, ds, &c[2], &p[2], &e[2])
             >= 0);
@@ -461,7 +467,7 @@ test_tone_muted_by_error_rate(void) {
     for (int i = 0; i < 160; ++i) {
         peak = (out[i] > peak) ? out[i] : ((-out[i] > peak) ? -out[i] : peak);
     }
-    assert(peak < 100.0f); /* comfort noise (float is int16 / 7), not a tone at volume 212 (peak ~1700) */
+    assert(peak <= 1.5f / 7.0f); /* mute noise (float is int16 / 7); a tone at volume 212 peaks above 100 */
     /* Soft decisions do not mute on the error rate, so the tone plays. */
     mbe_soft_bit soft[4][24];
     char fr[4][24], d[49];
@@ -488,6 +494,150 @@ test_tone_muted_by_error_rate(void) {
     puts("tones: muted with the error rate on hard decisions, tone state still advancing");
 }
 
+/* int16 output of one frame. */
+static void
+to_int16(const float* pcm, short* out) {
+    mbe_floattoshort(pcm, out);
+}
+
+/*
+ * The repeat limit's mute, as on DVSI's decoder: the 4th lost frame in a row
+ * fades the last frame out instead of cutting to noise, the frames after it
+ * are DVSI-level mute noise (int16 0 or +-1), and the prediction history is
+ * kept, so the voice after the mute decodes the same model as with no lost
+ * frames at all.
+ */
+static void
+test_repeat_limit_mute(void) {
+    char voice[NVOICE][49], b125[49];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    mbe_parms cur, prev, enh, rcur, rprev, renh;
+    mbe_process_result r;
+    float out[160];
+    short pcm[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_initMbeParms(&rcur, &rprev, &renh);
+    for (int i = 0; i < 4; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &rcur, &rprev, &renh) == 0);
+    }
+    for (int i = 0; i < 5; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 0);
+        assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i >= 3));
+        to_int16(out, pcm);
+        double head = 0.0, tail = 0.0;
+        int peak = 0;
+        for (int n = 0; n < 160; ++n) {
+            head += (n < 40) ? (double)pcm[n] * pcm[n] : 0.0;
+            tail += (n >= 120) ? (double)pcm[n] * pcm[n] : 0.0;
+            peak = (abs(pcm[n]) > peak) ? abs(pcm[n]) : peak;
+        }
+        if (i == 3) {
+            /* Fading out: the previous frame continues at the start, gone by the end. */
+            assert(head > 100.0 * 40.0 * 40.0 && tail < 40.0 * 4.0);
+        } else if (i == 4) {
+            assert(peak <= 1);
+        }
+    }
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &rcur, &rprev, &renh) == 0);
+    assert_same_pcm(prev.log2Ml, rprev.log2Ml, sizeof(prev.log2Ml) / sizeof(prev.log2Ml[0]), "log2Ml after the mute");
+    assert_same_pcm(&prev.gamma, &rprev.gamma, 1, "gamma after the mute");
+    puts("repeat limit: fades out, mutes at DVSI's level, keeps the prediction history");
+}
+
+/* Reaching the repeat limit while the error rate mutes does not fade the
+ * suppressed speech back in: the output stays DVSI-level noise. */
+static void
+test_repeat_limit_under_error_mute(void) {
+    char voice[NVOICE][49];
+    make_voice(voice);
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    float out[160];
+    short pcm[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 40; ++i) {
+        make_result(&r, 3);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    }
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    for (int i = 0; i < 6; ++i) {
+        make_result(&r, 4);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 4);
+        assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE))
+               == (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE));
+        to_int16(out, pcm);
+        for (int n = 0; n < 160; ++n) {
+            assert(abs(pcm[n]) <= 1);
+        }
+    }
+    puts("repeat limit under the error-rate mute: stays at the mute level");
+}
+
+/* Every frame advances the unvoiced noise generator once, muted frames
+ * included, so after voice, 8 lost frames and voice the generator is where
+ * 13 voice frames leave it (it used to rewind after the mute). */
+static void
+test_repeat_limit_noise_continuity(void) {
+    char voice[NVOICE][49], b125[49];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    mbe_parms cur, prev, enh, rcur, rprev, renh;
+    mbe_process_result r;
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_initMbeParms(&rcur, &rprev, &renh);
+    for (int i = 0; i < 13; ++i) {
+        const char* d = (i < 4 || i == 12) ? voice[i % NVOICE] : b125;
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &rcur, &rprev, &renh) == 0);
+    }
+    assert_same_pcm(&cur.noiseSeed, &rcur.noiseSeed, 1, "noise seed after the mute");
+    puts("repeat limit: the noise generator advances on every frame");
+}
+
+/* The error-rate mute plays the same DVSI-level noise: int16 0 or +-1, about a
+ * third of the samples nonzero (DVSI's muted dam_e10_hd: 33%). */
+static void
+test_error_rate_mute_level(void) {
+    char voice[NVOICE][49];
+    make_voice(voice);
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    float out[160];
+    short pcm[160];
+    int nonzero = 0, muted = 0;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 200; ++i) {
+        make_result(&r, 3);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+        if ((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
+            continue;
+        }
+        ++muted;
+        to_int16(out, pcm);
+        for (int n = 0; n < 160; ++n) {
+            assert(abs(pcm[n]) <= 1);
+            nonzero += pcm[n] != 0;
+        }
+    }
+    assert(muted > 100);
+    double share = (double)nonzero / (160.0 * muted);
+    assert(share > 0.30 && share < 0.37);
+    puts("error-rate mute: DVSI-level noise");
+}
+
 int
 main(void) {
     test_classes();
@@ -499,6 +649,10 @@ main(void) {
     test_tone_ends_repeat_run();
     test_rejected_tone_is_lost();
     test_tone_muted_by_error_rate();
+    test_repeat_limit_mute();
+    test_error_rate_mute_level();
+    test_repeat_limit_under_error_mute();
+    test_repeat_limit_noise_continuity();
     test_dtx_frame();
     return 0;
 }

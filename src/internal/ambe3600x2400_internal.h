@@ -28,7 +28,7 @@
  * 1 dB per band. The encoder predicts with the same value so that its frames
  * reconstruct the intended envelope in DVSI decoders.
  */
-#define MBE_AMBE2400_PREDICTION_RHO  0.8f
+#define MBE_AMBE2400_PREDICTION_RHO       0.8f
 
 /*
  * D-STAR's gain is absolute: gamma = SCALE * AmbePlusDg[b2] + OFFSET, with no
@@ -41,8 +41,8 @@
  * and the offset is where the rate-33 gain indices agree best.
  * The encoder quantizes the gain against the same levels.
  */
-#define MBE_AMBE2400_GAIN_SCALE      2.0f
-#define MBE_AMBE2400_GAIN_OFFSET     (-0.09f)
+#define MBE_AMBE2400_GAIN_SCALE           2.0f
+#define MBE_AMBE2400_GAIN_OFFSET          (-0.09f)
 
 /*
  * D-STAR mutes a hard-decision stream while its error rate (0.95 eps_R +
@@ -56,9 +56,14 @@
  * do not mute on it: at 10% DVSI mutes 53% of the loud frames there, against
  * 88% with hard decisions, and no rule tried reproduced that. A muted frame
  * is synthesized as usual (model, phase, overlap and noise state all advance)
- * and played as comfort noise.
+ * and played as mute noise at DVSI's level (MBE_AMBE2400_MUTE_NOISE_AMPLITUDE).
  */
-#define MBE_AMBE2400_MUTE_ERROR_RATE 0.042f
+#define MBE_AMBE2400_MUTE_ERROR_RATE      0.042f
+
+/* Amplitude (int16 scale) of the uniform noise D-STAR mutes to. The int16
+ * conversion truncates, so it is 0 on two thirds of the samples and +-1 on the
+ * rest, as DVSI's muted D-STAR output is (dam_e10_hd: 67% 0, 16.5% each +-1). */
+#define MBE_AMBE2400_MUTE_NOISE_AMPLITUDE 1.5f
 
 /*
  * D-STAR pitch law: f0 = 2^(OFFSET - SLOPE * (b0 + 0.5)) cycles per sample.
@@ -69,8 +74,8 @@
  * and the pitch of the original input speech agree with them. The encoder
  * quantizes with the same law.
  */
-#define MBE_AMBE2400_LOG2_F0_OFFSET  (-4.24738f)
-#define MBE_AMBE2400_LOG2_F0_SLOPE   0.0217705f
+#define MBE_AMBE2400_LOG2_F0_OFFSET       (-4.24738f)
+#define MBE_AMBE2400_LOG2_F0_SLOPE        0.0217705f
 
 /* Fundamental (cycles per sample) of pitch code b0. */
 static inline float

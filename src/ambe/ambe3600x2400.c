@@ -703,6 +703,44 @@ ambe2400_update_decode_state(const char ambe_d[49], int bad, int total_errors, m
     cur_mp->repeatCount = 0;
 }
 
+/* The noise D-STAR mutes to, at the level of DVSI's muted output. */
+static void
+ambe2400_mute_noise(float* aout_buf) {
+    mbe_synthesizeUniformNoisef(aout_buf, MBE_AMBE2400_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+}
+
+/*
+ * The repeat limit's mute (the 4th consecutive repeat). DVSI's decoder fades
+ * the last frame out rather than cutting it, then plays its mute noise, and
+ * keeps the prediction history: the voice after five lost frames follows
+ * DVSI's best this way (docs/dvsi-parity.md). The last synthesized frame
+ * becomes a silent copy of itself, so the voice after the mute fades in.
+ */
+static void
+ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                           mbe_parms* prev_mp_enhanced) {
+    mbe_parms silent = *prev_mp_enhanced;
+    float noise[160];
+
+    mbe_moveMbeParms(cur_mp, prev_mp);
+    memset(silent.Ml, 0, sizeof(silent.Ml));
+    silent.repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced);
+    /* The next frame's synthesis draws its unvoiced noise from cur_mp, as
+     * after any synthesized frame. */
+    cur_mp->noiseSeed = silent.noiseSeed;
+    memcpy(cur_mp->noiseOverlap, silent.noiseOverlap, sizeof(cur_mp->noiseOverlap));
+    mbe_moveMbeParms(&silent, prev_mp_enhanced);
+    mbe_copy_error_state(prev_mp_enhanced, cur_mp);
+    ambe2400_mute_noise(noise);
+    /* While the error rate mutes, the last frames' speech was never played:
+     * the fade still advances the state but stays silent. */
+    const int audible = !ambe2400_error_rate_mutes(result, cur_mp);
+    for (int i = 0; i < 160; ++i) {
+        aout_buf[i] = (audible ? aout_buf[i] : 0.0f) + noise[i];
+    }
+}
+
 static void
 ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
                           mbe_parms* prev_mp_enhanced) {
@@ -713,19 +751,13 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         if (ambe2400_error_rate_mutes(result, cur_mp)) {
             mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-            mbe_synthesizeComfortNoisef(aout_buf);
+            ambe2400_mute_noise(aout_buf);
         }
         return;
     }
 
-    /* The repeat limit restarts the model; the error rate keeps accumulating. */
-    const float error_rate = cur_mp->errorRate;
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-    mbe_synthesizeComfortNoisef(aout_buf);
-    mbe_initAmbeParms_common(cur_mp, prev_mp, prev_mp_enhanced);
-    cur_mp->errorRate = error_rate;
-    prev_mp->errorRate = error_rate;
-    prev_mp_enhanced->errorRate = error_rate;
+    ambe2400_mute_repeat_limit(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 static void
@@ -738,7 +770,7 @@ ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const cha
         mbe_synthesizeTonefdstar(aout_buf, ambe_d, cur_mp, bad);
         if (ambe2400_error_rate_mutes(result, cur_mp)) {
             mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-            mbe_synthesizeComfortNoisef(aout_buf);
+            ambe2400_mute_noise(aout_buf);
         }
         mbe_moveMbeParms(cur_mp, prev_mp);
         return;
