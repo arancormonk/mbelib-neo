@@ -326,33 +326,6 @@ mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_
 }
 
 void
-mbe_setAmbeErasureParms_common(mbe_parms* mp, const mbe_parms* state_src) {
-    if (mp == NULL) {
-        return;
-    }
-    if (state_src != NULL) {
-        memmove(mp->PHIl, state_src->PHIl, sizeof(mp->PHIl));
-        memmove(mp->PSIl, state_src->PSIl, sizeof(mp->PSIl));
-        mp->noiseSeed = state_src->noiseSeed;
-        memmove(mp->noiseOverlap, state_src->noiseOverlap, sizeof(mp->noiseOverlap));
-        memmove(mp->previousUw, state_src->previousUw, sizeof(mp->previousUw));
-    }
-    mp->w0 = 0.0f;
-    mp->L = 9;
-    mp->K = 0;
-    mp->gamma = 0.0f;
-    mp->swn = 0;
-    mp->tonePhase = 0;
-    for (int l = 0; l <= 56; ++l) {
-        mp->Ml[l] = 1.0f;
-        mp->Vl[l] = 0;
-        mp->log2Ml[l] = 0.0f;
-    }
-    mp->localEnergy = MBE_DEFAULT_LOCAL_ENERGY;
-    mp->amplitudeThreshold = MBE_DEFAULT_AMPLITUDE_THRESHOLD;
-}
-
-void
 mbe_ensureAmbeDefaults_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     if (!prev_mp) {
         return;

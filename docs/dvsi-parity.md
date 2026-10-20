@@ -64,6 +64,48 @@ tried reproduced that. The repeat limit's reset keeps the error rate, so it keep
 across the reset. A muted frame is synthesized as usual (model, phase, overlap and noise state
 advance) and played as comfort noise.
 
+### D-STAR lost frames
+
+DVSI's test vectors never carry b0 124 or 125 outside the channel-error vectors, so how DVSI's
+D-STAR decoder plays them, and tone frames with no tone, was measured on hardware for
+[#106](https://github.com/arancormonk/mbelib-neo/issues/106): one ThumbDV (AMBE-3000R, firmware
+V120.E100) decoding three passages of `dstar/dam.bit` and `dstar/clean.bit`, with 1, 3 or 5
+crafted frames inserted after eight voice frames and 16 voice frames after them. Every capture
+was repeated, and every repeat was sample-identical.
+
+- **As a lost frame** (whole stream, voice after included, sample-identical to the same number
+  of frames sent with the chip's LOST_FRAME flag): b0 125 (b2 0, 4, 32, 63); a b0 126 tone frame
+  with index 0, 4, 123, 127, 148 or 255; the b0 127 frame with index 128 and volume 0 that this
+  library's encoder used to send for silence. A lost frame repeats the last frame at level for
+  three frames; the 4th fades out and the 5th is near silent.
+- **Not as a lost frame**: the null frame (`9E 8D 32 88 26 1A 3F 61 E8`, b0 124), b0 124 with
+  b1 15, b0 120..123, and b0 126 tone frames with a playable index at any volume, 0 included.
+
+This library now decodes b0 125, b0 126 tone frames without a tone and b0 127 frames as lost
+frames: they repeat the last frame exactly as a frame with too many errors does and count toward
+the same repeat limit. It takes every b0 127 frame as lost because the one measured plays
+differently from the same fields under b0 126. On the measured streams our decoder plays each of
+them exactly as its own repeat for errors, for runs of 1 and 3; its repeats are close to DVSI's
+lost frames (`dam` run of three, frame RMS: ours 4372, 4153, 4352; DVSI 4421, 4931, 4928).
+
+Every b0 127 frame in DVSI's `dstar/*_dtx.bit` vectors is the all-ones DV frame (`FF` x 9; b0 127,
+tone index 191, volume 183 after two corrections), which DVSI's decoder plays near silent (frame RMS
+about 0.6) rather than as a lost frame. Those vectors were decoded with `-dtx 10000`, while the
+hardware above ran with DTX off, so the all-ones frame keeps its earlier handling here (comfort
+noise and a decoder reset) until it is measured with DTX off. Our encoder sent b0 124 and 125 for the
+lowest pitches and for quiet frames (16 and 156 of `dam`'s 1276 frames), and DVSI's decoder plays
+b0 125 as a lost frame; it now sends b0 0..123, as DVSI's encoder does. A played tone frame now
+also ends a run of repeats, so a repeat after it starts a new count. On the validation vectors, with
+both encodings decoded by the earlier decoder (which plays b0 125 as voice, so both are scored on
+the same frames), the change moves the encoder's log-spectral distance from the input by +0.015 dB
+and its envelope correlation by -0.0014, and leaves pitch, octave errors and voicing agreement no
+worse (`dstar-lost-frames` gate set); DVSI's own speech bits decode unchanged.
+
+Still different from DVSI on these streams: the 4th lost frame in a row mutes to comfort noise
+and resets the model where DVSI fades to silence (the first voice frame after five lost frames:
+ours 1157, DVSI 2787), and a tone frame cuts off the previous frame's tail where DVSI lets it
+fade out.
+
 ### D-STAR high-band shelf
 
 The shelf above the spectral enhancement is +2.5 dB, not +3.0 dB, which balances D-STAR's

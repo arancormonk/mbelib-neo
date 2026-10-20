@@ -110,6 +110,23 @@ mbe_ambe2400_tone_index(const char* ambe_d) {
            | (ambe_d[10] << 1) | ambe_d[11];
 }
 
+/*
+ * What mbe_decodeAmbe2400Parms() returns besides 0 (voice) and a playable
+ * tone index (5..122, 128..147). On DVSI's AMBE-3000, b0 125, a b0 126 tone
+ * frame whose index has no tone, and the b0 127 frame with index 128 and
+ * volume 0 play sample for sample as a lost frame does, which repeats the last
+ * frame: MBE_AMBE2400_FRAME_LOST. Every b0 127 frame is taken as lost, since
+ * those same fields play as a tone under b0 126 there. The exception is the
+ * all-ones DV frame DVSI's encoder sends in DTX pauses (b0 127), which keeps
+ * the earlier silence handling (MBE_AMBE2400_FRAME_SILENCE) until it is
+ * measured on DVSI's decoder with DTX off.
+ */
+#define MBE_AMBE2400_FRAME_LOST    2
+#define MBE_AMBE2400_FRAME_SILENCE 3
+
+/* The highest pitch code the encoder sends; DVSI's encoder sends none above it. */
+#define MBE_AMBE2400_MAX_VOICE_B0  123
+
 /* Write index 0..255 into a tone frame; every selector maps to a distinct
  * value, so each index has exactly one. */
 static inline void
