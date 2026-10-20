@@ -53,16 +53,19 @@ levels, so that DVSI's decoders play our bits at the intended level.
 ### D-STAR muting under channel errors
 
 DVSI's decoder mutes D-STAR under sustained channel errors near 10% and never at 5% or below.
-With hard decisions this library now mutes a frame to comfort noise while the error rate it
+With hard decisions this library now mutes a frame while the error rate it
 already keeps (`0.95 eps_R + 0.001064 eps_T`, with D-STAR's own error counts) is above 0.042.
 On DVSI's vectors that agrees with DVSI's mute decisions on all loud frames at 1-5% and on 90% at
 10%. It is an approximation: at 10% it starts muting 0.7 s into the stream, where DVSI starts at
 3.3 s, since DVSI's rule integrates the errors more slowly; reproducing it exactly needs per-stream
 state that `mbe_parms` cannot gain within a minor release. Soft decisions do not mute on it: at
 10% DVSI mutes 53% of the loud frames of the soft stream against 88% of the hard one, and no rule
-tried reproduced that. The repeat limit's reset keeps the error rate, so it keeps accumulating
-across the reset. A muted frame is synthesized as usual (model, phase, overlap and noise state
-advance) and played as comfort noise.
+tried reproduced that. A muted frame is synthesized as usual (model, phase, overlap and noise
+state advance) and played as mute noise at the level of DVSI's: DVSI's muted D-STAR output is 0 on
+67% of the samples and +-1 on the rest (`dam_e10_hd`, RMS 0.60), and ours is uniform noise in
+[-1.5, 1.5] on the int16 scale, which the int16 conversion truncates to the same mix
+(every muted frame of `dam_e10_hd` plays at RMS 0.5-0.7, where the library's comfort noise played
+56).
 
 Tone frames follow the same mute: a frame that reads as a playable tone is muted while the error
 rate is above the threshold, and one that fails the error check (2 C0 corrections, or 3 or more
@@ -113,10 +116,24 @@ the same frames), the change moves the encoder's log-spectral distance from the 
 and its envelope correlation by -0.0014, and leaves pitch, octave errors and voicing agreement no
 worse (`dstar-lost-frames` gate set); DVSI's own speech bits decode unchanged.
 
-Still different from DVSI on these streams: the 4th lost frame in a row mutes to comfort noise
-and resets the model where DVSI fades to silence (the first voice frame after five lost frames:
-ours 1157, DVSI 2787), and a tone frame cuts off the previous frame's tail where DVSI lets it
-fade out.
+The repeat limit follows DVSI too. On the hardware's runs of five lost frames DVSI plays the 4th as
+the last frame fading out (`dam` 2316), then near silence, and keeps the prediction history: the
+voice after the run follows the voice before it. The library used to play comfort noise (57) and
+reset the model, so the voice after it started from scratch. It now synthesizes the 4th frame as
+the last frame fading into a silent copy of itself, under the mute noise, keeps the prediction
+history, and stays muted until a frame plays; while the error rate also mutes, the fade is not
+played, since the speech it would fade out was never heard. From the 3rd lost frame to the 8th
+voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` over the frame RMS
+values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
+resetting the model after the fade instead was further from DVSI on all three.
+
+Still different from DVSI on these streams: a tone frame cuts off the previous frame's tail where
+DVSI lets it fade out, and the voice after the tone plays at once where DVSI's fades in. Adding
+the fade-out of the previous frame under the tone (and fading the voice after it in) cuts the
+mean frame-level error on zero-volume tones from about 8 to 2.5 dB, but DVSI's fade-out there is
+about 5 dB quieter than this library's synthesis window gives, its fade-in is faster, and the change
+moves tones with a nonzero volume (the only kind DVSI's encoder sends) further from DVSI (1.8-2.1
+to 1.9-2.5 dB); it waits for waveforms of DVSI's tone transitions (#147).
 
 ### D-STAR high-band shelf
 

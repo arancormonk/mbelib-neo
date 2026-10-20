@@ -681,7 +681,7 @@ test_ambe2400_accepted_tones(void) {
     };
 
     char data[49], frame[96], damaged[96], decoded[49];
-    float tone[20][160], noise[20][160], pcm[20][160];
+    float tone[20][160], pcm[20][160];
     mbe_process_result context, result, frame_result[20];
     mbe_parms cur, prev, enh;
 
@@ -698,7 +698,6 @@ test_ambe2400_accepted_tones(void) {
         double tone_energy = 0.0;
         for (int n = 0; n < 20; ++n) {
             mbe_synthesizeTonefdstar(tone[n], data, &cur, id);
-            mbe_synthesizeComfortNoisef(noise[n]);
             for (int i = 0; i < 160; ++i) {
                 tone_energy += (double)tone[n][i] * tone[n][i];
             }
@@ -736,16 +735,21 @@ test_ambe2400_accepted_tones(void) {
                     assert_result_total(&result, ret);
                     assert(ret == total);
                     assert(memcmp(decoded, data, sizeof(data)) == 0);
-                    /* A rejected tone plays as a lost frame: a repeat, and every 4th in a row mutes. */
+                    /* A rejected tone plays as a lost frame: a repeat, muted from the 4th in a
+                     * row on, after the 4th's fade-out to DVSI-level noise (int16 0 or +-1). */
                     const unsigned lost = MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
-                                          | ((n % 4 == 3) ? MBE_PROCESS_FLAG_MUTE : 0u);
+                                          | ((n >= 3) ? MBE_PROCESS_FLAG_MUTE : 0u);
                     assert(result.flags
                            == (MBE_PROCESS_FLAG_C0_VALID | (cases[c].accepted ? MBE_PROCESS_FLAG_TONE : lost)));
                     assert_float_pcm_sane(pcm[n]);
                     if (cases[c].accepted) {
                         assert(float_array_equal_exact(pcm[n], tone[n], 160));
-                    } else if (n % 4 == 3) {
-                        assert(float_array_equal_exact(pcm[n], noise[n / 4], 160));
+                    } else if (n >= 4) {
+                        short muted[160];
+                        mbe_floattoshort(pcm[n], muted);
+                        for (int i = 0; i < 160; ++i) {
+                            assert(muted[i] >= -1 && muted[i] <= 1);
+                        }
                     }
                     if (path == 0) {
                         frame_result[n] = result;
