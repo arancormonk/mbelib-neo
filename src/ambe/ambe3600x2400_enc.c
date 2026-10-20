@@ -138,8 +138,9 @@ ambe2400_enc_quantize_pitch(struct ambe_enc_frame* q, float f0) {
     if (q->b[0] < 0) {
         q->b[0] = 0;
     }
-    if (q->b[0] > 125) {
-        q->b[0] = 125;
+    /* DVSI's encoder sends no voice frame above b0 123, and its decoder plays 125 as a lost frame. */
+    if (q->b[0] > MBE_AMBE2400_MAX_VOICE_B0) {
+        q->b[0] = MBE_AMBE2400_MAX_VOICE_B0;
     }
 
     q->f0q = mbe_ambe2400_f0(q->b[0]);
@@ -358,8 +359,8 @@ ambe2400_enc_tone_index(int tone_id) {
  * inverse of the level law the decoder plays D-STAR tone frames with
  * (mbe_tone_dstar_level_db). DVSI's encoder sends half a step more: on its
  * D-STAR tone vectors this rounding gives DVSI's volume on 88% of the tone
- * frames both send and is within one step on 97%. At least 1: volume 0 with
- * index 128 is the silence frame. */
+ * frames both send and is within one step on 97%. At least 1, so a detected
+ * tone is never sent at the inaudible volume 0. */
 static int
 ambe2400_enc_tone_volume(float amplitude) {
     double rms_db = 20.0 * log10(fmax((double)amplitude, 1e-3) / (M_SQRT2 * 32768.0));

@@ -12,7 +12,6 @@
  */
 #include <assert.h>
 #include <math.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -99,7 +98,6 @@ residual_db(const float* pcm, int n, double f1, double f2) {
     }
     return 10.0 * log10(left / total + 1e-30);
 }
-#endif
 
 /* Amplitude of the component at `hz`, in dB re an RMS of 32768 on the int16 scale. */
 static double
@@ -113,6 +111,7 @@ component_db(const float* pcm, int n, double hz) {
     double amplitude = 2.0 * sqrt(re * re + im * im) / n;
     return 20.0 * log10(amplitude / sqrt(2.0) / 32768.0 + 1e-30);
 }
+#endif
 
 #ifdef MBELIB_TEST_NOTONES
 static double
@@ -198,6 +197,9 @@ test_dstar_tones(void) {
     /* DTMF: index 128 + 4 * column + row over 697/770/852/941 by 1209/1336/1477/1633 Hz. */
     pack_dstar_tone(d, 128, 206);
     expect_tone("D-STAR DTMF 1 vol 206", mbe_processAmbe2400Dataf, d, 697.0, 1209.0, dstar_level(206));
+    /* Volume 0 is a tone too, as on DVSI's decoder, not a reset or a repeat. */
+    pack_dstar_tone(d, 128, 0);
+    expect_tone("D-STAR DTMF 1 vol 0", mbe_processAmbe2400Dataf, d, 697.0, 1209.0, dstar_level(0));
     pack_dstar_tone(d, 128 + 4 * 2 + 3, 181);
     expect_tone("D-STAR DTMF # vol 181", mbe_processAmbe2400Dataf, d, 941.0, 1477.0, dstar_level(181));
     /* Call progress: 144..147 as AMBE+2's 160..163. */
@@ -207,49 +209,10 @@ test_dstar_tones(void) {
     expect_tone("D-STAR 350+490 vol 203", mbe_processAmbe2400Dataf, d, 350.0, 490.0, dstar_level(203));
 }
 
-/* The silence frame earlier versions of this library's encoder sent (b0 127,
- * index 128, volume 0) plays comfort noise, never a tone, and resets the
- * decoder: the voice frame after it decodes exactly as from a fresh stream. */
-static void
-test_dstar_silence_frame(void) {
-    char voice[49] = {0}, silence[49] = {0};
-    put_bits(voice, 0, 40, 6); /* b0 80 */
-    put_bits(voice, 6, 0x15, 6);
-    put_bits(voice, 12, 0x2a, 6);
-    put_bits(silence, 0, 63, 6);
-    silence[48] = 1;
-    float out[160], fresh[160], after[160];
-    mbe_parms cur, prev, enhanced;
-    mbe_initMbeParms(&cur, &prev, &enhanced);
-    mbe_setThreadRngSeed(1);
-    for (int f = 0; f < 4; ++f) {
-        assert(mbe_processAmbe2400Dataf(out, NULL, voice, &cur, &prev, &enhanced) >= 0);
-    }
-    mbe_process_result result;
-    mbe_initProcessResult(&result);
-    assert(mbe_processAmbe2400Dataf(out, &result, silence, &cur, &prev, &enhanced) >= 0);
-    assert(component_db(out, 160, 697.0) < -60.0 && component_db(out, 160, 1209.0) < -60.0);
-    mbe_setThreadRngSeed(2);
-    assert(mbe_processAmbe2400Dataf(after, NULL, voice, &cur, &prev, &enhanced) >= 0);
-
-    mbe_parms fcur, fprev, fenhanced;
-    mbe_initMbeParms(&fcur, &fprev, &fenhanced);
-    mbe_setThreadRngSeed(2);
-    assert(mbe_processAmbe2400Dataf(fresh, NULL, voice, &fcur, &fprev, &fenhanced) >= 0);
-    for (int i = 0; i < 160; ++i) {
-        uint32_t a, b;
-        memcpy(&a, &after[i], sizeof(a));
-        memcpy(&b, &fresh[i], sizeof(b));
-        assert(a == b);
-    }
-    puts("D-STAR encoder silence frame: no tone, decoder reset");
-}
-
 int
 main(void) {
     test_ambe2450_tones();
     test_dstar_tones();
-    test_dstar_silence_frame();
     puts("tones: ok");
     return 0;
 }

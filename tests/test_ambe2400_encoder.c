@@ -1012,7 +1012,7 @@ dstar_f0(int b0) {
  * 0.9254 x 4 kHz, the top harmonic DVSI's D-STAR decoder synthesizes. */
 static int
 test_pitch_law(void) {
-    for (int code = 0; code <= 125; code++) {
+    for (int code = 0; code <= 124; code++) {
         mbe_parms cur, prev, enhanced;
         char d[49] = {0};
         mbe_initMbeParms(&cur, &prev, &enhanced);
@@ -1030,7 +1030,7 @@ test_pitch_law(void) {
             return 1;
         }
     }
-    static const int codes[] = {0, 13, 40, 76, 100, 123, 125};
+    static const int codes[] = {0, 13, 40, 76, 100, 123, 124};
     for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
         mbe_parms cur, prev, enhanced;
         char d[49] = {0};
@@ -1049,7 +1049,7 @@ test_pitch_law(void) {
             return 1;
         }
     }
-    puts("pitch law: b0 0..125 follow the calibrated D-STAR law and harmonic count");
+    puts("pitch law: b0 0..124 follow the calibrated D-STAR law and harmonic count");
     return 0;
 }
 
@@ -1878,7 +1878,7 @@ main(void) {
     fails += test_pitch_law();
     /* 400 Hz, the shortest analysed period, is b0 3; b0 0..2 reach 402..418 Hz. */
     fails += test_pitch_endpoint(enc, 20, 3);
-    fails += test_pitch_endpoint(enc, 127, 125);
+    fails += test_pitch_endpoint(enc, 127, 123);
     fails += test_dc_noise(enc);
     fails += test_noise_unvoiced(enc);
     fails += test_vowels_voiced(enc);

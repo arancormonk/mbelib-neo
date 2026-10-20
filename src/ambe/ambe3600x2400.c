@@ -182,36 +182,39 @@ ambe2400_set_silence_model(mbe_parms* cur_mp, int* L) {
     }
 }
 
+/* The parameter bits of the all-ones DV frame (FF x 9) that DVSI's encoder
+ * sends in DTX pauses, after its two corrections. */
 static int
-ambe2400_handle_tone_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L) {
-    if ((b0 & 0x7E) != 0x7E) {
+ambe2400_is_dtx_frame(const char* ambe_d) {
+    static const char dtx[49] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1,
+                                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    return memcmp(ambe_d, dtx, sizeof(dtx)) == 0;
+}
+
+/*
+ * b0 125..127: a tone index, MBE_AMBE2400_FRAME_LOST or
+ * MBE_AMBE2400_FRAME_SILENCE (see ambe3600x2400_internal.h); 0 for voice. A
+ * b0 126 tone frame plays at any volume, 0 included; b0 120..124, the null
+ * frame among them, are voice.
+ */
+static int
+ambe2400_special_frame(const char* ambe_d, mbe_parms* cur_mp, int b0, int* L) {
+    if (b0 < 125) {
         return 0;
     }
-
-    int tone_index = mbe_ambe2400_tone_index(ambe_d);
-    if ((tone_index >= 5) && (tone_index <= 122)) {
-        return tone_index;
+    if (b0 == 126) {
+        int tone_index = mbe_ambe2400_tone_index(ambe_d);
+        float freq1, freq2;
+        return mbe_tone_lookup_dstar_freqs(tone_index, &freq1, &freq2) ? tone_index : MBE_AMBE2400_FRAME_LOST;
     }
-    /* Dual tones with a nonzero volume. Volume 0 with index 128 is the
-     * silence frame earlier versions of this library's encoder sent; it plays
-     * comfort noise and resets the decoder. */
-    float freq1, freq2;
-    if ((tone_index >= 128) && mbe_tone_dstar_volume(ambe_d) != 0
-        && mbe_tone_lookup_dstar_freqs(tone_index, &freq1, &freq2)) {
-        return tone_index;
-    }
-
-    if (!((tone_index >= 128) && (tone_index <= 163))) {
+    if (b0 == 127 && ambe2400_is_dtx_frame(ambe_d)) {
 #ifdef AMBE_DEBUG
         fprintf(stderr, "Silence Frame\n");
 #endif
         ambe2400_set_silence_model(cur_mp, L);
+        return MBE_AMBE2400_FRAME_SILENCE;
     }
-
-#ifdef AMBE_DEBUG
-    fprintf(stderr, "Tone Frame\n");
-#endif
-    return 3;
+    return MBE_AMBE2400_FRAME_LOST;
 }
 
 static void
@@ -495,7 +498,9 @@ mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, c
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
- * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
+ * @return 0 for voice, a tone index (5..122, 128..147) for a tone frame, 2 for
+ *         a frame that plays as a lost frame (b0 125..127: repeat the previous
+ *         frame), or 3 for the DTX silence frame; only voice fully decodes cur_mp.
  */
 int
 mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
@@ -521,9 +526,9 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
 #endif
 
     int b0 = ambe2400_decode_b0(ambe_d);
-    int tone_frame = ambe2400_handle_tone_frame(ambe_d, cur_mp, b0, &L);
-    if (tone_frame != 0) {
-        return tone_frame;
+    int special = ambe2400_special_frame(ambe_d, cur_mp, b0, &L);
+    if (special != 0) {
+        return special;
     }
 
     ambe2400_setup_voice_model(cur_mp, b0, &L, &f0);
@@ -653,26 +658,38 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
 }
 
 static int
-ambe2400_is_accepted_tone(int bad, int c0_errors, int total_errors) {
-    return ((bad >= 5 && bad <= 122) || (bad >= 128 && bad <= 147)) && c0_errors < 2 && total_errors < 3;
+ambe2400_is_tone(int bad) {
+    return (bad >= 5 && bad <= 122) || (bad >= 128 && bad <= 147);
+}
+
+/* Hard-decision output mutes while the error rate is above the threshold;
+ * soft decisions do not mute on it (docs/dvsi-parity.md). */
+static int
+ambe2400_error_rate_mutes(const mbe_process_result* result, const mbe_parms* cur_mp) {
+    return ((result->flags & MBE_PROCESS_FLAG_SOFT_INPUT) == 0u) && (cur_mp->errorRate > MBE_AMBE2400_MUTE_ERROR_RATE);
 }
 
 static void
-ambe2400_update_decode_state(int bad, int c0_errors, int total_errors, mbe_process_result* result, mbe_parms* cur_mp,
-                             const mbe_parms* prev_mp) {
-    if (bad == 2) {
-        mbe_result_set_flag(result, MBE_PROCESS_FLAG_ERASURE);
-        cur_mp->repeatCount = 0;
-        mbe_setAmbeErasureParms_common(cur_mp, prev_mp);
+ambe2400_update_decode_state(const char ambe_d[49], int bad, int total_errors, mbe_process_result* result,
+                             mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    if (bad == MBE_AMBE2400_FRAME_LOST) {
+        /* Repeated like a frame with too many errors, keeping this frame's own
+         * error accounting and noise state. A lost tone frame is flagged as both. */
+        const unsigned tone = (ambe2400_decode_b0(ambe_d) >= 126) ? MBE_PROCESS_FLAG_TONE : 0u;
+        mbe_repeat_load_model(cur_mp, prev_mp);
+        cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT | tone);
         return;
     }
-    if (bad == 3) {
+    if (bad == MBE_AMBE2400_FRAME_SILENCE) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
         cur_mp->repeatCount = 0;
         return;
     }
-    if (ambe2400_is_accepted_tone(bad, c0_errors, total_errors)) {
+    if (ambe2400_is_tone(bad)) {
+        /* A played tone ends a run of repeats. */
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
+        cur_mp->repeatCount = 0;
         return;
     }
     if (total_errors > 3) {
@@ -694,8 +711,7 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
         mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-        if (((result->flags & MBE_PROCESS_FLAG_SOFT_INPUT) == 0u)
-            && (cur_mp->errorRate > MBE_AMBE2400_MUTE_ERROR_RATE)) {
+        if (ambe2400_error_rate_mutes(result, cur_mp)) {
             mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
             mbe_synthesizeComfortNoisef(aout_buf);
         }
@@ -713,26 +729,22 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
 }
 
 static void
-ambe2400_synthesize_erasure(float* aout_buf, const mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    mbe_synthesizeComfortNoisef(aout_buf);
-    mbe_moveMbeParms(cur_mp, prev_mp);
-    mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-}
-
-static void
-ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad, int c0_errors,
-                          int total_errors, mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    if (ambe2400_is_accepted_tone(bad, c0_errors, total_errors)) {
+ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad,
+                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    if (ambe2400_is_tone(bad)) {
+        /* The error rate mutes a tone as it mutes voice, after synthesis, so
+         * the tone state advances: on DVSI's dam_e10_hd vector a channel error
+         * that reads as a tone stays silent there. */
         mbe_synthesizeTonefdstar(aout_buf, ambe_d, cur_mp, bad);
+        if (ambe2400_error_rate_mutes(result, cur_mp)) {
+            mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
+            mbe_synthesizeComfortNoisef(aout_buf);
+        }
         mbe_moveMbeParms(cur_mp, prev_mp);
         return;
     }
-    if (bad == 0) {
+    if (bad == 0 || bad == MBE_AMBE2400_FRAME_LOST) {
         ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
-        return;
-    }
-    if (bad == 2) {
-        ambe2400_synthesize_erasure(aout_buf, cur_mp, prev_mp, prev_mp_enhanced);
         return;
     }
 
@@ -766,9 +778,14 @@ mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char
         return bad;
     }
 
-    ambe2400_update_decode_state(bad, c0_errors, total_errors, result, cur_mp, prev_mp);
-    ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, c0_errors, total_errors, cur_mp, prev_mp,
-                              prev_mp_enhanced);
+    /* A tone frame that fails the error check plays as a lost frame, as one
+     * whose index has no tone does: it used to reset the decoder, clearing the
+     * error rate, so output unmuted mid-burst where DVSI's stays muted. */
+    if (ambe2400_is_tone(bad) && (c0_errors >= 2 || total_errors >= 3)) {
+        bad = MBE_AMBE2400_FRAME_LOST;
+    }
+    ambe2400_update_decode_state(ambe_d, bad, total_errors, result, cur_mp, prev_mp);
+    ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, cur_mp, prev_mp, prev_mp_enhanced);
     return result->total_errors;
 }
 

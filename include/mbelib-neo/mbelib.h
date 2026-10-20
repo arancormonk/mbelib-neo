@@ -310,7 +310,9 @@ MBE_API int mbe_eccAmbe3600x2400Data(char ambe_fr[4][24], char* ambe_d);
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
- * @return Tone index or 0 for voice; implementation-specific non-zero for tone frames.
+ * @return 0 for voice, a tone index (5..122, 128..147) for a tone frame, 2 for
+ *         a frame that plays as a lost frame (b0 125..127: repeat the previous
+ *         frame), or 3 for the DTX silence frame; only voice fully decodes cur_mp.
  */
 MBE_API int mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /**

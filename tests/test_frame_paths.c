@@ -736,10 +736,17 @@ test_ambe2400_accepted_tones(void) {
                     assert_result_total(&result, ret);
                     assert(ret == total);
                     assert(memcmp(decoded, data, sizeof(data)) == 0);
+                    /* A rejected tone plays as a lost frame: a repeat, and every 4th in a row mutes. */
+                    const unsigned lost = MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
+                                          | ((n % 4 == 3) ? MBE_PROCESS_FLAG_MUTE : 0u);
                     assert(result.flags
-                           == (MBE_PROCESS_FLAG_C0_VALID | (cases[c].accepted ? MBE_PROCESS_FLAG_TONE : 0u)));
+                           == (MBE_PROCESS_FLAG_C0_VALID | (cases[c].accepted ? MBE_PROCESS_FLAG_TONE : lost)));
                     assert_float_pcm_sane(pcm[n]);
-                    assert(float_array_equal_exact(pcm[n], cases[c].accepted ? tone[n] : noise[n], 160));
+                    if (cases[c].accepted) {
+                        assert(float_array_equal_exact(pcm[n], tone[n], 160));
+                    } else if (n % 4 == 3) {
+                        assert(float_array_equal_exact(pcm[n], noise[n / 4], 160));
+                    }
                     if (path == 0) {
                         frame_result[n] = result;
                     } else {

@@ -133,19 +133,6 @@ void mbe_setAmbeDefaultModel_common(mbe_parms* mp);
 void mbe_initAmbeParms_common(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 
 /**
- * @brief Set AMBE parameters to the library erasure defaults.
- *
- * Mirrors AMBEModelParameters.setDefaults(FrameType.ERASURE): w0=0,
- * L=9, unvoiced bands, unit amplitudes, zero gain term. Keeps phase and
- * unvoiced overlap/noise state from `state_src` to preserve synthesizer
- * continuity behavior.
- *
- * @param mp Target parameter set to rewrite.
- * @param state_src Source state for phase/noise continuity (may be NULL).
- */
-void mbe_setAmbeErasureParms_common(mbe_parms* mp, const mbe_parms* state_src);
-
-/**
  * @brief Ensure AMBE parameter state is initialized with AMBE defaults.
  *
  * If the previous state does not appear to be AMBE-initialized, this
