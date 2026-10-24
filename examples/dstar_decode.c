@@ -18,7 +18,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include <mbelib-neo/mbelib.h>
 
@@ -55,12 +54,7 @@ write_wav_header(FILE* fp, uint32_t data_size) {
 }
 
 static void
-store_samples(unsigned char* bytes, short pcm[FRAME_SAMPLES], const char bits[49]) {
-    /* Only b0 == 127 with tone index 128 (all eight tone bits zero) is silence. */
-    int tone_bits = bits[6] | bits[7] | bits[8] | bits[9] | bits[10] | bits[11] | bits[42] | bits[43];
-    if (bits[0] && bits[1] && bits[2] && bits[3] && bits[4] && bits[5] && bits[48] && tone_bits == 0) {
-        memset(pcm, 0, FRAME_SAMPLES * sizeof(short));
-    }
+store_samples(unsigned char* bytes, const short pcm[FRAME_SAMPLES]) {
     for (int i = 0; i < FRAME_SAMPLES; i++) {
         int value = pcm[i];
         if (value > 31128) {
@@ -76,7 +70,7 @@ store_samples(unsigned char* bytes, short pcm[FRAME_SAMPLES], const char bits[49
 }
 
 static int
-append_samples(struct pcm_buffer* buffer, short pcm[FRAME_SAMPLES], const char bits[49]) {
+append_samples(struct pcm_buffer* buffer, const short pcm[FRAME_SAMPLES]) {
     if (buffer->size > MAX_WAV_DATA_SIZE - FRAME_SAMPLES * 2u) {
         (void)fprintf(stderr, "WAV size limit exceeded\n");
         return -1;
@@ -97,7 +91,7 @@ append_samples(struct pcm_buffer* buffer, short pcm[FRAME_SAMPLES], const char b
         buffer->data = data;
         buffer->capacity = capacity;
     }
-    store_samples(buffer->data + buffer->size, pcm, bits);
+    store_samples(buffer->data + buffer->size, pcm);
     buffer->size = needed;
     return 0;
 }
@@ -120,7 +114,7 @@ decode_frames(FILE* fin, struct pcm_buffer* buffer) {
             (void)fprintf(stderr, "decode error\n");
             return -1;
         }
-        if (append_samples(buffer, pcm, bits) < 0) {
+        if (append_samples(buffer, pcm) < 0) {
             return -1;
         }
         frames++;
