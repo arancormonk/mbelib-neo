@@ -128,6 +128,19 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
 void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp);
 
 /**
+ * @brief Render 160 samples of a D-STAR tone, continuing the tone phases in @p mp.
+ *
+ * mbe_synthesizeTonefdstar() without the bit validation, for a tone known by
+ * its index and volume. An index with no D-STAR tone renders silence.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param mp Parameter set carrying the tone phases (updated).
+ * @param index D-STAR tone index.
+ * @param volume D-STAR tone volume, 0..255.
+ */
+void mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume);
+
+/**
  * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7
  * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
  */

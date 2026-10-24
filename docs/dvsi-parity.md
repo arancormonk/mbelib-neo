@@ -145,13 +145,65 @@ voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` ove
 values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
 resetting the model after the fade instead was further from DVSI on all three.
 
-Still different from DVSI on these streams: a tone frame cuts off the previous frame's tail where
-DVSI lets it fade out, and the voice after the tone plays at once where DVSI's fades in. Adding
-the fade-out of the previous frame under the tone (and fading the voice after it in) cuts the
-mean frame-level error on zero-volume tones from about 8 to 2.5 dB, but DVSI's fade-out there is
-about 5 dB quieter than this library's synthesis window gives, its fade-in is faster, and the change
-moves tones with a nonzero volume (the only kind DVSI's encoder sends) further from DVSI (1.8-2.1
-to 1.9-2.5 dB); it waits for waveforms of DVSI's tone transitions (#147).
+### D-STAR tone transitions
+
+DVSI's decoder crossfades into and out of a tone over the first 80 samples of a frame (#147). The
+same ThumbDV played tones after voice on the `dam` and `clean` passages: indexes 32, 128 and 144 at
+volumes 0, 30, 90, 180 and 255, one frame or five, plus zero-volume tones from a fresh start. Each
+capture was repeated, and every repeat was sample-identical.
+
+- **The speech under the tone** is the last frame repeated, as a lost frame plays it, faded out. On
+  all three passages, the zero-volume tone frame divided by the lost frame at the same point gives,
+  per 8 samples, 0.96, 0.92, 0.78, 0.67, 0.57, 0.46, 0.40, 0.29, 0.12, 0.07, 0.02, 0.01 and then 0
+  (the second `clean` passage; the first agrees within 0.07, `dam` over its first 32 samples): a
+  near-linear fade to zero at sample 80. A tone stream minus the zero-volume stream scales with the
+  volume (the curves at volumes 90 and 180 are identical), so the speech under the tone does not
+  depend on the volume.
+- **The tone** fades in over the same 80 samples (index 32 on `clean`: 0.10 of its steady level at
+  sample 8, 0.49 at 40, 0.98 at 80) and, once the voice returns, goes on under it and fades out over
+  that frame's first 80 samples (0.97 at sample 4, 0.06 at 76). The voice fades in over those 80
+  samples too: per 16 samples, the median ratio to the voice with no tone is 0.08, 0.22, 0.54, 0.40,
+  0.94, and scattered around 1 after that. A tone that follows a tone plays on without a crossfade.
+
+This library used to cut from the speech to the tone and from the tone to the voice at the frame
+boundary. It now plays the first tone frame as `g(n) tone(n) + (1 - g(n)) repeat(n)` and the first
+voice frame after a tone as `g(n) voice(n) + (1 - g(n)) tone(n)`, with `g(n) = n / 80` for n < 80
+and 1 after it, `repeat` the last frame repeated as a lost frame plays it, and `voice` the frame as
+it would play after that repeat. A tone after a muted frame has no speech under it. A tone muted by
+the error rate still holds its state, so the next tone plays on without a crossfade, but it leaves no
+tail. Each frame's state records whether the error rate muted it, so both hold when the next frame
+comes from the other kind of decisions (soft decisions do not mute on the error rate). Over the tone frames and the four voice frames after them, the mean
+`|20 log10((ours + 1) / (DVSI + 1))|` over frame RMS falls on 76 hardware streams:
+
+| Streams | Before | After |
+|---|---|---|
+| Tone, volume 30-255, one frame (27) | 4.15 dB | 0.76 dB |
+| Tone, volume 30-255, five frames (24) | 2.80 dB | 0.61 dB |
+| Tone, volume 0, one frame (7) | 12.38 dB | 0.86 dB |
+| Tone, volume 0, five frames (18) | 4.01 dB | 1.50 dB |
+
+On DVSI's 52 D-STAR tone vectors (tones as DVSI's encoder sends them, decoded by DVSI's decoder),
+compared frame for frame as the hardware streams are, the same error over frames above RMS 30 falls
+from 1.73 to 0.18 dB on the 1219 frames where a tone starts, from 7.99 to 0.60 dB on the 1190 where
+one ends, and from 1.27 to 0.74 dB over all of them (about 20,250). Both decoders put out one frame
+per frame of bits; the scoreboard's lags for these vectors (-72 to +8 samples) come from correlating
+periodic tones, and at those lags the figures are 1.78 to 0.41, 8.10 to 1.29 and 1.28 to 0.79 dB.
+Of the 2409 frames where a tone starts or ends, 2173 come more than 1 dB closer to DVSI's and 25
+move more than 1 dB further (1891 and 89 at the scoreboard's lags, 57 of those in `dtmf`, whose
+tails match at lag 0). 18 of the 25 are in `dtmfvbad`, where tones of one or two frames alternate
+with voice frames that carry the tones' edges, and the tail adds to that voice in a phase DVSI's
+does not share. Steady tone level, frequency and balance are unchanged (mean level error 0.096
+against 0.094 dB), and DVSI's speech and channel-error vectors decode bit for bit as before. One
+steady window of `cp1` (of 46) now reads as a tone where DVSI's has none, so the
+`dvsi-parity-tones` gate fails on it: there, DVSI's encoder coded the tone's onset as voice, and
+that voice frame fading out under the first tone frame partly cancels the tone's own fade-in (frame
+RMS 4757 against DVSI's 6552; the cut played 6879).
+
+The crossfade is specific to tones. Moving the speech synthesis window `Ws` to an 80-sample crossfade
+at the start of the frame moves D-STAR speech away from DVSI's decode (mean development
+log-spectral distance from DVSI's 3.70 to 3.86 dB). At the repeat limit, fading the repeat out over
+the same 80 samples plays `dam`'s faded frame at 1552 against DVSI's 2316, where the current fade
+gives 2483, so the repeat limit keeps its fade.
 
 ### D-STAR high-band shelf
 

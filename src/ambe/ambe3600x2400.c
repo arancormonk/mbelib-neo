@@ -15,6 +15,7 @@
  */
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -709,6 +710,128 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
     }
 }
 
+/*
+ * Tone transitions, as on DVSI's decoder: entering a tone, the last frame's
+ * speech, synthesized as a repeat of it, fades out linearly over the first
+ * MBE_AMBE2400_TONE_FADE samples while the tone fades in; leaving it, the tone
+ * goes on and fades out over the same span while the voice fades in. Vl[0]
+ * (Vl is indexed from 1, so element 0 is otherwise unused) of the state a frame
+ * commits to prev_mp records the tone it leaves sounding, whose phases that
+ * state carries, and whether the error rate muted the frame: the next frame
+ * may be decoded from the other kind of decisions, which mute differently.
+ */
+#define MBE_AMBE2400_TONE_FADE   80
+#define MBE_AMBE2400_TONE_HELD   (1 << 16)
+#define MBE_AMBE2400_FRAME_MUTED (1 << 17)
+
+static void
+ambe2400_hold_tone(mbe_parms* mp, int index, int volume, int muted) {
+    mp->Vl[0] = MBE_AMBE2400_TONE_HELD | (muted ? MBE_AMBE2400_FRAME_MUTED : 0) | (volume << 8) | index;
+}
+
+/* Whether the error rate muted the last frame. */
+static int
+ambe2400_last_frame_muted(const mbe_parms* prev_mp) {
+    return (prev_mp->Vl[0] & MBE_AMBE2400_FRAME_MUTED) != 0;
+}
+
+/* The tone the last frame left sounding, or 0. */
+static int
+ambe2400_held_tone(const mbe_parms* prev_mp, int* index, int* volume) {
+    const int held = prev_mp->Vl[0];
+    if ((held & MBE_AMBE2400_TONE_HELD) == 0) {
+        return 0;
+    }
+    *index = held & 0xFF;
+    *volume = (held >> 8) & 0xFF;
+    return 1;
+}
+
+/* Gain of the incoming signal at sample n of a transition frame. */
+static float
+ambe2400_fade_in_gain(int n) {
+    return (n >= MBE_AMBE2400_TONE_FADE) ? 1.0f : (float)n / (float)MBE_AMBE2400_TONE_FADE;
+}
+
+/* Whether the last frame played speech: not muted by the error rate or at the
+ * repeat limit (which leaves a silent last frame). */
+static int
+ambe2400_last_frame_audible(const mbe_parms* prev_mp) {
+    return !ambe2400_last_frame_muted(prev_mp) && prev_mp->repeatCount < MBE_MAX_FRAME_REPEATS;
+}
+
+/* Under the first tone frame, the last frame repeated, as a lost frame plays
+ * it (the prediction history is unchanged), to be faded out. */
+static void
+ambe2400_speech_under_tone(float* speech, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    mbe_parms repeated = *cur_mp;
+    mbe_repeat_load_model(&repeated, prev_mp);
+    repeated.repeatCount = 0;
+    float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(&repeated, MBE_HIGH_BAND_GAIN_AMBE2400);
+    mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
+    /* The next frame's synthesis draws its unvoiced noise from cur_mp. */
+    cur_mp->noiseSeed = repeated.noiseSeed;
+    memcpy(cur_mp->noiseOverlap, repeated.noiseOverlap, sizeof(cur_mp->noiseOverlap));
+    mbe_moveMbeParms(&repeated, prev_mp_enhanced);
+    mbe_copy_error_state(prev_mp_enhanced, cur_mp);
+}
+
+static void
+ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int index,
+                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    int held_index, held_volume;
+    const int entering = !ambe2400_held_tone(prev_mp, &held_index, &held_volume);
+    const int volume = mbe_tone_dstar_volume(ambe_d);
+    float speech[160] = {0};
+
+    if (entering && ambe2400_last_frame_audible(prev_mp)) {
+        ambe2400_speech_under_tone(speech, cur_mp, prev_mp, prev_mp_enhanced);
+    }
+    mbe_renderToneDstarf(aout_buf, cur_mp, index, volume);
+    if (entering) {
+        for (int n = 0; n < 160; ++n) {
+            const float gain = ambe2400_fade_in_gain(n);
+            aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * speech[n]);
+        }
+    }
+    /* The error rate mutes a tone as it mutes voice, after synthesis, so the
+     * tone state advances: on DVSI's dam_e10_hd vector a channel error that
+     * reads as a tone stays silent there. */
+    const int muted = ambe2400_error_rate_mutes(result, cur_mp);
+    if (muted) {
+        mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
+        ambe2400_mute_noise(aout_buf);
+    }
+    ambe2400_hold_tone(cur_mp, index, volume, muted);
+    mbe_moveMbeParms(cur_mp, prev_mp);
+}
+
+/* Leaving a tone: the voice fades in under the tone's fading tail (silent if
+ * the error rate muted the tone), which goes on from the tone's phases. */
+struct ambe2400_tone_tail {
+    int index;
+    int volume;
+    int audible;
+    int swn;
+    uint32_t tone_phase;
+};
+
+static void
+ambe2400_fade_in_from_tone(float* aout_buf, const struct ambe2400_tone_tail* held) {
+    float tail[160] = {0};
+    if (held->audible) {
+        mbe_parms tone;
+        memset(&tone, 0, sizeof(tone));
+        tone.swn = held->swn;
+        tone.tonePhase = held->tone_phase;
+        mbe_renderToneDstarf(tail, &tone, held->index, held->volume);
+    }
+    for (int n = 0; n < 160; ++n) {
+        const float gain = ambe2400_fade_in_gain(n);
+        aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * tail[n]);
+    }
+}
+
 static void
 ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
                           mbe_parms* prev_mp_enhanced) {
@@ -732,18 +855,17 @@ static void
 ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad,
                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     if (ambe2400_is_tone(bad)) {
-        /* The error rate mutes a tone as it mutes voice, after synthesis, so
-         * the tone state advances: on DVSI's dam_e10_hd vector a channel error
-         * that reads as a tone stays silent there. */
-        mbe_synthesizeTonefdstar(aout_buf, ambe_d, cur_mp, bad);
-        if (ambe2400_error_rate_mutes(result, cur_mp)) {
-            mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-            ambe2400_mute_noise(aout_buf);
-        }
-        mbe_moveMbeParms(cur_mp, prev_mp);
+        ambe2400_synthesize_tone(aout_buf, result, ambe_d, bad, cur_mp, prev_mp, prev_mp_enhanced);
         return;
     }
+    struct ambe2400_tone_tail held = {0, 0, 0, prev_mp->swn, prev_mp->tonePhase};
+    const int leaving = ambe2400_held_tone(prev_mp, &held.index, &held.volume);
+    held.audible = !ambe2400_last_frame_muted(prev_mp);
+    cur_mp->Vl[0] = ambe2400_error_rate_mutes(result, cur_mp) ? MBE_AMBE2400_FRAME_MUTED : 0;
     ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
+    if (leaving && (result->flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
+        ambe2400_fade_in_from_tone(aout_buf, &held);
+    }
 }
 
 int

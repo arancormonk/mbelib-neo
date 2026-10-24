@@ -910,15 +910,29 @@ mbe_synthesizeTonefdstar(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp,
     mbe_synthesizeSilencef(aout_buf);
     return;
 #else
-    float freq1 = 0, freq2 = 0;
-
-    if (!cur_mp || mbe_validate_bits(ambe_d, 49u) < 0 || !mbe_tone_lookup_dstar_freqs(ID1, &freq1, &freq2)) {
+    if (!cur_mp || mbe_validate_bits(ambe_d, 49u) < 0) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
+    mbe_renderToneDstarf(aout_buf, cur_mp, ID1, mbe_tone_dstar_volume(ambe_d));
+#endif
+}
 
-    const double level_db = mbe_tone_dstar_level_db(mbe_tone_dstar_volume(ambe_d));
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(level_db));
+void
+mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume) {
+#ifdef DISABLE_AMBE_TONES
+    (void)mp;
+    (void)index;
+    (void)volume;
+    mbe_synthesizeSilencef(aout_buf);
+#else
+    float freq1 = 0, freq2 = 0;
+
+    if (!mp || !mbe_tone_lookup_dstar_freqs(index, &freq1, &freq2)) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
+    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)));
 #endif
 }
 

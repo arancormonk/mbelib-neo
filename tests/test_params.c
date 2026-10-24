@@ -806,7 +806,8 @@ dstar_frame_with_errors(const char ambe_d[49], int errors, int soft, mbe_parms* 
  * take eps_R past 0.042 on the 21st frame, and clean frames bring it back.
  * Soft decisions never mute on the rate. A muted frame is synthesized as usual
  * and only its output replaced, so the hard stream's state (model, phases,
- * overlap and noise) stays byte for byte the soft stream's. */
+ * overlap and noise) stays byte for byte the soft stream's, apart from the
+ * record that the frame was muted. */
 static void
 test_ambe2400_error_rate_mute(void) {
     enum { FRAMES = 52, ERRORED = 40 };
@@ -841,7 +842,11 @@ test_ambe2400_error_rate_mute(void) {
                 continue;
             }
             for (int k = 0; k < 3; ++k) {
-                assert(parms_identical(&hard_state[f][k], &state[k]));
+                /* Vl[0] (Vl is indexed from 1) records whether the frame was muted. */
+                mbe_parms hard = hard_state[f][k];
+                assert((hard.Vl[0] != 0) == (rate > 0.042f) && state[k].Vl[0] == 0);
+                hard.Vl[0] = 0;
+                assert(parms_identical(&hard, &state[k]));
             }
             if (rate > 0.042f) {
                 /* Comfort noise where the soft stream plays the frame's speech. */
