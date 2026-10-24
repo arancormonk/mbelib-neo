@@ -17,6 +17,7 @@
  */
 
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,6 +96,17 @@ assert_same_pcm(const float* a, const float* b, size_t n, const char* what) {
             printf("%s: sample %zu differs (%g vs %g)\n", what, i, (double)a[i], (double)b[i]);
             assert(0);
         }
+    }
+}
+
+/* Two computed samples, equal up to rounding (optimized builds may fuse the
+ * crossfade's multiply-adds differently in the library and here). */
+static void
+assert_close_sample(float got, float want, const char* what, int n) {
+    const float tolerance = 1e-5f * fmaxf(1.0f, fabsf(want));
+    if (fabsf(got - want) > tolerance) {
+        printf("%s: sample %d differs (%g vs %g)\n", what, n, (double)got, (double)want);
+        assert(0);
     }
 }
 
@@ -527,6 +539,138 @@ test_tone_muted_by_error_rate(void) {
     puts("tones: muted with the error rate on hard decisions, tone state still advancing");
 }
 
+/*
+ * Tone transitions, as on DVSI's decoder: the first tone frame crossfades
+ * linearly over its first 80 samples from the last frame repeated (what a lost
+ * frame plays there) to the tone, and the first voice frame after it from the
+ * tone, which goes on, to the voice (what it plays after that lost frame).
+ * Outside the crossfades the output is the plain tone and the plain voice.
+ */
+static void
+test_tone_transitions(void) {
+    char voice[NVOICE][49], tone[49], lost[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 130, 180);
+    memcpy(lost, voice[3], sizeof(lost));
+    put_b0(lost, 125);
+    mbe_parms cur, prev, enh, lcur, lprev, lenh;
+    mbe_process_result r;
+    float out[160], ref[160], plain[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_initMbeParms(&lcur, &lprev, &lenh);
+    for (int i = 0; i < 4; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &lcur, &lprev, &lenh) == 0);
+    }
+    /* The tone frame: the lost frame's speech fading out, the tone fading in. */
+    mbe_parms tone_state = cur;
+    mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(ref, &r, lost, &lcur, &lprev, &lenh) == 0);
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
+        const float want = (gain * plain[n]) + ((1.0f - gain) * ref[n]);
+        assert_close_sample(out[n], want, "tone frame crossfade", n);
+    }
+    /* The voice after it: the tone going on and fading out, the voice fading in. */
+    mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+    assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_MUTE)) == 0u);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(ref, &r, voice[4], &lcur, &lprev, &lenh) == 0);
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
+        const float want = (gain * ref[n]) + ((1.0f - gain) * plain[n]);
+        assert_close_sample(out[n], want, "voice after the tone crossfade", n);
+    }
+    /* And the voice after that plays as after the lost frame. */
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[5], &cur, &prev, &enh) == 0);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(ref, &r, voice[5], &lcur, &lprev, &lenh) == 0);
+    assert_same_pcm(out, ref, 160, "second voice frame after the tone");
+    /* After the repeat limit's mute the last frame is silent: the tone fades
+     * in with no speech under it. */
+    for (int i = 0; i < 5; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, lost, &cur, &prev, &enh) == 0);
+    }
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    tone_state = cur;
+    mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
+        const float want = (gain * plain[n]) + ((1.0f - gain) * 0.0f);
+        assert_close_sample(out[n], want, "tone after the mute", n);
+    }
+    puts("tones: crossfade in and out over the first 80 samples, as on DVSI's decoder");
+}
+
+/*
+ * Muting is decided per frame from that frame's decisions (hard decisions mute
+ * on the error rate, soft ones do not), and a transition looks at whether the
+ * last frame was muted, not at how this frame is decoded: hard-decision voice
+ * muted by the error rate leaves no speech under a soft-decision tone, and a
+ * muted hard-decision tone leaves no tail under soft-decision voice.
+ */
+static void
+test_tone_transitions_after_mute(void) {
+    char voice[NVOICE][49], tone[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 32, 180);
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    float out[160], plain[160], ref[160];
+    /* (a) muted hard-decision voice, then a soft-decision tone. */
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 40; ++i) {
+        make_result(&r, 3);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    }
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    mbe_parms tone_state = cur;
+    mbe_synthesizeTonefdstar(plain, tone, &tone_state, 32);
+    make_result(&r, 0);
+    r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
+    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
+        assert_close_sample(out[n], gain * plain[n], "soft tone after muted hard voice", n);
+    }
+    /* (b) a muted hard-decision tone, then soft-decision voice. */
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 40; ++i) {
+        make_result(&r, 3);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    }
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    mbe_parms rc = cur, rp = prev, re = enh;
+    rp.Vl[0] = 0; /* the same state with no tone held */
+    make_result(&r, 0);
+    r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
+    make_result(&r, 0);
+    r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
+    assert(mbe_processAmbe2400Dataf(ref, &r, voice[0], &rc, &rp, &re) == 0);
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
+        assert_close_sample(out[n], gain * ref[n], "soft voice after a muted hard tone", n);
+    }
+    puts("tones: a muted last frame leaves no speech under a tone and no tail under voice");
+}
+
 /* int16 output of one frame. */
 static void
 to_int16(const float* pcm, short* out) {
@@ -682,6 +826,8 @@ main(void) {
     test_tone_ends_repeat_run();
     test_rejected_tone_is_lost();
     test_tone_muted_by_error_rate();
+    test_tone_transitions();
+    test_tone_transitions_after_mute();
     test_repeat_limit_mute();
     test_error_rate_mute_level();
     test_repeat_limit_under_error_mute();

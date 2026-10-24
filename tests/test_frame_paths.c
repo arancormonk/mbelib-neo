@@ -743,7 +743,10 @@ test_ambe2400_accepted_tones(void) {
                            == (MBE_PROCESS_FLAG_C0_VALID | (cases[c].accepted ? MBE_PROCESS_FLAG_TONE : lost)));
                     assert_float_pcm_sane(pcm[n]);
                     if (cases[c].accepted) {
-                        assert(float_array_equal_exact(pcm[n], tone[n], 160));
+                        /* The first tone frame fades the tone in over its first 80
+                         * samples (under the last frame's fading speech). */
+                        const size_t from = (n == 0) ? 80u : 0u;
+                        assert(float_array_equal_exact(pcm[n] + from, tone[n] + from, 160 - from));
                     } else if (n >= 4) {
                         short muted[160];
                         mbe_floattoshort(pcm[n], muted);
