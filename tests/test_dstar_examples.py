@@ -111,11 +111,18 @@ def verify(encode, decode):
     quiet_wav = success(decode, silence)
     check_wav(quiet_wav, frames + 1)
     assert peak(quiet_wav) <= 64
-    # The example decoder writes the b0=127/tone-index=128 frame earlier encoders sent as exact silence
-    # (the library itself plays comfort noise for it).
+    # The b0=127/tone-index=128 frame earlier encoders sent for silence plays as the library plays it, a lost
+    # frame: from a fresh stream, three quiet repeats of the initial model, then from the 5th frame mute noise
+    # of 0 or +-1 ...
     silent_wav = success(decode, silence_frame * (frames + 1))
     check_wav(silent_wav, frames + 1)
-    assert not any(silent_wav[44:])
+    assert peak(silent_wav) <= 64 and peak(silent_wav, 160 * 4) <= 1
+    # ... and after voice, a repeat of the last frame rather than silence.
+    lost = 6
+    repeated_wav = success(decode, encoded[:12 * lost] + silence_frame + encoded[12 * (lost + 1):])
+    check_wav(repeated_wav, frames + 1)
+    lost_frame = struct.unpack_from("<160h", repeated_wav, 44 + 320 * lost)
+    assert max(abs(sample) for sample in lost_frame) > 1000
     burst = bytes(len(pcm) - 64) + b"".join(
         struct.pack("<h", 24000 if i % 20 < 10 else -24000) for i in range(32)
     )
@@ -124,7 +131,7 @@ def verify(encode, decode):
     flushed_wav = success(decode, flushed)
     check_wav(flushed_wav, frames + 1)
     assert peak(flushed_wav, 160 * frames) > 200  # quiet frames stay within 64
-    print("PASS silent input as quiet voice frames, silence-frame mute, last-32-sample burst in the flush frame")
+    print("PASS silent input as quiet voice frames, old silence frame as a lost frame, last-32-sample burst in the flush frame")
 
     mismatched = invoke(decode, b"\x1a\r\n" + encoded[3:])
     assert mismatched.returncode == 0

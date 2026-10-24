@@ -312,7 +312,7 @@ MBE_API int mbe_eccAmbe3600x2400Data(char ambe_fr[4][24], char* ambe_d);
  * @param prev_mp Input: previous frame parameters (for prediction).
  * @return 0 for voice, a tone index (5..122, 128..147) for a tone frame, 2 for
  *         a frame that plays as a lost frame (b0 125..127: repeat the previous
- *         frame), or 3 for the DTX silence frame; only voice fully decodes cur_mp.
+ *         frame); only voice decodes cur_mp.
  */
 MBE_API int mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /**
@@ -404,8 +404,8 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * As from DVSI's encoder, quiet and silent input is coded as low-level voice,
  * and the decoded level follows the input level (there is no AGC). Earlier
  * versions normalized the level and sent the AMBE silence frame (b0 127, tone
- * index 128) for quiet input; this library's decoders play that frame as
- * comfort noise and reset. DTMF, call-progress and single tones are sent as
+ * index 128) for quiet input; this library's decoders play that frame as a
+ * lost frame, as DVSI's decoder does (a repeat of the last frame). DTMF, call-progress and single tones are sent as
  * D-STAR tone frames (b0 126, with the tone index and 8-bit volume the decoder
  * plays), where DVSI's encoder sends them. A call-progress tone is sent once
  * it has filled three consecutive 20 ms analysis spans (an 80 ms tone always

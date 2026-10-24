@@ -13,7 +13,7 @@
  * frame exactly as a frame with too many errors does, through every decode
  * API, and counts toward the repeat limit; b0 120..124 (the null frame
  * included) stay voice; a b0 126 tone frame plays at any volume; the all-ones
- * DTX frame keeps its silence handling.
+ * DV frame is a b0 127 frame like any other.
  */
 
 #include <assert.h>
@@ -359,38 +359,71 @@ test_tone_ends_repeat_run(void) {
     puts("repeat count: a played tone ends a run of repeats");
 }
 
-/* The all-ones DTX frame keeps the silence handling: comfort noise, then a
- * decoder reset, so the next voice frame decodes as from a fresh stream. */
+/*
+ * The all-ones DV frame (FF x 9, b0 127 after two corrections) plays as a lost
+ * frame, as on DVSI's decoder for runs of 1, 3 and 20: through the hard-frame
+ * API its first frame repeats the last frame exactly as a frame repeated for
+ * errors does, the 4th mutes, the frames after it play mute noise, and the
+ * voice after the run keeps the prediction history.
+ */
 static void
-test_dtx_frame(void) {
+test_all_ones_frame(void) {
     unsigned char ones[9];
     char fr[4][24], d[49];
     char voice[NVOICE][49];
     mbe_process_result r;
-    mbe_parms cur, prev, enh, fcur, fprev, fenh;
-    float out[160], after[160], fresh[160];
+    mbe_parms cur, prev, enh, rcur, rprev, renh;
+    float out[160], want[160 * 7];
+    unsigned want_flags[1];
+    short pcm[160];
     memset(ones, 0xFF, sizeof(ones));
     make_voice(voice);
     assert(mbe_decodeDStarDVData(ones, fr) == 0);
     assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 2);
-    mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == MBE_AMBE2400_FRAME_SILENCE);
-    mbe_initMbeParms(&cur, &prev, &enh);
-    for (int i = 0; i < 4; ++i) {
-        make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+    for (int i = 0; i < 6; ++i) {
+        assert(d[i] == 1);
     }
-    assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 2);
-    assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
-    mbe_setThreadRngSeed(2);
-    make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(after, &r, voice[4], &cur, &prev, &enh) == 0);
-    mbe_initMbeParms(&fcur, &fprev, &fenh);
-    mbe_setThreadRngSeed(2);
-    make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(fresh, &r, voice[4], &fcur, &fprev, &fenh) == 0);
-    assert_same_pcm(after, fresh, 160, "voice after the DTX frame vs fresh stream");
-    puts("DTX frame: silence handling and decoder reset kept");
+    assert(d[48] == 1); /* b0 127 */
+    mbe_initMbeParms(&cur, &prev, &enh);
+    assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == MBE_AMBE2400_FRAME_LOST);
+    run_stream((const char (*)[49])voice, NULL, 1, 4, want, want_flags);
+    static const int runs[] = {1, 3, 20};
+    for (size_t k = 0; k < sizeof(runs) / sizeof(runs[0]); ++k) {
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int i = 0; i < 4; ++i) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        }
+        for (int i = 0; i < runs[k]; ++i) {
+            assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 2);
+            const unsigned mute = (i >= 3) ? MBE_PROCESS_FLAG_MUTE : 0u;
+            assert(r.flags
+                   == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
+                       | MBE_PROCESS_FLAG_TONE | mute));
+            if (i == 0) {
+                assert_same_pcm(out, want + (size_t)160 * 4u, 160, "all-ones frame vs error repeat");
+            }
+            if (i >= 4) {
+                mbe_floattoshort(out, pcm);
+                for (int n = 0; n < 160; ++n) {
+                    assert(abs(pcm[n]) <= 1);
+                }
+            }
+        }
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+        /* The same voice with no all-ones frames in between. */
+        mbe_initMbeParms(&rcur, &rprev, &renh);
+        for (int i = 0; i < 5; ++i) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &rcur, &rprev, &renh) == 0);
+        }
+        assert_same_pcm(prev.log2Ml, rprev.log2Ml, sizeof(prev.log2Ml) / sizeof(prev.log2Ml[0]),
+                        "log2Ml after the all-ones run");
+        assert_same_pcm(&prev.gamma, &rprev.gamma, 1, "gamma after the all-ones run");
+    }
+    puts("all-ones frame: plays as a lost frame for runs of 1, 3 and 20, prediction kept");
 }
 
 /*
@@ -653,6 +686,6 @@ main(void) {
     test_error_rate_mute_level();
     test_repeat_limit_under_error_mute();
     test_repeat_limit_noise_continuity();
-    test_dtx_frame();
+    test_all_ones_frame();
     return 0;
 }

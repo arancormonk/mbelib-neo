@@ -103,12 +103,30 @@ differently from the same fields under b0 126. On the measured streams our decod
 them exactly as its own repeat for errors, for runs of 1 and 3; its repeats are close to DVSI's
 lost frames (`dam` run of three, frame RMS: ours 4372, 4153, 4352; DVSI 4421, 4931, 4928).
 
-Every b0 127 frame in DVSI's `dstar/*_dtx.bit` vectors is the all-ones DV frame (`FF` x 9; b0 127,
-tone index 191, volume 183 after two corrections), which DVSI's decoder plays near silent (frame RMS
-about 0.6) rather than as a lost frame. Those vectors were decoded with `-dtx 10000`, while the
-hardware above ran with DTX off, so the all-ones frame keeps its earlier handling here (comfort
-noise and a decoder reset) until it is measured with DTX off. Our encoder sent b0 124 and 125 for the
-lowest pitches and for quiet frames (16 and 156 of `dam`'s 1276 frames), and DVSI's decoder plays
+The all-ones DV frame (`FF` x 9; b0 127, tone index 191, volume 183 after two corrections) plays
+as a lost frame too. On the same ThumbDV, runs of 1, 3 and 20 of it after voice are sample-identical
+to as many LOST_FRAME frames on all three passages, voice after included, with the encoder's DTX bit
+(ECMODE `0x0800`, an encoder option) clear and set alike. Runs of 1 and 3 of the same fields sent
+with clean FEC, under b0 127 and under b0 126 (index 191 has no tone), are sample-identical to
+LOST_FRAME too (DTX bit clear). The frame is not something DVSI's
+encoder sends on the channel: DVSI's USB-3000 host software, simulating DTX (`-enc -dtx N`), writes
+all ones into the bit file for each silence frame it does not "transmit", and when decoding
+(`-dec -dtx N`) it hands each all-ones frame to the chip with the CNI flag set, so the chip plays
+comfort noise instead of decoding it (USB-3000 manual, `-dtx`; DVSI's `dstar/*_dtx` vectors were
+made that way). DVSI's `_dtx` decodes therefore show the CNI flag: the first all-ones frame of a run
+fades the last frame out and the rest play at RMS 0.57. A decoder given only the bits, as this
+library is, gets the chip's lost frame. The library used to play the all-ones frame as comfort noise
+(RMS about 56) and reset the decoder, which neither does. It now decodes it as the other b0 127 frames.
+On the `dam` passage with 20 of them, frame RMS from the first all-ones frame: DVSI 4421, 4931, 4928,
+2316, 12, then 0.5-0.6, and 2787, 2779 on the voice after; ours 4372, 4153, 4352, 2483, 0.5, then
+0.5-0.6, and 1680, 3163 (mean `|20 log10((ours + 1) / (DVSI + 1))|` over the run and the 16 voice
+frames 1.4 dB, 18.7 dB before). Against DVSI's `_dtx` decodes, where the first frames of a run
+differ by design (a repeat against a fade), the mean over the all-ones frames falls from 29-31 dB to
+1.0 dB (`dam_dtx`), 0.7 dB (`clean_dtx`) and 4.8 dB (`noisy_dtx`, whose repeats of the background
+noise play at level where CNI fades out) and on the first voice frame after a run from 14-32 dB to
+2.8-3.2 dB.
+
+Our encoder sent b0 124 and 125 for the lowest pitches and for quiet frames (16 and 156 of `dam`'s 1276 frames), and DVSI's decoder plays
 b0 125 as a lost frame; it now sends b0 0..123, as DVSI's encoder does. A played tone frame now
 also ends a run of repeats, so a repeat after it starts a new count. On the validation vectors, with
 both encodings decoded by the earlier decoder (which plays b0 125 as voice, so both are scored on

@@ -112,8 +112,8 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
 /**
  * @brief Set the initial AMBE model: w0, L, K = 0, gamma = 0, unit unvoiced amplitudes.
  *
- * Shared by the AMBE decode paths and the AMBE 2400 encoder, whose silence
- * reset mirrors the decoder's state.
+ * Used by mbe_initAmbeParms_common() for the initial state of the AMBE
+ * decode paths.
  *
  * @param mp Parameter set to rewrite (phase, error and synthesis state untouched).
  */

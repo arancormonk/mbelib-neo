@@ -1024,7 +1024,7 @@ main(void) {
                 assert(harmonics_below_nyquist(&cur));
             }
         }
-        /* D-STAR state after the standard silence frame (b0 127, tone index 128). */
+        /* D-STAR state after a b0 127 frame (tone index 128), a lost frame. */
         mbe_initMbeParms(&cur, &prev, &enh);
         set_bits_zero(ambe_d, 49);
         for (int i = 0; i < 6; ++i) {
