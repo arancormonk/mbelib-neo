@@ -151,8 +151,8 @@ resetting the model after the fade instead was further from DVSI on all three.
 b0 124, the null frame among them, plays on DVSI's decoder as a frame with every band unvoiced, its
 spectral amplitudes decoded and predicted as a voice frame's. This library decodes it with the AMBE+2
 silence model of TIA-102.BABA-1 4.1 (w0 = 2 pi / 32, L = 14), the model that fits DVSI's output best
-of those tried below; DVSI's exact w0 and L are not confirmed (a capture that tells L = 14 from
-L = 9 was requested in #106). The ThumbDV of #106 played ten b0 124 frames from a fresh start
+of those tried below; the hardware rules out the 9-harmonic alternative and supports 14 harmonics
+(see "Checked on the hardware" below). The ThumbDV of #106 played ten b0 124 frames from a fresh start
 (`clean` frame 110's spectral bits) at b1 15 and 0 and gains b2 12, 34 and 59, each repeated
 sample-identically:
 
@@ -174,8 +174,9 @@ Mean `|20 log10((ours + 1) / (DVSI + 1))|` over frame RMS:
 | Null frame x3 after voice (3 streams) | 4.40 to 4.09 dB | 2.19 to 1.94 dB |
 
 Over the fresh runs' frames 2-10, the error in the share of power in each 1 kHz band falls from 2.57
-to 0.35 dB (mean of the six runs). An all-unvoiced model with the 9 harmonics of the highest pitch code matches the frame
-RMS a little better (1.11 dB on the fresh runs' b0 124 frames) but misses the bands by 2.84 dB.
+to 0.35 dB (mean of the six runs). An all-unvoiced model with the 9 harmonics of the highest pitch
+code matches the frame RMS a little better (1.11 dB on the fresh runs' b0 124 frames) but misses the
+bands by 2.84 dB, and the hardware rules it out (below).
 Leaving the silence frame out of the prediction history, as AMBE+2 does, is further from DVSI on all
 three sets (6.82, 2.42 and 4.46 dB on the b0 124 frames), and the 80-sample crossfades of tones help
 the frames after a fresh run but not the b0 124 frames after voice (3.23 dB).
@@ -192,6 +193,35 @@ Still different from DVSI:
 DVSI's vectors carry b0 124 only once, at frame 1102 of `dam_e5_hd` (from channel errors): its 112
 changed frames differ from DVSI's decode by 1.63 dB against 1.61 before, and every other vector
 decodes bit for bit as before.
+
+**Checked on the hardware.** A further ThumbDV run (#106 round 5: the same fresh-start streams at
+b1 0, b2 34, each field changed one at a time, every stream repeated sample-identically):
+
+- **Not 9 harmonics**: b5 carries no coefficient at L = 9 and does at L = 14 (and at other counts
+  above 9). On b0 124, b5 0 and 15 play differently (up to 14.3 dB per frame, the voice after the
+  run included; 11.2 dB within the run; b5 5 and 10 differ from both); on b0 0 (L = 9) they play
+  sample for sample alike.
+- **Not pitch code 0**: b0 124 and b0 0 with the same bits play differently (up to 16.6 dB, the
+  voice after the run included; 16.3 dB within the run).
+- **Only b0 124**: b0 120..123 with the same bits play as low-pitch voice, each different from b0
+  124, and leave the voice after the run louder (+28 to +29 dB on its first frame against +23.9).
+- **Every spectral field is decoded**: b3, b4, b6, b7 and b8 each change the output when set to 0
+  or to its maximum.
+- **A 250 Hz, 14-harmonic frame**: b0 34 (250.3 Hz, L 14) with b1 0 and the same bits leaves the
+  voice after the run nearly sample-identical to b0 124's from its second frame on (no sample more
+  than 32 apart at b5 0, 1 at b5 15), so the state b0 124 leaves is very close to an ordinary
+  14-harmonic unvoiced frame's: the strongest support for 14 harmonics. The
+  run itself plays up to 3.6 dB (b5 0) and 4.6 dB (b5 15) apart, so DVSI synthesizes the b0 124 frame
+  itself a little differently.
+
+This library reproduces each of those relations: b5 changes b0 124 and not b0 0, b0 124 differs
+from b0 0, and b0 120..123 stay voice. Over the 24 streams of that run, the error on frames 2-10 of
+the run falls from 2.20 to 1.33 dB and on the six frames after it from 3.46 to 2.21 dB (b0 124 with
+b5 0: 2.15 to 1.60 dB on the run; b5 15: 5.12 to 2.08 dB). Two differences remain: b0 124 and b0 34
+leave the voice after the run at the same level here but not with the same waveform (DVSI's nearly
+match), and on the run with b3 at its maximum, which plays near full scale, DVSI's level falls
+faster after the run (616 against 14369 on its fourth frame); the earlier pitch-law decode misses
+there too.
 
 ### D-STAR tone transitions
 

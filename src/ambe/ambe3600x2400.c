@@ -196,8 +196,8 @@ ambe2400_special_frame(const char* ambe_d, int b0) {
  * The fundamental and harmonic count of b0. DVSI's AMBE-3000 plays b0 124 with
  * every band unvoiced (b1 ignored), its amplitudes decoded and predicted as a
  * voice frame's; it decodes here with TIA-102.BABA-1 4.1's AMBE+2 silence
- * model (w0 = 2 pi / 32, L = 14), the best fit measured, though DVSI's exact
- * w0 and L are unconfirmed (docs/dvsi-parity.md).
+ * model (w0 = 2 pi / 32, L = 14), the best fit measured, which the hardware
+ * supports over 9 harmonics (docs/dvsi-parity.md).
  */
 static void
 ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
