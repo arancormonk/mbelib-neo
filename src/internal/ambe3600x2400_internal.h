@@ -129,6 +129,9 @@ mbe_ambe2400_tone_index(const char* ambe_d) {
  */
 #define MBE_AMBE2400_FRAME_LOST   2
 
+/* b0 124, the silence frame (the D-STAR null frame among them). */
+#define MBE_AMBE2400_SILENCE_B0   124
+
 /* The highest pitch code the encoder sends; DVSI's encoder sends none above it. */
 #define MBE_AMBE2400_MAX_VOICE_B0 123
 

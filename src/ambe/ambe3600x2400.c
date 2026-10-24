@@ -176,7 +176,8 @@ ambe2400_decode_b0(const char* ambe_d) {
 /*
  * b0 125..127: a tone index or MBE_AMBE2400_FRAME_LOST (see
  * ambe3600x2400_internal.h); 0 for voice. A b0 126 tone frame plays at any
- * volume, 0 included; b0 120..124, the null frame among them, are voice.
+ * volume, 0 included; b0 120..123 are voice, and b0 124 (the null frame among
+ * them) is a silence frame decoded as voice (ambe2400_setup_voice_model()).
  */
 static int
 ambe2400_special_frame(const char* ambe_d, int b0) {
@@ -191,8 +192,22 @@ ambe2400_special_frame(const char* ambe_d, int b0) {
     return MBE_AMBE2400_FRAME_LOST;
 }
 
+/*
+ * The fundamental and harmonic count of b0. DVSI's AMBE-3000 plays b0 124 with
+ * every band unvoiced (b1 ignored), its amplitudes decoded and predicted as a
+ * voice frame's; it decodes here with TIA-102.BABA-1 4.1's AMBE+2 silence
+ * model (w0 = 2 pi / 32, L = 14), the best fit measured, though DVSI's exact
+ * w0 and L are unconfirmed (docs/dvsi-parity.md).
+ */
 static void
 ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
+    if (b0 == MBE_AMBE2400_SILENCE_B0) {
+        cur_mp->w0 = MBE_AMBE_SILENCE_W0;
+        *f0 = MBE_AMBE_SILENCE_W0 / (float)(2.0 * M_PI);
+        *L = MBE_AMBE_SILENCE_L;
+        cur_mp->L = *L;
+        return;
+    }
     *f0 = mbe_ambe2400_f0(b0);
     cur_mp->w0 = *f0 * (float)2 * M_PI;
     *L = mbe_ambe2400_harmonic_count(*f0);
@@ -201,7 +216,12 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
 
 static void
 ambe2400_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int b0, int L, float f0) {
-    (void)b0;
+    if (b0 == MBE_AMBE2400_SILENCE_B0) {
+        for (int l = 1; l <= L; l++) {
+            cur_mp->Vl[l] = 0;
+        }
+        return;
+    }
     int b1 = 0;
     b1 |= ambe_d[38] << 3;
     b1 |= ambe_d[39] << 2;

@@ -1009,10 +1009,11 @@ dstar_f0(int b0) {
 
 /* The decoder reconstructs w0 from b0 with the calibrated law across the voice
  * range, and sizes L like the AMBE+2 table: every harmonic at or below
- * 0.9254 x 4 kHz, the top harmonic DVSI's D-STAR decoder synthesizes. */
+ * 0.9254 x 4 kHz, the top harmonic DVSI's D-STAR decoder synthesizes. b0 124,
+ * the silence frame, decodes as voice with the AMBE+2 silence model instead. */
 static int
 test_pitch_law(void) {
-    for (int code = 0; code <= 124; code++) {
+    for (int code = 0; code <= 123; code++) {
         mbe_parms cur, prev, enhanced;
         char d[49] = {0};
         mbe_initMbeParms(&cur, &prev, &enhanced);
@@ -1030,7 +1031,7 @@ test_pitch_law(void) {
             return 1;
         }
     }
-    static const int codes[] = {0, 13, 40, 76, 100, 123, 124};
+    static const int codes[] = {0, 13, 40, 76, 100, 123};
     for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
         mbe_parms cur, prev, enhanced;
         char d[49] = {0};
@@ -1049,7 +1050,21 @@ test_pitch_law(void) {
             return 1;
         }
     }
-    puts("pitch law: b0 0..124 follow the calibrated D-STAR law and harmonic count");
+    {
+        mbe_parms cur, prev, enhanced;
+        char d[49] = {0};
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int bit = 0; bit < 6; bit++) {
+            d[bit] = (char)((124 >> (6 - bit)) & 1);
+        }
+        d[48] = 0;
+        if (mbe_decodeAmbe2400Parms(d, &cur, &prev) != 0 || cur.L != 14
+            || fabs((double)cur.w0 / (2.0 * M_PI / 32.0) - 1.0) > 1e-6) {
+            printf("pitch law: b0 124 gives L %d, w0 %.7f, want the silence model\n", cur.L, (double)cur.w0);
+            return 1;
+        }
+    }
+    puts("pitch law: b0 0..123 follow the calibrated D-STAR law and harmonic count, b0 124 the silence model");
     return 0;
 }
 
