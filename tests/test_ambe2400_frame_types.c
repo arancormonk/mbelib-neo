@@ -155,7 +155,8 @@ test_classes(void) {
     puts("classes: b0 0..124 voice, 125 lost, 126 tone or lost by index at any volume, 127 lost");
 }
 
-/* The D-STAR null frame decodes cleanly to b0 124 and is voice. */
+/* The D-STAR null frame decodes cleanly to b0 124, a silence frame decoded as
+ * voice: the AMBE+2 silence model (w0 2 pi / 32, L 14), every band unvoiced. */
 static void
 test_null_frame_is_voice(void) {
     static const unsigned char null_frame[9] = {0x9E, 0x8D, 0x32, 0x88, 0x26, 0x1A, 0x3F, 0x61, 0xE8};
@@ -168,8 +169,11 @@ test_null_frame_is_voice(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     assert(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh) == 0);
     assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT)) == 0u);
-    assert(cur.L == mbe_ambe2400_harmonic_count(mbe_ambe2400_f0(124)));
-    puts("null frame: b0 124, decoded as voice");
+    assert(cur.L == 14 && fabsf(cur.w0 / (2.0f * (float)M_PI / 32.0f) - 1.0f) < 1e-6f);
+    for (int l = 1; l <= cur.L; ++l) {
+        assert(cur.Vl[l] == 0);
+    }
+    puts("null frame: b0 124, a silence frame decoded as voice");
 }
 
 /*
@@ -201,6 +205,111 @@ run_stream(const char voice[NVOICE][49], const char* special, int count, int err
         make_result(&r, 0);
         assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
     }
+}
+
+/* Process voice[0..3], `special` through the parameter-bit (path 0), hard-frame
+ * (1) or soft-frame (2) API, then voice[4..5]; writes all PCM, the prediction
+ * history before the special frame and the history it commits. */
+static void
+run_silence_stream(const char voice[NVOICE][49], const char special[49], int path, float* pcm, mbe_parms* before,
+                   mbe_parms* history) {
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    int f = 0;
+    mbe_setThreadRngSeed(1);
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 4; ++i, ++f) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
+    }
+    char fr[4][24], d[49];
+    mbe_soft_bit soft[4][24];
+    air_frame(special, fr);
+    soft_frame((const char (*)[24])fr, soft);
+    float* out = pcm + ((size_t)160 * (size_t)f++);
+    *before = prev;
+    if (path == 0) {
+        assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh) == 0);
+    } else if (path == 1) {
+        assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 0);
+    } else {
+        assert(mbe_processAmbe3600x2400SoftFramef(out, &r, (const mbe_soft_bit(*)[24])soft, d, &cur, &prev, &enh) == 0);
+    }
+    assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT)) == 0u);
+    *history = prev;
+    for (int i = 4; i < NVOICE; ++i, ++f) {
+        make_result(&r, 0);
+        r.flags |= (path == 2) ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u;
+        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
+    }
+}
+
+/*
+ * b0 124 is a silence frame decoded as voice, as DVSI's AMBE-3000 plays it:
+ * the AMBE+2 silence model with every band unvoiced, so all 16 b1 values play
+ * sample for sample alike, on every API, through the voice after it; its
+ * amplitudes are decoded and committed to the prediction history as a voice
+ * frame's (the history after it is the silence model, not the last voice).
+ */
+static void
+test_b0_124_silence_frame(void) {
+    char voice[NVOICE][49], silence[49];
+    make_voice(voice);
+    float first[160 * (NVOICE + 1)], pcm[160 * (NVOICE + 1)];
+    mbe_parms before, history, first_history;
+    memset(&first_history, 0, sizeof(first_history));
+    const size_t n = (size_t)160 * (NVOICE + 1);
+    for (int path = 0; path < 3; ++path) {
+        for (int b1 = 0; b1 < 16; ++b1) {
+            memcpy(silence, voice[3], sizeof(silence));
+            put_b0(silence, 124);
+            for (int i = 0; i < 4; ++i) {
+                silence[38 + i] = (char)((b1 >> (3 - i)) & 1);
+            }
+            run_silence_stream((const char (*)[49])voice, silence, path, pcm, &before, &history);
+            /* The committed history is the silence frame's own decode from the
+             * history before it: its amplitudes and gain, not the last voice's. */
+            mbe_parms decoded = before, last = before;
+            assert(mbe_decodeAmbe2400Parms(silence, &decoded, &last) == 0);
+            assert(history.L == 14 && decoded.L == 14);
+            for (int l = 1; l <= 14; ++l) {
+                assert(history.Vl[l] == 0);
+            }
+            assert_same_pcm(history.log2Ml + 1, decoded.log2Ml + 1, 14, "committed log2Ml");
+            assert_same_pcm(history.Ml + 1, decoded.Ml + 1, 14, "committed Ml");
+            assert_same_pcm(&history.gamma, &decoded.gamma, 1, "committed gamma");
+            int replaced = 0;
+            for (int l = 1; l <= 14; ++l) {
+                uint32_t now_bits, before_bits;
+                memcpy(&now_bits, &history.log2Ml[l], sizeof(now_bits));
+                memcpy(&before_bits, &before.log2Ml[l], sizeof(before_bits));
+                replaced |= now_bits != before_bits;
+            }
+            assert(replaced);
+            if (path == 0 && b1 == 0) {
+                memcpy(first, pcm, sizeof(first));
+                first_history = history;
+            }
+            assert_same_pcm(pcm, first, n, "b0 124 across b1 and APIs");
+        }
+    }
+    /* The history is the silence frame's own decoded amplitudes, which the
+     * voice after it predicts from: it plays otherwise than after a lost frame,
+     * which keeps the last voice frame's history. */
+    char lost[49];
+    memcpy(lost, voice[3], sizeof(lost));
+    put_b0(lost, 125);
+    unsigned lost_flags[1];
+    run_stream((const char (*)[49])voice, lost, 1, 0, pcm, lost_flags);
+    assert(first_history.L == 14 && first_history.w0 < 0.2f);
+    int differs = 0;
+    for (size_t i = (size_t)160 * 5u; i < n; ++i) {
+        differs |= fabsf(pcm[i] - first[i]) > 1.0f;
+    }
+    assert(differs);
+    puts("b0 124: a silence frame, every band unvoiced whatever b1, committed as voice");
 }
 
 /* A lost frame plays sample for sample as a frame repeated for errors and
@@ -819,6 +928,7 @@ int
 main(void) {
     test_classes();
     test_null_frame_is_voice();
+    test_b0_124_silence_frame();
     test_lost_plays_as_repeat();
     test_mixed_repeat_count();
     test_frame_apis_agree();

@@ -93,7 +93,8 @@ was repeated, and every repeat was sample-identical.
   with index 0, 4, 123, 127, 148 or 255; the b0 127 frame with index 128 and volume 0 that this
   library's encoder used to send for silence. A lost frame repeats the last frame at level for
   three frames; the 4th fades out and the 5th is near silent.
-- **Not as a lost frame**: the null frame (`9E 8D 32 88 26 1A 3F 61 E8`, b0 124), b0 124 with
+- **Not as a lost frame** (b0 124 plays as a silence frame, see [D-STAR b0 124](#d-star-b0-124)):
+  the null frame (`9E 8D 32 88 26 1A 3F 61 E8`, b0 124), b0 124 with
   b1 15, b0 120..123, and b0 126 tone frames with a playable index at any volume, 0 included.
 
 This library now decodes b0 125, b0 126 tone frames without a tone and b0 127 frames as lost
@@ -144,6 +145,53 @@ played, since the speech it would fade out was never heard. From the 3rd lost fr
 voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` over the frame RMS
 values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
 resetting the model after the fade instead was further from DVSI on all three.
+
+### D-STAR b0 124
+
+b0 124, the null frame among them, plays on DVSI's decoder as a frame with every band unvoiced, its
+spectral amplitudes decoded and predicted as a voice frame's. This library decodes it with the AMBE+2
+silence model of TIA-102.BABA-1 4.1 (w0 = 2 pi / 32, L = 14), the model that fits DVSI's output best
+of those tried below; DVSI's exact w0 and L are not confirmed (a capture that tells L = 14 from
+L = 9 was requested in #106). The ThumbDV of #106 played ten b0 124 frames from a fresh start
+(`clean` frame 110's spectral bits) at b1 15 and 0 and gains b2 12, 34 and 59, each repeated
+sample-identically:
+
+- **b1 is ignored**: b1 15 and 0 play sample for sample alike, the voice after the run included.
+- **b2 is the gain**: from the second frame of the run on, b2 12 to 34 adds 19.7 dB and 34 to 59
+  22.9 dB on every frame (17.2 and 22.8 dB on the first, which starts from silence).
+- **The level climbs** through the run (b2 59: frame RMS 1314, 1778, 2529, ... 7022 on frames
+  2-9), as the prediction from the fresh start's history builds up.
+- **No steady pitch**: at most 2 of the 10 frames look periodic.
+
+This library decoded b0 124 as voice at the pitch law's 64.4 Hz with 56 harmonics and b1's voicing.
+It now decodes it with the silence model above and commits it to the prediction history, as before.
+Mean `|20 log10((ours + 1) / (DVSI + 1))|` over frame RMS:
+
+| Streams | b0 124 frames | Next 6 frames |
+|---|---|---|
+| Fresh start: 6 runs of 10 (their first frame left out, see below), 8 streams after | 3.00 to 1.87 dB | 2.96 to 1.62 dB |
+| After voice, 1 or 3 frames (12 streams on six anchors, round 3) | 2.25 to 2.09 dB | 2.04 to 1.40 dB |
+| Null frame x3 after voice (3 streams) | 4.40 to 4.09 dB | 2.19 to 1.94 dB |
+
+Over the fresh runs' frames 2-10, the error in the share of power in each 1 kHz band falls from 2.57
+to 0.35 dB (mean of the six runs). An all-unvoiced model with the 9 harmonics of the highest pitch code matches the frame
+RMS a little better (1.11 dB on the fresh runs' b0 124 frames) but misses the bands by 2.84 dB.
+Leaving the silence frame out of the prediction history, as AMBE+2 does, is further from DVSI on all
+three sets (6.82, 2.42 and 4.46 dB on the b0 124 frames), and the 80-sample crossfades of tones help
+the frames after a fresh run but not the b0 124 frames after voice (3.23 dB).
+
+Still different from DVSI:
+- **The first frame from a fresh start**: an all-unvoiced first frame plays silent here (the noise
+  generator starts from silence), where DVSI's plays RMS 394 at b2 59 (29 at b2 34, 4 at b2 12).
+- **The first voice frame after b0 124** plays louder than DVSI's inside speech (`clean` anchor 110,
+  three frames: 6815 against 2760). After a fresh run, the part of that frame that depends on the
+  run's gain (the outgoing noise; b2 59 minus b2 12) last reaches 10 at sample 87 of the frame
+  (counting from 0) on DVSI's decoder and at sample 104 here, the end of the unvoiced overlap.
+- **The second of three null frames** plays at RMS 4 against DVSI's 123 (`dam`).
+
+DVSI's vectors carry b0 124 only once, at frame 1102 of `dam_e5_hd` (from channel errors): its 112
+changed frames differ from DVSI's decode by 1.63 dB against 1.61 before, and every other vector
+decodes bit for bit as before.
 
 ### D-STAR tone transitions
 
