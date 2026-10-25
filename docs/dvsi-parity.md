@@ -373,6 +373,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   reproduced; within voiced runs, including pitch steps, our pulse positions follow DVSI's.
 - DVSI hard-clips at full scale; this library clips at 0.95 of full scale. Clipping at full
   scale moved no metric, so it is not adopted.
+- A frame at the largest D-STAR gain and b3 (b2 63, b3 511; `9E B0 6F EE F8 7B 9F FE 74`) held
+  for 50 frames ([#158](https://github.com/arancormonk/mbelib-neo/issues/158)): a DVMEGA DVstick 30
+  plays -18.4 dBFS on the first frame and -9.0 to -11.4 dBFS after it, this library -13.0 and -6.5
+  to -8.4 dBFS. It used to play silence there from the 5th frame, when the spectral enhancement's
+  weights overflowed float.
 - Small pitch differences remain: P25 codes up to 0.07% from DVSI's (rounding-like), D-STAR codes
   within 0.03%.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2

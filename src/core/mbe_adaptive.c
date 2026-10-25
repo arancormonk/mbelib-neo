@@ -84,17 +84,19 @@ mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, f
     }
     cur_mp->localEnergy = energy;
     const float threshold = voicing_threshold(cur_mp);
-    float amplitude_sum = 0.0f;
+    /* In double: a float sum of loud amplitudes can overflow, and the scale
+     * below would then silence every harmonic. */
+    double amplitude_sum = 0.0;
     for (int l = 1; l <= cur_mp->L; ++l) {
         if (cur_mp->Ml[l] > threshold) {
             cur_mp->Vl[l] = 1;
         }
-        amplitude_sum += cur_mp->Ml[l];
+        amplitude_sum += (double)cur_mp->Ml[l];
     }
     cur_mp->amplitudeThreshold = amplitude_threshold(cur_mp, prior_threshold);
     float scale = 1.0f;
-    if (amplitude_sum > 0.0f && (float)cur_mp->amplitudeThreshold <= amplitude_sum) {
-        scale = (float)cur_mp->amplitudeThreshold / amplitude_sum;
+    if (amplitude_sum > 0.0 && (double)cur_mp->amplitudeThreshold <= amplitude_sum) {
+        scale = (float)((double)cur_mp->amplitudeThreshold / amplitude_sum);
     }
     if (scale < 0.0f) {
         scale = 0.0f;

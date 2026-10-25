@@ -24,6 +24,7 @@
  * @{ 
  */
 
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -458,19 +459,33 @@ mbe_accumulate_spectral_energy(const mbe_parms* cur_mp, const float cos_tab[57],
     *out_rm1 = Rm1;
 }
 
+/*
+ * W_l = sqrt(M_l) (0.96 pi (Rm0^2 + Rm1^2 - 2 Rm0 Rm1 cos(w0 l)) / (w0 Rm0 (Rm0^2 - Rm1^2)))^(1/4),
+ * evaluated with r = Rm1 / Rm0 and M_l / sqrt(Rm0), which are at most 1: the
+ * terms in Rm0^3 overflow float for loud models (a D-STAR frame held at b2 63
+ * reaches Rm0 1e19 and played silence) and underflow for quiet ones. The
+ * numerator is at least (1 - |r|)^2. A model whose r or a numerator comes
+ * within float's error of 0 (nearly all its energy at cos(w0 l) = +-1, which
+ * no decoded model reaches) is enhanced in double precision instead
+ * (mbe_spectral_float_unresolved()).
+ */
 static void
 mbe_apply_spectral_weights(mbe_parms* cur_mp, const float cos_tab[57], float Rm0, float Rm1) {
     float Wl[57];
-    float R2m0 = Rm0 * Rm0;
-    float R2m1 = Rm1 * Rm1;
     const int L = cur_mp->L;
+
+    if (!(Rm0 > 0.0f) || !(cur_mp->w0 > 0.0f)) {
+        return;
+    }
+    const float r = Rm1 / Rm0;
+    const float shape = ((float)0.96 * (float)M_PI) / (cur_mp->w0 * ((float)1 - (r * r)));
+    const float inv_sqrt_rm0 = (float)1 / sqrtf(Rm0);
 
     for (int l = 1; l <= L; l++) {
         if (cur_mp->Ml[l] != 0.0f) {
             const float cos_w0l = cos_tab[l];
-            Wl[l] = sqrtf(cur_mp->Ml[l])
-                    * sqrtf(sqrtf(((float)0.96 * (float)M_PI * ((R2m0 + R2m1) - ((float)2 * Rm0 * Rm1 * cos_w0l)))
-                                  / (cur_mp->w0 * Rm0 * (R2m0 - R2m1))));
+            const float spread = fmaxf(((float)1 + (r * r)) - ((float)2 * r * cos_w0l), 0.0f);
+            Wl[l] = sqrtf(cur_mp->Ml[l] * inv_sqrt_rm0) * sqrtf(sqrtf(shape * spread));
 
             if ((8 * l) <= L) {
                 /* no-op for low harmonics */
@@ -711,6 +726,101 @@ mbe_render_restore(mbe_parms* mp, const struct mbe_render_saved* saved) {
     }
 }
 
+/*
+ * The enhancement's energy sums square the amplitudes: in float they overflow
+ * for a peak amplitude above about 2^63 and lose the envelope below 2^-63
+ * (decoded models stay within 2^-30..2^49). A model with a peak beyond 2^60 or
+ * 2^-60 is enhanced in double precision instead, as is one whose weights float
+ * cannot resolve (mbe_spectral_float_unresolved()).
+ */
+static int
+mbe_spectral_needs_wide_range(const mbe_parms* cur_mp) {
+    float peak = 0.0f;
+    for (int l = 1; l <= cur_mp->L; l++) {
+        const float magnitude = fabsf(cur_mp->Ml[l]);
+        if (magnitude > peak) {
+            peak = magnitude;
+        }
+    }
+    return (peak > 0x1p60f) || (peak > 0.0f && peak < 0x1p-60f);
+}
+
+/*
+ * Whether float cannot resolve mbe_apply_spectral_weights(): its denominator,
+ * w0 (1 - r^2), or the numerator 1 + r^2 - 2 r cos(w0 l) of a weighted
+ * harmonic comes too close to 0, where the float cosines' error (about 1e-6)
+ * and rounding dominate. Decoded models keep 1 - r^2 above 2.5e-3 and every
+ * numerator above 1.5e-3 (energy in harmonic 1 at the lowest pitch).
+ */
+static int
+mbe_spectral_float_unresolved(const mbe_parms* cur_mp, const float cos_tab[57], float Rm0, float Rm1) {
+    if (!(Rm0 > 0.0f) || !(cur_mp->w0 > 0.0f)) {
+        return 0;
+    }
+    const float r = Rm1 / Rm0;
+    if (!(((float)1 - (r * r)) > 0x1p-14f)) {
+        return 1;
+    }
+    for (int l = 1; l <= cur_mp->L; l++) {
+        const float spread = ((float)1 + (r * r)) - ((float)2 * r * cos_tab[l]);
+        if ((8 * l) > cur_mp->L && cur_mp->Ml[l] != 0.0f && !(spread > 0x1p-12f)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* One weighted amplitude of mbe_apply_spectral_weights(), in double precision.
+ * As |r| reaches 1 (all the energy at cos(w0 l) = r = +-1) the numerator and
+ * the denominator both vanish and W_l tends to
+ * sqrt(M_l / sqrt(Rm0)) (0.96 pi / w0)^(1/4), which is used where even double
+ * rounding leaves no positive denominator. */
+static double
+mbe_wide_weighted_amplitude(const mbe_parms* cur_mp, int l, double cos_w0l, double rm0, double r, int singular) {
+    const double w0 = (double)cur_mp->w0;
+    const double ml = (double)cur_mp->Ml[l];
+    const double spread = singular ? 1.0 : fmax((1.0 + (r * r)) - (2.0 * r * cos_w0l), 0.0);
+    const double shape = (0.96 * M_PI) / (singular ? w0 : w0 * (1.0 - (r * r)));
+    const double weight = sqrt(ml / sqrt(rm0)) * sqrt(sqrt(shape * spread));
+    if ((8 * l) <= cur_mp->L) {
+        return ml;
+    }
+    return ml * ((weight > 1.2) ? 1.2 : ((weight < 0.5) ? 0.5 : weight));
+}
+
+/* mbe_spectralAmpEnhanceWithRm0() in double precision, its cosines too (a
+ * float cosine of -1 can round past it), amplitudes held to the float range;
+ * returns Rm0, held to it too. */
+static float
+mbe_spectral_enhance_wide_range(mbe_parms* cur_mp, float high_band_gain) {
+    const int L = cur_mp->L;
+    double rm0 = 0.0, rm1 = 0.0, sum = 0.0;
+    double enhanced[57], cosines[57];
+    for (int l = 1; l <= L; l++) {
+        const double power = (double)cur_mp->Ml[l] * (double)cur_mp->Ml[l];
+        cosines[l] = cos((double)cur_mp->w0 * (double)l);
+        rm0 += power;
+        rm1 += power * cosines[l];
+    }
+    const int weighted = (rm0 > 0.0) && (cur_mp->w0 > 0.0f);
+    const double r = weighted ? rm1 / rm0 : 0.0;
+    const int singular = weighted && !((double)cur_mp->w0 * (1.0 - (r * r)) > 0.0);
+    for (int l = 1; l <= L; l++) {
+        enhanced[l] = (weighted && cur_mp->Ml[l] != 0.0f)
+                          ? mbe_wide_weighted_amplitude(cur_mp, l, cosines[l], rm0, r, singular)
+                          : (double)cur_mp->Ml[l];
+        sum += enhanced[l] * enhanced[l];
+    }
+    const double gamma = (sum > 0.0) ? sqrt(rm0 / sum) : 1.0;
+    const float hz_per_harmonic = cur_mp->w0 * (8000.0f / (2.0f * (float)M_PI));
+    for (int l = 1; l <= L; l++) {
+        const double value =
+            enhanced[l] * gamma * (double)mbe_high_band_gain(hz_per_harmonic * (float)l, high_band_gain);
+        cur_mp->Ml[l] = (value > (double)FLT_MAX) ? FLT_MAX : (float)value;
+    }
+    return (rm0 > (double)FLT_MAX) ? FLT_MAX : (float)rm0;
+}
+
 /**
  * @brief Apply spectral amplitude enhancement to the current parameters.
  * @param cur_mp In/out parameter set to enhance.
@@ -728,7 +838,13 @@ mbe_spectralAmpEnhanceWithRm0(mbe_parms* cur_mp, float high_band_gain) {
     }
 
     mbe_precompute_harmonic_cosines(cos_tab, cur_mp->L, cur_mp->w0);
+    if (MBE_UNLIKELY(mbe_spectral_needs_wide_range(cur_mp))) {
+        return mbe_spectral_enhance_wide_range(cur_mp, high_band_gain);
+    }
     mbe_accumulate_spectral_energy(cur_mp, cos_tab, &Rm0, &Rm1);
+    if (MBE_UNLIKELY(mbe_spectral_float_unresolved(cur_mp, cos_tab, Rm0, Rm1))) {
+        return mbe_spectral_enhance_wide_range(cur_mp, high_band_gain);
+    }
 
     mbe_apply_spectral_weights(cur_mp, cos_tab, Rm0, Rm1);
 
