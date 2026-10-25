@@ -896,6 +896,36 @@ test_repeat_limit_noise_continuity(void) {
     puts("repeat limit: the noise generator advances on every frame");
 }
 
+/* A clean frame at the largest gain and b3 (b2 63, b3 511) held for 50
+ * frames plays every frame, as DVSI's AMBE-3000 does (#158). Its prediction
+ * builds the amplitudes up to about 2^45; the enhancement's weights used to
+ * overflow on the way, and from the 5th copy the output was NaN, played as
+ * silence. */
+static void
+test_loud_held_frame_plays(void) {
+    static const unsigned char dv[9] = {0x9e, 0xb0, 0x6f, 0xee, 0xf8, 0x7b, 0x9f, 0xfe, 0x74};
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    char fr[4][24], d[49];
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int f = 0; f < 50; ++f) {
+        assert(mbe_decodeDStarDVData(dv, fr) == 0);
+        assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 0);
+        assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE)) == 0u);
+        double energy = 0.0;
+        for (int n = 0; n < 160; ++n) {
+            uint32_t bits;
+            memcpy(&bits, &out[n], sizeof(bits));
+            assert((bits & UINT32_C(0x7f800000)) != UINT32_C(0x7f800000));
+            energy += (double)out[n] * out[n];
+        }
+        /* At least -30 dBFS (the float output is the int16 scale over 7). */
+        assert(energy / 160.0 > pow(32768.0 * 0.0316 / 7.0, 2.0));
+    }
+    puts("loud held frame: every frame plays");
+}
+
 /* The error-rate mute plays the same DVSI-level noise: int16 0 or +-1, about a
  * third of the samples nonzero (DVSI's muted dam_e10_hd: 33%). */
 static void
@@ -946,5 +976,6 @@ main(void) {
     test_repeat_limit_under_error_mute();
     test_repeat_limit_noise_continuity();
     test_all_ones_frame();
+    test_loud_held_frame_plays();
     return 0;
 }

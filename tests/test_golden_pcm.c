@@ -34,11 +34,14 @@
  * accumulate over 24 frames, so other targets check determinism and energy.
  * The float hashes depend on the kernel ISA the library runs (mbe_cpu_isa():
  * scalar, SSE2 or AVX2 vector width), whether the library was compiled for it
- * or picked it at run time; the int16 hashes do not distinguish SSE2 and AVX2.
+ * or picked it at run time; so can the int16 hashes (AMBE+2's differ between
+ * SSE2 and AVX2).
  * Regenerate with gen_golden (scalar: dev-debug; SIMD: Debug with
  * -DMBELIB_ENABLE_SIMD=ON, `gen_golden sse2` and `gen_golden avx2`).
  * PFFFT 0ac3d39 uses more accurate twiddle factors. These float hashes were
  * regenerated on Ubuntu 24.04 for scalar, SSE2 and AVX2; int16 hashes held.
+ * The scale-free spectral weights (#158) moved every AMBE float hash and
+ * AMBE+2's int16 hashes by rounding.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -54,19 +57,19 @@ static struct golden_ambe_expect
 golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     if (isa == MBE_CPU_ISA_AVX2) {
-        e.ambe2450_f32 = 0xCC1BAC6Bu;
-        e.ambe2450_s16 = 0x49E0330Du;
-        e.ambe2400_f32 = 0x4349E7B9u;
+        e.ambe2450_f32 = 0x54CD95CAu;
+        e.ambe2450_s16 = 0xC2FB86BAu;
+        e.ambe2400_f32 = 0xCA585D1Fu;
         e.ambe2400_s16 = 0x8F10FA7Eu;
     } else if (isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x0A6D887Cu;
-        e.ambe2450_s16 = 0x49E0330Du;
-        e.ambe2400_f32 = 0x54EC4DB4u;
+        e.ambe2450_f32 = 0xBFC27C96u;
+        e.ambe2450_s16 = 0xC597CFD7u;
+        e.ambe2400_f32 = 0x1814DFF1u;
         e.ambe2400_s16 = 0x8F10FA7Eu;
     } else {
-        e.ambe2450_f32 = 0xF25F0126u;
-        e.ambe2450_s16 = 0xA4881DEBu;
-        e.ambe2400_f32 = 0xA82FF1BDu;
+        e.ambe2450_f32 = 0x10961185u;
+        e.ambe2450_s16 = 0xD6CCAF6Fu;
+        e.ambe2400_f32 = 0xC57B429Cu;
         e.ambe2400_s16 = 0xEB36DEB9u;
     }
     return e;

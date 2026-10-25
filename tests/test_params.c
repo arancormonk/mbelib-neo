@@ -9,6 +9,7 @@
  */
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #ifndef M_PI
@@ -252,6 +253,244 @@ flat_model(mbe_parms* mp) {
         mp->Ml[l] = 1.0f;
         mp->log2Ml[l] = 0.0f;
     }
+}
+
+/* A 130 Hz model with a formant-like envelope whose weights cover every
+ * branch of the enhancement (kept, capped at 1.2, floored at 0.5, scaled). */
+static void
+shaped_model(mbe_parms* mp, float scale) {
+    flat_model(mp);
+    mp->w0 = (float)(2.0 * M_PI * 130.0 / 8000.0);
+    mp->L = 30;
+    for (int l = 1; l <= mp->L; ++l) {
+        double envelope = 0.05 + exp(-0.5 * pow((l - 5.0) / 2.0, 2.0)) + (0.6 * exp(-0.5 * pow((l - 18.0) / 3.0, 2.0)));
+        mp->Ml[l] = (float)envelope * scale;
+    }
+}
+
+/* The enhancement of shaped_model(), from the equations in double precision;
+ * counts the harmonics whose weight is capped and floored. */
+static void
+reference_enhancement(const mbe_parms* mp, double want[57], int* capped, int* floored) {
+    double rm0 = 0.0, rm1 = 0.0, sum = 0.0;
+    for (int l = 1; l <= mp->L; ++l) {
+        rm0 += (double)mp->Ml[l] * mp->Ml[l];
+        rm1 += (double)mp->Ml[l] * mp->Ml[l] * cos((double)mp->w0 * l);
+    }
+    for (int l = 1; l <= mp->L; ++l) {
+        double c = cos((double)mp->w0 * l);
+        double w = sqrt((double)mp->Ml[l])
+                   * pow((0.96 * M_PI * ((rm0 * rm0) + (rm1 * rm1) - (2.0 * rm0 * rm1 * c)))
+                             / (mp->w0 * rm0 * ((rm0 * rm0) - (rm1 * rm1))),
+                         0.25);
+        double gain = w;
+        if (8 * l <= mp->L) {
+            gain = 1.0;
+        } else if (w > 1.2) {
+            gain = 1.2;
+            ++*capped;
+        } else if (w < 0.5) {
+            gain = 0.5;
+            ++*floored;
+        }
+        want[l] = gain * mp->Ml[l];
+        sum += want[l] * want[l];
+    }
+    for (int l = 1; l <= mp->L; ++l) {
+        want[l] *= sqrt(rm0 / sum);
+    }
+}
+
+/* The weights depend on the envelope's shape, not its level: the same model
+ * 2^40 times louder (whose Rm0^3 overflows float; a D-STAR frame held at b2 63
+ * played silence, #158) or 2^40 times quieter (Rm0^3 underflows), or 2^100
+ * times louder or quieter (Rm0 itself overflows or underflows), enhances to
+ * the same model at that level. */
+static void
+test_spectral_enhancement_any_level(void) {
+    static const float scales[] = {1.0f, 0x1p40f, 0x1p-40f, 0x1p100f, 0x1p-100f};
+    mbe_parms unit;
+    double want[57];
+    int capped = 0, floored = 0;
+    shaped_model(&unit, 1.0f);
+    reference_enhancement(&unit, want, &capped, &floored);
+    assert(capped > 0 && floored > 0 && capped + floored < unit.L - 3);
+    for (size_t i = 0; i < sizeof(scales) / sizeof(scales[0]); ++i) {
+        mbe_parms mp;
+        shaped_model(&mp, scales[i]);
+        const float rm0 = mbe_spectralAmpEnhanceWithRm0(&mp, 1.0f);
+        for (int l = 1; l <= mp.L; ++l) {
+            assert(approx_equal(mp.Ml[l] / scales[i], (float)want[l], 1e-5f));
+        }
+        /* The energy before enhancement, at the model's level, within float range. */
+        double rm0_want = 0.0;
+        for (int l = 1; l <= unit.L; ++l) {
+            rm0_want += (double)unit.Ml[l] * unit.Ml[l];
+        }
+        rm0_want *= (double)scales[i] * (double)scales[i];
+        if (rm0_want > (double)FLT_MAX) {
+            assert(rm0 <= FLT_MAX && rm0 > 0x1p127f);
+        } else if (rm0_want < (double)FLT_MIN) {
+            assert(rm0 >= 0.0f && rm0 < FLT_MIN);
+        } else {
+            assert(fabs((double)rm0 - rm0_want) <= 1e-5 * rm0_want);
+        }
+    }
+}
+
+/* A model with all its energy in its top harmonic at w0 L within a few
+ * hundred ulps of pi: where cos(w0 L) rounds to -1, |Rm1| = Rm0 and the
+ * weight has no finite value. It takes the cap, so the enhancement leaves the
+ * one harmonic as it is, where the weights used to be 0 / 0 (on about 6% of
+ * these models). */
+static void
+test_spectral_enhancement_singular(void) {
+    for (int L = 9; L <= 56; L += 7) {
+        float w0 = (float)(M_PI / L);
+        for (int k = 0; k < 400; ++k) {
+            w0 = nextafterf(w0, (k < 200) ? 1.0f : 0.0f);
+            mbe_parms mp;
+            flat_model(&mp);
+            mp.L = L;
+            mp.w0 = (k == 200) ? (float)(M_PI / L) : w0;
+            for (int l = 1; l <= L; ++l) {
+                mp.Ml[l] = (l == L) ? 3.0f : 0.0f;
+            }
+            (void)mbe_spectralAmpEnhanceWithRm0(&mp, 1.0f);
+            assert(approx_equal(mp.Ml[L], 3.0f, 1e-5f));
+        }
+    }
+}
+
+/* Amplitudes anywhere in float's range, and a model spanning 2^160 between
+ * its harmonics, enhance as the equations give in double precision: no
+ * harmonic is lost or overflows, and the energy returned stays in range. */
+static void
+test_spectral_enhancement_extremes(void) {
+    static const float singles[] = {0x1p127f, 0x1p-129f, 0x1p-149f};
+    /* The subnormal inputs need an FPU that keeps subnormals (no flush to zero). */
+    volatile float smallest_normal = 0x1p-126f, subnormal = 0x1p-149f;
+    const int subnormals = (smallest_normal * 0.5f > 0.0f) && (subnormal * 2.0f > 0.0f);
+    for (size_t i = 0; i < (subnormals ? sizeof(singles) / sizeof(singles[0]) : 1u); ++i) {
+        mbe_parms mp;
+        flat_model(&mp);
+        mp.L = 9;
+        mp.w0 = 0.1f;
+        for (int l = 1; l <= mp.L; ++l) {
+            mp.Ml[l] = (l == mp.L) ? singles[i] : 0.0f;
+        }
+        const float rm0 = mbe_spectralAmpEnhanceWithRm0(&mp, 1.0f);
+        assert(fabs((double)mp.Ml[mp.L] / (double)singles[i] - 1.0) < 1e-6);
+        assert(rm0 >= 0.0f && rm0 <= FLT_MAX);
+    }
+    mbe_parms wide, unit;
+    double want[57];
+    int capped = 0, floored = 0;
+    shaped_model(&wide, 0x1p100f);
+    wide.Ml[1] = 0x1p-60f;
+    unit = wide;
+    reference_enhancement(&unit, want, &capped, &floored);
+    (void)mbe_spectralAmpEnhanceWithRm0(&wide, 1.0f);
+    for (int l = 1; l <= wide.L; ++l) {
+        assert(wide.Ml[l] > 0.0f);
+        assert(fabs((double)wide.Ml[l] / want[l] - 1.0) < 1e-5);
+    }
+}
+
+static void near_singular_run(float w0);
+
+/* A weighted harmonic whose numerator 1 + r^2 - 2 r cos(w0 l) is far below the
+ * float cosines' error (Ml[46] 1/8 of Ml[47], w0 47 near pi) enhances as the
+ * equations give in double precision, at any level. */
+static void
+test_spectral_enhancement_small_numerator(void) {
+    static const float levels[] = {1.0f, 0x1p61f};
+    mbe_parms unit;
+    double want[57];
+    int capped = 0, floored = 0;
+    flat_model(&unit);
+    unit.L = 47;
+    unit.w0 = 0x1.11c956p-4f;
+    for (int l = 1; l <= unit.L; ++l) {
+        unit.Ml[l] = (l == 47) ? 1.0f : ((l == 46) ? 0.125f : 0.0f);
+    }
+    reference_enhancement(&unit, want, &capped, &floored);
+    for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); ++i) {
+        mbe_parms mp = unit;
+        for (int l = 1; l <= mp.L; ++l) {
+            mp.Ml[l] *= levels[i];
+        }
+        (void)mbe_spectralAmpEnhanceWithRm0(&mp, 1.0f);
+        for (int l = 46; l <= 47; ++l) {
+            assert(fabs((double)mp.Ml[l] / (double)levels[i] / want[l] - 1.0) < 1e-4);
+        }
+    }
+}
+
+/* A spectrum where float rounds r to -1 though a weak harmonic is present
+ * (Ml[8] 2^-14 of Ml[9] at w0 9 near pi) enhances to the same shape at every
+ * level, as the equations give in double precision, where the float weights
+ * would have no denominator. */
+static void
+test_spectral_enhancement_near_singular(void) {
+    /* w0 9 within a few ulps of pi, on both sides of where float's cos(w0 9)
+     * rounds to -1 or past it. */
+    for (int step = -4; step <= 4; ++step) {
+        float w0 = 0x1.65717ap-2f;
+        for (int k = 0; k < (step < 0 ? -step : step); ++k) {
+            w0 = nextafterf(w0, step < 0 ? 0.0f : 1.0f);
+        }
+        near_singular_run(w0);
+    }
+}
+
+static void
+near_singular_run(float w0) {
+    static const float levels[] = {1.0f, 0x1p60f, 0x1p61f, 0x1p-61f};
+    mbe_parms unit;
+    double want[57];
+    int capped = 0, floored = 0;
+    flat_model(&unit);
+    unit.L = 9;
+    unit.w0 = w0;
+    for (int l = 1; l <= unit.L; ++l) {
+        unit.Ml[l] = (l == 9) ? 1.0f : ((l == 8) ? 0x1p-14f : 0.0f);
+    }
+    reference_enhancement(&unit, want, &capped, &floored);
+    for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); ++i) {
+        mbe_parms mp = unit;
+        for (int l = 1; l <= mp.L; ++l) {
+            mp.Ml[l] *= levels[i];
+        }
+        (void)mbe_spectralAmpEnhanceWithRm0(&mp, 1.0f);
+        for (int l = 8; l <= 9; ++l) {
+            assert(fabs((double)mp.Ml[l] / (double)levels[i] / want[l] - 1.0) < 1e-4);
+        }
+    }
+}
+
+/* The adaptive smoothing scales loud amplitudes down to its threshold rather
+ * than silencing them when their sum passes float's range. */
+static void
+test_adaptive_smoothing_loud_model(void) {
+    mbe_parms cur, prev, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    cur.w0 = (float)(2.0 * M_PI * 70.0 / 8000.0);
+    cur.L = 56;
+    for (int l = 1; l <= cur.L; ++l) {
+        cur.Vl[l] = 1;
+        cur.Ml[l] = 0x1p123f;
+    }
+    cur.errorRate = 0.05f;
+    cur.errorCountTotal = 8;
+    prev.L = 56;
+    mbe_applyAdaptiveSmoothingWithRm0(&cur, &prev, FLT_MAX);
+    double sum = 0.0;
+    for (int l = 1; l <= cur.L; ++l) {
+        assert(cur.Ml[l] > 0.0f && cur.Ml[l] < 0x1p123f);
+        sum += (double)cur.Ml[l];
+    }
+    assert(fabs(sum - (double)cur.amplitudeThreshold) <= 1e-4 * (double)cur.amplitudeThreshold);
 }
 
 /* Shelf shape: 0 dB to 2.5 kHz, rising linearly to the full gain at 3 kHz, flat to 3.6 kHz. */
@@ -901,6 +1140,12 @@ main(void) {
     test_render_aliased_model();
     test_low_band_edge_cases();
     test_harmonic_phase_filter();
+    test_spectral_enhancement_any_level();
+    test_spectral_enhancement_singular();
+    test_spectral_enhancement_extremes();
+    test_spectral_enhancement_near_singular();
+    test_spectral_enhancement_small_numerator();
+    test_adaptive_smoothing_loud_model();
     test_high_band_shelf_shape();
     test_high_band_shelf_per_codec();
 
