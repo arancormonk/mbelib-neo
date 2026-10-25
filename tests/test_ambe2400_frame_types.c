@@ -103,10 +103,12 @@ assert_same_pcm(const float* a, const float* b, size_t n, const char* what) {
 }
 
 /* Two computed samples, equal up to rounding (optimized builds may fuse the
- * crossfade's multiply-adds differently in the library and here). */
+ * crossfade's multiply-adds differently in the library and here, or
+ * reassociate them, which near a zero crossing of a signal in the hundreds
+ * leaves a few 1e-5; 1e-4 is under a thousandth of an int16 step). */
 static void
 assert_close_sample(float got, float want, const char* what, int n) {
-    const float tolerance = 1e-5f * fmaxf(1.0f, fabsf(want));
+    const float tolerance = 1e-5f * fmaxf(10.0f, fabsf(want));
     if (fabsf(got - want) > tolerance) {
         printf("%s: sample %d differs (%g vs %g)\n", what, n, (double)got, (double)want);
         assert(0);
@@ -1227,9 +1229,18 @@ test_hard_tone_with_corrections(void) {
             assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE | soft));
         }
         if (k > 0) {
-            /* The first frame's crossfade can round differently in optimized builds. */
+            /* The first frame's crossfade can round differently in optimized builds,
+             * by a few ulps of the tone's peak. */
+            float peak = 0.0f;
             for (int n = 80; n < 160; ++n) {
-                assert_close_sample(got[0][n], want[0][n], "tone frame with corrections", n);
+                peak = fmaxf(peak, fabsf(want[0][n]));
+            }
+            for (int n = 80; n < 160; ++n) {
+                if (fabsf(got[0][n] - want[0][n]) > 1e-5f * peak) {
+                    printf("tone frame with corrections: sample %d differs (%g vs %g)\n", n, (double)got[0][n],
+                           (double)want[0][n]);
+                    assert(0);
+                }
             }
             assert_same_pcm(got[1], want[1], 160, "second tone frame with corrections");
         }
