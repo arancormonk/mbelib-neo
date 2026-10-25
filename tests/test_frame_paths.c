@@ -674,10 +674,9 @@ test_ambe2400_accepted_tones(void) {
         int protected;
         int accepted;
     } cases[] = {
-        {0, 0, 1},
-        {1, 1, 1}, /* Both error counts immediately below their rejection gates. */
-        {2, 0, 0},
-        {1, 2, 0},
+        /* A tone frame with any correctable errors plays, as on DVSI's
+         * AMBE-3000 (#155). */
+        {0, 0, 1}, {1, 1, 1}, {2, 0, 1}, {1, 2, 1}, {3, 0, 1}, {0, 3, 1},
     };
 
     char data[49], frame[96], damaged[96], decoded[49];

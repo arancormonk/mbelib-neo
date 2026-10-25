@@ -309,20 +309,23 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const struct mbe_analysis_resul
                       mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     struct ambe_enc_frame q = {0};
     unsigned char columns[MBE_ANALYSIS_COLUMNS];
+    /* Predict from the history the decoder predicts from; the caller's
+     * predictor is not changed. */
+    mbe_parms prediction_prev = *prev_mp;
+    mbe_ambe2400_resolve_history(&prediction_prev);
     q.cache = mbe_ambe2400_get_dct_cache();
     ambe2400_enc_quantize_pitch(&q, res->f0);
     ambe2400_enc_voicing(&q, &enc->fe.analysis, res, columns);
     ambe2400_enc_magnitudes(&q, res);
-    ambe_enc_quantize_gain(&q, &ambe2400_enc_tables, prev_mp);
-    ambe_enc_prediction(&q, &ambe2400_enc_tables, prev_mp);
+    ambe_enc_quantize_gain(&q, &ambe2400_enc_tables, &prediction_prev);
+    ambe_enc_prediction(&q, &ambe2400_enc_tables, &prediction_prev);
     ambe_enc_quantize_residual(&q, &ambe2400_enc_tables);
     ambe2400_enc_reconstruct_coefficients(&q);
     mbe_ambe2400_inverse_dct_tl(q.Cik_q, q.Ji, q.Tl_q);
     ambe2400_enc_pack(&q, ambe_d);
     ambe2400_enc_fill_parms(&q, cur_mp);
-    /* Share the decoder update without changing the caller's predictor. */
-    mbe_parms prediction_prev = *prev_mp;
     mbe_ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
+    cur_mp->Vl[0] &= ~MBE_AMBE2400_HISTORY_BITS;
     if (!mbe_encoder_model_valid(cur_mp)) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }

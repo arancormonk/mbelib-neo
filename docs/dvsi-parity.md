@@ -68,16 +68,87 @@ state advance) and played as mute noise at the level of DVSI's: DVSI's muted D-S
 56).
 
 Tone frames follow the same mute: a frame that reads as a playable tone is muted while the error
-rate is above the threshold, and one that fails the error check (2 C0 corrections, or 3 or more
-in all) is a lost frame, repeated with its error count kept. On `dam_e10_hd` a channel error read
+rate is above the threshold. One that failed an error check (2 C0 corrections, or 3 or more in
+all) used to be a lost frame, repeated with its error count kept; a tone frame with correctable
+errors now plays ([D-STAR channel errors](#d-star-channel-errors)). On `dam_e10_hd` a channel error read
 as a tone at frame 367 used to play at RMS 8497 inside a stretch DVSI keeps muted (0.5), and a
 rejected tone at frame 477 reset the decoder, clearing the error rate, so our output unmuted for
 the frames after it (RMS 370-562) where DVSI's stays muted (0.6). With both fixed, our mute
 decisions on `dam_e10_hd`'s loud frames agree with DVSI's on 89.6% (86.4% before; missed mutes
 4.1% to 1.0%, false mutes unchanged); no other vector's mute decisions change. Soft decisions do
-not mute on the error rate, so on `dam_e10_sd` the rejected tone at frame 477 now repeats and the
-frames after it follow the speech (RMS 2965, 2599, 1979; DVSI's decode of the clean bits 3151,
-2677, 2362) where the reset played 55, 345, 494; DVSI mutes there.
+not mute on the error rate, so on `dam_e10_sd` the rejected tone at frame 477 then repeated and the
+frames after it followed the speech (RMS 2965, 2599, 1979; DVSI's decode of the clean bits 3151,
+2677, 2362) where the reset played 55, 345, 494; DVSI mutes there. Since tone frames with
+correctable errors play, that frame plays as a tone (RMS 1923) and the frames after it again follow
+the speech (2236, 2028, 1782).
+
+### D-STAR channel errors
+
+A DVMEGA DVstick 30 (AMBE-3000, firmware V121.E100), which decodes all 104 of DVSI's D-STAR
+hard-decision vectors sample for sample as DVSI's `.pcm` files, decoded crafted streams with exact
+C0 and C1 bit errors ([#155](https://github.com/arancormonk/mbelib-neo/issues/155)). Each stream
+was captured twice from a fresh start, and the two captures were identical.
+
+- **Uncorrectable C0.** A frame with four errors in C0 (data bits, parity bits, the overall parity
+  bit among them, or a mix) plays sample for sample as LOST_FRAME, for single frames and bursts of 3
+  to 6, voice and tone frames alike. The overall parity bit tells these from three errors. The
+  library decoded them as Golay (23,12) does: it miscorrected the 23 bits to a wrong codeword, or,
+  with the overall parity bit among the four, played the frame as if it were clean.
+- **Corrected errors.** Voice with 1+3, 2+2, 3+1 or 3+3 corrections in C0 and C1 plays as the
+  clean frame (18 of 20 frames sample for sample, the other two within 0.02 dB). Tone frames
+  with 0+3, 2+0, 1+2 or 3+3 corrections play exactly as the clean tone. The library repeated a
+  voice frame with more than 3 corrections, and played a tone frame with 2 C0 corrections, or 3 in
+  all, as lost. Four errors in C1, which Golay (23,12) miscorrects, do not make a lost frame.
+- **After an uncorrectable frame**, the chip's output differs from what it plays after the same
+  frames sent as LOST_FRAME, by up to 7 dB.
+
+The frame decoders now flag a C0 word with four errors (`MBE_PROCESS_FLAG_C0_UNCORRECTABLE`,
+carried to the parameter-bit API like the C0 context; the soft decoder checks its hard decisions).
+Such a frame plays as a lost frame and counts toward the repeat limit. A voice frame decoded from it
+still becomes the prediction history: the next frame predicts from its decoded amplitudes, and the
+amplitudes a repeat plays stay those of the last good frame. The error counts, and so the error-rate
+mute, are unchanged. A frame is no longer repeated for its count of corrections, and a tone frame
+with corrections plays. The hardware streams are hard decisions; soft decisions follow the same
+rules, which DVSI's soft-decision vectors below favour over the earlier ones, and fully reliable
+soft bits keep decoding exactly as hard ones.
+
+Measured against the hardware, as frame levels (mean `|dB|` from the chip over the test frames and
+those after them):
+
+| Streams | Before | After |
+|---|---|---|
+| Four-error C0 bursts of 3-6 frames (`g8`) | 3.17 | 0.89 |
+| Four-error C0 patterns, 1 or 3 frames (`f2`) | 1.40 | 0.79 |
+| Tone frames with corrections (`g6`) | 7.47 | 0.54 |
+| Voice with C0 + C1 corrections (`g2`) | 1.94 | 1.09 |
+| C0 + C1 parity errors on every frame (`g4`) | 17.35 | 1.22 |
+
+How each stream compares with its control, identical or not, now matches the chip's verdict in
+every comparison of these groups but three: the two `g2` frames the chip changes by 0.02 dB, and
+`g4`'s 3 + 3 parity errors on every frame, which change the chip's output by up to 0.05 dB and
+leave ours as it was (parity errors are not all counted here). Predicting from the bad frame's
+decode is what makes the frames after it differ from the LOST_FRAME version, as on the chip: over
+the 400 frames after the 25 bad-frame/LOST pairs, the level difference between the two versions
+follows the chip's (RMS 1.73 dB) with a correlation of 0.962 and an RMS error of 0.49 dB; repeating
+with the history untouched gives 0.888 and 0.81 dB and leaves 18 of the 25 pairs sample-identical,
+where the chip's never are. This fits
+the measurements; it is not shown to be the chip's internal rule.
+
+DVSI's channel-error vectors contain such frames: 1 in `dam_e2_hd`, 32 in `dam_e5_hd` and 209 in
+`dam_e10_hd`. On the 32 of `dam_e5_hd` the log-spectral distance from DVSI's decode falls from 4.79
+to 3.19 dB (level 3.88 to 1.86 dB), and on the third frame after them from 3.62 to 3.13 dB.
+On the loud frames neither decoder mutes, the distance falls from 3.143 to 3.133 dB (`dam_e2_hd`),
+3.700 to 3.521 (`dam_e5_hd`) and 6.003 to 4.816 (`dam_e10_hd`, on the 14 of the 72 loud frames
+DVSI plays that qualify), and with soft decisions from 3.143 to 3.133 (`dam_e2_sd`), 3.553 to
+3.533 (`dam_e5_sd`) and 6.250 to 5.610 (`dam_e10_sd`). Mute decisions agree with DVSI's as often
+as before, and on one more loud frame of `dam_e10_sd`; `dam_e1` and every speech and tone vector
+are unchanged, and so are the D-STAR encoder's bits for all 97 of DVSI's inputs.
+
+Still different: the chip's error-rate mute does not come on within 10 s of 3 corrected data bits
+per frame, but does with 3 + 3 corrected parity bits; this library mutes from 2 corrected data bits
+a frame and does not count every parity error. Fitting that needs measurements of more error
+loads. Of five tone frames with four C1 errors the chip plays three at their miscorrected volume
+and two as lost frames, which no rule tried separates.
 
 ### D-STAR lost frames
 
@@ -145,6 +216,19 @@ played, since the speech it would fade out was never heard. From the 3rd lost fr
 voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` over the frame RMS
 values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
 resetting the model after the fade instead was further from DVSI on all three.
+
+Right after a tone the lost frame repeats the tone, which ends
+([#156](https://github.com/arancormonk/mbelib-neo/issues/156)). On the DVstick 30 above, after one or
+five tone frames (index 32, volume 0, 180 or 255) the first lost frame plays the tone's tail fading out
+over its first 80 samples (-30.7 dBFS after a tone at -23.0), the next two are digital silence, and
+the repeat limit's 4th and 5th follow at the mute level. The all-ones frame sent as a normal frame
+plays exactly as LOST_FRAME there, so a decoder given only the bits gets this. The library repeated
+the speech from before the tone at its level (-13 to -15 dBFS on those streams). It now plays the
+tone's tail fading out as when voice follows a tone, over a silent repeat, and the frames repeated after
+it are silent; the prediction history stays the one from before the tone. Over every frame of those
+streams (voice, the tone, the run, voice) the mean `|dB|` from the chip falls from 9.19 to 1.18 with
+runs of five and from 4.22 to 0.74 with runs of two. At volume 255 the chip's second lost frame still plays at -91.5 dBFS; ours is
+silent.
 
 ### D-STAR b0 124
 
@@ -378,6 +462,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   plays -18.4 dBFS on the first frame and -9.0 to -11.4 dBFS after it, this library -13.0 and -6.5
   to -8.4 dBFS. It used to play silence there from the 5th frame, when the spectral enhancement's
   weights overflowed float.
+- After a D-STAR b0 124 frame (the null frame among them), a DVMEGA DVstick 30 plays the lost
+  frames of a run from the 4th or 5th on at a comfort-noise level that follows the gain field b2
+  of the b0 124 frames (-75 dBFS after the null frame, up to -2 dBFS after b2 63), and plays all
+  lost frames at level directly after one ([#156](https://github.com/arancormonk/mbelib-neo/issues/156));
+  this library mutes from the 5th, at about -95 dBFS.
 - Small pitch differences remain: P25 codes up to 0.07% from DVSI's (rounding-like), D-STAR codes
   within 0.03%.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2
