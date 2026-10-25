@@ -217,6 +217,19 @@ voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` ove
 values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
 resetting the model after the fade instead was further from DVSI on all three.
 
+Right after a tone the lost frame repeats the tone, which ends
+([#156](https://github.com/arancormonk/mbelib-neo/issues/156)). On the DVstick 30 above, after one or
+five tone frames (index 32, volume 0, 180 or 255) the first lost frame plays the tone's tail fading out
+over its first 80 samples (-30.7 dBFS after a tone at -23.0), the next two are digital silence, and
+the repeat limit's 4th and 5th follow at the mute level. The all-ones frame sent as a normal frame
+plays exactly as LOST_FRAME there, so a decoder given only the bits gets this. The library repeated
+the speech from before the tone at its level (-13 to -15 dBFS on those streams). It now plays the
+tone's tail fading out as when voice follows a tone, over a silent repeat, and the frames repeated after
+it are silent; the prediction history stays the one from before the tone. Over every frame of those
+streams (voice, the tone, the run, voice) the mean `|dB|` from the chip falls from 9.19 to 1.18 with
+runs of five and from 4.22 to 0.74 with runs of two. At volume 255 the chip's second lost frame still plays at -91.5 dBFS; ours is
+silent.
+
 ### D-STAR b0 124
 
 b0 124, the null frame among them, plays on DVSI's decoder as a frame with every band unvoiced, its
@@ -449,6 +462,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   plays -18.4 dBFS on the first frame and -9.0 to -11.4 dBFS after it, this library -13.0 and -6.5
   to -8.4 dBFS. It used to play silence there from the 5th frame, when the spectral enhancement's
   weights overflowed float.
+- After a D-STAR b0 124 frame (the null frame among them), a DVMEGA DVstick 30 plays the lost
+  frames of a run from the 4th or 5th on at a comfort-noise level that follows the gain field b2
+  of the b0 124 frames (-75 dBFS after the null frame, up to -2 dBFS after b2 63), and plays all
+  lost frames at level directly after one ([#156](https://github.com/arancormonk/mbelib-neo/issues/156));
+  this library mutes from the 5th, at about -95 dBFS.
 - Small pitch differences remain: P25 codes up to 0.07% from DVSI's (rounding-like), D-STAR codes
   within 0.03%.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2

@@ -890,6 +890,21 @@ ambe2400_fade_in_from_tone(float* aout_buf, const struct ambe2400_tone_tail* hel
     }
 }
 
+/*
+ * A lost frame right after a tone: DVSI's AMBE-3000 plays the tone's tail
+ * fading out over the first MBE_AMBE2400_TONE_FADE samples and then silence,
+ * and the lost frames after it are silent, so the frame it repeats is the
+ * tone, silent once it ends (#156). The repeated model is silenced, as is the
+ * last synthesized frame it would overlap (its amplitudes and its unvoiced
+ * overlap); the prediction history is kept.
+ */
+static void
+ambe2400_silence_after_tone(mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
+    memset(cur_mp->Ml, 0, sizeof(cur_mp->Ml));
+    memset(prev_mp_enhanced->Ml, 0, sizeof(prev_mp_enhanced->Ml));
+    memset(prev_mp_enhanced->previousUw, 0, sizeof(prev_mp_enhanced->previousUw));
+}
+
 static void
 ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
                           mbe_parms* prev_mp_enhanced) {
@@ -923,6 +938,9 @@ ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const cha
     /* A repeat keeps the prediction history its model carries. */
     const int history = repeat ? (cur_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS) : 0;
     cur_mp->Vl[0] = history | (ambe2400_error_rate_mutes(result, cur_mp) ? MBE_AMBE2400_FRAME_MUTED : 0);
+    if (leaving && repeat) {
+        ambe2400_silence_after_tone(cur_mp, prev_mp_enhanced);
+    }
     ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
     if (leaving && (result->flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
         ambe2400_fade_in_from_tone(aout_buf, &held);
