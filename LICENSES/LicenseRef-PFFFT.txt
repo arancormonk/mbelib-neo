@@ -47,7 +47,7 @@ SOFTWARE.
 
 
 PFFFT: https://github.com/arancormonk/pffft
-Pinned revision: 77a7ecda1f58f041168636c99be3e6e968d984d7
+Pinned revision: 548918d826a45a1f4cd1b3236ad0efea801b7605
 
 src/pffft.c
 /* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
@@ -106,6 +106,63 @@ src/pffft.c
 */
 
 src/pffft_priv_impl.h
+/* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
+   Copyright (c) 2020  Hayati Ayguen ( h_ayguen@web.de )
+   Copyright (c) 2020  Dario Mambro ( dario.mambro@gmail.com )
+
+   Based on original fortran 77 code from FFTPACKv4 from NETLIB
+   (http://www.netlib.org/fftpack), authored by Dr Paul Swarztrauber
+   of NCAR, in 1985.
+
+   As confirmed by the NCAR fftpack software curators, the following
+   FFTPACKv5 license applies to FFTPACKv4 sources. My changes are
+   released under the same terms.
+
+   FFTPACK license:
+
+   http://www.cisl.ucar.edu/css/software/fftpack5/ftpk.html
+
+   Copyright (c) 2004 the University Corporation for Atmospheric
+   Research ("UCAR"). All rights reserved. Developed by NCAR's
+   Computational and Information Systems Laboratory, UCAR,
+   www.cisl.ucar.edu.
+
+   Redistribution and use of the Software in source and binary forms,
+   with or without modification, is permitted provided that the
+   following conditions are met:
+
+   - Neither the names of NCAR's Computational and Information Systems
+   Laboratory, the University Corporation for Atmospheric Research,
+   nor the names of its sponsors or contributors may be used to
+   endorse or promote products derived from this Software without
+   specific prior written permission.
+
+   - Redistributions of source code must retain the above copyright
+   notices, this list of conditions, and the disclaimer below.
+
+   - Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions, and the disclaimer below in the
+   documentation and/or other materials provided with the
+   distribution.
+
+   THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE CONTRIBUTORS OR COPYRIGHT
+   HOLDERS BE LIABLE FOR ANY CLAIM, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
+   SOFTWARE.
+
+
+   PFFFT : a Pretty Fast FFT.
+
+   This file is largerly based on the original FFTPACK implementation, modified in
+   order to take advantage of SIMD instructions of modern CPUs.
+*/
+
+src/pffft_passes_impl.h
 /* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
    Copyright (c) 2020  Hayati Ayguen ( h_ayguen@web.de )
    Copyright (c) 2020  Dario Mambro ( dario.mambro@gmail.com )
@@ -275,6 +332,49 @@ src/pffft_real_impl.h
    This file is largerly based on the original FFTPACK implementation, modified in
    order to take advantage of SIMD instructions of modern CPUs.
 */
+
+src/pffft_internal.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+src/pffft_setup.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+src/pffft_cpu_x86.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+src/pffft_wide_impl.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ *
+ * The FFTPACK pass codelets reused here keep their original FFTPACK license,
+ * see pffft_passes_impl.h.
+ */
+
+src/pffft_wide_select.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+src/pffft_wide_sizes.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+src/pffft_wide_api.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+src/pffft_wide_tu.c
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
 
 include/pffft/pffft.h
 /* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com ) 

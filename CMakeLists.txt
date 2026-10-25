@@ -734,6 +734,29 @@ else()
     ]=]
       MBELIB_TARGET_X86_64
     )
+    if(
+        MBELIB_TARGET_X86_64
+        AND MSVC
+        AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang"
+    )
+        # PFFFT's 8-lane AVX2 FFT backend: GCC and Clang build it inside
+        # pffft.c; MSVC needs it as a translation unit of its own, compiled
+        # with /arch:AVX2 (PFFFT's README, "MSVC and the 8-lane code").
+        # pffft.c only calls it after its CPU check; /GL- keeps link-time
+        # code generation from inlining AVX2 code into code that runs first.
+        set(_mbelib_pffft_wide_tu
+            "${MBELIB_PFFFT_SOURCE_DIR}/src/pffft_wide_tu.c"
+        )
+        set_source_files_properties(
+            "${_mbelib_pffft_wide_tu}"
+            PROPERTIES COMPILE_OPTIONS "/arch:AVX2;/GL-"
+        )
+        foreach(_target mbe-shared mbe-static)
+            target_sources(${_target} PRIVATE "${_mbelib_pffft_wide_tu}")
+            target_compile_definitions(${_target} PRIVATE PFFFT_WIDE_TU=1)
+        endforeach()
+        unset(_mbelib_pffft_wide_tu)
+    endif()
     if(NOT MBELIB_TARGET_X86_64)
         set(_mbelib_avx2_reason "not an x86-64 target")
     else()

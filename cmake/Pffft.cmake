@@ -80,8 +80,17 @@ set(PFFFT_INCLUDE_DIR "${MBELIB_PFFFT_SOURCE_DIR}/include/pffft")
 set(_pffft_notice_sources
     src/pffft.c
     src/pffft_priv_impl.h
+    src/pffft_passes_impl.h
     src/pffft_cplx_impl.h
     src/pffft_real_impl.h
+    src/pffft_internal.h
+    src/pffft_setup.h
+    src/pffft_cpu_x86.h
+    src/pffft_wide_impl.h
+    src/pffft_wide_select.h
+    src/pffft_wide_sizes.h
+    src/pffft_wide_api.h
+    src/pffft_wide_tu.c
     include/pffft/pffft.h
     include/pffft/pffft_double.h
     src/simd/pf_float.h
