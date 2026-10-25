@@ -1001,6 +1001,8 @@ test_c0_uncorrectable_plays_lost(void) {
     mbe_parms state[3][3], before, after;
     mbe_process_result r;
     char d[49];
+    memset(&before, 0, sizeof(before));
+    memset(&after, 0, sizeof(after));
     for (int run = 0; run < 3; ++run) {
         mbe_parms* s3 = state[run];
         mbe_setThreadRngSeed(1);
