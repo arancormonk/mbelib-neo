@@ -580,19 +580,17 @@ mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_pro
     }
 
     memcpy(fr, ambe_fr, sizeof(fr));
-    /* Four errors in C0, which the overall parity bit tells from three
-     * (docs/dvsi-parity.md, "D-STAR channel errors"). The error counts stay
-     * the corrected data bits the error-rate mute is calibrated on. The soft
-     * decoder checks its hard decisions the same way. */
-    char probe[4][24];
-    memcpy(probe, fr, sizeof(probe));
-    const int c0_uncorrectable = mbe_eccAmbe3600C0Counted_common(probe) >= 4;
-    c0_errors = mbe_eccAmbe3600x2400C0(fr);
+    /* Every corrected bit counts, parity bits included, as the error level
+     * the mute follows adds them up (MBE_AMBE2400_MUTE_LEVEL). Four errors in
+     * C0, which the overall parity bit tells from three, make the word
+     * uncorrectable (docs/dvsi-parity.md, "D-STAR channel errors"). */
+    c0_errors = mbe_eccAmbe3600C0Counted_common(fr);
+    const int c0_uncorrectable = c0_errors >= 4;
     ret = mbe_demodulateAmbe3600x2400Data(fr);
     if (ret < 0) {
         return ret;
     }
-    protected_errors = mbe_eccAmbe3600x2400Data(fr, ambe_d);
+    protected_errors = mbe_eccAmbe3600DataCounted_common(fr, ambe_d);
 
     if (result) {
         result->c0_errors = c0_errors;
@@ -629,9 +627,9 @@ mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
         }
     }
     const int c0_uncorrectable = mbe_eccAmbe3600C0Counted_common(probe) >= 4;
-    c0_errors = mbe_eccAmbe3600C0Soft_common(fr);
+    c0_errors = mbe_eccAmbe3600C0SoftCounted_common(fr);
     mbe_demodulateAmbe3600DataSoft_common(fr);
-    protected_errors = mbe_eccAmbe3600DataSoft_common(fr, ambe_d);
+    protected_errors = mbe_eccAmbe3600DataSoftCounted_common(fr, ambe_d);
 
     if (result) {
         result->c0_errors = c0_errors;
@@ -641,6 +639,20 @@ mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
                         | (c0_uncorrectable ? MBE_PROCESS_FLAG_C0_UNCORRECTABLE : 0u);
     }
     return c0_errors + protected_errors;
+}
+
+/*
+ * The error level a caller's state carries, or 0 when it holds none: a level
+ * is never negative and stays far below 2^20 (100 times the largest count).
+ * The test reads the bit pattern from memory and compares it against 2^20's,
+ * which also rejects NaN, infinity and negative values, also under fast-math
+ * (see mbe_encoder.c).
+ */
+static float
+ambe2400_prior_error_level(const mbe_parms* prev_mp) {
+    uint32_t bits;
+    memcpy(&bits, &prev_mp->PSIl[0], sizeof(bits));
+    return (bits <= 0x49800000u) ? prev_mp->PSIl[0] : 0.0f;
 }
 
 static int
@@ -671,6 +683,7 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
     cur_mp->errorCountTotal = *total_errors;
     cur_mp->errorCount4 = 0; /* AMBE has no Hamming cosets */
     cur_mp->errorRate = (0.95f * prev_mp->errorRate) + (0.001064f * (float)cur_mp->errorCountTotal);
+    cur_mp->PSIl[0] = (MBE_AMBE2400_MUTE_DECAY * ambe2400_prior_error_level(prev_mp)) + (float)cur_mp->errorCountTotal;
     return 0;
 }
 
@@ -679,11 +692,12 @@ ambe2400_is_tone(int bad) {
     return (bad >= 5 && bad <= 122) || (bad >= 128 && bad <= 147);
 }
 
-/* Hard-decision output mutes while the error rate is above the threshold;
- * soft decisions do not mute on it (docs/dvsi-parity.md). */
+/* Hard-decision output mutes while the error level is above its threshold
+ * (MBE_AMBE2400_MUTE_LEVEL); soft decisions do not mute on it
+ * (docs/dvsi-parity.md). */
 static int
 ambe2400_error_rate_mutes(const mbe_process_result* result, const mbe_parms* cur_mp) {
-    return ((result->flags & MBE_PROCESS_FLAG_SOFT_INPUT) == 0u) && (cur_mp->errorRate > MBE_AMBE2400_MUTE_ERROR_RATE);
+    return ((result->flags & MBE_PROCESS_FLAG_SOFT_INPUT) == 0u) && (cur_mp->PSIl[0] > MBE_AMBE2400_MUTE_LEVEL);
 }
 
 static void
@@ -737,7 +751,7 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
     mbe_moveMbeParms(&silent, prev_mp_enhanced);
     mbe_copy_error_state(prev_mp_enhanced, cur_mp);
     ambe2400_mute_noise(noise);
-    /* While the error rate mutes, the last frames' speech was never played:
+    /* While the error level mutes, the last frames' speech was never played:
      * the fade still advances the state but stays silent. */
     const int audible = !ambe2400_error_rate_mutes(result, cur_mp);
     for (int i = 0; i < 160; ++i) {
@@ -752,7 +766,7 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
  * goes on and fades out over the same span while the voice fades in. Vl[0]
  * (Vl is indexed from 1, so element 0 is otherwise unused) of the state a frame
  * commits to prev_mp records the tone it leaves sounding, whose phases that
- * state carries, and whether the error rate muted the frame: the next frame
+ * state carries, and whether the error level muted the frame: the next frame
  * may be decoded from the other kind of decisions, which mute differently.
  * It also records the harmonic count of a prediction history that differs from
  * the repeated model (MBE_AMBE2400_HISTORY_HELD).
@@ -787,7 +801,7 @@ ambe2400_take_lost_frame(const mbe_process_result* result, int bad, const mbe_pa
     return MBE_AMBE2400_FRAME_LOST;
 }
 
-/* Whether the error rate muted the last frame. */
+/* Whether the error level muted the last frame. */
 static int
 ambe2400_last_frame_muted(const mbe_parms* prev_mp) {
     return (prev_mp->Vl[0] & MBE_AMBE2400_FRAME_MUTED) != 0;
@@ -811,7 +825,7 @@ ambe2400_fade_in_gain(int n) {
     return (n >= MBE_AMBE2400_TONE_FADE) ? 1.0f : (float)n / (float)MBE_AMBE2400_TONE_FADE;
 }
 
-/* Whether the last frame played speech: not muted by the error rate or at the
+/* Whether the last frame played speech: not muted by the error level or at the
  * repeat limit (which leaves a silent last frame). */
 static int
 ambe2400_last_frame_audible(const mbe_parms* prev_mp) {
@@ -852,7 +866,7 @@ ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char
             aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * speech[n]);
         }
     }
-    /* The error rate mutes a tone as it mutes voice, after synthesis, so the
+    /* The error level mutes a tone as it mutes voice, after synthesis, so the
      * tone state advances: on DVSI's dam_e10_hd vector a channel error that
      * reads as a tone stays silent there. */
     const int muted = ambe2400_error_rate_mutes(result, cur_mp);
@@ -865,7 +879,7 @@ ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char
 }
 
 /* Leaving a tone: the voice fades in under the tone's fading tail (silent if
- * the error rate muted the tone), which goes on from the tone's phases. */
+ * the error level muted the tone), which goes on from the tone's phases. */
 struct ambe2400_tone_tail {
     int index;
     int volume;

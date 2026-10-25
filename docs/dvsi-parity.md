@@ -53,14 +53,37 @@ levels, so that DVSI's decoders play our bits at the intended level.
 ### D-STAR muting under channel errors
 
 DVSI's decoder mutes D-STAR under sustained channel errors near 10% and never at 5% or below.
-With hard decisions this library now mutes a frame while the error rate it
-already keeps (`0.95 eps_R + 0.001064 eps_T`, with D-STAR's own error counts) is above 0.042.
-On DVSI's vectors that agrees with DVSI's mute decisions on all loud frames at 1-5% and on 90% at
-10%. It is an approximation: at 10% it starts muting 0.7 s into the stream, where DVSI starts at
-3.3 s, since DVSI's rule integrates the errors more slowly; reproducing it exactly needs per-stream
-state that `mbe_parms` cannot gain within a minor release. Soft decisions do not mute on it: at
-10% DVSI mutes 53% of the loud frames of the soft stream against 88% of the hard one, and no rule
-tried reproduced that. A muted frame is synthesized as usual (model, phase, overlap and noise
+With hard decisions this library mutes a frame while an error level is above 342. The level is
+`0.99 * level + errors`, where `errors` is the frame's corrected bit errors with the parity bits of
+C0 and C1 included (the count rate 33 keeps), held in element 0 of `PSIl`, which is indexed from 1.
+A constant count takes the level to 100 times that count, so 3 corrected bits a frame never mute,
+and 4, 5 and 6 mute after 193, 115 and 84 frames. The rule was fitted by the reporter of
+[#155](https://github.com/arancormonk/mbelib-neo/issues/155) to a DVMEGA DVstick 30 decoding 500-frame
+`dam` streams with 3 to 7 corrected bits a frame, as data bits, parity bits and both, in C0, C1 and
+both: the output drops 4 dB below the clean stream at frame 201, 122 and 91 for 4, 5 and 6 bits
+whatever the split (this rule: 200, 122, 91), never for 3 bits, and never for 3 + 3 bits on every 2nd
+or 3rd frame (nor here). Over those 41 streams the mean frame-level difference from the unit falls
+from 10.30 to 2.36 dB. The rule before this one, the error rate `0.95 eps_R + 0.001064 eps_T` above
+0.042 on corrected data bits only, muted from 2 data bits a frame, never on parity bits, and 0.7 s into
+a 10% channel.
+
+DVSI's own channel-error vectors, which played no part in fitting it, agree: on `dam_e10_hd` our mute
+decisions now match DVSI's on all 603 loud frames (540 before), and the first loud frame muted is frame
+165 in both decodes (34 before; the mute itself starts at frame 136, on quiet frames); at 1-5% neither
+mutes. The log-spectral distance from DVSI's decode on the loud frames neither mutes is unchanged where
+both runs measure it, and now covers all 72 loud frames DVSI plays at 10% (14 before); `dam_e1_hd` moves
+from 3.097 to 3.109 dB, through the adaptive smoothing that now also sees parity errors, and `dam_e2_sd`
+and `dam_e5_sd` from 3.133 to 3.121 and 3.533 to 3.522. Still different: streams where C1 holds four or
+more errors that it miscorrects drop 20 dB on the unit earlier than here (the reporter's `c1par4`, `c1par6`
+and C0 3 + C1 4 streams), and the unit's output departs slightly from the clean stream well before the
+mute (from frame 22 or 16 at 5 or 6 bits), which no rule here reproduces.
+
+Soft decisions do not mute on it: at
+10% DVSI mutes 53% of the loud frames of the soft stream against 88% of the hard one. Counting the bits
+the soft decoder corrects mutes it as the hard one (agreement 0.65, false mutes 35%); its
+reliability-weighted costs reach the threshold of 342 never, and a threshold fitted to that one vector
+(182) would agree on 90% of its loud frames, from frame 295 (DVSI 325), on a reliability scale that
+each caller sets, so neither is adopted. A muted frame is synthesized as usual (model, phase, overlap and noise
 state advance) and played as mute noise at the level of DVSI's: DVSI's muted D-STAR output is 0 on
 67% of the samples and +-1 on the rest (`dam_e10_hd`, RMS 0.60), and ours is uniform noise in
 [-1.5, 1.5] on the int16 scale, which the int16 conversion truncates to the same mix
@@ -106,8 +129,9 @@ The frame decoders now flag a C0 word with four errors (`MBE_PROCESS_FLAG_C0_UNC
 carried to the parameter-bit API like the C0 context; the soft decoder checks its hard decisions).
 Such a frame plays as a lost frame and counts toward the repeat limit. A voice frame decoded from it
 still becomes the prediction history: the next frame predicts from its decoded amplitudes, and the
-amplitudes a repeat plays stay those of the last good frame. The error counts, and so the error-rate
-mute, are unchanged. A frame is no longer repeated for its count of corrections, and a tone frame
+amplitudes a repeat plays stay those of the last good frame. The error counts, and so the mute, were
+left as they were (the mute now counts parity bits too; see [D-STAR muting under channel
+errors](#d-star-muting-under-channel-errors)). A frame is no longer repeated for its count of corrections, and a tone frame
 with corrections plays. The hardware streams are hard decisions; soft decisions follow the same
 rules, which DVSI's soft-decision vectors below favour over the earlier ones, and fully reliable
 soft bits keep decoding exactly as hard ones.
@@ -144,11 +168,9 @@ DVSI plays that qualify), and with soft decisions from 3.143 to 3.133 (`dam_e2_s
 as before, and on one more loud frame of `dam_e10_sd`; `dam_e1` and every speech and tone vector
 are unchanged, and so are the D-STAR encoder's bits for all 97 of DVSI's inputs.
 
-Still different: the chip's error-rate mute does not come on within 10 s of 3 corrected data bits
-per frame, but does with 3 + 3 corrected parity bits; this library mutes from 2 corrected data bits
-a frame and does not count every parity error. Fitting that needs measurements of more error
-loads. Of five tone frames with four C1 errors the chip plays three at their miscorrected volume
-and two as lost frames, which no rule tried separates.
+Still different: of five tone frames with four C1 errors in a row, none plays as a lost frame, but
+two (whose volume differs from the tone frame before) play near what an 80-sample fade from the
+previous tone's volume gives, where this library switches volume at once (#155).
 
 ### D-STAR lost frames
 
@@ -211,7 +233,7 @@ the last frame fading out (`dam` 2316), then near silence, and keeps the predict
 voice after the run follows the voice before it. The library used to play comfort noise (57) and
 reset the model, so the voice after it started from scratch. It now synthesizes the 4th frame as
 the last frame fading into a silent copy of itself, under the mute noise, keeps the prediction
-history, and stays muted until a frame plays; while the error rate also mutes, the fade is not
+history, and stays muted until a frame plays; while the error level also mutes, the fade is not
 played, since the speech it would fade out was never heard. From the 3rd lost frame to the 8th
 voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` over the frame RMS
 values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
@@ -332,9 +354,9 @@ boundary. It now plays the first tone frame as `g(n) tone(n) + (1 - g(n)) repeat
 voice frame after a tone as `g(n) voice(n) + (1 - g(n)) tone(n)`, with `g(n) = n / 80` for n < 80
 and 1 after it, `repeat` the last frame repeated as a lost frame plays it, and `voice` the frame as
 it would play after that repeat. A tone after a muted frame has no speech under it. A tone muted by
-the error rate still holds its state, so the next tone plays on without a crossfade, but it leaves no
-tail. Each frame's state records whether the error rate muted it, so both hold when the next frame
-comes from the other kind of decisions (soft decisions do not mute on the error rate). Over the tone frames and the four voice frames after them, the mean
+the error level still holds its state, so the next tone plays on without a crossfade, but it leaves no
+tail. Each frame's state records whether the error level muted it, so both hold when the next frame
+comes from the other kind of decisions (soft decisions do not mute on it). Over the tone frames and the four voice frames after them, the mean
 `|20 log10((ours + 1) / (DVSI + 1))|` over frame RMS falls on 76 hardware streams:
 
 | Streams | Before | After |
@@ -451,8 +473,8 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
 
 ## Known differences
 
-- D-STAR muting starts earlier than DVSI's at sustained 10% bit errors, and soft-decision D-STAR
-  streams are not muted on the error rate (see above).
+- Soft-decision D-STAR streams are not muted on the error level, where DVSI mutes some of them
+  (see above).
 - After a fully unvoiced gap DVSI repositions the voiced pulse train in a way no simple rule
   reproduced; within voiced runs, including pitch steps, our pulse positions follow DVSI's.
 - DVSI hard-clips at full scale; this library clips at 0.95 of full scale. Clipping at full

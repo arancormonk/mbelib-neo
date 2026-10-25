@@ -26,6 +26,8 @@ mbe_copy_error_state(mbe_parms* dst, const mbe_parms* src) {
     dst->errorCount4 = src->errorCount4;
     dst->repeatCount = src->repeatCount;
     dst->mutingThreshold = src->mutingThreshold;
+    /* D-STAR keeps its error level for the mute in element 0 of PSIl. */
+    dst->PSIl[0] = src->PSIl[0];
 }
 
 /**

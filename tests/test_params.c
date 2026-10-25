@@ -1025,7 +1025,7 @@ test_ambe2450_differential_gain(void) {
     }
 }
 
-/* One D-STAR voice frame through the staged Data API with a caller-supplied
+/* One D-STAR frame through the staged Data API with a caller-supplied
  * error count (and soft flag); returns the result flags. */
 static unsigned
 dstar_frame_with_errors(const char ambe_d[49], int errors, int soft, mbe_parms* cur, mbe_parms* prev, mbe_parms* enh,
@@ -1039,17 +1039,17 @@ dstar_frame_with_errors(const char ambe_d[49], int errors, int soft, mbe_parms* 
     return result.flags;
 }
 
-/* D-STAR mutes hard-decision streams whose error rate (0.95 eps_R + 0.001064
- * eps_T) exceeds 0.042, as DVSI's AMBE-3000 mutes D-STAR at sustained channel
- * error rates near 10% and never at 5%. Three errors a frame (no repeats)
- * take eps_R past 0.042 on the 21st frame, and clean frames bring it back.
- * Soft decisions never mute on the rate. A muted frame is synthesized as usual
- * and only its output replaced, so the hard stream's state (model, phases,
- * overlap and noise) stays byte for byte the soft stream's, apart from the
- * record that the frame was muted. */
+/* D-STAR mutes hard-decision streams while their error level (0.99 of the
+ * last level plus the frame's corrected bits) is above 342, as DVSI's
+ * AMBE-3000 mutes under sustained channel errors (#155). Six corrected bits
+ * a frame cross it on the 84th frame, and clean frames bring it back. Soft
+ * decisions never mute on the level. A muted frame is synthesized as usual and only
+ * its output replaced, so the hard stream's state (model, phases, overlap
+ * and noise) stays byte for byte the soft stream's, apart from the record
+ * that the frame was muted. */
 static void
 test_ambe2400_error_rate_mute(void) {
-    enum { FRAMES = 52, ERRORED = 40 };
+    enum { FRAMES = 260, ERRORED = 200, ONSET = 83, MUTED_FRAMES = 158 };
 
     static mbe_parms hard_state[FRAMES][3];
     static float hard_out[FRAMES][160];
@@ -1067,14 +1067,14 @@ test_ambe2400_error_rate_mute(void) {
         memset(state, 0, sizeof(state));
         mbe_initMbeParms(&state[0], &state[1], &state[2]);
         mbe_setThreadRngSeed(0x2400u);
-        float rate = 0.0f;
+        float level = 0.0f;
         for (int f = 0; f < FRAMES; ++f) {
-            const int errors = (f < ERRORED) ? 3 : 0;
-            rate = (0.95f * rate) + (0.001064f * (float)errors);
+            const int errors = (f < ERRORED) ? 6 : 0;
+            level = (0.99f * level) + (float)errors;
             unsigned flags = dstar_frame_with_errors(ambe_d, errors, soft, &state[0], &state[1], &state[2], out);
             assert((flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
-            assert(((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (!soft && rate > 0.042f));
-            assert(f >= ERRORED || ((f >= 20) == (rate > 0.042f)));
+            assert(((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (!soft && level > 342.0f));
+            assert(f >= ERRORED || ((f >= ONSET) == (level > 342.0f)));
             if (!soft) {
                 memcpy(hard_state[f], state, sizeof(state));
                 memcpy(hard_out[f], out, sizeof(out));
@@ -1083,11 +1083,11 @@ test_ambe2400_error_rate_mute(void) {
             for (int k = 0; k < 3; ++k) {
                 /* Vl[0] (Vl is indexed from 1) records whether the frame was muted. */
                 mbe_parms hard = hard_state[f][k];
-                assert((hard.Vl[0] != 0) == (rate > 0.042f) && state[k].Vl[0] == 0);
+                assert((hard.Vl[0] != 0) == (level > 342.0f) && state[k].Vl[0] == 0);
                 hard.Vl[0] = 0;
                 assert(parms_identical(&hard, &state[k]));
             }
-            if (rate > 0.042f) {
+            if (level > 342.0f) {
                 /* Comfort noise where the soft stream plays the frame's speech. */
                 float hard_peak = 0.0f, soft_peak = 0.0f;
                 for (int n = 0; n < 160; ++n) {
@@ -1098,25 +1098,96 @@ test_ambe2400_error_rate_mute(void) {
                 muted++;
             }
         }
-        assert(rate < 0.042f);
+        assert(level < 342.0f);
     }
-    assert(muted == 25); /* frames 21-40, and five clean ones while eps_R decays */
+    assert(muted == MUTED_FRAMES); /* frames 83-199, and the clean ones until 240 while the level decays */
 }
 
-/* The repeat limit's mute resets D-STAR's model but keeps the error rate, so
- * a long run of bad frames keeps accumulating toward the error-rate mute. */
+/* Constant corrected-bit counts from the first frame: 3 bits a frame never
+ * mute, 4 mute on the 193rd frame, 5 on the 115th and 6 on the 84th (on the
+ * DVstick 30 of #155, with errors from frame 8: frames 201, 122 and 91). */
+static void
+test_ambe2400_error_rate_onsets(void) {
+    static const int errors[4] = {3, 4, 5, 6};
+    static const int onset[4] = {0, 193, 115, 84};
+    char ambe_d[49] = {0};
+    static const int b0_bits[7] = {0, 1, 2, 3, 4, 5, 48};
+    for (int k = 0; k < 7; ++k) {
+        ambe_d[b0_bits[k]] = (char)((30 >> (6 - k)) & 1);
+    }
+    ambe_d[6] = 1;
+    for (int i = 0; i < 4; ++i) {
+        mbe_parms cur, prev, enh;
+        float out[160];
+        mbe_initMbeParms(&cur, &prev, &enh);
+        int first = 0;
+        for (int f = 1; f <= 500; ++f) {
+            unsigned flags = dstar_frame_with_errors(ambe_d, errors[i], 0, &cur, &prev, &enh, out);
+            if ((flags & MBE_PROCESS_FLAG_MUTE) != 0u && first == 0) {
+                first = f;
+            }
+        }
+        assert(first == onset[i]);
+    }
+}
+
+/* A caller's state with no valid error level in PSIl[0] (NaN, infinity, a
+ * negative or an impossibly large value) starts from 0: six corrected bits a
+ * frame mute from the 84th frame on, and clean frames never mute. */
+static void
+test_ambe2400_error_level_from_bad_state(void) {
+    static const uint32_t seeds[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0xBF800000u, 0x4E800000u, 0x80000000u};
+    char ambe_d[49] = {0};
+    static const int b0_bits[7] = {0, 1, 2, 3, 4, 5, 48};
+    for (int k = 0; k < 7; ++k) {
+        ambe_d[b0_bits[k]] = (char)((30 >> (6 - k)) & 1);
+    }
+    ambe_d[6] = 1;
+    for (size_t i = 0; i < sizeof(seeds) / sizeof(seeds[0]); ++i) {
+        for (int errors = 0; errors <= 6; errors += 6) {
+            mbe_parms cur, prev, enh;
+            float out[160];
+            mbe_initMbeParms(&cur, &prev, &enh);
+            (void)dstar_frame_with_errors(ambe_d, 0, 0, &cur, &prev, &enh, out);
+            memcpy(&prev.PSIl[0], &seeds[i], sizeof(seeds[i]));
+            int first = 0, muted = 0;
+            for (int f = 1; f <= 200; ++f) {
+                unsigned flags = dstar_frame_with_errors(ambe_d, errors, 0, &cur, &prev, &enh, out);
+                if ((flags & MBE_PROCESS_FLAG_MUTE) != 0u) {
+                    first = (first == 0) ? f : first;
+                    ++muted;
+                }
+            }
+            assert(first == (errors ? 84 : 0) && muted == (errors ? 117 : 0));
+        }
+    }
+}
+
+/* Lost frames reach the repeat limit and mute, while PSIl[0] and the
+ * smoothing errorRate both continue their recurrences through model resets. */
 static void
 test_ambe2400_repeat_limit_keeps_error_rate(void) {
     char ambe_d[49] = {0};
-    ambe_d[6] = 1;
+    /* b0=125 is a lost frame, independently of the supplied error count. */
+    static const int b0_bits[7] = {0, 1, 2, 3, 4, 5, 48};
+    for (int k = 0; k < 7; ++k) {
+        ambe_d[b0_bits[k]] = (char)((125 >> (6 - k)) & 1);
+    }
     mbe_parms cur, prev, enh;
     float out[160];
     mbe_initMbeParms(&cur, &prev, &enh);
     double rate = 0.0;
+    double level = 0.0;
     for (int f = 1; f <= 12; ++f) {
-        (void)dstar_frame_with_errors(ambe_d, 5, 0, &cur, &prev, &enh, out); /* repeats: 5 > 3 */
+        unsigned flags = dstar_frame_with_errors(ambe_d, 5, 0, &cur, &prev, &enh, out);
+        const int repeats = f < MBE_MAX_FRAME_REPEATS ? f : MBE_MAX_FRAME_REPEATS;
+        assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+        assert(cur.repeatCount == repeats && prev.repeatCount == repeats);
+        assert(((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (f >= MBE_MAX_FRAME_REPEATS));
         rate = (0.95 * rate) + (0.001064 * 5.0);
+        level = (0.99 * level) + 5.0;
         assert(fabs((double)prev.errorRate - rate) < 1e-6);
+        assert(fabs((double)prev.PSIl[0] - level) < 1e-3);
     }
 }
 
@@ -1131,6 +1202,8 @@ main(void) {
     test_ambe2400_absolute_gain();
     test_ambe2450_differential_gain();
     test_ambe2400_error_rate_mute();
+    test_ambe2400_error_rate_onsets();
+    test_ambe2400_error_level_from_bad_state();
     test_ambe2400_repeat_limit_keeps_error_rate();
     test_low_band_gain();
     test_low_band_phase();

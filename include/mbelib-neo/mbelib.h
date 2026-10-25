@@ -337,8 +337,9 @@ MBE_API int mbe_demodulateAmbe3600x2400Data(char ambe_fr[4][24]);
  * @brief Decode a hard AMBE 3600x2400 frame to parameter bits without synthesis.
  * @param ambe_fr Input frame as 4x24 bitplanes; not modified.
  * @param ambe_d  Output parameter bits (49).
- * @param result  Optional output status; receives C0/protected/total errors and `MBE_PROCESS_FLAG_C0_VALID`,
- *                plus `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` for a C0 word with four errors.
+ * @param result  Optional output status; receives C0/protected/total errors (every corrected bit, parity
+ *                bits included) and `MBE_PROCESS_FLAG_C0_VALID`, plus `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` for a
+ *                C0 word with four errors.
  * @return Corrected error total (`c0_errors + protected_errors`).
  */
 MBE_API int mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_process_result* result);
@@ -347,7 +348,10 @@ MBE_API int mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[
  * @param ambe_fr Input soft frame as 4x24 bitplanes; not modified.
  * @param ambe_d  Output hard parameter bits (49).
  * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`, and
- *                `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` when C0's hard decisions hold four errors.
+ *                `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` when C0's hard decisions hold four errors. Its counts
+ *                are reliability-weighted: each codeword's soft bits that disagree with the decoded
+ *                codeword, parity bits included, weighted by reliability in units of a fully reliable
+ *                bit and rounded.
  * @return Corrected error total (`c0_errors + protected_errors`).
  */
 MBE_API int mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[49],

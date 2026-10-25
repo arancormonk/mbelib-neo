@@ -46,20 +46,23 @@
 #define MBE_AMBE2400_GAIN_OFFSET          (-0.09f)
 
 /*
- * D-STAR mutes a hard-decision stream while its error rate (0.95 eps_R +
- * 0.001064 eps_T, as rate 33 keeps it, with D-STAR's own counts) is above
- * this. DVSI's AMBE-3000 mutes D-STAR at sustained channel error rates near
- * 10% and never at 5% or below; on its 1-10% test vectors this threshold
- * agrees with DVSI's muting on 100% of the loud frames at 1-5% and 90% at
- * 10%, where it starts muting earlier than DVSI does (0.7 s into a constant
- * 10% channel, against DVSI's 3.3 s). It approximates DVSI's rule,
- * which integrates the errors more slowly than this rate does. Soft decisions
- * do not mute on it: at 10% DVSI mutes 53% of the loud frames there, against
- * 88% with hard decisions, and no rule tried reproduced that. A muted frame
- * is synthesized as usual (model, phase, overlap and noise state all advance)
- * and played as mute noise at DVSI's level (MBE_AMBE2400_MUTE_NOISE_AMPLITUDE).
+ * D-STAR mutes a hard-decision stream while its error level is above
+ * MBE_AMBE2400_MUTE_LEVEL: level = MBE_AMBE2400_MUTE_DECAY * level + the
+ * frame's corrected bit errors, parity bits of C0 and C1 included. A constant
+ * count takes the level to 100 times that count, so 3 corrected bits a frame
+ * never mute and 4, 5 and 6 mute after 193, 115 and 84 frames. On a DVMEGA
+ * DVstick 30 (AMBE-3000) the output drops at frames 201, 122 and 91 of streams
+ * whose errors start at frame 8 (here 200, 122, 91), for data and parity bits
+ * alike (#155), and on DVSI's dam_e10_hd vector this mutes the same loud
+ * frames as DVSI's decode (docs/dvsi-parity.md). Soft decisions do not mute
+ * on it. The level lives in element 0 of PSIl, which is indexed from 1, and
+ * carries across repeats with the rest of the error state (mbe_repeat.h). A
+ * muted frame is synthesized as usual (model, phase, overlap and noise state
+ * all advance) and played as mute noise at DVSI's level
+ * (MBE_AMBE2400_MUTE_NOISE_AMPLITUDE).
  */
-#define MBE_AMBE2400_MUTE_ERROR_RATE      0.042f
+#define MBE_AMBE2400_MUTE_DECAY           0.99f
+#define MBE_AMBE2400_MUTE_LEVEL           342.0f
 
 /* Amplitude (int16 scale) of the uniform noise D-STAR mutes to. The int16
  * conversion truncates, so it is 0 on two thirds of the samples and +-1 on the

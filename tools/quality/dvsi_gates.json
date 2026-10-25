@@ -1155,5 +1155,57 @@
         "value": 0
       }
     ]
+  },
+  "dstar-error-level-mute-channel": {
+    "description": "D-STAR hard decisions mute on an error level that counts parity bits and integrates slowly (0.99 level + corrected bits, above 342; #155): under channel errors (dam at 1.1-10.6% bit errors) our D-STAR mute decisions agree no less often with DVSI's for hard or soft decisions; their mean over the four hard-decision vectors is at least 0.9975 (with the 1-5% vectors in full agreement, 0.99 at 10%); and on the loud frames neither run nor DVSI mutes our D-STAR output is on average no further from DVSI's, for hard or soft decisions, by more than 0.01 dB.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "dstar",
+        "metric": "channel.hd.mute_agreement",
+        "rule": "min",
+        "value": 0.9975
+      },
+      {
+        "mode": "dstar",
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "dstar",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": "dstar",
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "dstar-error-level-mute-speech": {
+    "description": "The same change leaves DVSI's error-free speech bits decoding unchanged in every mode.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }
