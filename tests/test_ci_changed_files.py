@@ -109,6 +109,9 @@ def main():
         repo = os.path.join(scratch, "repo")
         os.mkdir(repo)
         run(git, repo, "init", "-q")
+        # Commits start git's auto-maintenance detached; it could still be
+        # writing in .git when the temporary directory is removed.
+        run(git, repo, "config", "maintenance.auto", "false")
         run(git, repo, "config", "user.name", "ci-changed-files test")
         run(git, repo, "config", "user.email", "ci-changed-files@example.invalid")
         run(git, repo, "config", "commit.gpgsign", "false")

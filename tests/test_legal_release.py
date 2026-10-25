@@ -110,6 +110,9 @@ class SourceBundle(unittest.TestCase):
         self.pins = {"PFFFT_SHA": "1" * 40, "PFFFT_ARCHIVE_SHA256": hashlib.sha256(self.dependency.read_bytes()).hexdigest()}
         (self.repo / "tools/ci-dependency-pins.env").write_text("\n".join(f"{k}={v}" for k, v in self.pins.items()))
         self.command("init", "-q")
+        # Commits start git's auto-maintenance detached; it could still be
+        # writing in .git when the temporary directory is removed.
+        self.command("config", "maintenance.auto", "false")
         self.command("config", "core.hooksPath", str(self.root / "no-hooks"))
         self.command("config", "user.name", "Source test")
         self.command("config", "user.email", "source-test@example.invalid")

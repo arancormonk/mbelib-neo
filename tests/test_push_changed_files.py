@@ -53,6 +53,9 @@ def main():
     bash, git_exe, script = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
     with tempfile.TemporaryDirectory(prefix="mbe_push_changed_files_") as repo:
         git(git_exe, repo, "init", "-q")
+        # Commits start git's auto-maintenance detached; it could still be
+        # writing in .git when the temporary directory is removed.
+        git(git_exe, repo, "config", "maintenance.auto", "false")
         git(git_exe, repo, "config", "user.name", "push-changed-files test")
         git(git_exe, repo, "config", "user.email", "push-changed-files@example.invalid")
         git(git_exe, repo, "config", "commit.gpgsign", "false")
