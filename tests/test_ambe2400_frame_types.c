@@ -122,6 +122,14 @@ make_result(mbe_process_result* r, int errors) {
     r->total_errors = errors;
 }
 
+/* A frame whose C0 word is uncorrectable, with `errors` protected-bit
+ * corrections: the repeat for errors. */
+static void
+make_uncorrectable_result(mbe_process_result* r, int errors) {
+    make_result(r, errors);
+    r->flags |= MBE_PROCESS_FLAG_C0_UNCORRECTABLE;
+}
+
 /* A frame result with `c0` Golay corrections in C0 and `protected` elsewhere. */
 static void
 make_result_c0(mbe_process_result* r, int c0, int protected_errors) {
@@ -180,10 +188,10 @@ test_null_frame_is_voice(void) {
 }
 
 /*
- * Decode voice[0..3], `count` copies of `special`, then voice[4..5]. With
- * `errors` > 3 the special frames are instead voice[3] reported with that many
- * corrections, which takes the existing repeat path. Writes all PCM and the
- * special frames' flags.
+ * Decode voice[0..3], `count` copies of `special`, then voice[4..5]. With no
+ * `special` the frames are instead voice[3] with an uncorrectable C0 word and
+ * `errors` corrections, which takes the repeat path for errors. Writes all PCM
+ * and the special frames' flags.
  */
 static void
 run_stream(const char voice[NVOICE][49], const char* special, int count, int errors, float* pcm, unsigned* flags) {
@@ -197,7 +205,11 @@ run_stream(const char voice[NVOICE][49], const char* special, int count, int err
         assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
     }
     for (int i = 0; i < count; ++i, ++f) {
-        make_result(&r, special ? 0 : errors);
+        if (special) {
+            make_result(&r, 0);
+        } else {
+            make_uncorrectable_result(&r, errors);
+        }
         assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, special ? special : voice[3], &cur, &prev,
                                         &enh)
                >= 0);
@@ -350,6 +362,9 @@ test_lost_plays_as_repeat(void) {
                 assert(
                     got_flags[i]
                     == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT | tone | mute));
+                assert(want_flags[i]
+                       == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C0_UNCORRECTABLE | MBE_PROCESS_FLAG_ERASURE
+                           | MBE_PROCESS_FLAG_REPEAT | mute));
                 assert((i < 3) ? (mute == 0u) : (i == 3) ? (mute != 0u) : 1);
             }
         }
@@ -374,7 +389,11 @@ test_mixed_repeat_count(void) {
     }
     for (int i = 0; i < 4; ++i) {
         int errored = (i & 1) != 0;
-        make_result(&r, errored ? 4 : 0);
+        if (errored) {
+            make_uncorrectable_result(&r, 4);
+        } else {
+            make_result(&r, 0);
+        }
         assert(mbe_processAmbe2400Dataf(out, &r, errored ? voice[3] : b125, &cur, &prev, &enh) >= 0);
         assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
         assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i == 3));
@@ -466,7 +485,11 @@ test_tone_ends_repeat_run(void) {
             make_result(&r, 0);
             assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
             for (int i = 0; i < 3; ++i) {
-                make_result(&r, errored ? 4 : 0);
+                if (errored) {
+                    make_uncorrectable_result(&r, 4);
+                } else {
+                    make_result(&r, 0);
+                }
                 assert(mbe_processAmbe2400Dataf(out, &r, errored ? voice[1] : b125, &cur, &prev, &enh) >= 0);
                 assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
             }
@@ -474,7 +497,11 @@ test_tone_ends_repeat_run(void) {
             assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
             assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
             assert(prev.repeatCount == 0);
-            make_result(&r, errored ? 4 : 0);
+            if (errored) {
+                make_uncorrectable_result(&r, 4);
+            } else {
+                make_result(&r, 0);
+            }
             assert(mbe_processAmbe2400Dataf(out, &r, errored ? voice[1] : b125, &cur, &prev, &enh) >= 0);
             assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE)) == MBE_PROCESS_FLAG_REPEAT);
             assert(prev.repeatCount == 1);
@@ -548,57 +575,6 @@ test_all_ones_frame(void) {
         assert_same_pcm(&prev.gamma, &rprev.gamma, 1, "gamma after the all-ones run");
     }
     puts("all-ones frame: plays as a lost frame for runs of 1, 3 and 20, prediction kept");
-}
-
-/*
- * A playable tone frame that fails the error check (2 C0 corrections, or 3 or
- * more in all) plays as a lost frame with the same error count: sample for
- * sample through the voice after it, with the error rate kept, where it used
- * to play comfort noise and reset the decoder (clearing the error rate).
- */
-static void
-test_rejected_tone_is_lost(void) {
-    char voice[NVOICE][49], tone[49], b125[49];
-    make_voice(voice);
-    pack_tone(tone, 126, 76, 212);
-    memcpy(b125, voice[3], sizeof(b125));
-    put_b0(b125, 125);
-    static const int errors[][2] = {{2, 0}, {0, 3}, {1, 2}, {0, 5}, {2, 4}};
-    for (size_t k = 0; k < sizeof(errors) / sizeof(errors[0]); ++k) {
-        float pcm[2][160 * (NVOICE + 1)];
-        unsigned flags[2] = {0u, 0u};
-        float rate[2] = {0.0f, 0.0f};
-        for (int run = 0; run < 2; ++run) {
-            mbe_parms cur, prev, enh;
-            mbe_process_result r;
-            int f = 0;
-            mbe_setThreadRngSeed(1);
-            mbe_initMbeParms(&cur, &prev, &enh);
-            for (int i = 0; i < 4; ++i, ++f) {
-                make_result(&r, 0);
-                assert(mbe_processAmbe2400Dataf(pcm[run] + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh)
-                       == 0);
-            }
-            make_result_c0(&r, errors[k][0], errors[k][1]);
-            assert(
-                mbe_processAmbe2400Dataf(pcm[run] + ((size_t)160 * (size_t)f), &r, run ? b125 : tone, &cur, &prev, &enh)
-                >= 0);
-            flags[run] = r.flags;
-            rate[run] = prev.errorRate;
-            ++f;
-            for (int i = 4; i < NVOICE; ++i, ++f) {
-                make_result(&r, 0);
-                assert(mbe_processAmbe2400Dataf(pcm[run] + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh)
-                       == 0);
-            }
-        }
-        assert(flags[0] == (flags[1] | MBE_PROCESS_FLAG_TONE));
-        assert((flags[0] & (MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT))
-               == (MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
-        assert(rate[0] > 0.0f);
-        assert_same_pcm(pcm[0], pcm[1], (size_t)160 * (NVOICE + 1), "rejected tone vs lost frame");
-    }
-    puts("rejected tones: a tone failing the error check plays as a lost frame, error rate kept");
 }
 
 /* While the error rate mutes hard-decision voice, a tone frame is muted too
@@ -859,7 +835,7 @@ test_repeat_limit_under_error_mute(void) {
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     for (int i = 0; i < 6; ++i) {
-        make_result(&r, 4);
+        make_uncorrectable_result(&r, 4);
         assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 4);
         assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE))
                == (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE));
@@ -926,6 +902,340 @@ test_loud_held_frame_plays(void) {
     puts("loud held frame: every frame plays");
 }
 
+/* One step of the next k-combination of 0..n-1 in idx[]; 0 after the last. */
+static int
+next_combination(int* idx, int k, int n) {
+    int i = k - 1;
+    while (i >= 0 && idx[i] == n - k + i) {
+        --i;
+    }
+    if (i < 0) {
+        return 0;
+    }
+    ++idx[i];
+    for (int j = i + 1; j < k; ++j) {
+        idx[j] = idx[j - 1] + 1;
+    }
+    return 1;
+}
+
+/*
+ * The frame decoders flag every C0 error pattern of weight 4, which the
+ * extended Golay (24,12) code detects, as uncorrectable, and none of weight 1
+ * to 3, the soft decoder from its hard decisions; the error counts stay the
+ * corrected data bits (DVSI's AMBE-3000 plays exactly the weight-4 frames as
+ * lost, #155).
+ */
+static void
+test_c0_uncorrectable_detection(void) {
+    char voice[NVOICE][49], fr[4][24], clean_d[49];
+    make_voice(voice);
+    air_frame(voice[2], fr);
+    mbe_process_result r;
+    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, clean_d, &r) == 0);
+    int flagged[5] = {0, 0, 0, 0, 0}, patterns[5] = {0, 0, 0, 0, 0};
+    for (int w = 1; w <= 4; ++w) {
+        int idx[4] = {0, 1, 2, 3};
+        do {
+            char bad[4][24], legacy[4][24], d[49];
+            memcpy(bad, fr, sizeof(bad));
+            for (int i = 0; i < w; ++i) {
+                bad[0][idx[i]] ^= 1;
+            }
+            memcpy(legacy, bad, sizeof(legacy));
+            const int c0 = mbe_eccAmbe3600x2400C0(legacy);
+            assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) >= 0);
+            const int is_flagged = (r.flags & MBE_PROCESS_FLAG_C0_UNCORRECTABLE) != 0u;
+            assert(is_flagged == (w == 4));
+            assert(r.c0_errors == c0);
+            if (w < 4) {
+                assert(memcmp(d, clean_d, sizeof(d)) == 0);
+            }
+            mbe_soft_bit soft[4][24];
+            soft_frame((const char (*)[24])bad, soft);
+            assert(mbe_decodeAmbe3600x2400SoftFrame((const mbe_soft_bit(*)[24])soft, d, &r) >= 0);
+            assert(((r.flags & MBE_PROCESS_FLAG_C0_UNCORRECTABLE) != 0u) == is_flagged);
+            flagged[w] += is_flagged;
+            ++patterns[w];
+        } while (next_combination(idx, w, 24));
+    }
+    assert(patterns[1] == 24 && patterns[2] == 276 && patterns[3] == 2024 && patterns[4] == 10626);
+    assert(flagged[4] == 10626);
+    puts("C0: every weight-4 error pattern, and none lighter, is uncorrectable");
+}
+
+/* Air frames of voice[0..5] with frame 3 replaced by `third`. */
+static void
+air_stream(const char voice[NVOICE][49], const char third[4][24], char frames[NVOICE][4][24]) {
+    for (int f = 0; f < NVOICE; ++f) {
+        if (f == 3) {
+            memcpy(frames[f], third, sizeof(frames[f]));
+        } else {
+            air_frame(voice[f], frames[f]);
+        }
+    }
+}
+
+/*
+ * A frame with an uncorrectable C0 word plays as a lost frame (sample for
+ * sample as a b0 125 frame there), and the frame after it predicts from the
+ * frame's own decode, as on DVSI's AMBE-3000, where the frames after it differ
+ * from LOST_FRAME's (#155). The staged decode passes the flag on to the
+ * parameter-bit API, and fully reliable soft decisions play as hard ones.
+ */
+static void
+test_c0_uncorrectable_plays_lost(void) {
+    char voice[NVOICE][49], b125[49], bad[4][24], lost[4][24];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    air_frame(voice[3], bad);
+    for (int i = 0; i < 4; ++i) {
+        bad[0][12 + (3 * i)] ^= 1; /* four C0 data bits */
+    }
+    air_frame(b125, lost);
+    char frames[2][NVOICE][4][24];
+    air_stream((const char (*)[49])voice, (const char (*)[24])bad, frames[0]);
+    air_stream((const char (*)[49])voice, (const char (*)[24])lost, frames[1]);
+    float pcm[3][NVOICE][160];
+    mbe_parms state[3][3], before, after;
+    mbe_process_result r;
+    char d[49];
+    for (int run = 0; run < 3; ++run) {
+        mbe_parms* s3 = state[run];
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&s3[0], &s3[1], &s3[2]);
+        for (int f = 0; f < NVOICE; ++f) {
+            const char (*fr)[24] = (const char (*)[24])frames[run == 1][f];
+            if (run == 0 && f == 3) {
+                before = s3[1];
+            }
+            if (run == 2) {
+                /* Staged: decode, then process the bits with the decode's result. */
+                assert(mbe_decodeAmbe3600x2400Frame(fr, d, &r) >= 0);
+                assert(mbe_processAmbe2400Dataf(pcm[run][f], &r, d, &s3[0], &s3[1], &s3[2]) >= 0);
+            } else {
+                assert(mbe_processAmbe3600x2400Framef(pcm[run][f], &r, fr, d, &s3[0], &s3[1], &s3[2]) >= 0);
+            }
+            if (run != 1 && f == 3) {
+                assert(r.flags
+                       == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_C0_UNCORRECTABLE | MBE_PROCESS_FLAG_ERASURE
+                           | MBE_PROCESS_FLAG_REPEAT));
+                if (run == 0) {
+                    after = s3[1];
+                }
+            }
+        }
+    }
+    assert_same_pcm(pcm[0][0], pcm[2][0], (size_t)160 * NVOICE, "staged decode vs frame API");
+    assert_same_pcm(pcm[0][0], pcm[1][0], (size_t)160 * 4, "uncorrectable C0 vs lost frame");
+    /* The history it commits is its own decode from the history before it. */
+    mbe_parms decoded = before, history = before;
+    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) >= 0);
+    assert(mbe_decodeAmbe2400Parms(d, &decoded, &history) == 0);
+    assert_same_pcm(&after.log2Ml[1], &decoded.log2Ml[1], (size_t)decoded.L, "history after the frame");
+    assert(after.L == before.L); /* the repeated model */
+    /* The next frame predicts from it, so it is not the frame after a lost frame. */
+    mbe_parms next = decoded, next_prev = decoded;
+    air_frame(voice[4], bad);
+    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) == 0);
+    assert(mbe_decodeAmbe2400Parms(d, &next, &next_prev) == 0);
+    int differs = 0;
+    for (int n = 0; n < 160; ++n) {
+        uint32_t x, y;
+        memcpy(&x, &pcm[0][4][n], sizeof(x));
+        memcpy(&y, &pcm[1][4][n], sizeof(y));
+        differs |= x != y;
+    }
+    assert(differs);
+    mbe_parms replay = after, replay_cur = before;
+    assert(mbe_decodeAmbe2400Parms(d, &replay_cur, &replay) == 0);
+    assert_same_pcm(&replay_cur.log2Ml[1], &next.log2Ml[1], (size_t)next.L, "the next frame's prediction");
+    mbe_soft_bit soft[4][24];
+    mbe_parms c, p, e;
+    float out[NVOICE][160];
+    mbe_setThreadRngSeed(1);
+    mbe_initMbeParms(&c, &p, &e);
+    for (int f = 0; f < NVOICE; ++f) {
+        soft_frame((const char (*)[24])frames[0][f], soft);
+        assert(mbe_processAmbe3600x2400SoftFramef(out[f], &r, (const mbe_soft_bit(*)[24])soft, d, &c, &p, &e) >= 0);
+    }
+    assert_same_pcm(out[0], pcm[0][0], (size_t)160 * NVOICE, "soft vs hard frames");
+    puts("uncorrectable C0: plays as a lost frame, the next frame predicts from its decode");
+}
+
+/* The history an uncorrectable frame leaves outlasts the frames that do not
+ * replace it: a lost frame or a tone between it and the next voice frame. */
+static void
+test_c0_uncorrectable_history_kept(void) {
+    char voice[NVOICE][49], b125[49], tone[49], d[49];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    pack_tone(tone, 126, 32, 180);
+    const char* between[] = {b125, tone};
+    for (size_t k = 0; k < sizeof(between) / sizeof(between[0]); ++k) {
+        mbe_parms cur, prev, enh, decoded, history;
+        mbe_process_result r;
+        float out[160];
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int i = 0; i < 3; ++i) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        }
+        decoded = cur;
+        history = prev;
+        assert(mbe_decodeAmbe2400Parms(voice[3], &decoded, &history) == 0);
+        make_uncorrectable_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, between[k], &cur, &prev, &enh) == 0);
+        mbe_parms want = decoded, want_prev = decoded;
+        memcpy(d, voice[4], sizeof(d));
+        assert(mbe_decodeAmbe2400Parms(d, &want, &want_prev) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+        assert(cur.L == want.L);
+        assert_same_pcm(&prev.log2Ml[1], &want.log2Ml[1], (size_t)want.L, "prediction after the frame between");
+        assert((prev.Vl[0] & ~0xFFFF) == 0); /* a decoded voice frame drops the held history */
+    }
+    puts("uncorrectable C0: its history outlasts a lost frame or a tone after it");
+}
+
+/* State that holds an uncorrectable frame's history works with the other
+ * entry points: a direct parameter decode predicts from it and leaves its own
+ * model as the history, and the encoder predicts from it as the decoder does,
+ * so decoding its bits from that state gives the model it reports. */
+static void
+test_c0_uncorrectable_history_entry_points(void) {
+    char voice[NVOICE][49];
+    make_voice(voice);
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 3; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+    }
+    make_uncorrectable_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == 0);
+    assert((prev.Vl[0] & ~0x3FFFF) != 0);
+    /* Direct decoding, as a caller of the staged API would chain it. */
+    mbe_parms dcur = cur, dprev = prev, pcur = cur, pprev = prev, penh = enh;
+    assert(mbe_decodeAmbe2400Parms(voice[4], &dcur, &dprev) == 0);
+    assert((dcur.Vl[0] & ~0x3FFFF) == 0);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &pcur, &pprev, &penh) == 0);
+    assert(dcur.L == pprev.L);
+    assert_same_pcm(&dcur.log2Ml[1], &pprev.log2Ml[1], (size_t)dcur.L, "direct decode after the frame");
+    mbe_moveMbeParms(&dcur, &dprev);
+    mbe_moveMbeParms(&pprev, &pcur);
+    assert(mbe_decodeAmbe2400Parms(voice[5], &dcur, &dprev) == 0);
+    assert(mbe_decodeAmbe2400Parms(voice[5], &pcur, &pprev) == 0);
+    assert_same_pcm(&dcur.log2Ml[1], &pcur.log2Ml[1], (size_t)dcur.L, "direct decode, the frame after");
+    /* The encoder, given the same state. */
+    mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
+    assert(enc != NULL);
+    float pcm[160];
+    int voiced = 0;
+    for (int f = 0; f < 12; ++f) {
+        for (int n = 0; n < 160; ++n) {
+            const double t = (double)((f * 160) + n) / 8000.0;
+            pcm[n] = (float)(6000.0 * (sin(2.0 * M_PI * 180.0 * t) + (0.5 * sin(2.0 * M_PI * 540.0 * t))));
+        }
+        char d[49];
+        mbe_parms ecur = cur, eprev = prev;
+        assert(mbe_encodeAmbe2400Parms(enc, pcm, d, &ecur, &eprev) == 0);
+        mbe_parms check = cur, check_prev = prev;
+        if (mbe_decodeAmbe2400Parms(d, &check, &check_prev) != 0) {
+            continue;
+        }
+        ++voiced;
+        assert(check.L == ecur.L);
+        assert_same_pcm(&check.log2Ml[1], &ecur.log2Ml[1], (size_t)check.L, "encoder vs decoder prediction");
+        assert((ecur.Vl[0] & ~0x3FFFF) == 0);
+    }
+    assert(voiced > 0);
+    mbe_ambe2400EncoderFree(enc);
+    puts("uncorrectable C0: direct decoding and the encoder predict from its history");
+}
+
+/*
+ * No frame is repeated for its count of corrected errors: DVSI's AMBE-3000
+ * plays voice with 3 + 3 corrections in C0 and C1 (#155).
+ */
+static void
+test_corrected_errors_play(void) {
+    char voice[NVOICE][49];
+    make_voice(voice);
+    for (int errors = 4; errors <= 6; ++errors) {
+        for (int soft = 0; soft <= 1; ++soft) {
+            mbe_parms cur, prev, enh, rcur, rprev;
+            mbe_process_result r;
+            float out[160];
+            mbe_initMbeParms(&cur, &prev, &enh);
+            for (int i = 0; i < 3; ++i) {
+                make_result(&r, 0);
+                assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+            }
+            rcur = cur;
+            rprev = prev;
+            assert(mbe_decodeAmbe2400Parms(voice[3], &rcur, &rprev) == 0);
+            make_result_c0(&r, 3, errors - 3);
+            r.flags |= soft ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u;
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == errors);
+            assert((r.flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
+            assert_same_pcm(&prev.log2Ml[1], &rcur.log2Ml[1], (size_t)rcur.L, "corrected frame's model");
+        }
+    }
+    puts("corrected errors: a frame with corrections plays, hard or soft");
+}
+
+/*
+ * A tone frame with any correctable errors plays, hard or soft, as DVSI's
+ * AMBE-3000 plays it for 0 + 3, 2 + 0, 1 + 2 and 3 + 3 corrections in C0 and
+ * C1 (#155): the tone is sample for sample the clean tone frames' (the speech
+ * fading out under the first one is smoothed by its error count); an
+ * uncorrectable C0 word makes it a lost frame. The library used to play a tone
+ * frame with 2 C0 corrections, or 3 in all, as lost.
+ */
+static void
+test_hard_tone_with_corrections(void) {
+    char voice[NVOICE][49], tone[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 32, 180);
+    static const int errors[][3] = {{0, 0, 0}, {0, 3, 0}, {2, 0, 0}, {1, 2, 0}, {3, 3, 0}, {2, 4, 1}, {0, 5, 1}};
+    float want[2][160], got[2][160];
+    for (size_t k = 0; k < sizeof(errors) / sizeof(errors[0]); ++k) {
+        mbe_parms cur, prev, enh;
+        mbe_process_result r;
+        float out[160];
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int i = 0; i < 4; ++i) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        }
+        for (int t = 0; t < 2; ++t) {
+            const unsigned soft = errors[k][2] ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u;
+            make_result_c0(&r, errors[k][0], errors[k][1]);
+            r.flags |= soft;
+            assert(mbe_processAmbe2400Dataf(k == 0 ? want[t] : got[t], &r, tone, &cur, &prev, &enh) >= 0);
+            assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE | soft));
+        }
+        if (k > 0) {
+            assert_same_pcm(got[0] + 80, want[0] + 80, 80, "tone frame with corrections");
+            assert_same_pcm(got[1], want[1], 160, "second tone frame with corrections");
+        }
+        make_uncorrectable_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT))
+               == (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
+    }
+    puts("tones: a tone frame with corrected errors plays, hard or soft");
+}
+
 /* The error-rate mute plays the same DVSI-level noise: int16 0 or +-1, about a
  * third of the samples nonzero (DVSI's muted dam_e10_hd: 33%). */
 static void
@@ -967,7 +1277,6 @@ main(void) {
     test_frame_apis_agree();
     test_zero_volume_tone();
     test_tone_ends_repeat_run();
-    test_rejected_tone_is_lost();
     test_tone_muted_by_error_rate();
     test_tone_transitions();
     test_tone_transitions_after_mute();
@@ -977,5 +1286,11 @@ main(void) {
     test_repeat_limit_noise_continuity();
     test_all_ones_frame();
     test_loud_held_frame_plays();
+    test_c0_uncorrectable_detection();
+    test_c0_uncorrectable_plays_lost();
+    test_c0_uncorrectable_history_kept();
+    test_c0_uncorrectable_history_entry_points();
+    test_corrected_errors_play();
+    test_hard_tone_with_corrections();
     return 0;
 }

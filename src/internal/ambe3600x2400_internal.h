@@ -16,6 +16,7 @@
 #include <math.h>
 
 #include "mbe_math.h"
+#include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
 /*
@@ -191,6 +192,32 @@ ambe2400_interpolate_prediction(float deltal, float lower, float upper) {
 static inline float
 ambe2400_reconstruct_log2Ml(float Tl, float c1, float c2, float Sum43, float BigGamma) {
     return Tl + c1 + c2 - Sum43 + BigGamma;
+}
+
+/*
+ * The D-STAR prediction history is log2Ml of the state committed to prev_mp,
+ * at prev_mp's harmonic count, or at the count these bits of Vl[0] (Vl is
+ * indexed from 1) hold after a frame with an uncorrectable C0 word, which
+ * plays as a lost frame (a repeat of prev_mp's model) but leaves its own
+ * decoded amplitudes to predict the next frame from. The decoder and the
+ * encoder predict from it alike.
+ */
+#define MBE_AMBE2400_HISTORY_HELD    (1 << 18)
+#define MBE_AMBE2400_HISTORY_L_SHIFT 19
+#define MBE_AMBE2400_HISTORY_BITS    (MBE_AMBE2400_HISTORY_HELD | (0x3F << MBE_AMBE2400_HISTORY_L_SHIFT))
+
+static inline int
+mbe_ambe2400_history_held(const mbe_parms* mp) {
+    return (mp->Vl[0] & MBE_AMBE2400_HISTORY_HELD) != 0;
+}
+
+/* Turn a copy of committed state into the history to predict from. */
+static inline void
+mbe_ambe2400_resolve_history(mbe_parms* mp) {
+    if (mbe_ambe2400_history_held(mp)) {
+        mp->L = mbe_clamp_harmonic_count((mp->Vl[0] >> MBE_AMBE2400_HISTORY_L_SHIFT) & 0x3F);
+        mp->Vl[0] &= ~MBE_AMBE2400_HISTORY_BITS;
+    }
 }
 
 #endif /* MBELIB_NEO_INTERNAL_AMBE3600X2400_H */

@@ -152,37 +152,46 @@ typedef struct mbe_soft_bit {
 } mbe_soft_bit;
 
 /** Processing/result flag: frame input used soft decisions. */
-#define MBE_PROCESS_FLAG_SOFT_INPUT 0x0001u
+#define MBE_PROCESS_FLAG_SOFT_INPUT       0x0001u
 /** Processing/result flag: C0 error count is available to the synthesis path. */
-#define MBE_PROCESS_FLAG_C0_VALID   0x0002u
+#define MBE_PROCESS_FLAG_C0_VALID         0x0002u
 /** Processing/result flag: IMBE C4 error count is available. */
-#define MBE_PROCESS_FLAG_C4_VALID   0x0004u
+#define MBE_PROCESS_FLAG_C4_VALID         0x0004u
 /** Processing/result flag: frame was classified as tone. */
-#define MBE_PROCESS_FLAG_TONE       0x0010u
+#define MBE_PROCESS_FLAG_TONE             0x0010u
 /** Processing/result flag: frame was classified as erasure. */
-#define MBE_PROCESS_FLAG_ERASURE    0x0020u
+#define MBE_PROCESS_FLAG_ERASURE          0x0020u
 /** Processing/result flag: previous parameters were repeated. */
-#define MBE_PROCESS_FLAG_REPEAT     0x0040u
+#define MBE_PROCESS_FLAG_REPEAT           0x0040u
 /** Processing/result flag: output was muted/comfort-noise substituted. */
-#define MBE_PROCESS_FLAG_MUTE       0x0080u
+#define MBE_PROCESS_FLAG_MUTE             0x0080u
 /**
  * Processing/result flag: an AMBE 3600x2450 silence frame (b0 124/125) was
  * decoded and synthesized. Silence frames do not update the prediction
  * history (TIA-102.BABA-1 4.3). Not rendered by mbe_formatProcessResult().
  */
-#define MBE_PROCESS_FLAG_SILENCE    0x0100u
+#define MBE_PROCESS_FLAG_SILENCE          0x0100u
 /**
  * Processing/result flag (context): the parameter bits come from an IMBE
  * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
  * data API, as for the C0/C4 context, and a muted frame gets library comfort
  * noise instead of the TIA-102.BABA 7.8 level, as in the ProVoice frame APIs.
  */
-#define MBE_PROCESS_FLAG_PROVOICE   0x0200u
+#define MBE_PROCESS_FLAG_PROVOICE         0x0200u
+/**
+ * Processing/result flag (context): the D-STAR (AMBE 3600x2400) frame decoders
+ * found an uncorrectable C0 word, four bit errors (in the hard decisions) that
+ * the extended Golay (24,12) code detects but cannot correct. Pass that result on
+ * to the AMBE 2400 data API, as for the C0 context: it plays the frame as a
+ * lost frame and still predicts the next frame from its decoded amplitudes, as
+ * DVSI's AMBE-3000 does.
+ */
+#define MBE_PROCESS_FLAG_C0_UNCORRECTABLE 0x0400u
 
 /** Status code: invalid pointer, invalid status counters, or otherwise unusable arguments. */
-#define MBE_STATUS_INVALID_ARGUMENT (-1)
+#define MBE_STATUS_INVALID_ARGUMENT       (-1)
 /** Status code: hard or soft input bit arrays contained values other than 0 or 1. */
-#define MBE_STATUS_INVALID_BITS     (-2)
+#define MBE_STATUS_INVALID_BITS           (-2)
 
 /**
  * @brief Frame decode and synthesis status.
@@ -309,7 +318,10 @@ MBE_API int mbe_eccAmbe3600x2400Data(char ambe_fr[4][24], char* ambe_d);
  * @brief Decode AMBE 2400 parameters from demodulated bits.
  * @param ambe_d  Demodulated AMBE parameter bits (49).
  * @param cur_mp  Output: current frame parameters.
- * @param prev_mp Input: previous frame parameters (for prediction).
+ * @param prev_mp Input: previous frame parameters (for prediction), as the
+ *                AMBE 2400 process functions commit them: after a frame with
+ *                `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` they hold that frame's
+ *                decode as the prediction history.
  * @return 0 for voice, a tone index (5..122, 128..147) for a tone frame, 2 for
  *         a frame that plays as a lost frame (b0 125..127: repeat the previous
  *         frame); only voice decodes cur_mp.
@@ -325,7 +337,8 @@ MBE_API int mbe_demodulateAmbe3600x2400Data(char ambe_fr[4][24]);
  * @brief Decode a hard AMBE 3600x2400 frame to parameter bits without synthesis.
  * @param ambe_fr Input frame as 4x24 bitplanes; not modified.
  * @param ambe_d  Output parameter bits (49).
- * @param result  Optional output status; receives C0/protected/total errors and `MBE_PROCESS_FLAG_C0_VALID`.
+ * @param result  Optional output status; receives C0/protected/total errors and `MBE_PROCESS_FLAG_C0_VALID`,
+ *                plus `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` for a C0 word with four errors.
  * @return Corrected error total (`c0_errors + protected_errors`).
  */
 MBE_API int mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_process_result* result);
@@ -333,7 +346,8 @@ MBE_API int mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[
  * @brief Decode a soft AMBE 3600x2400 frame to parameter bits without synthesis.
  * @param ambe_fr Input soft frame as 4x24 bitplanes; not modified.
  * @param ambe_d  Output hard parameter bits (49).
- * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`.
+ * @param result  Optional output status; also sets `MBE_PROCESS_FLAG_SOFT_INPUT`, and
+ *                `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` when C0's hard decisions hold four errors.
  * @return Corrected error total (`c0_errors + protected_errors`).
  */
 MBE_API int mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[49],
@@ -341,7 +355,8 @@ MBE_API int mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
 /**
  * @brief Process AMBE 2400 parameters into 8 kHz float PCM.
  * @param aout_buf Output buffer of 160 float samples.
- * @param result   Optional in/out status context. C0 context is used when `MBE_PROCESS_FLAG_C0_VALID` is set.
+ * @param result   Optional in/out status context. C0 context is used when `MBE_PROCESS_FLAG_C0_VALID` is set;
+ *                 a frame with `MBE_PROCESS_FLAG_C0_UNCORRECTABLE` plays as a lost frame.
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: previous frame parameters.

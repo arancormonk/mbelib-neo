@@ -533,7 +533,16 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     ambe2400_decode_ri(ambe_d, Ri);
     ambe2400_decode_cik(ambe_d, L, Ri, Cik, Ji);
     mbe_ambe2400_inverse_dct_tl(Cik, Ji, Tl);
-    mbe_ambe2400_update_spectral_amplitudes(cur_mp, prev_mp, Tl, unvc);
+    mbe_parms history;
+    mbe_parms* predict_from = prev_mp;
+    if (mbe_ambe2400_history_held(prev_mp)) {
+        history = *prev_mp;
+        mbe_ambe2400_resolve_history(&history);
+        predict_from = &history;
+    }
+    mbe_ambe2400_update_spectral_amplitudes(cur_mp, predict_from, Tl, unvc);
+    /* A decoded frame is its own prediction history. */
+    cur_mp->Vl[0] &= ~MBE_AMBE2400_HISTORY_BITS;
 
     return 0;
 }
@@ -571,6 +580,13 @@ mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_pro
     }
 
     memcpy(fr, ambe_fr, sizeof(fr));
+    /* Four errors in C0, which the overall parity bit tells from three
+     * (docs/dvsi-parity.md, "D-STAR channel errors"). The error counts stay
+     * the corrected data bits the error-rate mute is calibrated on. The soft
+     * decoder checks its hard decisions the same way. */
+    char probe[4][24];
+    memcpy(probe, fr, sizeof(probe));
+    const int c0_uncorrectable = mbe_eccAmbe3600C0Counted_common(probe) >= 4;
     c0_errors = mbe_eccAmbe3600x2400C0(fr);
     ret = mbe_demodulateAmbe3600x2400Data(fr);
     if (ret < 0) {
@@ -582,7 +598,7 @@ mbe_decodeAmbe3600x2400Frame(const char ambe_fr[4][24], char ambe_d[49], mbe_pro
         result->c0_errors = c0_errors;
         result->protected_errors = protected_errors;
         result->total_errors = c0_errors + protected_errors;
-        result->flags = MBE_PROCESS_FLAG_C0_VALID;
+        result->flags = MBE_PROCESS_FLAG_C0_VALID | (c0_uncorrectable ? MBE_PROCESS_FLAG_C0_UNCORRECTABLE : 0u);
     }
     return c0_errors + protected_errors;
 }
@@ -606,6 +622,13 @@ mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
     }
 
     memcpy(fr, ambe_fr, sizeof(fr));
+    char probe[4][24];
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 24; ++j) {
+            probe[i][j] = (char)(fr[i][j].bit & 1u);
+        }
+    }
+    const int c0_uncorrectable = mbe_eccAmbe3600C0Counted_common(probe) >= 4;
     c0_errors = mbe_eccAmbe3600C0Soft_common(fr);
     mbe_demodulateAmbe3600DataSoft_common(fr);
     protected_errors = mbe_eccAmbe3600DataSoft_common(fr, ambe_d);
@@ -614,17 +637,18 @@ mbe_decodeAmbe3600x2400SoftFrame(const mbe_soft_bit ambe_fr[4][24], char ambe_d[
         result->c0_errors = c0_errors;
         result->protected_errors = protected_errors;
         result->total_errors = c0_errors + protected_errors;
-        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID;
+        result->flags = MBE_PROCESS_FLAG_SOFT_INPUT | MBE_PROCESS_FLAG_C0_VALID
+                        | (c0_uncorrectable ? MBE_PROCESS_FLAG_C0_UNCORRECTABLE : 0u);
     }
     return c0_errors + protected_errors;
 }
 
 static int
 ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
-                         mbe_parms* prev_mp_enhanced, int* total_errors, int* c0_errors) {
+                         mbe_parms* prev_mp_enhanced, int* total_errors) {
     int ret;
 
-    if (!cur_mp || !prev_mp || !prev_mp_enhanced || !total_errors || !c0_errors) {
+    if (!cur_mp || !prev_mp || !prev_mp_enhanced || !total_errors) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
     ret = mbe_result_resolve_total_errors(result, total_errors);
@@ -636,7 +660,6 @@ ambe2400_prepare_process(mbe_process_result* result, const char ambe_d[49], mbe_
         return ret;
     }
 
-    *c0_errors = ((result->flags & MBE_PROCESS_FLAG_C0_VALID) != 0u) ? result->c0_errors : 0;
     mbe_result_prepare_synthesis(result, *total_errors);
 
     /* Normalize generic (IMBE) init state to the initial AMBE model. */
@@ -664,11 +687,11 @@ ambe2400_error_rate_mutes(const mbe_process_result* result, const mbe_parms* cur
 }
 
 static void
-ambe2400_update_decode_state(const char ambe_d[49], int bad, int total_errors, mbe_process_result* result,
-                             mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+ambe2400_update_decode_state(const char ambe_d[49], int bad, mbe_process_result* result, mbe_parms* cur_mp,
+                             const mbe_parms* prev_mp) {
     if (bad == MBE_AMBE2400_FRAME_LOST) {
-        /* Repeated like a frame with too many errors, keeping this frame's own
-         * error accounting and noise state. A lost tone frame is flagged as both. */
+        /* Repeated, keeping this frame's own error accounting and noise state.
+         * A lost tone frame is flagged as both. */
         const unsigned tone = (ambe2400_decode_b0(ambe_d) >= 126) ? MBE_PROCESS_FLAG_TONE : 0u;
         mbe_repeat_load_model(cur_mp, prev_mp);
         cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
@@ -681,14 +704,6 @@ ambe2400_update_decode_state(const char ambe_d[49], int bad, int total_errors, m
         cur_mp->repeatCount = 0;
         return;
     }
-    if (total_errors > 3) {
-        /* Repeat the previous model; this frame's error accounting and noise state continue. */
-        mbe_repeat_load_model(cur_mp, prev_mp);
-        cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
-        mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
-        return;
-    }
-
     cur_mp->repeatCount = 0;
 }
 
@@ -739,14 +754,37 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
  * commits to prev_mp records the tone it leaves sounding, whose phases that
  * state carries, and whether the error rate muted the frame: the next frame
  * may be decoded from the other kind of decisions, which mute differently.
+ * It also records the harmonic count of a prediction history that differs from
+ * the repeated model (MBE_AMBE2400_HISTORY_HELD).
  */
 #define MBE_AMBE2400_TONE_FADE   80
 #define MBE_AMBE2400_TONE_HELD   (1 << 16)
 #define MBE_AMBE2400_FRAME_MUTED (1 << 17)
 
 static void
-ambe2400_hold_tone(mbe_parms* mp, int index, int volume, int muted) {
-    mp->Vl[0] = MBE_AMBE2400_TONE_HELD | (muted ? MBE_AMBE2400_FRAME_MUTED : 0) | (volume << 8) | index;
+ambe2400_hold_tone(mbe_parms* mp, int index, int volume, int muted, int history) {
+    mp->Vl[0] = history | MBE_AMBE2400_TONE_HELD | (muted ? MBE_AMBE2400_FRAME_MUTED : 0) | (volume << 8) | index;
+}
+
+/*
+ * A frame whose C0 word is uncorrectable plays as a lost frame, and a voice
+ * frame decoded from it still becomes the prediction history: on
+ * DVSI's AMBE-3000 such a frame plays exactly as LOST_FRAME does, while the
+ * frames after it follow the decoded frame (docs/dvsi-parity.md, "D-STAR
+ * channel errors"). Returns the frame class to play.
+ */
+static int
+ambe2400_take_lost_frame(const mbe_process_result* result, int bad, const mbe_parms* decoded, float history[57],
+                         int* history_bits) {
+    *history_bits = 0;
+    if ((result->flags & MBE_PROCESS_FLAG_C0_UNCORRECTABLE) == 0u) {
+        return bad;
+    }
+    if (bad == 0) {
+        memcpy(history, decoded->log2Ml, sizeof(decoded->log2Ml));
+        *history_bits = MBE_AMBE2400_HISTORY_HELD | (decoded->L << MBE_AMBE2400_HISTORY_L_SHIFT);
+    }
+    return MBE_AMBE2400_FRAME_LOST;
 }
 
 /* Whether the error rate muted the last frame. */
@@ -822,7 +860,7 @@ ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
         ambe2400_mute_noise(aout_buf);
     }
-    ambe2400_hold_tone(cur_mp, index, volume, muted);
+    ambe2400_hold_tone(cur_mp, index, volume, muted, prev_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS);
     mbe_moveMbeParms(cur_mp, prev_mp);
 }
 
@@ -880,8 +918,11 @@ ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const cha
     }
     struct ambe2400_tone_tail held = {0, 0, 0, prev_mp->swn, prev_mp->tonePhase};
     const int leaving = ambe2400_held_tone(prev_mp, &held.index, &held.volume);
+    const int repeat = (result->flags & MBE_PROCESS_FLAG_REPEAT) != 0u;
     held.audible = !ambe2400_last_frame_muted(prev_mp);
-    cur_mp->Vl[0] = ambe2400_error_rate_mutes(result, cur_mp) ? MBE_AMBE2400_FRAME_MUTED : 0;
+    /* A repeat keeps the prediction history its model carries. */
+    const int history = repeat ? (cur_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS) : 0;
+    cur_mp->Vl[0] = history | (ambe2400_error_rate_mutes(result, cur_mp) ? MBE_AMBE2400_FRAME_MUTED : 0);
     ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
     if (leaving && (result->flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
         ambe2400_fade_in_from_tone(aout_buf, &held);
@@ -893,7 +934,6 @@ mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_process_result local_result;
     int bad;
-    int c0_errors;
     int total_errors;
     int ret;
 
@@ -904,7 +944,7 @@ mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char
     if (!aout_buf) {
         return MBE_STATUS_INVALID_ARGUMENT;
     }
-    ret = ambe2400_prepare_process(result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, &total_errors, &c0_errors);
+    ret = ambe2400_prepare_process(result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced, &total_errors);
     if (ret < 0) {
         return ret;
     }
@@ -914,13 +954,14 @@ mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char
         return bad;
     }
 
-    /* A tone frame that fails the error check plays as a lost frame, as one
-     * whose index has no tone does: it used to reset the decoder, clearing the
-     * error rate, so output unmuted mid-burst where DVSI's stays muted. */
-    if (ambe2400_is_tone(bad) && (c0_errors >= 2 || total_errors >= 3)) {
-        bad = MBE_AMBE2400_FRAME_LOST;
+    float history[57];
+    int history_bits;
+    bad = ambe2400_take_lost_frame(result, bad, cur_mp, history, &history_bits);
+    ambe2400_update_decode_state(ambe_d, bad, result, cur_mp, prev_mp);
+    if (history_bits != 0) {
+        memcpy(cur_mp->log2Ml, history, sizeof(cur_mp->log2Ml));
+        cur_mp->Vl[0] = history_bits;
     }
-    ambe2400_update_decode_state(ambe_d, bad, total_errors, result, cur_mp, prev_mp);
     ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, cur_mp, prev_mp, prev_mp_enhanced);
     return result->total_errors;
 }

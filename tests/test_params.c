@@ -1405,9 +1405,9 @@ main(void) {
         }
         er_before = prev.errorRate;
         seed_before = enh.noiseSeed;
-        init_result_total(&result, 4); /* D-STAR: total > 3 repeats */
+        init_result_total(&result, 4); /* D-STAR repeats no frame for its corrections */
         assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
-        assert(result_has_marker(&result, 'R'));
+        assert(!result_has_marker(&result, 'R'));
         assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.001064f * 4.0f))) < 1e-7f);
         assert(cur.errorCountTotal == 4);
         assert(float_bits_differ(enh.noiseSeed, seed_before));
