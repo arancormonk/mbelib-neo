@@ -177,6 +177,32 @@ and disconnected mode, and both release/VCS recipes generated the expected
 `.SRCINFO` with makepkg. Windows, macOS and ARM execution remains covered by
 the existing CI matrix and was not run on this Linux x86 host.
 
+### PFFFT update to 548918d
+
+The update from `77a7ecd` to `548918d` adds the fork's 8-lane AVX2 float
+backend. On x86-64, `pffft_new_setup()` uses it only on CPUs it was measured
+faster on (AMD Zen 3 and Zen 4) and only at the sizes listed for that CPU in
+`src/pffft_wide_sizes.h`, after a CPUID/XGETBV check; everything else keeps
+the 4-lane code. mbelib's only transform, the real 256-point FFT, is in none
+of those tables, so its FFT code path is unchanged on every CPU. GCC and
+Clang build the backend inside `pffft.c` with target attributes (MinGW GCC
+only in optimized builds). MSVC builds it as a translation unit of its own,
+`src/pffft_wide_tu.c`, which `CMakeLists.txt` now adds for MSVC x86-64 with
+`/arch:AVX2 /GL-` and `PFFFT_WIDE_TU`. The fork's 4-lane complex transforms
+also fuse their deinterleave/interleave into the first and last passes.
+
+The new compiled headers (`pffft_passes_impl.h`, `pffft_internal.h`,
+`pffft_setup.h`, `pffft_cpu_x86.h`, `pffft_wide_impl.h`,
+`pffft_wide_select.h`, `pffft_wide_sizes.h`, `pffft_wide_api.h`) and
+`pffft_wide_tu.c` were added to the compiled-source notices; the retained
+PFFFT text and its inventory hash were refreshed. Both pins were regenerated
+from the immutable archive.
+
+Every golden hash is unchanged. Local suites passed for Release GCC with
+warnings as errors, Release Clang, Debug SIMD (SSE2 and AVX2 golden PCM),
+Debug scalar, ASan/UBSan and NOTONES, and the acquisition regressions. MSVC
+is covered by the existing Windows CI.
+
 ### PFFFT update to 77a7ecd
 
 The update from `0ac3d39` to `77a7ecd` changes one compiled header,
