@@ -1385,6 +1385,79 @@ lost_after_dual_tone_run(int index) {
     assert_same_pcm(&prev.log2Ml[1], &before.log2Ml[1], (size_t)before.L, "history after the dual tone");
 }
 
+/* Expected output of a tone frame whose volume moves from `from` to `to`:
+ * the gain ramps over the first 80 samples, then the 0.95 full-scale clip. */
+static float
+volume_ramp_sample(float plain_to, int from, int to, int n) {
+    const float limit = (32767.0f * 0.95f) / 7.0f;
+    const float ratio = (float)pow(10.0, (mbe_tone_dstar_level_db(from) - mbe_tone_dstar_level_db(to)) / 20.0);
+    const float g = (n < 80) ? (ratio + ((1.0f - ratio) * ((float)n / 80.0f))) : 1.0f;
+    const float v = g * plain_to;
+    return (v > limit) ? limit : ((v < -limit) ? -limit : v);
+}
+
+/*
+ * A tone that goes on at another volume moves to it over the first 80
+ * samples, before the output clips, as on DVSI's AMBE-3000 (#155: a step
+ * from volume 245 to 117 plays -8.2 dBFS there, near what the ramp gives,
+ * not the new volume at once); a new index starts at once, and a tone held at
+ * one volume does not ramp.
+ */
+static void
+test_tone_volume_step(void) {
+    static const int steps[][3] = {{32, 180, 120}, {32, 120, 180}, {130, 200, 150}, {32, 255, 117}};
+    for (size_t k = 0; k < sizeof(steps) / sizeof(steps[0]); ++k) {
+        const int index = steps[k][0], from = steps[k][1], to = steps[k][2];
+        char tone_from[49], tone_to[49], voice[NVOICE][49];
+        make_voice(voice);
+        pack_tone(tone_from, 126, index, from);
+        pack_tone(tone_to, 126, index, to);
+        mbe_parms cur, prev, enh, tone_state;
+        mbe_process_result r;
+        float out[160], plain[160];
+        mbe_initMbeParms(&cur, &prev, &enh);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone_from, &cur, &prev, &enh) == 0);
+        tone_state = cur;
+        mbe_synthesizeTonefdstar(plain, tone_to, &tone_state, index);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone_to, &cur, &prev, &enh) == 0);
+        for (int n = 0; n < 160; ++n) {
+            assert_close_sample(out[n], volume_ramp_sample(plain[n], from, to, n), "tone volume step", n);
+        }
+        /* Held at the new volume, the next frame is the plain tone. */
+        mbe_synthesizeTonefdstar(plain, tone_to, &tone_state, index);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone_to, &cur, &prev, &enh) == 0);
+        for (int n = 0; n < 160; ++n) {
+            assert_close_sample(out[n], plain[n], "tone held after the step", n);
+        }
+    }
+    /* A new index at the same volume starts at once. */
+    char a[49], b[49], voice[NVOICE][49];
+    make_voice(voice);
+    pack_tone(a, 126, 32, 180);
+    pack_tone(b, 126, 40, 180);
+    mbe_parms cur, prev, enh, tone_state;
+    mbe_process_result r;
+    float out[160], plain[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, a, &cur, &prev, &enh) == 0);
+    tone_state = cur;
+    mbe_synthesizeTonefdstar(plain, b, &tone_state, 40);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, b, &cur, &prev, &enh) == 0);
+    for (int n = 0; n < 160; ++n) {
+        assert_close_sample(out[n], plain[n], "new tone index", n);
+    }
+    puts("tones: a volume step ramps over 80 samples before clipping; a new index starts at once");
+}
+
 /* The error-rate mute plays the same DVSI-level noise: int16 0 or +-1, about a
  * third of the samples nonzero (DVSI's muted dam_e10_hd: 33%). */
 static void
@@ -1443,5 +1516,6 @@ main(void) {
     test_hard_tone_with_corrections();
     test_lost_after_tone();
     test_lost_after_dual_tone();
+    test_tone_volume_step();
     return 0;
 }

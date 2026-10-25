@@ -858,7 +858,15 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
     if (entering && ambe2400_last_frame_audible(prev_mp)) {
         ambe2400_speech_under_tone(speech, cur_mp, prev_mp, prev_mp_enhanced);
     }
-    mbe_renderToneDstarf(aout_buf, cur_mp, index, volume);
+    /* A tone that goes on at another volume moves to it over the first
+     * MBE_AMBE2400_TONE_FADE samples, before the output clips, as on DVSI's
+     * AMBE-3000; a new tone index starts at once (docs/dvsi-parity.md, "D-STAR
+     * tone transitions"). */
+    if (!entering && held_index == index && held_volume != volume && ambe2400_last_frame_audible(prev_mp)) {
+        mbe_renderToneDstarFromf(aout_buf, cur_mp, index, held_volume, volume, MBE_AMBE2400_TONE_FADE);
+    } else {
+        mbe_renderToneDstarf(aout_buf, cur_mp, index, volume);
+    }
     if (entering) {
         for (int n = 0; n < 160; ++n) {
             const float gain = ambe2400_fade_in_gain(n);

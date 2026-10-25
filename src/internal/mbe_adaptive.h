@@ -141,6 +141,14 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
 void mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume);
 
 /**
+ * @brief mbe_renderToneDstarf() with the tone's level moving from @p from_volume
+ * to @p volume over the first @p ramp samples, before the output is clipped.
+ *
+ * @param ramp Samples of the level ramp, 1..160 (anything else: none).
+ */
+void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int from_volume, int volume, int ramp);
+
+/**
  * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7
  * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
  */

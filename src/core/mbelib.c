@@ -914,12 +914,15 @@ mbe_toneAmplitude(double level_db) {
     return (float)(sqrt(2.0) * 32768.0 * pow(10.0, level_db / 20.0) / 7.0);
 }
 
+/* A tone whose gain moves linearly from from_gain to gain over the first
+ * `ramp` samples (none for 0), clipped after the gain is applied. */
 static void
-mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain) {
+mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp) {
     if (out == NULL) {
         return;
     }
-    if (mp == NULL || !finite_frequency(f1) || !finite_frequency(f2) || !finite_frequency(gain) || f1 <= 0.0f) {
+    if (mp == NULL || !finite_frequency(f1) || !finite_frequency(f2) || !finite_frequency(gain)
+        || !finite_frequency(from_gain) || f1 <= 0.0f) {
         memset(out, 0, 160 * sizeof(*out));
         return;
     }
@@ -930,16 +933,22 @@ mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain) {
     const uint32_t step1 = frequency_increment(f1);
     const uint32_t step2 = dual ? frequency_increment(f2) : 0;
     for (int n = 0; n < 160; ++n) {
+        const float g = (n < ramp) ? from_gain + ((gain - from_gain) * ((float)n / (float)ramp)) : gain;
         phase1 += step1;
-        float value = gain * phase_sine(phase1);
+        float value = g * phase_sine(phase1);
         if (dual) {
             phase2 += step2;
-            value += gain * phase_sine(phase2);
+            value += g * phase_sine(phase2);
         }
         out[n] = mbe_clipFloatSample(value);
     }
     memcpy(&mp->swn, &phase1, sizeof(phase1));
     mp->tonePhase = phase2;
+}
+
+static void
+mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain) {
+    mbe_renderToneRampf(out, mp, f1, f2, gain, gain, 0);
 }
 #endif
 
@@ -1049,6 +1058,27 @@ mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume) {
         return;
     }
     mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)));
+#endif
+}
+
+void
+mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int from_volume, int volume, int ramp) {
+#ifdef DISABLE_AMBE_TONES
+    (void)mp;
+    (void)index;
+    (void)from_volume;
+    (void)volume;
+    (void)ramp;
+    mbe_synthesizeSilencef(aout_buf);
+#else
+    float freq1 = 0, freq2 = 0;
+
+    if (!mp || !mbe_tone_lookup_dstar_freqs(index, &freq1, &freq2)) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
+    mbe_renderToneRampf(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(from_volume)),
+                        mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), (ramp > 0 && ramp <= 160) ? ramp : 0);
 #endif
 }
 

@@ -1207,5 +1207,55 @@
         "value": 0
       }
     ]
+  },
+  "dstar-tone-volume-fade-tones": {
+    "description": "A D-STAR tone that goes on at another volume moves to it over the first 80 samples before clipping (#155): on DVSI's tone vectors no steady-tone window of ours agrees less often with DVSI's, plays a wrong tone more often, or is further from DVSI's level, frequency or balance (the frames where the volume changes are scored outside the scoreboard).",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0001
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "dstar-tone-volume-fade-speech": {
+    "description": "The same change leaves DVSI's speech bits decoding unchanged in every mode.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }
