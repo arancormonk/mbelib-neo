@@ -227,13 +227,18 @@ test_voiced_kernels(void) {
             for (int n = 0; n < 160; ++n) {
                 out[n] = 0.25f;
             }
-            mbe_voiced_interpolated(out, phase, 0.5f, 1.25f, frequency, delta, harmonic);
+            /* Odd trials raise the moving value to the fourth power (DVSI's law). */
+            const int fourth_power = trial & 1;
+            mbe_voiced_interpolated(out, phase, 0.5f, 1.25f, frequency, delta, harmonic, fourth_power);
             for (int n = 0; n < 160; ++n) {
                 /* The historical float phase expression, including its rounding. */
                 float theta = phase + frequency * (float)n + delta * (float)(harmonic * n * n) / 320.0f;
                 float amp = 0.5f + ((float)n / 160.0f) * 0.75f;
+                if (fourth_power) {
+                    amp = amp * amp * amp * amp;
+                }
                 double expected = 0.25 + 2.0 * amp * cos((double)theta);
-                assert(fabs(out[n] - expected) <= 2e-4);
+                assert(fabs(out[n] - expected) <= 2e-4 * (fourth_power ? 2.5 : 1.0));
             }
         }
     }
@@ -253,7 +258,7 @@ test_large_phases(void) {
             const float delta = chirp ? 0.009f : 0.0f;
             const int harmonic = 3;
             float out[160] = {0};
-            mbe_voiced_interpolated(out, phases[k], 0.5f, 1.0f, 0.125f, delta, harmonic);
+            mbe_voiced_interpolated(out, phases[k], 0.5f, 1.0f, 0.125f, delta, harmonic, 0);
             const double pc = cos((double)phases[k]), ps = sin((double)phases[k]);
             double worst = 0.0;
             int worst_n = 0;

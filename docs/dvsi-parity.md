@@ -484,6 +484,68 @@ medians on the development vectors, identical bits). Voiced harmonics are now re
 louder and unvoiced ones 0.4 dB quieter, applied with the high-pass, so the model and the
 adaptive smoothing see the decoded amplitudes.
 
+### Voiced amplitude
+
+Within a frame DVSI's decoders move a voiced harmonic from one frame's amplitude to the next's
+differently from TIA-102.BABA eq 133-135. On a DVMEGA DVstick 30
+([#157](https://github.com/arancormonk/mbelib-neo/issues/157)), D-STAR gain steps of 7.0 to 41.6 dB,
+up and down, at three positions in a stream, reach half their settled change in dB within one
+16-sample block of sample 80 of the step frame at every size (24 of 30 at 80 exactly). The
+specification's rendering, eq 135's linear amplitude for harmonics 1-7 and eq 133's crossfade with
+the window `wS` above them, reaches it at 16 to 144 samples depending on the step. On every codec
+path, a harmonic voiced in both frames at steady pitch (eq 134's pitch condition) is now
+interpolated whatever its number, with the fourth root of its amplitude moving linearly over the
+frame:
+
+```
+a_l(n) = ((1 - n/N) M_l(-1)^(1/4) + (n/N) M_l(0)^(1/4))^4
+```
+
+Over the 30 gain steps, the mean error of the level curve (the level change of each 16-sample
+block of the step frame as a fraction of the settled change) against the unit's falls from 0.103 to
+0.021; interpolating every harmonic with linear amplitude gives 0.110, a geometric mean 0.048 and
+the fourth root, the best of the power laws tried, 0.021. The curves of the unit's b0 and b1 steps
+stay as close as before. A fade from or to a silent model (after a mute, a tone or the repeat
+limit) keeps the specification's rendering: there the law would fade in as (n/N)^4, and the
+repeat-limit fade was matched to DVSI's with the specification's.
+
+The law carries less energy between two levels than linear amplitude: with it, DVSI's voiced
+frames played 0.11-0.16 dB louder than ours again (per-frame medians, development vectors). The
+voiced render gain on the codec paths is therefore +0.45 dB, chosen from +0.40, +0.45 and +0.50 dB
+on development, which puts those medians within 0.03 dB of where +0.3 dB put them with the
+specification's rendering. The public `mbe_synthesizeSpeechf()` keeps the specification's
+rendering and +0.3 dB. Measured on the unit's 179 streams from #157, which played no part in
+choosing the gain, frame levels come closer to its output in every group of streams (mean
+difference 0.62 to 0.53 dB).
+
+On DVSI's bits, each of the 25 development and validation vectors comes closer to DVSI's decode in
+each of the three modes, and on average closer to the input speech; 8 of the 75 move away from the
+input by at most 0.03 dB (`dam10` in every mode). The final partition, scored once, comes closer
+to both on all six of its vectors. Scored at joint lags (`voiced-amplitude` gate sets):
+
+| Codec | Partition | LSD vs DVSI (dB) | Envelope corr. vs DVSI | Level vs DVSI (dB) | LSD vs input (dB) |
+|---|---|---|---|---|---|
+| D-STAR | development | 3.705 → 3.347 | 0.9523 → 0.9535 | +0.049 → +0.070 | 6.578 → 6.521 |
+| D-STAR | validation | 3.191 → 2.899 | 0.9483 → 0.9496 | +0.025 → +0.055 | 4.990 → 4.921 |
+| D-STAR | final | 4.449 → 4.162 | 0.9218 → 0.9222 | +0.168 → +0.176 | 5.759 → 5.698 |
+| P25 | development | 3.798 → 3.455 | 0.9555 → 0.9561 | +0.027 → +0.045 | 6.514 → 6.454 |
+| P25 | validation | 3.180 → 2.904 | 0.9557 → 0.9565 | -0.034 → -0.013 | 4.900 → 4.820 |
+| P25 | final | 4.146 → 3.886 | 0.9286 → 0.9289 | +0.123 → +0.100 | 5.640 → 5.548 |
+| Rate 33 | development | 3.622 → 3.260 | 0.9527 → 0.9555 | -0.244 → -0.247 | 6.513 → 6.454 |
+| Rate 33 | validation | 3.055 → 2.747 | 0.9521 → 0.9542 | -0.074 → -0.074 | 5.021 → 4.940 |
+| Rate 33 | final | 4.204 → 3.895 | 0.9321 → 0.9331 | +0.074 → +0.034 | 5.793 → 5.704 |
+
+Most of the gain in log-spectral distance comes from interpolating every harmonic (linear
+amplitude alone: -0.31 dB on development in every mode); the fourth-root law adds the rest and
+the gains in envelope correlation and in distance from the input. Under channel errors, the
+frames that neither decoder mutes come 0.39, 0.24 and 0.48 dB closer to DVSI's (D-STAR, P25,
+rate 33, hard decisions) with mute decisions unchanged, and the encoders' bits are unchanged. On
+the tone vectors, rate 33's `alltone` agrees with DVSI's tone detector on two more windows and
+`dtmf180` on one fewer: at -49 dBFS, the voice frame right after a run of tone frames (frame
+1504, rendered with the crossfade as before, as its pitch jumps) now reads as a dual tone where
+DVSI's reads none, from the 0.15 dB of voiced gain, so `dvsi-parity-tones` and
+`voiced-amplitude-tones` fail on that window.
+
 ## Departures from the specification
 
 | Item | Specification text | DVSI's AMBE-3000 | This library |
@@ -493,6 +555,7 @@ adaptive smoothing see the decoded amplitudes.
 | Rate-33 harmonic count, b0 17 | Annex A: 11 | 12 | DVSI |
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
+| Voiced amplitude within a frame (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 133-135: harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS` | every harmonic at steady pitch, its fourth root linear | DVSI ([Voiced amplitude](#voiced-amplitude)) |
 
 The P25 attenuation is not adopted: no rule tried (eq 112-116 as printed, and instantaneous,
 clamped or leaky variants of it) explains it, and under channel errors our output stays closer to

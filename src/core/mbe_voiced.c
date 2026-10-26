@@ -112,7 +112,7 @@ voiced_chirp_init(float phase, float frequency, double b) {
 
 void
 MBE_KFN(mbe_voiced_interpolated)(float out[FRAME], float phase, float prev_amp, float cur_amp, float frequency,
-                                 float pitch_delta, int harmonic) {
+                                 float pitch_delta, int harmonic, int fourth_power) {
     double b = (double)pitch_delta * harmonic / (2.0 * FRAME);
     struct voiced_oscillator o = voiced_chirp_init(phase, frequency, b);
     double rotation = (double)(2 * WIDTH * WIDTH) * b;
@@ -125,6 +125,10 @@ MBE_KFN(mbe_voiced_interpolated)(float out[FRAME], float phase, float prev_amp, 
     mbe_vf start = mbe_vf_set(prev_amp), difference = mbe_vf_set(cur_amp - prev_amp);
     for (int i = 0; i < FRAME; i += WIDTH) {
         mbe_vf amp = mbe_vf_add(start, mbe_vf_mul(mbe_vf_mul(n, inv_n), difference));
+        if (fourth_power) {
+            const mbe_vf square = mbe_vf_mul(amp, amp);
+            amp = mbe_vf_mul(square, square);
+        }
         mbe_vf v = mbe_vf_mul(mbe_vf_mul(mbe_vf_set(2.0f), amp), o.c);
         mbe_vf_store(out + i, mbe_vf_add(mbe_vf_load(out + i), v));
         voiced_step(&o);
@@ -148,11 +152,11 @@ mbe_voiced_windowed(float out[FRAME], const float window[2 * FRAME], const struc
 
 void
 mbe_voiced_interpolated(float out[FRAME], float phase, float prev_amp, float cur_amp, float frequency,
-                        float pitch_delta, int harmonic) {
+                        float pitch_delta, int harmonic, int fourth_power) {
     if (mbe_cpu_use_avx2()) {
-        mbe_voiced_interpolated_avx2(out, phase, prev_amp, cur_amp, frequency, pitch_delta, harmonic);
+        mbe_voiced_interpolated_avx2(out, phase, prev_amp, cur_amp, frequency, pitch_delta, harmonic, fourth_power);
     } else {
-        mbe_voiced_interpolated_sse2(out, phase, prev_amp, cur_amp, frequency, pitch_delta, harmonic);
+        mbe_voiced_interpolated_sse2(out, phase, prev_amp, cur_amp, frequency, pitch_delta, harmonic, fourth_power);
     }
 }
 #endif

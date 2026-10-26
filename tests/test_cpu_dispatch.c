@@ -131,7 +131,7 @@ voiced_run(int isa, int trial, struct voiced_run* r) {
     assert(mbe_cpu_select_isa(isa) == 0);
     mbe_voiced_windowed(r->windowed, window, &prev, &cur);
     mbe_voiced_interpolated(r->interpolated, (float)trial * 2.3f, 0.4f, 1.1f, 0.02f * (float)(trial + 1), 0.004f,
-                            trial % 7 + 1);
+                            trial % 7 + 1, trial & 1);
 }
 
 static void
