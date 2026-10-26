@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "ambe3600x2400_internal.h"
+#include "mbe_adaptive.h"
 #include "mbe_tone.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -876,6 +877,266 @@ test_repeat_limit_noise_continuity(void) {
     puts("repeat limit: the noise generator advances on every frame");
 }
 
+/* How the frames before the voice that follows the repeat limit's mute run. */
+enum resume_lead {
+    RESUME_AFTER_VOICE,         /* voice, then lost frames */
+    RESUME_AFTER_TONE,          /* voice, a single tone, then lost frames */
+    RESUME_AFTER_UNCORRECTABLE, /* voice, then frames with an uncorrectable C0 word */
+    RESUME_FROM_FRESH_START,    /* lost frames from the initial state */
+};
+
+/* Whole parameter sets equal, per field (float bits, no padding bytes). */
+static void
+assert_same_state(const mbe_parms* a, const mbe_parms* b, const char* what) {
+    assert(a->L == b->L && a->K == b->K && a->swn == b->swn && a->tonePhase == b->tonePhase
+           && a->amplitudeThreshold == b->amplitudeThreshold && a->errorCountTotal == b->errorCountTotal
+           && a->errorCount4 == b->errorCount4 && a->repeatCount == b->repeatCount
+           && memcmp(a->Vl, b->Vl, sizeof(a->Vl)) == 0);
+    const float* fa[] = {&a->w0, &a->gamma, &a->localEnergy, &a->errorRate, &a->mutingThreshold, &a->noiseSeed};
+    const float* fb[] = {&b->w0, &b->gamma, &b->localEnergy, &b->errorRate, &b->mutingThreshold, &b->noiseSeed};
+    for (size_t i = 0; i < sizeof(fa) / sizeof(fa[0]); ++i) {
+        assert_same_pcm(fa[i], fb[i], 1, what);
+    }
+    assert_same_pcm(a->Ml, b->Ml, 57, what);
+    assert_same_pcm(a->log2Ml, b->log2Ml, 57, what);
+    assert_same_pcm(a->PHIl, b->PHIl, 57, what);
+    assert_same_pcm(a->PSIl, b->PSIl, 57, what);
+    assert_same_pcm(a->previousUw, b->previousUw, 256, what);
+    assert_same_pcm(a->noiseOverlap, b->noiseOverlap, 96, what);
+}
+
+/* The int16 energy of a frame's first 40 samples. */
+static long
+head_energy(const float* out) {
+    short pcm[160];
+    long energy = 0;
+    to_int16(out, pcm);
+    for (int n = 0; n < 40; ++n) {
+        energy += (long)pcm[n] * pcm[n];
+    }
+    return energy;
+}
+
+static void
+resume_frame(float* out, const char d[49], int uncorrectable, mbe_parms* cur, mbe_parms* prev, mbe_parms* enh) {
+    mbe_process_result r;
+    make_result(&r, 0);
+    if (uncorrectable) {
+        r.flags |= MBE_PROCESS_FLAG_C0_UNCORRECTABLE;
+    }
+    assert(mbe_processAmbe2400Dataf(out, &r, d, cur, prev, enh) == 0);
+}
+
+/* What the first voice frame after the lost run should do. */
+enum resume_expect {
+    RESUMES,            /* starts from the prediction history */
+    FADES_FROM_SILENCE, /* the mute's fade-in from a silent model */
+    UNAFFECTED,         /* a run short of the limit: no mute to resume from */
+};
+
+/*
+ * The model the first voice frame after the mute starts from, built here as
+ * docs/dvsi-parity.md describes it: the history's amplitudes from log2Ml (the
+ * decoder's unvoiced scale on unvoiced bands) at gain 0.3, enhanced, with the
+ * unvoiced overlap a frame of it leaves from the noise block after the next
+ * frame's.
+ */
+static void
+expected_resume_model(mbe_parms* enh, const mbe_parms* history) {
+    mbe_parms m = *enh;
+    m.L = history->L;
+    m.w0 = history->w0;
+    memset(m.Ml, 0, sizeof(m.Ml));
+    for (int l = 1; l <= history->L; ++l) {
+        const float scale = (history->Vl[l] == 1) ? 1.0f : 0.2046f / sqrtf(history->w0);
+        m.Vl[l] = history->Vl[l];
+        m.Ml[l] = 0.3f * scale * exp2f(history->log2Ml[l]);
+    }
+    (void)mbe_spectralAmpEnhanceWithRm0(&m, MBE_HIGH_BAND_GAIN_AMBE2400);
+    mbe_parms first = m, second = m, model = m;
+    float scratch[160];
+    first.repeatCount = second.repeatCount = model.repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(scratch, &first, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    second.noiseSeed = first.noiseSeed;
+    memcpy(second.noiseOverlap, first.noiseOverlap, sizeof(second.noiseOverlap));
+    model = m;
+    model.repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(scratch, &second, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    memcpy(enh->Ml, m.Ml, sizeof(m.Ml));
+    memcpy(&enh->Vl[1], &m.Vl[1], sizeof(m.Vl) - sizeof(m.Vl[0]));
+    enh->L = m.L;
+    enh->w0 = m.w0;
+    memcpy(enh->previousUw, second.previousUw, sizeof(second.previousUw));
+}
+
+/*
+ * Runs `lead` (voiced, or every band unvoiced), `lost` frames to drop, then
+ * voice twice, and checks the first voice frame against `expect`, using twins
+ * of the stream at that point: one with the start from the history disabled
+ * (the repeat count the mute left cleared just before it), one also given the
+ * expected model. From the next frame on, output and state match the twin.
+ */
+static void
+resume_run(enum resume_lead lead, int lost, int unvoiced, enum resume_expect expect) {
+    char voice[NVOICE][49], tone[49], b125[49];
+    make_voice(voice);
+    for (int f = 0; unvoiced && f < NVOICE; ++f) {
+        memset(voice[f] + 38, 0, 4); /* b1 0: every band unvoiced */
+    }
+    pack_tone(tone, 126, 32, 180);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    mbe_parms cur, prev, enh;
+    float out[160], twin_out[160], expected[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; lead != RESUME_FROM_FRESH_START && i < 4; ++i) {
+        resume_frame(out, voice[i], 0, &cur, &prev, &enh);
+    }
+    for (int i = 0; lead == RESUME_AFTER_TONE && i < 2; ++i) {
+        resume_frame(out, tone, 0, &cur, &prev, &enh);
+    }
+    const int uncorrectable = lead == RESUME_AFTER_UNCORRECTABLE;
+    for (int i = 0; i < lost; ++i) {
+        resume_frame(out, uncorrectable ? voice[(i + 1) % NVOICE] : b125, uncorrectable, &cur, &prev, &enh);
+    }
+    mbe_parms tcur = cur, tprev = prev, tenh = enh;
+    mbe_parms ecur = cur, eprev = prev, eenh = enh;
+    tprev.repeatCount = 0;
+    eprev.repeatCount = 0;
+    expected_resume_model(&eenh, &prev);
+    resume_frame(out, voice[4], 0, &cur, &prev, &enh);
+    resume_frame(twin_out, voice[4], 0, &tcur, &tprev, &tenh);
+    resume_frame(expected, voice[4], 0, &ecur, &eprev, &eenh);
+    if (expect == UNAFFECTED) {
+        assert_same_pcm(out, twin_out, 160, "first voice frame after a short run");
+    } else {
+        assert(head_energy(twin_out) == 0);
+        if (expect == RESUMES) {
+            assert(head_energy(out) > 0);
+            /* The model is rebuilt here and in the library, which fast-math
+             * builds round differently (a few 1e-5 of a sample); a wrong gain,
+             * unvoiced scale or noise block moves samples by tens of percent. */
+            for (int n = 0; n < 160; ++n) {
+                if (fabsf(out[n] - expected[n]) > 0.01f + (1e-3f * fabsf(expected[n]))) {
+                    printf("first voice frame after the mute: sample %d differs (%g vs %g)\n", n, (double)out[n],
+                           (double)expected[n]);
+                    assert(0);
+                }
+            }
+        } else {
+            assert_same_pcm(out, twin_out, 160, "first voice frame faded in from silence");
+        }
+    }
+    resume_frame(out, voice[5], 0, &cur, &prev, &enh);
+    resume_frame(twin_out, voice[5], 0, &tcur, &tprev, &tenh);
+    assert_same_pcm(out, twin_out, 160, "the voice frame after it");
+    assert_same_state(&cur, &tcur, "cur_mp after it");
+    assert_same_state(&prev, &tprev, "prev_mp after it");
+    assert_same_state(&enh, &tenh, "prev_mp_enhanced after it");
+}
+
+/*
+ * The first voice frame after the repeat limit's mute starts from the
+ * prediction history at gain 0.3, as on DVSI's AMBE-3000 (#156), rather than
+ * fading in from silence, also after a single tone (whose lost frames play
+ * silent while the history stays the voice before it), from voiced and from
+ * unvoiced history alike. It changes only that frame. A history held from an
+ * uncorrectable C0 word and the initial state keep the fade-in from silence,
+ * and a run short of the limit is not affected.
+ */
+static void
+test_resume_after_repeat_limit(void) {
+    for (int unvoiced = 0; unvoiced <= 1; ++unvoiced) {
+        resume_run(RESUME_AFTER_VOICE, 5, unvoiced, RESUMES);
+        resume_run(RESUME_AFTER_VOICE, 20, unvoiced, RESUMES);
+        resume_run(RESUME_AFTER_TONE, 5, unvoiced, RESUMES);
+        resume_run(RESUME_AFTER_UNCORRECTABLE, 5, unvoiced, FADES_FROM_SILENCE);
+        resume_run(RESUME_FROM_FRESH_START, 5, unvoiced, FADES_FROM_SILENCE);
+        resume_run(RESUME_AFTER_VOICE, 3, unvoiced, UNAFFECTED);
+    }
+    puts("repeat limit: the voice after it starts from the prediction history");
+}
+
+/* A history whose w0 is not in (0, pi] (caller-owned state can hold
+ * anything) keeps the fade-in from silence: the frame plays exactly as with
+ * the start from the history disabled. The values are made at run time from
+ * bit patterns: under fast-math a guard folded at compile time would still
+ * pass constants. */
+static void
+test_resume_guards(void) {
+    static const uint32_t bad_w0[] = {0x7FC00000u, 0x7F800000u, 0x00000000u, 0xBF800000u, 0x40800000u};
+    char voice[NVOICE][49], b125[49];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    for (size_t k = 0; k < sizeof(bad_w0) / sizeof(bad_w0[0]); ++k) {
+        mbe_parms cur, prev, enh;
+        float out[160], twin_out[160];
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int i = 0; i < 4; ++i) {
+            resume_frame(out, voice[i], 0, &cur, &prev, &enh);
+        }
+        for (int i = 0; i < 5; ++i) {
+            resume_frame(out, b125, 0, &cur, &prev, &enh);
+        }
+        memcpy(&prev.w0, &bad_w0[k], sizeof(prev.w0));
+        mbe_parms tcur = cur, tprev = prev, tenh = enh;
+        tprev.repeatCount = 0;
+        resume_frame(out, voice[4], 0, &cur, &prev, &enh);
+        resume_frame(twin_out, voice[4], 0, &tcur, &tprev, &tenh);
+        assert_same_pcm(out, twin_out, 160, "first voice frame after an invalid history");
+    }
+    puts("repeat limit: a history with an invalid w0 keeps the fade-in from silence");
+}
+
+/* What follows the mute may be a b0 124 frame (a silence model), or a frame
+ * the error level still mutes; either plays as without the start from the
+ * history: finite, and DVSI-level noise while muted. */
+static void
+test_resume_edge_frames(void) {
+    char voice[NVOICE][49], b125[49], b124[49];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    memcpy(b124, voice[2], sizeof(b124));
+    put_b0(b124, 124);
+    mbe_parms cur, prev, enh;
+    float out[160];
+    short pcm[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 4; ++i) {
+        resume_frame(out, voice[i], 0, &cur, &prev, &enh);
+    }
+    for (int i = 0; i < 5; ++i) {
+        resume_frame(out, b125, 0, &cur, &prev, &enh);
+    }
+    resume_frame(out, b124, 0, &cur, &prev, &enh);
+    for (int n = 0; n < 160; ++n) {
+        uint32_t bits; /* finite, compared as a bit pattern (fast-math builds) */
+        memcpy(&bits, &out[n], sizeof(bits));
+        assert((bits & 0x7FFFFFFFu) < 0x7F800000u);
+    }
+
+    mbe_process_result r;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 100; ++i) {
+        make_result(&r, 7);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
+    }
+    for (int i = 0; i < 5; ++i) {
+        make_result(&r, 7);
+        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 7);
+    }
+    make_result(&r, 7);
+    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 7);
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    to_int16(out, pcm);
+    for (int n = 0; n < 160; ++n) {
+        assert(abs(pcm[n]) <= 1);
+    }
+    puts("repeat limit: a b0 124 frame or a muted frame after it plays as before");
+}
+
 /* A clean frame at the largest gain and b3 (b2 63, b3 511) held for 50
  * frames plays every frame, as DVSI's AMBE-3000 does (#158). Its prediction
  * builds the amplitudes up to about 2^45; the enhancement's weights used to
@@ -1506,6 +1767,9 @@ main(void) {
     test_error_rate_mute_level();
     test_repeat_limit_under_error_mute();
     test_repeat_limit_noise_continuity();
+    test_resume_after_repeat_limit();
+    test_resume_guards();
+    test_resume_edge_frames();
     test_all_ones_frame();
     test_loud_held_frame_plays();
     test_c0_uncorrectable_detection();

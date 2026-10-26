@@ -760,6 +760,99 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
 }
 
 /*
+ * The first voice frame after the repeat limit's mute. On DVSI's AMBE-3000 (a
+ * DVMEGA DVstick 30 and a ThumbDV, #156) it does not fade in from silence: it
+ * starts from the prediction history, the last voice frame decoded, about
+ * 10 dB down (MBE_AMBE2400_RESUME_GAIN, fitted on frame levels; how the chip
+ * does it is not known). The silent last frame the mute left becomes that
+ * history at that gain, voiced harmonics and unvoiced overlap alike
+ * (docs/dvsi-parity.md, "D-STAR lost frames"). A history held from an
+ * uncorrectable C0 word, whose pitch and voicing were not kept, and the
+ * initial state keep the fade-in from silence.
+ */
+#define MBE_AMBE2400_RESUME_GAIN    0.3f
+
+/* Bit patterns (see mbe_encoder.c: this file may be built with fast-math,
+ * under which isfinite() and float range tests may fold away). */
+#define MBE_AMBE2400_PI_BITS        0x40490FDBu /* pi */
+#define MBE_AMBE2400_LOG2_HIGH_BITS 0x42F00000u /* 120: 2^log2Ml stays far from overflow */
+#define MBE_AMBE2400_LOG2_LOW_BITS  0x7F7FFFFFu /* any finite value below zero */
+
+static uint32_t
+ambe2400_float_bits(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return bits;
+}
+
+/* Whether the history can be rebuilt as a model: not held, a valid harmonic
+ * count, w0 in (0, pi], every log2Ml finite and at most 120, and not all zero
+ * (the initial state's are). */
+static int
+ambe2400_history_rebuildable(const mbe_parms* history) {
+    if (mbe_ambe2400_history_held(history) || !mbe_harmonic_count_is_valid(history->L)
+        || ambe2400_float_bits(&history->w0) - 1u >= MBE_AMBE2400_PI_BITS) {
+        return 0;
+    }
+    int decoded = 0;
+    for (int l = 1; l <= history->L; ++l) {
+        const uint32_t bits = ambe2400_float_bits(&history->log2Ml[l]);
+        const uint32_t limit = ((bits >> 31) != 0u) ? MBE_AMBE2400_LOG2_LOW_BITS : MBE_AMBE2400_LOG2_HIGH_BITS;
+        if ((bits & 0x7FFFFFFFu) > limit) {
+            return 0;
+        }
+        decoded |= (bits & 0x7FFFFFFFu) != 0u;
+    }
+    return decoded;
+}
+
+/* The unvoiced overlap a frame of this model leaves, drawn from the noise
+ * block after the one the next frame draws, so the two do not repeat each
+ * other. Only scratch copies are synthesized. */
+static void
+ambe2400_resume_overlap(float overlap[256], const mbe_parms* model) {
+    mbe_parms first = *model;
+    mbe_parms second = *model;
+    mbe_parms prev = *model;
+    float scratch[160];
+
+    first.repeatCount = 0;
+    second.repeatCount = 0;
+    prev.repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(scratch, &first, &prev, MBE_VOICED_SYNTHESIS_DVSI);
+    second.noiseSeed = first.noiseSeed;
+    memcpy(second.noiseOverlap, first.noiseOverlap, sizeof(second.noiseOverlap));
+    prev = *model;
+    prev.repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(scratch, &second, &prev, MBE_VOICED_SYNTHESIS_DVSI);
+    memcpy(overlap, second.previousUw, sizeof(second.previousUw));
+}
+
+static void
+ambe2400_resume_after_mute(mbe_parms* prev_mp_enhanced, const mbe_parms* history) {
+    if (!ambe2400_history_rebuildable(history)) {
+        return;
+    }
+    mbe_parms resumed = *prev_mp_enhanced;
+    const float unvoiced_scale = 0.2046f / sqrtf(history->w0);
+    resumed.L = history->L;
+    resumed.w0 = history->w0;
+    memset(resumed.Ml, 0, sizeof(resumed.Ml));
+    for (int l = 1; l <= history->L; ++l) {
+        /* As the decoder builds amplitudes from log2Ml. */
+        const float scale = (history->Vl[l] == 1) ? 1.0f : unvoiced_scale;
+        resumed.Vl[l] = history->Vl[l];
+        resumed.Ml[l] = MBE_AMBE2400_RESUME_GAIN * scale * exp2f(history->log2Ml[l]);
+    }
+    (void)mbe_spectralAmpEnhanceWithRm0(&resumed, MBE_HIGH_BAND_GAIN_AMBE2400);
+    memcpy(prev_mp_enhanced->Ml, resumed.Ml, sizeof(resumed.Ml));
+    memcpy(&prev_mp_enhanced->Vl[1], &resumed.Vl[1], sizeof(resumed.Vl) - sizeof(resumed.Vl[0]));
+    prev_mp_enhanced->L = resumed.L;
+    prev_mp_enhanced->w0 = resumed.w0;
+    ambe2400_resume_overlap(prev_mp_enhanced->previousUw, &resumed);
+}
+
+/*
  * Tone transitions, as on DVSI's decoder: entering a tone, the last frame's
  * speech, synthesized as a repeat of it, fades out linearly over the first
  * MBE_AMBE2400_TONE_FADE samples while the tone fades in; leaving it, the tone
@@ -954,6 +1047,9 @@ static void
 ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
                           mbe_parms* prev_mp_enhanced) {
     if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
+        if (prev_mp->repeatCount >= MBE_MAX_FRAME_REPEATS) {
+            ambe2400_resume_after_mute(prev_mp_enhanced, prev_mp);
+        }
         mbe_moveMbeParms(cur_mp, prev_mp);
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
         mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
