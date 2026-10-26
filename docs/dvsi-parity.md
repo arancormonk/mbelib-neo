@@ -168,9 +168,9 @@ DVSI plays that qualify), and with soft decisions from 3.143 to 3.133 (`dam_e2_s
 as before, and on one more loud frame of `dam_e10_sd`; `dam_e1` and every speech and tone vector
 are unchanged, and so are the D-STAR encoder's bits for all 97 of DVSI's inputs.
 
-Still different: of five tone frames with four C1 errors in a row, none plays as a lost frame, but
-two (whose volume differs from the tone frame before) play near what an 80-sample fade from the
-previous tone's volume gives, where this library switches volume at once (#155).
+Of five tone frames with four C1 errors in a row, none plays as a lost frame, and their volume
+changes ramp over 80 samples as this library now plays them ([D-STAR tone
+transitions](#d-star-tone-transitions)).
 
 ### D-STAR lost frames
 
@@ -403,6 +403,19 @@ at the start of the frame moves D-STAR speech away from DVSI's decode (mean deve
 log-spectral distance from DVSI's 3.70 to 3.86 dB). At the repeat limit, fading the repeat out over
 the same 80 samples plays `dam`'s faded frame at 1552 against DVSI's 2316, where the current fade
 gives 2483, so the repeat limit keeps its fade.
+
+A tone that goes on at another volume, the same index in consecutive tone frames, moves to the new
+level over the first 80 samples too, and the output is clipped after that. On a DVMEGA DVstick 30
+(#155), five tone frames of index 32 with volumes 100, 164, 37, 245 and 117 play -45.4, -30.4,
+-36.3, -3.3 and -8.2 dBFS, where switching volume at once played -28.8, -74.5, -1.7 and -45.5 on the
+last four; with the ramp they play -30.4, -36.5, -3.2 and -8.3 (mean difference over the five
+15.95 to 0.30 dB). Ramping after the clip instead plays the 245-to-117 frame at -9.4. On DVSI's
+tone vectors, the 942 frames where a tone's volume changes play 0.250 dB from DVSI's decode in
+frame level before and 0.218 dB after. Twelve of the 14 vectors with such frames come closer;
+`dtmf50` and `dtmf100`, three such frames between them, move from 0.099 to 0.103 dB, and the steady
+tones stay within the `dstar-tone-volume-fade` gate sets. A new tone index starts at
+once: crossfading those as well moved DVSI's sweeps further from its decode (`sine0_4k` 0.08 to
+0.33 dB on its 117 index changes).
 
 ### D-STAR high-band shelf
 
