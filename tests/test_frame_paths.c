@@ -441,11 +441,11 @@ test_fixture_ecc(void) {
                     memcpy(damaged, frame, (size_t)count);
                     damaged[row * fixture_modes[mode].columns + column] ^= 1;
                     /* Golay reports corrected data bits, not parity-bit damage.
-                     * AMBE C0 additionally reports its overall parity correction,
-                     * and rate 33 counts every damaged bit of either codeword
-                     * (TIA-102.BABA-1 5.5). */
+                     * Both AMBE rates count every damaged bit of either
+                     * codeword (TIA-102.BABA-1 5.5; D-STAR's error-level
+                     * mute adds them up, #155). */
                     int errors = row >= 4 || column - first >= 11;
-                    if (mode == AMBE2450 || (mode == AMBE2400 && row == 0)) {
+                    if (mode >= AMBE2450) {
                         errors = 1;
                     }
                     assert_decoded_fixture((enum fixture_mode)mode, damaged, data, row == 0 ? errors : 0,
@@ -842,16 +842,15 @@ test_ambe_error_counts(void) {
         assert(((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0) == (c->want_c0 >= 4));
     }
 
-    /* D-STAR counts: corrected data bits, plus the extended
-     * parity bit only when the codeword decodes clean. A data bit and a parity
-     * bit in C0 count 1 there (2 under 5.5). */
+    /* D-STAR counts corrected bits, parity bits included, as 5.5 does: a data
+     * bit and a parity bit in C0 count 2. */
     assert(mbe_encodeAmbe3600x2400Frame(ambe_d, clean) == 0);
     memcpy(frame, clean, sizeof(frame));
     frame[0][16] ^= 1;
     frame[0][4] ^= 1;
     mbe_process_result result;
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, data, &result) == 1);
-    assert(result.c0_errors == 1);
+    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, data, &result) == 2);
+    assert(result.c0_errors == 2);
 }
 
 /* Fully reliable soft decisions count as hard ones; an unreliable flip counts

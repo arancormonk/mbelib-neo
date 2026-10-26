@@ -513,7 +513,7 @@ test_tone_ends_repeat_run(void) {
 }
 
 /*
- * The all-ones DV frame (FF x 9, b0 127 after two corrections) plays as a lost
+ * The all-ones DV frame (FF x 9, b0 127 after three corrections) plays as a lost
  * frame, as on DVSI's decoder for runs of 1, 3 and 20: through the hard-frame
  * API its first frame repeats the last frame exactly as a frame repeated for
  * errors does, the 4th mutes, the frames after it play mute noise, and the
@@ -532,7 +532,7 @@ test_all_ones_frame(void) {
     memset(ones, 0xFF, sizeof(ones));
     make_voice(voice);
     assert(mbe_decodeDStarDVData(ones, fr) == 0);
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 2);
+    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 3);
     for (int i = 0; i < 6; ++i) {
         assert(d[i] == 1);
     }
@@ -549,7 +549,7 @@ test_all_ones_frame(void) {
             assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
         }
         for (int i = 0; i < runs[k]; ++i) {
-            assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 2);
+            assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 3);
             const unsigned mute = (i >= 3) ? MBE_PROCESS_FLAG_MUTE : 0u;
             assert(r.flags
                    == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
@@ -590,9 +590,9 @@ test_tone_muted_by_error_rate(void) {
     mbe_process_result r;
     float out[160];
     mbe_initMbeParms(&cur, &prev, &enh);
-    for (int i = 0; i < 40; ++i) {
-        make_result(&r, 3);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    for (int i = 0; i < 100; ++i) {
+        make_result(&r, 7);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     make_result(&r, 0);
@@ -615,6 +615,8 @@ test_tone_muted_by_error_rate(void) {
     mbe_parms mc = cur, mp = prev, me = enh, pc = cur, pp = prev, pe = enh;
     pc.errorRate = 0.0f;
     pp.errorRate = 0.0f;
+    pc.PSIl[0] = 0.0f;
+    pp.PSIl[0] = 0.0f;
     float muted[160], played[160], after_muted[160], after_played[160];
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(muted, &r, tone, &mc, &mp, &me) == 0);
@@ -721,9 +723,9 @@ test_tone_transitions_after_mute(void) {
     float out[160], plain[160], ref[160];
     /* (a) muted hard-decision voice, then a soft-decision tone. */
     mbe_initMbeParms(&cur, &prev, &enh);
-    for (int i = 0; i < 40; ++i) {
-        make_result(&r, 3);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    for (int i = 0; i < 100; ++i) {
+        make_result(&r, 7);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     mbe_parms tone_state = cur;
@@ -738,9 +740,9 @@ test_tone_transitions_after_mute(void) {
     }
     /* (b) a muted hard-decision tone, then soft-decision voice. */
     mbe_initMbeParms(&cur, &prev, &enh);
-    for (int i = 0; i < 40; ++i) {
-        make_result(&r, 3);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    for (int i = 0; i < 100; ++i) {
+        make_result(&r, 7);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
     }
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
@@ -831,9 +833,9 @@ test_repeat_limit_under_error_mute(void) {
     float out[160];
     short pcm[160];
     mbe_initMbeParms(&cur, &prev, &enh);
-    for (int i = 0; i < 40; ++i) {
-        make_result(&r, 3);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+    for (int i = 0; i < 100; ++i) {
+        make_result(&r, 7);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     for (int i = 0; i < 6; ++i) {
@@ -924,9 +926,9 @@ next_combination(int* idx, int k, int n) {
 /*
  * The frame decoders flag every C0 error pattern of weight 4, which the
  * extended Golay (24,12) code detects, as uncorrectable, and none of weight 1
- * to 3, the soft decoder from its hard decisions; the error counts stay the
- * corrected data bits (DVSI's AMBE-3000 plays exactly the weight-4 frames as
- * lost, #155).
+ * to 3, the soft decoder from its hard decisions; the error count is the
+ * pattern's weight, parity bits included (DVSI's AMBE-3000 plays exactly the
+ * weight-4 frames as lost, #155).
  */
 static void
 test_c0_uncorrectable_detection(void) {
@@ -939,17 +941,15 @@ test_c0_uncorrectable_detection(void) {
     for (int w = 1; w <= 4; ++w) {
         int idx[4] = {0, 1, 2, 3};
         do {
-            char bad[4][24], legacy[4][24], d[49];
+            char bad[4][24], d[49];
             memcpy(bad, fr, sizeof(bad));
             for (int i = 0; i < w; ++i) {
                 bad[0][idx[i]] ^= 1;
             }
-            memcpy(legacy, bad, sizeof(legacy));
-            const int c0 = mbe_eccAmbe3600x2400C0(legacy);
             assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) >= 0);
             const int is_flagged = (r.flags & MBE_PROCESS_FLAG_C0_UNCORRECTABLE) != 0u;
             assert(is_flagged == (w == 4));
-            assert(r.c0_errors == c0);
+            assert(r.c0_errors == w); /* every flipped bit counts, parity bits included */
             if (w < 4) {
                 assert(memcmp(d, clean_d, sizeof(d)) == 0);
             }
@@ -1333,8 +1333,8 @@ test_error_rate_mute_level(void) {
     int nonzero = 0, muted = 0;
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 200; ++i) {
-        make_result(&r, 3);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 3);
+        make_result(&r, 6);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 6);
         if ((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
             continue;
         }
