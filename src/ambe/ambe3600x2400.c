@@ -849,11 +849,10 @@ ambe2400_speech_under_tone(float* speech, mbe_parms* cur_mp, const mbe_parms* pr
 }
 
 static void
-ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int index,
-                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int volume, int history, mbe_parms* cur_mp,
+                   mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     int held_index, held_volume;
     const int entering = !ambe2400_held_tone(prev_mp, &held_index, &held_volume);
-    const int volume = mbe_tone_dstar_volume(ambe_d);
     float speech[160] = {0};
 
     if (entering && ambe2400_last_frame_audible(prev_mp)) {
@@ -874,8 +873,16 @@ ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
         ambe2400_mute_noise(aout_buf);
     }
-    ambe2400_hold_tone(cur_mp, index, volume, muted, prev_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS);
+    ambe2400_hold_tone(cur_mp, index, volume, muted, history);
     mbe_moveMbeParms(cur_mp, prev_mp);
+}
+
+static void
+ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int index,
+                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    const int history = prev_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS;
+    ambe2400_play_tone(aout_buf, result, index, mbe_tone_dstar_volume(ambe_d), history, cur_mp, prev_mp,
+                       prev_mp_enhanced);
 }
 
 /* Leaving a tone: the voice fades in under the tone's fading tail (silent if
@@ -919,6 +926,21 @@ ambe2400_silence_after_tone(mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     memset(prev_mp_enhanced->previousUw, 0, sizeof(prev_mp_enhanced->previousUw));
 }
 
+/*
+ * Lost frames after a dual-frequency tone (DTMF 128..143, call progress
+ * 144..147): on a DVMEGA DVstick 30 the first three play on at the tone's
+ * level and the 4th is 6 to 8 dB lower (#156), so the tone goes on, from its
+ * phases, until the repeat limit, whose mute it fades out under over the first
+ * 80 samples. The fade's shape and the phases are not measured, only frame
+ * levels. After a single-frequency tone (5..122; index 32 measured) a lost
+ * frame plays the tone's tail and then silence
+ * (ambe2400_silence_after_tone()).
+ */
+static int
+ambe2400_tone_outlasts_lost_frame(int index) {
+    return index >= 128;
+}
+
 static void
 ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
                           mbe_parms* prev_mp_enhanced) {
@@ -952,11 +974,21 @@ ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const cha
     /* A repeat keeps the prediction history its model carries. */
     const int history = repeat ? (cur_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS) : 0;
     cur_mp->Vl[0] = history | (ambe2400_error_rate_mutes(result, cur_mp) ? MBE_AMBE2400_FRAME_MUTED : 0);
+    const int outlasts = leaving && repeat && ambe2400_tone_outlasts_lost_frame(held.index);
+    if (outlasts && cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
+        cur_mp->swn = prev_mp->swn;
+        cur_mp->tonePhase = prev_mp->tonePhase;
+        ambe2400_play_tone(aout_buf, result, held.index, held.volume, history, cur_mp, prev_mp, prev_mp_enhanced);
+        return;
+    }
     if (leaving && repeat) {
         ambe2400_silence_after_tone(cur_mp, prev_mp_enhanced);
     }
     ambe2400_synthesize_voice(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
-    if (leaving && (result->flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
+    /* The tone that went on fades out under the repeat limit's mute. */
+    const int fades_out =
+        (result->flags & MBE_PROCESS_FLAG_MUTE) == 0u || (outlasts && !ambe2400_error_rate_mutes(result, cur_mp));
+    if (leaving && fades_out) {
         ambe2400_fade_in_from_tone(aout_buf, &held);
     }
 }

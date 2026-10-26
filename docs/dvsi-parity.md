@@ -252,6 +252,21 @@ streams (voice, the tone, the run, voice) the mean `|dB|` from the chip falls fr
 runs of five and from 4.22 to 0.74 with runs of two. At volume 255 the chip's second lost frame still plays at -91.5 dBFS; ours is
 silent.
 
+That holds for the single tone measured. After a dual-frequency tone, DTMF (index 128 to 143) or
+call progress (144 to 147), the same unit keeps the tone playing through the first three lost frames,
+within 0.5 dB of its level though not as exact repeats, and the 4th is 6 to 8 dB lower (#156, five
+tone frames of index 128, 143, 144 or 147 at volume 180, and 128 at volume 255, then runs of 1, 3 and
+4 all-ones frames). The library followed the single tone there, a fade and then silence. It now lets a
+dual tone go on, from its phases, through the lost frames until the repeat limit, and fades it out
+over the first 80 samples of the 4th under the mute noise; single tones keep the fade and silence.
+Over those 15 streams (the run and the five voice frames after it) the mean frame-level difference
+from the unit falls from 19.13 to 1.16 dB, the 4th lost frame from 72.4 to 1.7 dB (4.4 dB at index
+144) and the first voice frame after the run from 15.1 to 5.9 dB; after a run of four, that voice
+frame still plays 12 dB low, as the voice after any repeat-limit mute fades in. The reporter's patch
+was the starting point. Only frame levels were measured, so the fade's shape and the continuing phases
+are the library's choice; other dual indices and volumes, runs of 2 or more than 4 and single tones
+other than 32 were not measured. No DVSI vector changes.
+
 ### D-STAR b0 124
 
 b0 124, the null frame among them, plays on DVSI's decoder as a frame with every band unvoiced, its

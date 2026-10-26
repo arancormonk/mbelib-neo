@@ -1320,6 +1320,71 @@ lost_after_tone_run(int unvoiced) {
     assert_same_pcm(&prev.log2Ml[1], &before.log2Ml[1], (size_t)before.L, "history after the tone");
 }
 
+static void lost_after_dual_tone_run(int index);
+
+/*
+ * Lost frames after a dual tone, as on a DVMEGA DVstick 30 (#156): the tone
+ * goes on, from its phases, through the first three, fades out over the first
+ * 80 samples of the 4th under the repeat limit's mute noise, and mute noise
+ * follows; the prediction history is the one from before the tone.
+ */
+static void
+test_lost_after_dual_tone(void) {
+    static const int indexes[] = {128, 143, 144, 147};
+    for (size_t i = 0; i < sizeof(indexes) / sizeof(indexes[0]); ++i) {
+        lost_after_dual_tone_run(indexes[i]);
+    }
+    puts("lost frames after a dual tone: the tone goes on for three, fades out on the 4th");
+}
+
+static void
+lost_after_dual_tone_run(int index) {
+    char voice[NVOICE][49], tone[49], b125[49];
+    make_voice(voice);
+    pack_tone(tone, 126, index, 180);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    mbe_parms cur, prev, enh, tone_state, before;
+    mbe_process_result r;
+    float out[160], plain[160];
+    short pcm[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 4; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+    }
+    before = prev;
+    tone_state = cur;
+    for (int i = 0; i < 2; ++i) {
+        mbe_synthesizeTonefdstar(plain, tone, &tone_state, index);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    }
+    for (int i = 0; i < 6; ++i) {
+        mbe_synthesizeTonefdstar(plain, tone, &tone_state, index);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 0);
+        assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+        assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i >= 3));
+        if (i < 3) {
+            for (int n = 0; n < 160; ++n) {
+                assert_close_sample(out[n], plain[n], "tone going on", n);
+            }
+        } else if (i == 3) {
+            for (int n = 0; n < 160; ++n) {
+                const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
+                assert(fabsf(out[n] - ((1.0f - gain) * plain[n])) <= 2.0f);
+            }
+        } else {
+            to_int16(out, pcm);
+            for (int n = 0; n < 160; ++n) {
+                assert(abs(pcm[n]) <= 1);
+            }
+        }
+    }
+    assert_same_pcm(&prev.log2Ml[1], &before.log2Ml[1], (size_t)before.L, "history after the dual tone");
+}
+
 /* The error-rate mute plays the same DVSI-level noise: int16 0 or +-1, about a
  * third of the samples nonzero (DVSI's muted dam_e10_hd: 33%). */
 static void
@@ -1377,5 +1442,6 @@ main(void) {
     test_corrected_errors_play();
     test_hard_tone_with_corrections();
     test_lost_after_tone();
+    test_lost_after_dual_tone();
     return 0;
 }
