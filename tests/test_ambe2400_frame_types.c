@@ -905,14 +905,15 @@ assert_same_state(const mbe_parms* a, const mbe_parms* b, const char* what) {
     assert_same_pcm(a->noiseOverlap, b->noiseOverlap, 96, what);
 }
 
-/* The int16 energy of a frame's first 40 samples. */
-static long
+/* The int16 energy of a frame's first 40 samples (up to 40 * 32768^2, which
+ * a 32-bit long cannot hold). */
+static int64_t
 head_energy(const float* out) {
     short pcm[160];
-    long energy = 0;
+    int64_t energy = 0;
     to_int16(out, pcm);
     for (int n = 0; n < 40; ++n) {
-        energy += (long)pcm[n] * pcm[n];
+        energy += (int64_t)pcm[n] * pcm[n];
     }
     return energy;
 }
