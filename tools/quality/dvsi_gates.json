@@ -1257,5 +1257,230 @@
         "value": 0
       }
     ]
+  },
+  "voiced-amplitude-development": {
+    "description": "Voiced amplitude (every harmonic interpolated at steady pitch, its fourth root moving linearly, as on DVSI's AMBE-3000): in every mode our decode of DVSI's bits comes closer to DVSI's decoder by at least 0.1 dB of log-spectral distance, its envelope correlation with DVSI's and its distance from the input get no worse, its level moves by at most 0.1 dB, and the encoders' bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "voiced-amplitude-validation": {
+    "description": "Voiced amplitude (every harmonic interpolated at steady pitch, its fourth root moving linearly, as on DVSI's AMBE-3000): in every mode our decode of DVSI's bits comes closer to DVSI's decoder by at least 0.1 dB of log-spectral distance, its envelope correlation with DVSI's and its distance from the input get no worse, its level moves by at most 0.1 dB, and the encoders' bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "voiced-amplitude-final": {
+    "description": "Voiced amplitude (every harmonic interpolated at steady pitch, its fourth root moving linearly, as on DVSI's AMBE-3000): in every mode our decode of DVSI's bits comes closer to DVSI's decoder by at least 0.1 dB of log-spectral distance, its envelope correlation with DVSI's and its distance from the input get no worse, its level moves by at most 0.1 dB, and the encoders' bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "voiced-amplitude-channel": {
+    "description": "Voiced amplitude under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's as often as before at every error rate, hard or soft, and on the frames neither run nor DVSI mutes our hard-decision output is no further from DVSI's.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "voiced-amplitude-tones": {
+    "description": "Voiced amplitude on the tone vectors: no D-STAR or rate-33 tone vector's tone output agrees less often with DVSI's decoder or plays a wrong tone more often.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      }
+    ]
   }
 }

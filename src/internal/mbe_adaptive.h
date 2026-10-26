@@ -104,6 +104,25 @@ enum mbe_mute_noise {
     MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE and AMBE 3600x2450 paths. */
 };
 
+/** How voiced harmonics move from one frame's model to the next; chosen by the codec path. */
+enum mbe_voiced_synthesis {
+    /** TIA-102.BABA: at steady pitch the amplitudes of harmonics 1..7 move
+     * linearly over the frame and the others crossfade with the window Ws.
+     * The public mbe_synthesizeSpeechf() renders this way. */
+    MBE_VOICED_SYNTHESIS_SPEC,
+    /** Every codec path, as DVSI's AMBE-3000 decoders: at steady pitch every
+     * harmonic's amplitude moves between two levels with its fourth root
+     * linear over the frame (docs/dvsi-parity.md, "Voiced amplitude"). */
+    MBE_VOICED_SYNTHESIS_DVSI,
+};
+
+/**
+ * @brief Whether MBE_VOICED_SYNTHESIS_DVSI's fourth-root law moves a harmonic
+ * between these rendered amplitudes: both positive and finite (otherwise the
+ * harmonic renders as the specification's).
+ */
+int mbe_voiced_amplitude_law_applies(const float* prev, const float* cur);
+
 /**
  * @brief Synthesize speech using a captured pre-enhancement RM0 value.
  * @param aout_buf Output buffer of 160 float samples.
@@ -111,9 +130,10 @@ enum mbe_mute_noise {
  * @param prev_mp Previous enhanced frame parameters.
  * @param rm0 Sum of squared pre-enhancement amplitudes.
  * @param mute_noise Noise output if the frame is muted.
+ * @param voiced How the voiced harmonics move over the frame.
  */
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
-                                        enum mbe_mute_noise mute_noise);
+                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced);
 
 /**
  * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.
@@ -124,8 +144,10 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp Repeated (already enhanced) frame parameters.
  * @param prev_mp Previous enhanced frame parameters.
+ * @param voiced How the voiced harmonics move over the frame.
  */
-void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp);
+void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                                   enum mbe_voiced_synthesis voiced);
 
 /**
  * @brief Render 160 samples of a D-STAR tone, continuing the tone phases in @p mp.
@@ -174,6 +196,12 @@ void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int fro
  * 0.32-0.40 dB quieter than this synthesis otherwise does, in all three modes.
  */
 #define MBE_RENDER_VOICED_GAIN        1.03514217f /* +0.3 dB */
+/* The voiced gain with MBE_VOICED_SYNTHESIS_DVSI (+0.45 dB). Its fourth-root
+ * amplitude law carries less energy between two levels than linear
+ * interpolation, so at +0.3 dB DVSI's voiced frames would again play 0.11-0.16
+ * dB louder; +0.45 dB puts the per-frame medians where +0.3 dB put them with
+ * the specification's rendering. */
+#define MBE_RENDER_VOICED_GAIN_DVSI   1.05317369f /* +0.45 dB */
 #define MBE_RENDER_UNVOICED_GAIN      0.95499259f /* -0.4 dB */
 
 /**

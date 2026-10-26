@@ -57,20 +57,20 @@ static struct golden_ambe_expect
 golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     if (isa == MBE_CPU_ISA_AVX2) {
-        e.ambe2450_f32 = 0x54CD95CAu;
-        e.ambe2450_s16 = 0xC2FB86BAu;
-        e.ambe2400_f32 = 0xCA585D1Fu;
-        e.ambe2400_s16 = 0x8F10FA7Eu;
+        e.ambe2450_f32 = 0xF94B4E66u;
+        e.ambe2450_s16 = 0x76F4852Du;
+        e.ambe2400_f32 = 0x1DBCF5A4u;
+        e.ambe2400_s16 = 0xA5E1759Fu;
     } else if (isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0xBFC27C96u;
-        e.ambe2450_s16 = 0xC597CFD7u;
-        e.ambe2400_f32 = 0x1814DFF1u;
-        e.ambe2400_s16 = 0x8F10FA7Eu;
+        e.ambe2450_f32 = 0x18DE570Du;
+        e.ambe2450_s16 = 0x76F4852Du;
+        e.ambe2400_f32 = 0x6622C794u;
+        e.ambe2400_s16 = 0xAC44DD48u;
     } else {
-        e.ambe2450_f32 = 0x10961185u;
-        e.ambe2450_s16 = 0xD6CCAF6Fu;
-        e.ambe2400_f32 = 0xC57B429Cu;
-        e.ambe2400_s16 = 0xEB36DEB9u;
+        e.ambe2450_f32 = 0x1ABEBAABu;
+        e.ambe2450_s16 = 0x76F4852Du;
+        e.ambe2400_f32 = 0xEA3E6B8Au;
+        e.ambe2400_s16 = 0xAC44DD48u;
     }
     return e;
 }

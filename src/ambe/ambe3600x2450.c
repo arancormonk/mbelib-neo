@@ -832,7 +832,8 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mb
 static void
 ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2450);
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC);
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
+                                       MBE_VOICED_SYNTHESIS_DVSI);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
@@ -850,7 +851,7 @@ ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, 
     /* Step 2 repeats the previous frame's model, enhanced amplitudes included
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
-    mbe_synthesizeRepeatedSpeechf(aout_buf, cur_mp, prev_mp_enhanced);
+    mbe_synthesizeRepeatedSpeechf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 

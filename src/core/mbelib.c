@@ -690,14 +690,14 @@ struct mbe_render_saved {
 /* Give Ml[1..56] and PHIl[1..56] what the output renders: the low-band
  * roll-off's magnitude and phase and the voiced or unvoiced gain. */
 static void
-mbe_render_prepare(mbe_parms* restrict mp, struct mbe_render_saved* restrict saved, int maxl) {
+mbe_render_prepare(mbe_parms* restrict mp, struct mbe_render_saved* restrict saved, int maxl, float voiced_gain) {
     const float hz_per_harmonic = mp->w0 * (8000.0f / (2.0f * (float)M_PI));
     for (int l = 1; l <= 56; l++) {
         const float hz = hz_per_harmonic * (float)l;
         const int voiced = (l <= mp->L) && (mp->Vl[l] == 1);
         saved->Ml[l] = mp->Ml[l];
         saved->PHIl[l] = mp->PHIl[l];
-        mp->Ml[l] *= mbe_low_band_gain(hz) * (voiced ? MBE_RENDER_VOICED_GAIN : MBE_RENDER_UNVOICED_GAIN);
+        mp->Ml[l] *= mbe_low_band_gain(hz) * (voiced ? voiced_gain : MBE_RENDER_UNVOICED_GAIN);
 #if !defined(MBE_VF_WIDTH)
         /* Preserve the scalar expression's rounding, including x87 excess
          * precision; only skip phases that no oscillator will read. */
@@ -1216,14 +1216,37 @@ mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N) {
     }
 }
 
+/* Whether DVSI's amplitude law moves a harmonic from *prev to *cur: both
+ * amplitudes positive and finite. The bit patterns of positive finite floats
+ * are 1..0x7F7FFFFF; the test reads them from memory and compares against an
+ * ordinary bound, so fast-math cannot fold it into accepting NaN (as it can
+ * `x > 0.0f`; see mbe_encoder.c). */
+int
+mbe_voiced_amplitude_law_applies(const float* prev, const float* cur) {
+    uint32_t prev_bits, cur_bits;
+    memcpy(&prev_bits, prev, sizeof(prev_bits));
+    memcpy(&cur_bits, cur, sizeof(cur_bits));
+    return (prev_bits - 1u < 0x7F7FFFFFu) && (cur_bits - 1u < 0x7F7FFFFFu);
+}
+
+/* The value that moves linearly over the frame for an interpolated harmonic's
+ * amplitude: the amplitude itself, or its fourth root as DVSI's decoders move
+ * it (a law that applies only between positive amplitudes). */
+static float
+mbe_voiced_amplitude_coordinate(float amp, enum mbe_voiced_synthesis voiced) {
+    return (voiced == MBE_VOICED_SYNTHESIS_DVSI) ? sqrtf(sqrtf(amp)) : amp;
+}
+
 #if defined(MBE_VOICED_KERNELS)
 static void
 mbe_render_voiced_interpolated(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N,
-                               float cw0, float pw0, float pw0l) {
+                               float cw0, float pw0, float pw0l, enum mbe_voiced_synthesis voiced) {
     float deltaphil = cur_mp->PHIl[l] - prev_mp->PHIl[l] - (((pw0 + cw0) * (float)(l * N)) / 2.0f);
     float deltawl = (1.0f / (float)N)
                     * (deltaphil - (2.0f * (float)M_PI * floorf((deltaphil + (float)M_PI) / (2.0f * (float)M_PI))));
-    mbe_voiced_interpolated(aout_buf, prev_mp->PHIl[l], prev_mp->Ml[l], cur_mp->Ml[l], pw0l + deltawl, cw0 - pw0, l);
+    mbe_voiced_interpolated(aout_buf, prev_mp->PHIl[l], mbe_voiced_amplitude_coordinate(prev_mp->Ml[l], voiced),
+                            mbe_voiced_amplitude_coordinate(cur_mp->Ml[l], voiced), pw0l + deltawl, cw0 - pw0, l,
+                            voiced == MBE_VOICED_SYNTHESIS_DVSI);
 }
 
 static void
@@ -1237,16 +1260,22 @@ mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_p
 #else
 static void
 mbe_render_voiced_interpolated(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int l, int N,
-                               float cw0, float pw0, float pw0l) {
+                               float cw0, float pw0, float pw0l, enum mbe_voiced_synthesis voiced) {
     float* Ss = aout_buf;
     float deltaphil = cur_mp->PHIl[l] - prev_mp->PHIl[l] - (((pw0 + cw0) * (float)(l * N)) / 2.0f);
     float deltawl = (1.0f / (float)N)
                     * (deltaphil - (2.0f * (float)M_PI * floorf((deltaphil + (float)M_PI) / (2.0f * (float)M_PI))));
+    const float prev_amp = mbe_voiced_amplitude_coordinate(prev_mp->Ml[l], voiced);
+    const float cur_amp = mbe_voiced_amplitude_coordinate(cur_mp->Ml[l], voiced);
 
     for (int n = 0; n < N; n++) {
         float thetaln =
             prev_mp->PHIl[l] + ((pw0l + deltawl) * (float)n) + (((cw0 - pw0) * (float)(l * n * n)) / (float)(2 * N));
-        float aln = prev_mp->Ml[l] + (((float)n / (float)N) * (cur_mp->Ml[l] - prev_mp->Ml[l]));
+        float aln = prev_amp + (((float)n / (float)N) * (cur_amp - prev_amp));
+        if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
+            const float square = aln * aln;
+            aln = square * square;
+        }
         *Ss += 2.0f * aln * cosf(thetaln);
         Ss++;
     }
@@ -1304,7 +1333,8 @@ mbe_render_voiced_windowed(float* aout_buf, const mbe_parms* cur_mp, const mbe_p
 #endif
 
 static void
-mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int maxl, int N) {
+mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp, int maxl, int N,
+                         enum mbe_voiced_synthesis voiced) {
     const float cw0 = cur_mp->w0;
     const float pw0 = prev_mp->w0;
 
@@ -1318,9 +1348,19 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
         int prev_voiced = (prev_mp->Vl[l] == 1) && (pw0l < (float)M_PI);
 
         if (cur_voiced || prev_voiced) {
-            int use_interpolation = (l < 8) && cur_voiced && prev_voiced && (fabsf(cw0 - pw0) < (0.1f * cw0));
+            /* TIA-102.BABA interpolates harmonics 1..7 at steady pitch; DVSI's
+             * decoders move every harmonic between two levels that way
+             * (docs/dvsi-parity.md, "Voiced amplitude"). Fades from or to a
+             * silent model keep the specification's rendering. */
+            enum mbe_voiced_synthesis law = (voiced == MBE_VOICED_SYNTHESIS_DVSI
+                                             && mbe_voiced_amplitude_law_applies(&prev_mp->Ml[l], &cur_mp->Ml[l]))
+                                                ? MBE_VOICED_SYNTHESIS_DVSI
+                                                : MBE_VOICED_SYNTHESIS_SPEC;
+            int interpolated_harmonic = (l < 8) || (law == MBE_VOICED_SYNTHESIS_DVSI);
+            int use_interpolation =
+                interpolated_harmonic && cur_voiced && prev_voiced && (fabsf(cw0 - pw0) < (0.1f * cw0));
             if (use_interpolation) {
-                mbe_render_voiced_interpolated(aout_buf, cur_mp, prev_mp, l, N, cw0, pw0, pw0l);
+                mbe_render_voiced_interpolated(aout_buf, cur_mp, prev_mp, l, N, cw0, pw0, pw0l, law);
             } else {
                 mbe_render_voiced_windowed(aout_buf, cur_mp, prev_mp, l, N, cw0l, pw0l, cur_voiced, prev_voiced);
             }
@@ -1337,7 +1377,7 @@ enum mbe_speech_smoothing {
 
 static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
-                         float pre_enh_rm0, enum mbe_mute_noise mute_noise) {
+                         float pre_enh_rm0, enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced) {
 
     /* One frame length for the phase arithmetic, the window Ws and the
      * voiced kernels, which process exactly MBE_VOICED_FRAME samples. */
@@ -1393,16 +1433,19 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
      * both frames: prepare it once. */
     struct mbe_render_saved cur_saved, prev_saved;
     const int shared_model = prev_mp == cur_mp;
-    mbe_render_prepare(cur_mp, &cur_saved, maxl);
+    const float voiced_gain =
+        (voiced == MBE_VOICED_SYNTHESIS_DVSI) ? MBE_RENDER_VOICED_GAIN_DVSI : MBE_RENDER_VOICED_GAIN;
+    mbe_render_prepare(cur_mp, &cur_saved, maxl, voiced_gain);
     if (!shared_model) {
-        mbe_render_prepare(prev_mp, &prev_saved, maxl);
+        mbe_render_prepare(prev_mp, &prev_saved, maxl, voiced_gain);
     }
 
     /* Synthesize voiced components
      * Use phase/amplitude interpolation (Algorithms #134-138) for low harmonics
-     * when pitch is stable, otherwise use windowed oscillator approach
+     * (every harmonic on the codec paths) when pitch is stable, otherwise use windowed
+     * oscillator approach
      */
-    mbe_render_voiced_speech(aout_buf, cur_mp, prev_mp, maxl, N);
+    mbe_render_voiced_speech(aout_buf, cur_mp, prev_mp, maxl, N, voiced);
 
     /* Synthesize unvoiced components from the same per-frame noise buffer
      * (TIA-102.BABA equations 117-126). */
@@ -1425,19 +1468,21 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 
 void
 mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
-                                   enum mbe_mute_noise mute_noise) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise);
+                                   enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise, voiced);
 }
 
 void
-mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    /* AMBE 3600x2450 repeat path, which never mutes inside synthesis. */
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC);
+mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                              enum mbe_voiced_synthesis voiced) {
+    /* Repeat paths, which never mute inside synthesis. */
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC, voiced);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, MBE_MUTE_NOISE_COMFORT);
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, MBE_MUTE_NOISE_COMFORT,
+                             MBE_VOICED_SYNTHESIS_SPEC);
 }
 
 /**

@@ -743,7 +743,7 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
     mbe_moveMbeParms(cur_mp, prev_mp);
     memset(silent.Ml, 0, sizeof(silent.Ml));
     silent.repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced);
+    mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
     /* The next frame's synthesis draws its unvoiced noise from cur_mp, as
      * after any synthesized frame. */
     cur_mp->noiseSeed = silent.noiseSeed;
@@ -840,7 +840,8 @@ ambe2400_speech_under_tone(float* speech, mbe_parms* cur_mp, const mbe_parms* pr
     mbe_repeat_load_model(&repeated, prev_mp);
     repeated.repeatCount = 0;
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(&repeated, MBE_HIGH_BAND_GAIN_AMBE2400);
-    mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
+    mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
+                                       MBE_VOICED_SYNTHESIS_DVSI);
     /* The next frame's synthesis draws its unvoiced noise from cur_mp. */
     cur_mp->noiseSeed = repeated.noiseSeed;
     memcpy(cur_mp->noiseOverlap, repeated.noiseOverlap, sizeof(cur_mp->noiseOverlap));
@@ -955,7 +956,8 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
     if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
         mbe_moveMbeParms(cur_mp, prev_mp);
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT);
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
+                                           MBE_VOICED_SYNTHESIS_DVSI);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         if (ambe2400_error_rate_mutes(result, cur_mp)) {
             mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

@@ -688,6 +688,137 @@ test_render_voicing_gains(void) {
     }
 }
 
+/* Two frames of 18 voiced harmonics at 200 Hz and amplitude 16, rendered with
+ * `voiced`; the second frame's samples, played from a previous frame whose
+ * amplitudes are set to `prev_amp` (its phases kept, so every run renders the
+ * same phases) at the pitch `cur_hz`. */
+static void
+voiced_step_frame(float out[160], float prev_amp, double cur_hz, enum mbe_voiced_synthesis voiced) {
+    mbe_parms cur, prev, enhanced;
+    float first[160];
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    cur.w0 = (float)(2.0 * M_PI * 200.0 / 8000.0);
+    cur.L = 18;
+    for (int l = 1; l <= cur.L; ++l) {
+        cur.Vl[l] = 1;
+        cur.Ml[l] = 16.0f;
+    }
+    prev = cur;
+    mbe_synthesizeRepeatedSpeechf(first, &cur, &prev, voiced);
+    prev = cur;
+    for (int l = 1; l <= prev.L; ++l) {
+        prev.Ml[l] = prev_amp;
+    }
+    cur.w0 = (float)(2.0 * M_PI * cur_hz / 8000.0);
+    mbe_synthesizeRepeatedSpeechf(out, &cur, &prev, voiced);
+}
+
+/* fourth_root_law_error() of output that proves nothing: finite, since a
+ * fast-math build of this test may fold comparisons with infinity. */
+#define LAW_REJECTED 1e9
+
+/* Largest relative departure of step[n] / flat[n] from (1 + n / 160)^4 / 16,
+ * the fourth-root law from amplitude 1 to 16 against a steady 16, over samples
+ * away from zero crossings. */
+static double
+fourth_root_law_error(const float step[160], const float flat[160]) {
+    double peak = 0.0, worst = 0.0;
+    int checked = 0;
+    for (int n = 0; n < 160; ++n) {
+        /* Finite, read as a bit pattern so a fast-math build cannot fold it. */
+        uint32_t a, b;
+        memcpy(&a, &step[n], sizeof(a));
+        memcpy(&b, &flat[n], sizeof(b));
+        if ((a & 0x7FFFFFFFu) >= 0x7F800000u || (b & 0x7FFFFFFFu) >= 0x7F800000u) {
+            return LAW_REJECTED;
+        }
+        peak = fmax(peak, fabs((double)flat[n]));
+    }
+    /* A silent or non-finite steady frame proves nothing. */
+    if (!(peak > 1.0 && peak < 1e6)) {
+        return LAW_REJECTED;
+    }
+    for (int n = 0; n < 160; ++n) {
+        if (fabs((double)flat[n]) > 0.05 * peak) {
+            const double law = pow(1.0 + (double)n / 160.0, 4.0) / 16.0;
+            worst = fmax(worst, fabs((double)step[n] / (double)flat[n] - law) / law);
+            checked++;
+        }
+    }
+    return (checked >= 80) ? worst : LAW_REJECTED;
+}
+
+/* DVSI's law moves a harmonic only between two positive finite amplitudes:
+ * zero, negative, infinite and NaN amplitudes (stored as bit patterns, so a
+ * fast-math build cannot fold them) keep the specification's rendering. */
+static void
+test_voiced_amplitude_law_gate(void) {
+    static const uint32_t rejected[] = {0x00000000u, 0x80000000u, 0xBF800000u, 0x7F800000u,
+                                        0xFF800000u, 0x7FC00000u, 0xFFC00000u, 0x7F800001u};
+    static const uint32_t accepted[] = {0x00000001u, 0x00800000u, 0x3F800000u, 0x7F7FFFFFu};
+    const float one = 1.0f;
+    for (size_t i = 0; i < sizeof(rejected) / sizeof(rejected[0]); ++i) {
+        float x;
+        memcpy(&x, &rejected[i], sizeof(x));
+        assert(!mbe_voiced_amplitude_law_applies(&x, &one));
+        assert(!mbe_voiced_amplitude_law_applies(&one, &x));
+    }
+    for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); ++i) {
+        float x;
+        memcpy(&x, &accepted[i], sizeof(x));
+        assert(mbe_voiced_amplitude_law_applies(&x, &one));
+        assert(mbe_voiced_amplitude_law_applies(&one, &x));
+    }
+}
+
+/* Whether `dvsi` is `spec` at the codec paths' voiced gain: every harmonic of
+ * these frames is voiced. */
+static int
+at_dvsi_voiced_gain(const float dvsi[160], const float spec[160]) {
+    const double ratio = (double)MBE_RENDER_VOICED_GAIN_DVSI / (double)MBE_RENDER_VOICED_GAIN;
+    for (int n = 0; n < 160; ++n) {
+        if (!(fabs((double)dvsi[n] - ratio * (double)spec[n]) <= 1e-4 * (1.0 + fabs((double)dvsi[n])))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The codec paths' voiced amplitude (MBE_VOICED_SYNTHESIS_DVSI): at steady
+ * pitch every harmonic, the 8th and above included, moves from one level to the
+ * next with its fourth root linear over the frame, as DVSI's AMBE-3000 plays a
+ * gain step (#157); the specification's rendering does not. A fade from a silent
+ * model and a pitch step render as the specification's, at the codec paths'
+ * voiced gain. */
+static void
+test_dvsi_voiced_amplitude(void) {
+    float flat[160], step[160];
+    /* The checker itself rejects silent and non-finite output. */
+    float level[160], nan_samples[160], silence[160] = {0};
+    for (int n = 0; n < 160; ++n) {
+        const uint32_t nan_bits = 0x7FC00000u;
+        level[n] = 16.0f;
+        memcpy(&nan_samples[n], &nan_bits, sizeof(nan_samples[n]));
+    }
+    assert(fourth_root_law_error(nan_samples, level) >= LAW_REJECTED);
+    assert(fourth_root_law_error(level, nan_samples) >= LAW_REJECTED);
+    assert(fourth_root_law_error(silence, silence) >= LAW_REJECTED);
+    voiced_step_frame(flat, 16.0f, 200.0, MBE_VOICED_SYNTHESIS_DVSI);
+    voiced_step_frame(step, 1.0f, 200.0, MBE_VOICED_SYNTHESIS_DVSI);
+    assert(fourth_root_law_error(step, flat) < 1e-4);
+    voiced_step_frame(flat, 16.0f, 200.0, MBE_VOICED_SYNTHESIS_SPEC);
+    voiced_step_frame(step, 1.0f, 200.0, MBE_VOICED_SYNTHESIS_SPEC);
+    assert(fourth_root_law_error(step, flat) > 0.1);
+
+    float dvsi[160], spec[160];
+    voiced_step_frame(dvsi, 0.0f, 200.0, MBE_VOICED_SYNTHESIS_DVSI);
+    voiced_step_frame(spec, 0.0f, 200.0, MBE_VOICED_SYNTHESIS_SPEC);
+    assert(at_dvsi_voiced_gain(dvsi, spec));
+    voiced_step_frame(dvsi, 1.0f, 230.0, MBE_VOICED_SYNTHESIS_DVSI);
+    voiced_step_frame(spec, 1.0f, 230.0, MBE_VOICED_SYNTHESIS_SPEC);
+    assert(at_dvsi_voiced_gain(dvsi, spec));
+}
+
 typedef int (*process_fn)(float*, mbe_process_result*, const char*, mbe_parms*, mbe_parms*, mbe_parms*);
 
 /* A codec's process path enhances with its own shelf: after one voice frame
@@ -811,7 +942,7 @@ test_harmonic_phase_filter(void) {
         float out[160];
         /* A repeat skips adaptive smoothing, so the oracle sees precisely
          * the amplitudes used to regenerate the phases, including zeros. */
-        mbe_synthesizeRepeatedSpeechf(out, &cur, &prev);
+        mbe_synthesizeRepeatedSpeechf(out, &cur, &prev, MBE_VOICED_SYNTHESIS_SPEC);
         for (int l = 1; l <= 56; ++l) {
             assert(fabsf(cur.PHIl[l] - cur.PSIl[l] - want[l]) < 4e-6f * (1.0f + fabsf(want[l])));
         }
@@ -1210,6 +1341,8 @@ main(void) {
     test_low_band_rendering();
     test_low_band_phase_rendering();
     test_render_voicing_gains();
+    test_dvsi_voiced_amplitude();
+    test_voiced_amplitude_law_gate();
     test_render_aliased_model();
     test_low_band_edge_cases();
     test_harmonic_phase_filter();
