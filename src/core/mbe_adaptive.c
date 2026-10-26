@@ -2,6 +2,7 @@
 /* Independently implemented from TIA-102.BABA equations 111--116 and the policies in legal/implementation-provenance.md. */
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_math.h"
 
 #include <float.h>
 #include <limits.h>
@@ -40,13 +41,16 @@ voicing_threshold(const mbe_parms* mp) {
     if (mp->errorRate <= MBE_ERROR_THRESHOLD_LOW && mp->errorCountTotal <= 4) {
         return FLT_MAX;
     }
-    /* x^(3/8) = (sqrt(sqrt(sqrt(x))))^3, equation 112. */
-    const float root = sqrtf(sqrtf(sqrtf(mp->localEnergy)));
-    const float energy_power = (root * root) * root;
+    /* x^(3/8) = (sqrt(sqrt(sqrt(x))))^3, equation 112. Each step is rounded
+     * to float (x87 would otherwise move the voicing boundary). */
+    const float root = mbe_round_to_float(sqrtf(mbe_round_to_float(sqrtf(mbe_round_to_float(sqrtf(mp->localEnergy))))));
+    const float energy_power = mbe_round_to_float(mbe_round_to_float(root * root) * root);
     if (mp->errorRate <= MBE_ERROR_THRESHOLD_ENTRY && mp->errorCount4 == 0) {
-        return (MBE_ADAPTIVE_GAIN * energy_power) / expf(MBE_ADAPTIVE_EXPONENT * mp->errorRate);
+        const float gain = mbe_round_to_float(MBE_ADAPTIVE_GAIN * energy_power);
+        const float decay = mbe_round_to_float(expf(mbe_round_to_float(MBE_ADAPTIVE_EXPONENT * mp->errorRate)));
+        return mbe_round_to_float(gain / decay);
     }
-    return MBE_ADAPTIVE_ALT * energy_power;
+    return mbe_round_to_float(MBE_ADAPTIVE_ALT * energy_power);
 }
 
 static int
@@ -78,7 +82,10 @@ mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, f
     if (prior_energy < MBE_MIN_LOCAL_ENERGY) {
         prior_energy = MBE_DEFAULT_LOCAL_ENERGY;
     }
-    float energy = MBE_ENERGY_SMOOTH_ALPHA * prior_energy + MBE_ENERGY_SMOOTH_BETA * rm0;
+    /* Rounded per step: x87 may otherwise carry the unrounded sum into the
+     * stored energy that voicing_threshold() reads back. */
+    float energy = mbe_round_to_float(mbe_round_to_float(MBE_ENERGY_SMOOTH_ALPHA * prior_energy)
+                                      + mbe_round_to_float(MBE_ENERGY_SMOOTH_BETA * rm0));
     if (energy < MBE_MIN_LOCAL_ENERGY) {
         energy = MBE_MIN_LOCAL_ENERGY;
     }
@@ -96,7 +103,7 @@ mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, f
     cur_mp->amplitudeThreshold = amplitude_threshold(cur_mp, prior_threshold);
     float scale = 1.0f;
     if (amplitude_sum > 0.0 && (double)cur_mp->amplitudeThreshold <= amplitude_sum) {
-        scale = (float)((double)cur_mp->amplitudeThreshold / amplitude_sum);
+        scale = mbe_round_to_float((float)((double)cur_mp->amplitudeThreshold / amplitude_sum));
     }
     if (scale < 0.0f) {
         scale = 0.0f;
@@ -113,7 +120,7 @@ mbe_applyAdaptiveSmoothing(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     }
     float rm0 = 0.0f;
     for (int l = 1; l <= cur_mp->L; ++l) {
-        rm0 += cur_mp->Ml[l] * cur_mp->Ml[l];
+        rm0 = mbe_round_to_float(rm0 + mbe_round_to_float(cur_mp->Ml[l] * cur_mp->Ml[l]));
     }
     mbe_applyAdaptiveSmoothingWithRm0(cur_mp, prev_mp, rm0);
 }

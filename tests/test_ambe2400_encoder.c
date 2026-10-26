@@ -254,6 +254,7 @@ main(int argc, char** argv) {
 #ifdef MBELIB_TEST_FENV_OVERFLOW
 #include <fenv.h>
 #endif
+#include <float.h>
 #include <stdint.h>
 #include <string.h>
 

@@ -202,6 +202,23 @@ test_threshold_boundaries(void) {
     assert(current.Vl[1] == 0);
     assert(current.Vl[2] == 0);
     assert(current.Vl[3] == 1);
+
+    /* Equation 112's other branch, at error rate 0 (expf(0) is 1, so the
+     * boundary is exact on every target): five errors, none in block 4. */
+    mbe_parms gained;
+    new_model(&gained);
+    gained.errorRate = 0.0f;
+    gained.errorCountTotal = 5;
+    gained.errorCount4 = 0;
+    const float gained_boundary = 45.255f * 64.0f;
+    gained.Ml[1] = nextafterf(gained_boundary, 0.0f);
+    gained.Ml[2] = gained_boundary;
+    gained.Ml[3] = nextafterf(gained_boundary, FLT_MAX);
+    mbe_applyAdaptiveSmoothingWithRm0(&gained, &previous, 65536.0f);
+    assert(gained.Vl[1] == 0);
+    assert(gained.Vl[2] == 0);
+    assert(gained.Vl[3] == 1);
+
     current.errorRate = 0.0125f;
     current.errorCountTotal = 4;
     assert(!mbe_requiresAdaptiveSmoothing(&current));

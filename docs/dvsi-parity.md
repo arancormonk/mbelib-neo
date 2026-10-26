@@ -239,6 +239,38 @@ voice frame after the run, the mean of `|20 log10((ours + 1) / (DVSI + 1))|` ove
 values falls from 8.2 to 3.2 dB (`dam`), 3.4 to 2.1 dB and 3.0 to 0.8 dB (two `clean` passages);
 resetting the model after the fade instead was further from DVSI on all three.
 
+The voice after the mute does not fade in from silence on DVSI's AMBE-3000 either
+([#156](https://github.com/arancormonk/mbelib-neo/issues/156)). On a DVMEGA DVstick 30, voice after
+a CNI run of five or more plays at the level of voice after as many lost frames (within 0.1 dB on
+six pairs of streams; levels only, the samples were not compared), so DVSI's `_dtx` decodes stand
+in for that frame's shape: over their 65 onsets after five or more all-ones frames, ours was
+digital zero for its first 48 samples, where DVSI's, averaged in 16-sample blocks, starts about
+15 dB below its later level in the first block and rises over about 110 samples. On the DVstick 30
+the first voice frame played up to 12 dB louder than ours after loud voice, and also after a single
+tone, whose lost frames are silent; the only state that can carry that energy there is the
+prediction history, the voice from before the tone. The library now starts that frame from the
+prediction history 10.5 dB down (gain 0.3): the last synthesized frame, which the mute left silent,
+becomes the history's model at that gain (its amplitudes built from log2Ml as the decoder builds
+them, then the spectral enhancement), with that model's own unvoiced overlap. Only that frame
+changes; the state it commits and every frame after it are as before. A history held from an
+uncorrectable C0 word, whose pitch and voicing are not kept, and the initial state keep the fade-in
+from silence. The gain is a fit to frame levels; how the chip does this is not known. The mean
+`|dB|` of the first voice frame after a run of four or more:
+
+| Data | Fade-in from silence | From the history |
+| --- | --- | --- |
+| DVMEGA DVstick 30 (#155, #156; 29 runs, uncorrectable C0 words included) | 6.54 | 2.39 |
+| ThumbDV (#106; runs of 5 and 20 on three passages) | 3.64 | 1.85 |
+| DVSI's `_dtx` decodes (110 runs), frame level | 3.19 | 2.92 |
+| DVSI's `_dtx` decodes, log-spectral distance (the 57 onsets above -60 dBFS) | 3.52 | 3.42 |
+
+Each source alone favours another gain (0.2 on the DVstick 30, 0.3 on the ThumbDV, 0.5 or more on
+the `_dtx` decodes), and every gain from 0.2 to 0.5 beats the fade from silence on all three. Still
+different: after the DVstick 30's one run of 30, our first voice frame plays 12 dB louder than the
+unit's (26 dB quieter before); from a fresh start and after a run of 10 it plays 3.3 dB louder, as
+before; and after uncorrectable C0 words, with the fade from silence, it plays 3.5 dB louder and
+8.3 dB quieter on the two bursts that differ. No other DVSI vector changes, soft decisions included.
+
 Right after a tone the lost frame repeats the tone, which ends
 ([#156](https://github.com/arancormonk/mbelib-neo/issues/156)). On the DVstick 30 above, after one or
 five tone frames (index 32, volume 0, 180 or 255) the first lost frame plays the tone's tail fading out
@@ -262,7 +294,8 @@ over the first 80 samples of the 4th under the mute noise; single tones keep the
 Over those 15 streams (the run and the five voice frames after it) the mean frame-level difference
 from the unit falls from 19.13 to 1.16 dB, the 4th lost frame from 72.4 to 1.7 dB (4.4 dB at index
 144) and the first voice frame after the run from 15.1 to 5.9 dB; after a run of four, that voice
-frame still plays 12 dB low, as the voice after any repeat-limit mute fades in. The reporter's patch
+frame played 12 dB low, as the voice after any repeat-limit mute faded in from silence, and it now
+plays 3.2 dB loud, started from the prediction history (above). The reporter's patch
 was the starting point. Only frame levels were measured, so the fade's shape and the continuing phases
 are the library's choice; other dual indices and volumes, runs of 2 or more than 4 and single tones
 other than 32 were not measured. No DVSI vector changes.
@@ -505,9 +538,10 @@ Over the 30 gain steps, the mean error of the level curve (the level change of e
 block of the step frame as a fraction of the settled change) against the unit's falls from 0.103 to
 0.021; interpolating every harmonic with linear amplitude gives 0.110, a geometric mean 0.048 and
 the fourth root, the best of the power laws tried, 0.021. The curves of the unit's b0 and b1 steps
-stay as close as before. A fade from or to a silent model (after a mute, a tone or the repeat
-limit) keeps the specification's rendering: there the law would fade in as (n/N)^4, and the
-repeat-limit fade was matched to DVSI's with the specification's.
+stay as close as before. A fade from or to a silent model (after a mute or a tone, and the repeat
+limit's fade-out) keeps the specification's rendering: there the law would fade in as (n/N)^4, and the
+repeat-limit fade was matched to DVSI's with the specification's. D-STAR's voice after the repeat
+limit fades from the prediction history instead (see "D-STAR lost frames").
 
 The law carries less energy between two levels than linear amplitude: with it, DVSI's voiced
 frames played 0.11-0.16 dB louder than ours again (per-frame medians, development vectors). The
@@ -577,9 +611,17 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   weights overflowed float.
 - After a D-STAR b0 124 frame (the null frame among them), a DVMEGA DVstick 30 plays the lost
   frames of a run from the 4th or 5th on at a comfort-noise level that follows the gain field b2
-  of the b0 124 frames (-75 dBFS after the null frame, up to -2 dBFS after b2 63), and plays all
-  lost frames at level directly after one ([#156](https://github.com/arancormonk/mbelib-neo/issues/156));
-  this library mutes from the 5th, at about -95 dBFS.
+  of the b0 124 frames (up to -2 dBFS after b2 63, b3 511), and plays all lost frames at level
+  directly after one ([#156](https://github.com/arancormonk/mbelib-neo/issues/156)); this library
+  mutes from the 5th, at about -95 dBFS. Of those frames radios send only the null frame (b2 4).
+  After it, on the measured passage, the unit's 4th lost frame follows the voice before the run, as
+  ours does (within 6 dB), while the run starts up to 16 voice frames after the null frame; with 17
+  to 20 voice frames between, it plays the 4th at -73.9 to -75.9 dBFS where ours plays -87.7 to
+  -90.4, and a run of 30 (20 voice frames after) from the 5th on at about -74 dBFS (frame RMS about
+  6) where ours plays about -95 (RMS about 0.6). It is not modelled: that would take the comfort
+  noise's spectrum (not measured), a level law over b2 to b5 fitted to one sweep, a rule for how
+  several b0 124 frames combine (not determined), and more hidden state in `mbe_parms`, whose layout
+  is fixed.
 - Small pitch differences remain: P25 codes up to 0.07% from DVSI's (rounding-like), D-STAR codes
   within 0.03%.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2
