@@ -177,6 +177,19 @@ and disconnected mode, and both release/VCS recipes generated the expected
 `.SRCINFO` with makepkg. Windows, macOS and ARM execution remains covered by
 the existing CI matrix and was not run on this Linux x86 host.
 
+### PFFFT update to 316f0b0
+
+The update from `548918d` to `316f0b0` changes no output. The fork's complex
+transforms chose their interleaving last pass by testing an optional output
+buffer for NULL; the backward callers pass the output buffer itself, so Clang's
+static analyzer assumed that buffer could be NULL and reported dereferences
+ending in `avxintrin.h` (dsd-neo's strict scan-build). A constant flag now
+selects that pass. The changed files are `src/pffft_passes_impl.h`,
+`src/pffft_priv_impl.h` and `src/pffft_wide_impl.h`; their notices are
+unchanged, so only the pinned revision in the retained PFFFT text and its
+inventory hash were refreshed. Both pins were regenerated from the immutable
+archive.
+
 ### PFFFT update to 548918d
 
 The update from `77a7ecd` to `548918d` adds the fork's 8-lane AVX2 float
