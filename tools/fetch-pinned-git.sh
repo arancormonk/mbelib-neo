@@ -18,6 +18,9 @@ fi
 rm -rf "$dest"
 mkdir -p "$(dirname "$dest")"
 git init "$dest"
+# A fetch starts git's auto-maintenance detached; keep it from writing in
+# .git while a caller removes a temporary destination.
+git -C "$dest" config maintenance.auto false
 git -C "$dest" remote add origin "$repo_url"
 git -C "$dest" fetch --depth 1 origin "$want_sha"
 git -C "$dest" checkout --detach "$want_sha"

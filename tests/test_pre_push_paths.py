@@ -35,6 +35,9 @@ def main():
         shutil.copy2(os.path.join(source_root, "tools", "push_changed_files.sh"),
                      os.path.join(repo, "tools", "push_changed_files.sh"))
         git(git_exe, repo, "init", "-q")
+        # Commits start git's auto-maintenance detached; it could still be
+        # writing in .git when the temporary directory is removed.
+        git(git_exe, repo, "config", "maintenance.auto", "false")
         git(git_exe, repo, "config", "user.name", "pre-push test")
         git(git_exe, repo, "config", "user.email", "pre-push@example.invalid")
         git(git_exe, repo, "config", "commit.gpgsign", "false")
