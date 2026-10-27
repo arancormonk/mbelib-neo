@@ -616,6 +616,127 @@ the tone vectors, rate 33's `alltone` agrees with DVSI's tone detector on two mo
 DVSI's reads none, from the 0.15 dB of voiced gain, so `dvsi-parity-tones` and
 `voiced-amplitude-tones` fail on that window.
 
+### Encoder voicing over background noise
+
+A recording encoded by this library's D-STAR encoder and played on DVSI hardware buzzed at the
+lowest pitch in its pauses ([#149](https://github.com/arancormonk/mbelib-neo/issues/149)), where
+DVSI's own encoding plays noise.
+
+**Cause.** The pauses hold 60 Hz mains hum (about 75 LSB, -53 dBFS, with weak 120 and 180 Hz
+harmonics) over about 13 LSB of background. In them all three encoders sent the lowest pitch with
+every band voiced: 62 voiced pause frames in D-STAR, all 56 harmonics from 0 to 0.4 s. Two things
+combine:
+
+- The hum makes the error function E(P) small at the longest periods.
+- At such a pitch a harmonic band spans about two bins of the 256-point spectrum, and fitting one
+  window-shaped line there (eq 25) leaves noise little residual. White noise's expected fit error,
+  computed from `w_R`'s spectral covariance and checked by simulation, is about 0.15 at 62 Hz, 0.3
+  near 90 Hz and 0.7 at 250 Hz, against an eq (37) threshold near 0.4. So the noise bands passed
+  as voiced.
+
+It is not specific to hum. On DVSI's development and validation vectors, DVSI's encoder sent 81%
+of the frames the D-STAR encoder voiced below 70 Hz with every band unvoiced.
+
+**What DVSI's encoders do.** DVSI documents noise suppression in its encoders, on by default, and
+its vectors were made with it. Its effect shows in DVSI's bits decoded by this library's decoder:
+
+- In the pauses of `dam10` and `damcar` (`dam` plus white-like noise at -34 dBFS and car noise at
+  -46 dBFS), the known noise comes out 10-12 dB down from 1 kHz and 23-29 dB down below 500 Hz.
+- In `t01`/`t02`, whose pauses carry 60.1 Hz hum, the 60 Hz line is 50 dB down.
+- On the final partition's `mark` the pauses come down only about 6 dB.
+- Steady pulse trains (-20 to -39 dBFS) keep their level.
+
+How much of the low-frequency loss comes from suppression and how much from DVSI sending most fully
+unvoiced frames at one pitch (250.3 Hz D-STAR, 248.1 Hz P25, which leaves nothing below 125 Hz)
+cannot be separated from the bits.
+
+**This change.** The analysis estimates the background noise and uses it in the voicing decisions
+only; magnitudes are unchanged (`src/core/mbe_speech_analysis.c`, "Background noise").
+
+- **Noise estimate.** Per spectrum bin: the lowest smoothed power of the last 48 or so noise-like
+  frames, doubled and at most their mean (after minimum statistics, R. Martin, IEEE Trans. Speech
+  Audio Process. 9(5), 2001). A frame is noise-like when all of these hold:
+  - it does not repeat in the voice band: E at the tracked pitch, on the input high-passed at
+    100 Hz by a 6th-order Butterworth, is above the periodicity gate;
+  - its power is within 6 dB of the previous frame's;
+  - it is quiet (under -30 dBFS, where DVSI's encoder treats noise as noise from the start of a
+    stream) or 15 dB under the loudest sound tracked so far (`xi_max` of eq 41); background lies 18 dB
+    and more under the speech in DVSI's noisy vectors.
+
+  The estimate is forgotten 50 frames (one second) after the last noise-like frame.
+- **Voicing.** A 500 Hz column is treated as unvoiced before the codec quantizes its voicing when
+  its energy is under four times the noise estimate and white noise's expected fit error there is
+  under 0.3. That is mostly at pitches below about 90 Hz, where noise passes the voicing test;
+  the expected error is weighted by the column's energy, so a column dominated by one low harmonic
+  can fall under it at somewhat higher pitches (up to about 115 Hz).
+  - D-STAR applies this to its own columns, P25 and rate 33 to the column of each band's middle
+    harmonic.
+  - D-STAR's 1 kHz bit can still voice such a column when the other column outweighs it.
+- **What was tried and dropped.** Bringing the magnitudes down as DVSI does, with a floor fitted on
+  `dam10` and `damcar`, made the held-out `mark` 0.4-0.5 dB further from DVSI's encoding: there
+  DVSI attenuates far less, and low-level speech came out about 3 dB too quiet.
+
+**Gates.** The `noise-voicing` gates were declared before scoring this design, and the final
+partition had already been scored once for that suppressing variant, so it is not held out here.
+
+**Results** (joint lags, against main; both encodings decoded by the same decoder):
+
+- "Voicing agreement" is the scoreboard's per-1 kHz-band agreement with DVSI's encoding.
+- "False voicing" is the share of DVSI's fully unvoiced frames that we voice.
+- "Recall" is the share of DVSI's voiced frames that we voice.
+- "Band recall" is the share of DVSI's voiced 1 kHz bands that we voice.
+
+| Codec | Partition | Voicing agreement | False voicing | Recall | Band recall | LSD vs DVSI's encoding (dB) |
+|---|---|---|---|---|---|---|
+| D-STAR | development | 0.865 → 0.881 | 11.0% → 6.1% | 0.826 → 0.825 | 0.794 → 0.792 | 5.733 → 5.731 |
+| D-STAR | validation | 0.821 → 0.853 | 23.0% → 11.4% | 0.824 → 0.823 | 0.796 → 0.795 | 4.612 → 4.613 |
+| D-STAR | final | 0.837 → 0.840 | 11.9% → 7.5% | 0.783 → 0.781 | 0.767 → 0.756 | 5.794 → 5.802 |
+| P25 | development | 0.864 → 0.879 | 11.7% → 7.0% | 0.820 → 0.820 | 0.795 → 0.790 | 5.669 → 5.665 |
+| P25 | validation | 0.828 → 0.855 | 24.0% → 13.1% | 0.825 → 0.823 | 0.803 → 0.801 | 4.456 → 4.456 |
+| P25 | final | 0.842 → 0.844 | 12.6% → 8.1% | 0.787 → 0.787 | 0.770 → 0.756 | 5.486 → 5.494 |
+| Rate 33 | development | 0.844 → 0.860 | 14.4% → 8.5% | 0.791 → 0.790 | 0.795 → 0.790 | 5.716 → 5.711 |
+| Rate 33 | validation | 0.832 → 0.860 | 23.0% → 9.4% | 0.794 → 0.789 | 0.799 → 0.795 | 4.508 → 4.508 |
+| Rate 33 | final | 0.832 → 0.835 | 11.5% → 6.8% | 0.749 → 0.744 | 0.764 → 0.750 | 5.682 → 5.691 |
+
+Levels against DVSI's encoding are unchanged (within 0.04 dB), and so is the pitch. On `t01` and
+`t02` D-STAR's false voicing falls from 0.31 and 0.42 to under 0.1. On #149's recording the voiced
+pause frames fall from 62 to 1 (D-STAR), 3 (P25) and 0 (rate 33).
+
+Of the 121 checks, 16 fail:
+
+- **Band recall on single vectors.** 2-3 points of DVSI's voiced 1 kHz bands are lost on `mark`
+  (all modes) and on `ucarm15a` and `ucarf15a` (P25, rate 33), against a 2-point limit; on average
+  0.4-1.4 points.
+- **Low-voice recall over hum.** DVSI-voiced frames below 80 Hz over the hum of `t02` and `t03`
+  (rate 33 and D-STAR): 15 of 34 and 4 of 12 in rate 33, 1 of 9 in D-STAR. DVSI voices some
+  frames there that are low voice over hum.
+- **Rate-33 voiced recall on single vectors.** 1.5 points on `t04` and 1.0 on `mark`, against a
+  1-point limit.
+- **Clipping.** More clipped samples on inputs that are overloaded or reach the rails: P25
+  `dam_10ov` +3, `lvl` +1 and `t04` +3, and rate-33 `t04` +2.
+
+Variants that changed the periodicity gate instead were rejected for real low voices:
+
+- Cutting the top period to 122, with E taken from the high-passed input, never voiced a steady
+  62.5 Hz voice and voiced 776 of DVSI's 816 sub-80 Hz voiced frames that main voiced.
+- A gate passing on either a high-passed or a 50/60 Hz-notched input kept low voices, but the
+  notches take 0.3 s to settle, so every stream still began with a buzz over hum.
+
+Still different:
+
+- Pauses keep their level: DVSI's encoders bring background noise down, this library's do not.
+  A model fitted to DVSI's suppression of added noise did not carry over to its real recordings.
+- A quiet voice whose harmonics are weak beside its fundamental, low and in noise, is periodic in
+  the voice band only faintly and can lose voicing like hum. A synthetic 66 Hz voice at about
+  -50 dBFS with harmonics falling as 1/h², at about 10 dB SNR, keeps voicing in 33-43% of frames,
+  against all of them before. Loud (-20 dBFS), such a voice keeps all of them, also after a vowel
+  13 dB louder, since only quiet sound or sound 15 dB under the loudest so far is taken for noise.
+  Right after a sound 17 dB louder (a tone near full scale), it loses voicing for about a second,
+  until that sound's level has decayed in the tracker or the estimate expires.
+- After noise that stops under an unbroken vowel, the estimate takes 50 frames (one second) to
+  go. Until then a column of that vowel whose noise-expected fit error is under 0.3 (mostly
+  below about 90 Hz, in places up to about 115 Hz) can lose voicing.
+
 ## Departures from the specification
 
 | Item | Specification text | DVSI's AMBE-3000 | This library |
@@ -626,6 +747,7 @@ DVSI's reads none, from the 0.15 dB of voiced gain, so `dvsi-parity-tones` and
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 | Voiced amplitude within a frame (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 133-135: harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS` | every harmonic at steady pitch, its fourth root linear | DVSI ([Voiced amplitude](#voiced-amplitude)) |
+| Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | at pitches below about 90 Hz a 500 Hz column holding little more than the learned background noise is unvoiced ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
 
 The P25 attenuation is not adopted: no rule tried (eq 112-116 as printed, and instantaneous,
 clamped or leaky variants of it) explains it, and under channel errors our output stays closer to

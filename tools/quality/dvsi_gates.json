@@ -1482,5 +1482,423 @@
         "rule": "all_no_increase"
       }
     ]
+  },
+  "noise-voicing-development": {
+    "description": "Voicing over background noise (#149): at low pitches, where noise passes the voicing test, a 500 Hz column holding little more than the learned background noise (steady mains hum included) is not voiced; magnitudes are unchanged. In every mode our encoding voices like DVSI's more often and voices fewer of DVSI's unvoiced frames, loses no voiced frames or bands (at most 1% of DVSI's voiced frames and 2% of its voiced 1 kHz bands on any vector; of its voiced frames below 80 Hz, 2% on average and 15% on any vector, which hold few), stays as close to DVSI's encoding in spectrum, envelope and level, keeps its pitch, clips no more on any vector, and the decoders are untouched.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voicing_agreement_mean",
+        "rule": "increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.false_voicing_rate",
+        "rule": "decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voiced_recall",
+        "rule": "all_no_decrease",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voiced_band_recall",
+        "rule": "all_no_decrease",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.low_voiced_recall",
+        "rule": "no_decrease",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.low_voiced_recall",
+        "rule": "all_no_decrease",
+        "value": 0.15
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.pitch_cents_median",
+        "rule": "no_increase",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rail_excess_samples",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.pcm_rail_samples",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "noise-voicing-validation": {
+    "description": "Voicing over background noise (#149): at low pitches, where noise passes the voicing test, a 500 Hz column holding little more than the learned background noise (steady mains hum included) is not voiced; magnitudes are unchanged. In every mode our encoding voices like DVSI's more often and voices fewer of DVSI's unvoiced frames, loses no voiced frames or bands (at most 1% of DVSI's voiced frames and 2% of its voiced 1 kHz bands on any vector; of its voiced frames below 80 Hz, 2% on average and 15% on any vector, which hold few), stays as close to DVSI's encoding in spectrum, envelope and level, keeps its pitch, clips no more on any vector, and the decoders are untouched.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voicing_agreement_mean",
+        "rule": "increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.false_voicing_rate",
+        "rule": "decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voiced_recall",
+        "rule": "all_no_decrease",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voiced_band_recall",
+        "rule": "all_no_decrease",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.low_voiced_recall",
+        "rule": "no_decrease",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.low_voiced_recall",
+        "rule": "all_no_decrease",
+        "value": 0.15
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.pitch_cents_median",
+        "rule": "no_increase",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rail_excess_samples",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.pcm_rail_samples",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "noise-voicing-final": {
+    "description": "Voicing over background noise (#149): at low pitches, where noise passes the voicing test, a 500 Hz column holding little more than the learned background noise (steady mains hum included) is not voiced; magnitudes are unchanged. In every mode our encoding voices like DVSI's more often and voices fewer of DVSI's unvoiced frames, loses no voiced frames or bands (at most 1% of DVSI's voiced frames and 2% of its voiced 1 kHz bands on any vector; of its voiced frames below 80 Hz, 2% on average and 15% on any vector, which hold few), stays as close to DVSI's encoding in spectrum, envelope and level, keeps its pitch, clips no more on any vector, and the decoders are untouched.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voicing_agreement_mean",
+        "rule": "increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.false_voicing_rate",
+        "rule": "decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voiced_recall",
+        "rule": "all_no_decrease",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.voiced_band_recall",
+        "rule": "all_no_decrease",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.low_voiced_recall",
+        "rule": "no_decrease",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.low_voiced_recall",
+        "rule": "all_no_decrease",
+        "value": 0.15
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.pitch_cents_median",
+        "rule": "no_increase",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rail_excess_samples",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.pcm_rail_samples",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "noise-voicing-tones": {
+    "description": "Voicing over background noise on DVSI's tone vectors: on no vector do the encoders' tone frames agree less often with DVSI's or add tone frames where DVSI sends voice.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "all_no_increase"
+      }
+    ]
   }
 }

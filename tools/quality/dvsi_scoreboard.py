@@ -363,6 +363,41 @@ def voicing_agreement(encoded, reference, frame_offset):
     return [count / total for count in agree] if total else [None] * 4
 
 
+def voicing_recall(encoded, reference, frame_offset, low_f0=80.0):
+    """Voicing against the reference, encoded[f] against reference[f - frame_offset], over frames the
+    reference alone selects (its decodable voice frames), so our own repeats, tones or mutes count as not
+    voiced: the share of its voiced frames (any harmonic voiced) we voice, the same over its voiced frames
+    below low_f0 Hz, the share of its voiced 1 kHz bands we voice, and the share of its fully unvoiced
+    frames we voice."""
+    voiced, low, bands, unvoiced = [0, 0], [0, 0], [0, 0], [0, 0]
+    for index, record in enumerate(encoded):
+        other = index - frame_offset
+        if not 0 <= other < len(reference):
+            continue
+        b = reference[other]["decoded"]
+        if b.get("status") != 0 or "Vl" not in b or reference[other]["flags"] & FLAG_SKIP:
+            continue
+        a = record["decoded"]
+        ours_ok = a.get("status") == 0 and "Vl" in a and not record["flags"] & FLAG_SKIP
+        ours = ours_ok and any(a["Vl"])
+        if any(b["Vl"]):
+            voiced[0] += 1
+            voiced[1] += ours
+            if model_f0(b) < low_f0:
+                low[0] += 1
+                low[1] += ours
+            ours_bands = band_voicing(a) if ours_ok else [False] * 4
+            for x, y in zip(ours_bands, band_voicing(b)):
+                bands[0] += y
+                bands[1] += bool(x and y)
+        else:
+            unvoiced[0] += 1
+            unvoiced[1] += ours
+    share = lambda pair: pair[1] / pair[0] if pair[0] else None  # noqa: E731
+    return {"voiced_recall": share(voiced), "low_voiced_recall": share(low), "low_voiced_frames": low[0],
+            "voiced_band_recall": share(bands), "false_voicing_rate": share(unvoiced)}
+
+
 def octave_errors(records, signal, shift):
     """Fraction of stable voiced frames whose input has a stronger harmonic comb at 2x or 0.5x the coded f0."""
     import numpy as np
@@ -632,6 +667,7 @@ def score_encoder(tools, decode_tools, mode, speech, base, speech_samples, lags,
         "octave_error_rate": octave_errors(records, speech_samples, encoded["lag_samples"]),
         "dvsi_octave_error_rate": octave_errors(dvsi_records, speech_samples, dvsi_eval["lag_samples"]),
         "voicing_agreement": voicing_agreement(records, dvsi_records, frame_offset),
+        **voicing_recall(records, dvsi_records, frame_offset),
         "frame_offset": frame_offset,
     }
 
@@ -932,7 +968,8 @@ def flatten(result):
         if isinstance(level, (int, float)):
             flat["encoder.level_gap_db"] = abs(level)
         for key in ("pitch_cents_median", "dvsi_pitch_cents_median", "octave_error_rate", "dvsi_octave_error_rate",
-                    "rail_excess_samples", "silence_frame_rate", "dvsi_silence_frame_rate"):
+                    "rail_excess_samples", "silence_frame_rate", "dvsi_silence_frame_rate", "voiced_recall",
+                    "low_voiced_recall", "voiced_band_recall", "false_voicing_rate"):
             if key in encoder:
                 flat[f"encoder.{key}"] = encoder[key]
         agreement = [value for value in encoder.get("voicing_agreement", []) if value is not None]

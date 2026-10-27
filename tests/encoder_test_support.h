@@ -134,7 +134,16 @@ enc_vowel_envelope(double hz) {
     return peaks / (1.0 + (hz / 300.0));
 }
 
-enum enc_fixture_kind { ENC_NOISE, ENC_COLORED_NOISE, ENC_VOWEL, ENC_MISSING_F0, ENC_STRONG_H2, ENC_GLIDE, ENC_SERIES };
+enum enc_fixture_kind {
+    ENC_NOISE,
+    ENC_COLORED_NOISE,
+    ENC_VOWEL,
+    ENC_MISSING_F0,
+    ENC_STRONG_H2,
+    ENC_GLIDE,
+    ENC_SERIES,
+    ENC_HUM
+};
 
 struct enc_fixture {
     enum enc_fixture_kind kind;
@@ -178,6 +187,13 @@ enc_fixture_frame(struct enc_fixture* fx, int frame, float pcm[160]) {
         } else if (fx->kind == ENC_COLORED_NOISE) {
             fx->lowpass = (0.8 * fx->lowpass) + (fx->level * enc_gauss());
             v = fx->lowpass;
+        } else if (fx->kind == ENC_HUM) {
+            /* Mains hum with weak 2nd and 3rd harmonics over a noise floor
+             * about 12 dB down, as in the quiet stretches of #149's recording. */
+            fx->phase[1] += 2.0 * M_PI * f0 / 8000.0;
+            v = fx->level
+                * (sin(fx->phase[1]) + (0.1 * sin((2.0 * fx->phase[1]) + 1.0)) + (0.1 * sin((3.0 * fx->phase[1]) + 2.0))
+                   + (0.17 * enc_gauss()));
         } else {
             v = enc_fixture_harmonics(fx, f0);
         }
@@ -470,10 +486,39 @@ enc_test_noise_unvoiced(const struct enc_codec* c, void* enc) {
     return 0;
 }
 
-/* Steady vowels across the pitch range are voiced and on pitch. */
+/* Mains hum, at #149's level (-53 dBFS) and louder, is noise to the encoders:
+ * it is learned as background, and from the 10th frame on at most one
+ * harmonic in ten is voiced (the encoders used to voice all of them, at the
+ * lowest pitch). */
+static inline int
+enc_test_hum_unvoiced(const struct enc_codec* c, void* enc) {
+    const struct {
+        double hz;
+        double level;
+    } cases[] = {{60.0, 0.0023}, {50.0, 0.0023}, {60.0, 0.02}, {50.0, 0.02}};
+
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        struct enc_fixture fx = {.kind = ENC_HUM, .f0 = cases[k].hz, .level = cases[k].level};
+        struct enc_fixture_stats st;
+        enc_rng = 0x149u + (uint32_t)k;
+        if (enc_run_fixture(c, enc, &fx, 200, 10, &st) != 0 || st.harmonics == 0 || st.other_frames != 0) {
+            return 1;
+        }
+        if (st.voiced_harmonics * 10 > st.harmonics) {
+            printf("%s %.0f Hz hum at %.4f: %d/%d voiced harmonics\n", c->name, cases[k].hz, cases[k].level,
+                   st.voiced_harmonics, st.harmonics);
+            return 1;
+        }
+    }
+    printf("%s: 50 and 60 Hz mains hum at most 10%% voiced\n", c->name);
+    return 0;
+}
+
+/* Steady vowels across the pitch range, from the lowest pitch every codec
+ * sends, are voiced and on pitch. */
 static inline int
 enc_test_vowels(const struct enc_codec* c, void* enc) {
-    const double f0s[] = {70.0, 95.0, 120.0, 150.0, 200.0, 240.0, 310.0};
+    const double f0s[] = {66.0, 70.0, 95.0, 120.0, 150.0, 200.0, 240.0, 310.0};
     for (size_t i = 0; i < sizeof(f0s) / sizeof(f0s[0]); i++) {
         struct enc_fixture fx = {.kind = ENC_VOWEL, .f0 = f0s[i], .level = 0.05};
         struct enc_fixture_stats st;
@@ -486,7 +531,7 @@ enc_test_vowels(const struct enc_codec* c, void* enc) {
             return 1;
         }
     }
-    printf("%s: vowels 70-310 Hz voiced and on pitch\n", c->name);
+    printf("%s: vowels 66-310 Hz voiced and on pitch\n", c->name);
     return 0;
 }
 
@@ -1038,6 +1083,7 @@ enc_run_common(const struct enc_codec* c, void* enc) {
     fails += enc_test_short_float(c, enc);
     fails += enc_test_contexts(c, enc);
     fails += enc_test_noise_unvoiced(c, enc);
+    fails += enc_test_hum_unvoiced(c, enc);
     fails += enc_test_vowels(c, enc);
     fails += enc_test_pitch_cases(c, enc);
     fails += enc_test_level(c, enc);
