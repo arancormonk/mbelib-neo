@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.6.3 LANGUAGES C)
+project(mbelib-neo VERSION 2.6.4 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
