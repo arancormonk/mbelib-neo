@@ -102,6 +102,26 @@ mbe_ambe2400_harmonic_count(float f0) {
 }
 
 /*
+ * Voicing of harmonic l from b1, whose bits 3..0 voice the 1 kHz bands from
+ * 0 Hz up. A harmonic is voiced when the bit of its band, or of the band
+ * 250 Hz (half a 500 Hz column) above it, is set: on DVSI's AMBE-3000 each
+ * voiced band also reaches 250 Hz into the band below, measured on a DVMEGA
+ * DVstick 30 at 18 pitches (#157, docs/dvsi-parity.md "D-STAR voicing
+ * bands"). The decoder and the encoder's decoder-equivalent model use it
+ * alike; columns are rounded to float so x87 builds truncate them the same way
+ * at both.
+ */
+static inline int
+mbe_ambe2400_harmonic_voiced(int b1, int l, float f0) {
+    const float column = mbe_round_to_float((float)l * 16.0f * f0);
+    int own = (int)column;
+    int above = (int)mbe_round_to_float(column + 0.5f);
+    own = (own > 7) ? 7 : own;
+    above = (above > 7) ? 7 : above;
+    return ((b1 >> (3 - (own / 2))) | (b1 >> (3 - (above / 2)))) & 1;
+}
+
+/*
  * Tone frame (b0 126) index: bits 6..8 select its three most significant bits
  * through this table, and its five low bits sit at 9, 42, 43, 10 and 11. The
  * decoder reads and the encoder writes the index with these.

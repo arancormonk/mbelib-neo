@@ -297,8 +297,13 @@ from the unit falls from 19.13 to 1.16 dB, the 4th lost frame from 72.4 to 1.7 d
 frame played 12 dB low, as the voice after any repeat-limit mute faded in from silence, and it now
 plays 3.2 dB loud, started from the prediction history (above). The reporter's patch
 was the starting point. Only frame levels were measured, so the fade's shape and the continuing phases
-are the library's choice; other dual indices and volumes, runs of 2 or more than 4 and single tones
-other than 32 were not measured. No DVSI vector changes.
+are the library's choice. A later round measured single tones 5, 50, 100 and 122 and DTMF 135 the same
+way (five tone frames at volume 180, then four all-ones frames): the single tones end as index 32
+does, the tail and then silence, and DTMF 135 goes on as the other dual tones do. The library follows
+all five: its first lost frame is within 0.6 dB of the unit's (2.2 dB quieter after index 5), the
+next two are digital silence on both (except the unit's second after index 5, at -77 dBFS), the 4th
+is at the mute level (-99.1 dBFS on the unit, -95.8 here), and DTMF 135's four are within 0.2 dB.
+Other volumes, runs of 2 or more than 4 and other indices were not measured. No DVSI vector changes.
 
 ### D-STAR b0 124
 
@@ -376,6 +381,37 @@ leave the voice after the run at the same level here but not with the same wavef
 match), and on the run with b3 at its maximum, which plays near full scale, DVSI's level falls
 faster after the run (616 against 14369 on its fourth frame); the earlier pitch-law decode misses
 there too.
+
+### D-STAR voicing bands
+
+b1's four bits voice the 1 kHz bands from 0 Hz up. On a DVMEGA DVstick 30
+([#157](https://github.com/arancormonk/mbelib-neo/issues/157)), each voiced band also reaches about
+250 Hz into the band below. Two sweeps measured it: b0 0 to 60 in steps of 5, and b0 0, 10, 20, 30,
+50, 70, 90, 100, 110 and 119 (18 distinct pitches), each with every b1 value, as the harmonicity of each 500 Hz band of
+the output (voiced at 16 dB or more, unvoiced at 8 dB or less). The bands' upper edges sit at 1, 2
+and 3 kHz, as this library had them; their lower edges sit 250 Hz lower. A free fit of each band's
+run of voiced harmonics at each pitch finds those edges: an overlap in hertz fits 66 of the 72
+pitch-and-band cells, one counted in harmonics 60, and the old edges 53.
+
+The library now voices a harmonic when the bit of its band, or of the band 250 Hz (half a 500 Hz
+column) above it, is set (`mbe_ambe2400_harmonic_voiced()`, used by the decoder and by the encoder's
+decoder-equivalent model). Against the unit's clear band calls the mismatches fall from 186 to 56 of
+2847 (84 to 30 of 1238 in the first sweep, 102 to 26 of 1609 in the second), and 250 Hz is the best
+overlap in each sweep alone (240 and 260 Hz give 68 and 64; no upward overlap helps). Frame levels on
+those streams move closer to the unit's (mean `|dB|` 0.608 to 0.547 and 0.769 to 0.690); the unit's
+other #155 and #156 streams play unchanged, since their b1 values never voice a band above an
+unvoiced one, which is the only case the overlap changes. On DVSI's vectors the D-STAR log-spectral
+distance from DVSI falls by 0.009 dB (development), 0.006 dB (validation), 0.010 dB (final) and
+0.022 dB (hard-decision channel errors). The encoder's b1 decisions are unchanged (its bits are
+identical on all of DVSI's inputs). One tone-detector window of `dtmfvbad` flips: a strong 874 Hz
+harmonic, now voiced at the bottom of an overlap, reads as a dual tone there (agreement 0.9909 to
+0.9902).
+
+Still different: 36 of the 56 are boundary bands that read as partly voiced here (between 8 and
+16 dB) where the unit's are clear; 20 are opposite calls. At b0 30 and 55 the unit's
+2000-3000 Hz band reaches lower still (1500-2000 Hz voiced with b1 2), and at b0 55 it leaves
+2500-3000 Hz unvoiced, as if that band sat at 1500-2500 Hz; at b0 100 the unit never voices 3500 to
+4000 Hz. No rule tried accounts for those.
 
 ### D-STAR tone transitions
 

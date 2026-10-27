@@ -229,10 +229,9 @@ ambe2400_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int b0, int L, float 
     b1 |= ambe_d[41];
 
     for (int l = 1; l <= L; l++) {
-        int jl = (int)((float)l * (float)16.0 * f0);
-        cur_mp->Vl[l] = AmbePlusVuv[b1][jl];
+        cur_mp->Vl[l] = mbe_ambe2400_harmonic_voiced(b1, l, f0);
 #ifdef AMBE_DEBUG
-        fprintf(stderr, "jl[%i]:%i Vl[%i]:%i\n", l, jl, l, cur_mp->Vl[l]);
+        fprintf(stderr, "Vl[%i]:%i\n", l, cur_mp->Vl[l]);
 #endif
     }
 #ifdef AMBE_DEBUG

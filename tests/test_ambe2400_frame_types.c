@@ -141,6 +141,48 @@ make_result_c0(mbe_process_result* r, int c0, int protected_errors) {
     r->total_errors = c0 + protected_errors;
 }
 
+/*
+ * b1's bits 3..0 voice the 1 kHz bands from 0 Hz up, and each voiced band also
+ * reaches 250 Hz into the band below, as on DVSI's AMBE-3000 (#157): a
+ * harmonic at f Hz is voiced when some set bit's band [1000 k - 250, 1000 k +
+ * 1000) holds it (from 0 Hz for the lowest). Checked for every b1 at pitches
+ * whose harmonics all lie at least 40 Hz from those edges, and at pitches with
+ * a harmonic 3 to 10 Hz above or below 750, 1750 or 2750 Hz, which pin the
+ * overlap between 247 and 253 Hz.
+ */
+static void
+test_voicing_bands(void) {
+    static const int pitches[] = {0, 19, 30, 38, 4, 8, 12, 24, 45, 54, 77, 91, 100, 106};
+    for (size_t p = 0; p < sizeof(pitches) / sizeof(pitches[0]); ++p) {
+        for (int b1 = 0; b1 < 16; ++b1) {
+            char d[49];
+            mbe_parms cur, prev, enh;
+            memset(d, 0, sizeof(d));
+            put_b0(d, pitches[p]);
+            put_b2(d, 40);
+            for (int i = 0; i < 4; ++i) {
+                d[38 + i] = (char)((b1 >> (3 - i)) & 1);
+            }
+            mbe_initMbeParms(&cur, &prev, &enh);
+            assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == 0);
+            for (int l = 1; l <= cur.L; ++l) {
+                const double hz = (double)l * (double)cur.w0 / (2.0 * M_PI) * 8000.0;
+                int voiced = 0;
+                for (int k = 0; k < 4; ++k) {
+                    const double low = (k == 0) ? 0.0 : (1000.0 * k) - 250.0;
+                    voiced |= ((b1 >> (3 - k)) & 1) && hz >= low && hz < 1000.0 * (k + 1);
+                }
+                if (cur.Vl[l] != voiced) {
+                    printf("b0 %d b1 %d: harmonic %d (%.1f Hz) voiced %d, expected %d\n", pitches[p], b1, l, hz,
+                           cur.Vl[l], voiced);
+                    assert(0);
+                }
+            }
+        }
+    }
+    puts("voicing: each b1 band reaches 250 Hz into the band below");
+}
+
 /* Every b0 0..124 is voice; 125 is lost; a b0 126 tone frame plays exactly the
  * indexes D-STAR has a tone for, at any volume; b0 127 is lost. */
 static void
@@ -1753,6 +1795,7 @@ test_error_rate_mute_level(void) {
 
 int
 main(void) {
+    test_voicing_bands();
     test_classes();
     test_null_frame_is_voice();
     test_b0_124_silence_frame();
