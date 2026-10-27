@@ -1283,7 +1283,7 @@ test_noise_unvoiced(mbe_ambe2400_encoder* enc) {
 /* Steady vowels across the pitch range are voiced and on pitch. */
 static int
 test_vowels_voiced(mbe_ambe2400_encoder* enc) {
-    const double f0s[] = {70.0, 95.0, 120.0, 150.0, 200.0, 240.0, 310.0};
+    const double f0s[] = {66.0, 70.0, 95.0, 120.0, 150.0, 200.0, 240.0, 310.0};
     for (size_t i = 0; i < sizeof(f0s) / sizeof(f0s[0]); i++) {
         struct fixture fx = {.kind = FIX_VOWEL, .f0 = f0s[i], .level = 0.05};
         struct fixture_stats st;
@@ -1302,7 +1302,7 @@ test_vowels_voiced(mbe_ambe2400_encoder* enc) {
             return 1;
         }
     }
-    puts("vowels 70-310 Hz: voiced in all bands, b0 within 1");
+    puts("vowels 66-310 Hz: voiced in all bands, b0 within 1");
     return 0;
 }
 
@@ -1897,6 +1897,7 @@ main(void) {
     fails += test_pitch_endpoint(enc, 127, 123);
     fails += test_dc_noise(enc);
     fails += test_noise_unvoiced(enc);
+    fails += enc_test_hum_unvoiced(&dstar_codec, enc);
     fails += test_vowels_voiced(enc);
     fails += test_mixed_bands(enc);
     fails += test_pitch_cases(enc);

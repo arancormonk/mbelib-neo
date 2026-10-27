@@ -37,6 +37,9 @@
  *    (eqs 3-4, expired), which the AMBE decoders' unvoiced scaling expects.
  *  - The periodicity gate of eq (37) is 0.4 and covers every column and band;
  *    see mbe_analysis_column_threshold() and mbe_analysis_band_voicing().
+ *  - Background noise is tracked, and at low pitches a 500 Hz column that
+ *    holds little more than it is not voiced; see "Background noise" below.
+ *    The standard's analysis has no such step.
  */
 #include "mbe_speech_analysis.h"
 
@@ -111,6 +114,19 @@ init_windows(struct mbe_analysis_tables* t) {
     t->w_r_sq_sum = (float)w_r_sq;
 }
 
+/* The covariance of white noise's windowed spectrum between bins d apart. */
+static void
+init_noise_cov(struct mbe_analysis_tables* t) {
+    for (int d = 0; d < 16; ++d) {
+        double c = 0.0;
+        for (int n = -MBE_ANALYSIS_WR_HALF; n <= MBE_ANALYSIS_WR_HALF; ++n) {
+            double w = t->w_r[n + MBE_ANALYSIS_WR_HALF];
+            c += w * w * cos(2.0 * M_PI * (double)d * (double)n / ANALYSIS_FFT);
+        }
+        t->noise_cov[d] = (float)c;
+    }
+}
+
 static void
 init_lowpass(struct mbe_analysis_tables* t) {
     double taps[(2 * MBE_ANALYSIS_LPF_HALF) + 1];
@@ -151,6 +167,7 @@ mbe_analysis_init_tables(struct mbe_analysis_tables* tables) {
     init_windows(tables);
     init_lowpass(tables);
     init_window_transform(tables);
+    init_noise_cov(tables);
 }
 
 void
@@ -159,21 +176,53 @@ mbe_analysis_reset(struct mbe_analysis_state* state) {
         return;
     }
     memset(state, 0, sizeof(*state));
+    for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
+        state->noise_cur[m] = -1.0f; /* no noise-like frame taken */
+    }
     state->pitch_prev[0] = 100.0f; /* 5.1.3 initial values */
     state->pitch_prev[1] = 100.0f;
     state->xi_max = XI_MAX_FLOOR;
 }
 
+/*
+ * The high-pass behind the noise estimator's periodicity test: a 6th-order
+ * Butterworth at 100 Hz (bilinear transform, prewarped), as three sections
+ * with Q 0.5176, 0.7071 and 1.9319, each b0 (1 - 2 z^-1 + z^-2) /
+ * (1 + a1 z^-1 + a2 z^-2). It takes 50 and 60 Hz down 36 and 27 dB and 120 Hz
+ * 0.5 dB.
+ */
+#define GATE_SECTIONS 3
+static const float GATE_HP[GATE_SECTIONS][3] = {
+    {0.92812044f, -1.85337538f, 0.859106383f}, /* b0, a1, a2 */
+    {0.945976856f, -1.88903308f, 0.894874345f},
+    {0.97858679f, -1.95415227f, 0.960194894f},
+};
+
+/* One section in transposed direct form II; z holds its two states. */
+static float
+gate_section(const float c[3], float* z, float x) {
+    float y = (c[0] * x) + z[0];
+    z[0] = (-2.0f * c[0] * x) - (c[1] * y) + z[1];
+    z[1] = (c[0] * x) - (c[2] * y);
+    return y;
+}
+
 void
 mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_ANALYSIS_FRAME]) {
     memmove(state->buf, state->buf + MBE_ANALYSIS_FRAME, MBE_ANALYSIS_HISTORY * sizeof(float));
+    memmove(state->gate_buf, state->gate_buf + MBE_ANALYSIS_FRAME, MBE_ANALYSIS_HISTORY * sizeof(float));
     float* frame = state->buf + MBE_ANALYSIS_HISTORY;
+    float* gate = state->gate_buf + MBE_ANALYSIS_HISTORY;
     for (int i = 0; i < MBE_ANALYSIS_FRAME; ++i) {
         /* eq (3): H(z) = (1 - z^-1) / (1 - 0.99 z^-1) */
         float y = input[i] - state->hp_in + (0.99f * state->hp_out);
         state->hp_in = input[i];
         state->hp_out = y;
         frame[i] = y;
+        for (int k = 0; k < GATE_SECTIONS; ++k) {
+            y = gate_section(GATE_HP[k], state->gate_filter + (2 * (size_t)k), y);
+        }
+        gate[i] = y;
     }
 }
 
@@ -199,9 +248,9 @@ pitch_of(int index) {
  * vectorizer cannot reassociate the surrounding energy reduction. Fast-math
  * builds let the compiler vectorize the filter and energy in a single pass. */
 static void
-pitch_lowpass(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, float* out) {
+pitch_lowpass(const struct mbe_analysis_tables* t, const float* buf, float* out) {
     const int span = (2 * MBE_ANALYSIS_PITCH_HALF) + 1;
-    const float* input = s->buf + SAMPLE_CENTRE - MBE_ANALYSIS_PITCH_HALF;
+    const float* input = buf + SAMPLE_CENTRE - MBE_ANALYSIS_PITCH_HALF;
     int j = 0;
     for (; j + MBE_VF_WIDTH <= span; j += MBE_VF_WIDTH) {
         mbe_vf acc = mbe_vf_set(0.0f);
@@ -221,19 +270,20 @@ pitch_lowpass(const struct mbe_analysis_tables* t, const struct mbe_analysis_sta
 }
 #endif
 
+/* eqs (7) and (9) over one history: buf or gate_buf of the state. */
 static int
-pitch_autocorrelation(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, mbe_acf_plan* acf,
-                      struct pitch_work* w, float* energy) {
+pitch_autocorrelation(const struct mbe_analysis_tables* t, const float* buf, mbe_acf_plan* acf, struct pitch_work* w,
+                      float* energy) {
     const int span = (2 * MBE_ANALYSIS_PITCH_HALF) + 1;
     float e = 0.0f;
 #if defined(MBE_VECTOR_PITCH_LOWPASS)
-    pitch_lowpass(t, s, w->s_lpf);
+    pitch_lowpass(t, buf, w->s_lpf);
 #endif
     for (int j = 0; j < span; ++j) {
 #if defined(MBE_VECTOR_PITCH_LOWPASS)
         float acc = w->s_lpf[j];
 #else
-        const float* x = s->buf + SAMPLE_CENTRE - MBE_ANALYSIS_PITCH_HALF + j; /* sample j - 150 */
+        const float* x = buf + SAMPLE_CENTRE - MBE_ANALYSIS_PITCH_HALF + j; /* sample j - 150 */
         float acc = 0.0f;
         for (int k = -MBE_ANALYSIS_LPF_HALF; k <= MBE_ANALYSIS_LPF_HALF; ++k) {
             acc += x[-k] * t->lpf[k + MBE_ANALYSIS_LPF_HALF]; /* eq (9) */
@@ -592,6 +642,21 @@ harmonic_magnitude(const struct mbe_analysis_tables* t, const struct spectrum* s
     return sqrtf(sum / ((float)ANALYSIS_FFT * t->w_r_sq_sum));
 }
 
+/* The normalized fit error white noise leaves in this band, expected: 1 minus
+ * the share of its energy the window-shaped line explains, w' C w / (w'w
+ * bins C(0)) with C the noise covariance between bins. */
+static float
+noise_fit_error(const struct mbe_analysis_tables* t, const struct band_fit* fit) {
+    float explained = 0.0f;
+    for (int a = 0; a < fit->bins; ++a) {
+        for (int b = 0; b < fit->bins; ++b) {
+            explained += fit->w[a] * fit->w[b] * t->noise_cov[(a > b) ? a - b : b - a];
+        }
+    }
+    const float total = fit->window_energy * (float)fit->bins * t->noise_cov[0];
+    return (total > 0.0f) ? 1.0f - (explained / total) : 1.0f;
+}
+
 static void
 harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp, struct mbe_analysis_result* r) {
     const float f0_bins = r->f0 * (float)ANALYSIS_FFT;
@@ -611,6 +676,7 @@ harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp
             fit_band(t, sp, centre, lo, hi, &fit);
             r->fit_error[l] = (fit.energy > 0.0f) ? fit.error / fit.energy : 1.0f;
             r->fit_energy[l] = fit.energy;
+            r->noise_fit_error[l] = noise_fit_error(t, &fit);
             /* eq (43): band energy relative to the window's over the same bins. */
             r->voiced_magnitude[l] = (fit.window_energy > 0.0f) ? sqrtf(fit.energy / fit.window_energy) : 0.0f;
             /* eq (44): mean band energy per bin, scaled by 1 / sum w_R. */
@@ -618,6 +684,7 @@ harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp
             r->harmonics = l;
         } else {
             r->fit_error[l] = 1.0f;
+            r->noise_fit_error[l] = 1.0f;
             r->voiced_magnitude[l] = r->voiced_magnitude[l - 1];
             r->noise_magnitude[l] = r->noise_magnitude[l - 1];
         }
@@ -652,6 +719,186 @@ energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s,
     return factor;
 }
 
+/* ---- Background noise ---- */
+
+/*
+ * At the lowest pitches a harmonic band spans about two bins, and the voicing
+ * test passes noise as voiced (#149: 60 Hz mains hum read as a voice at
+ * 65 Hz, every band voiced). The analysis therefore estimates the background
+ * noise per bin, and the voicing decisions treat a 500 Hz column at such a
+ * pitch as unvoiced when it holds little more than that estimate
+ * (mbe_analysis_noise_dominated()). The magnitudes are not changed. DVSI's
+ * AMBE-3000 encoders suppress background noise by default
+ * (docs/dvsi-parity.md, "Encoder voicing over background noise"); this only
+ * borrows an estimate of it to keep it from being voiced.
+ *
+ * The estimate per bin is the lowest smoothed power of the last 48 or so
+ * noise-like frames, doubled (after minimum statistics, R. Martin, IEEE Trans.
+ * Speech Audio Process. 9(5), 2001), and at most their mean. A frame is
+ * noise-like when it does not repeat in the voice band (E at the tracked pitch,
+ * on the input high-passed at 100 Hz, above the periodicity gate; mains hum
+ * without its fundamental repeats at no pitch the search sends), its total
+ * power is within 6 dB of the previous frame's, which keeps most of a speech
+ * onset out, and it is quiet (under -30 dBFS) or 15 dB under the loudest
+ * sound tracked so far. A quiet voice whose harmonics are weak beside its
+ * fundamental is periodic in the voice band only faintly and can be taken for
+ * noise as hum is; a loud one only right after a sound 15 dB louder.
+ */
+#define NOISE_SMOOTH        0.5f     /* first-order smoothing of the spectrum power */
+#define NOISE_WINDOW_FRAMES 6        /* noise-like frames per sub-window; 8 sub-windows */
+#define NOISE_IDLE_FRAMES   50       /* frames without a noise-like one before the estimate is forgotten */
+#define NOISE_BIAS          2.0f     /* noise estimate over the minimum */
+#define NOISE_STEADY        3.98107f /* 6 dB, as a power ratio */
+#define NOISE_BELOW_PEAK    0.0316f  /* 15 dB under the tracked peak energy, eq (41) */
+#define NOISE_CEILING       9.1e5f   /* xi_0 of white noise at -30 dBFS */
+
+/* The estimate from the sub-windows' minima: NOISE_BIAS times the lowest,
+ * but no more than the mean of the noise-like frames they took. With few such
+ * frames their minimum is close to their mean, and doubling it would put
+ * speech under the estimate. */
+static void
+noise_estimate(struct mbe_analysis_state* s) {
+    int taken = 0;
+    for (int u = 0; u <= s->noise_windows && u <= MBE_ANALYSIS_NOISE_WINDOWS; ++u) {
+        taken += s->noise_taken[u];
+    }
+    for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
+        float low = s->noise_cur[m];
+        float sum = 0.0f;
+        for (int u = 0; u <= s->noise_windows && u <= MBE_ANALYSIS_NOISE_WINDOWS; ++u) {
+            sum += s->noise_sum[u][m];
+        }
+        for (int u = 0; u < s->noise_windows; ++u) {
+            float v = s->noise_min[u][m];
+            if (v >= 0.0f && (low < 0.0f || v < low)) {
+                low = v;
+            }
+        }
+        s->noise[m] = (low > 0.0f && taken > 0) ? fminf(NOISE_BIAS * low, sum / (float)taken) : 0.0f;
+    }
+}
+
+/* Forget the noise estimate. */
+static void
+noise_clear(struct mbe_analysis_state* s) {
+    memset(s->noise_sum, 0, sizeof(s->noise_sum));
+    memset(s->noise_taken, 0, sizeof(s->noise_taken));
+    memset(s->noise, 0, sizeof(s->noise));
+    for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
+        s->noise_cur[m] = -1.0f;
+    }
+    s->noise_count = 0;
+    s->noise_windows = 0;
+}
+
+/* Take the frame's smoothed power into the open sub-window, and close it
+ * after NOISE_WINDOW_FRAMES noise-like frames. */
+static void
+noise_take(struct mbe_analysis_state* s) {
+    for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
+        if (s->noise_cur[m] < 0.0f || s->noise_power[m] < s->noise_cur[m]) {
+            s->noise_cur[m] = s->noise_power[m];
+        }
+        s->noise_sum[0][m] += s->noise_power[m];
+    }
+    s->noise_taken[0]++;
+    if (++s->noise_count < NOISE_WINDOW_FRAMES) {
+        return;
+    }
+    memmove(s->noise_min[1], s->noise_min[0], (MBE_ANALYSIS_NOISE_WINDOWS - 1) * sizeof(s->noise_min[0]));
+    memcpy(s->noise_min[0], s->noise_cur, sizeof(s->noise_cur));
+    s->noise_windows += (s->noise_windows < MBE_ANALYSIS_NOISE_WINDOWS);
+    s->noise_count = 0;
+    memmove(s->noise_sum[1], s->noise_sum[0], MBE_ANALYSIS_NOISE_WINDOWS * sizeof(s->noise_sum[0]));
+    memmove(s->noise_taken + 1, s->noise_taken, MBE_ANALYSIS_NOISE_WINDOWS * sizeof(s->noise_taken[0]));
+    memset(s->noise_sum[0], 0, sizeof(s->noise_sum[0]));
+    s->noise_taken[0] = 0;
+    for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
+        s->noise_cur[m] = -1.0f; /* nothing taken yet */
+    }
+}
+
+/* Smooth the frame's spectrum power into the state and, when the frame is
+ * noise-like, take it into the open sub-window and refresh the estimate.
+ * Sub-windows close every NOISE_WINDOW_FRAMES noise-like frames, so the
+ * minimum spans the last 50 or so of them however much speech lies between.
+ * Once NOISE_IDLE_FRAMES pass without one (sustained voiced sound, or loud
+ * noise that stopped under a vowel) the estimate is forgotten, so a stale one
+ * suppresses at most that long. */
+static void
+noise_track(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp,
+            int aperiodic) {
+    float total = 0.0f;
+    for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
+        float p = (sp->re[m] * sp->re[m]) + (sp->im[m] * sp->im[m]);
+        s->noise_power[m] =
+            (s->noise_frames == 0) ? p : (NOISE_SMOOTH * s->noise_power[m]) + ((1.0f - NOISE_SMOOTH) * p);
+        total += p;
+    }
+    /* Within 6 dB of the previous frame, digital silence after silence included. */
+    const int steady = (total <= NOISE_STEADY * s->noise_prev_total && s->noise_prev_total <= NOISE_STEADY * total);
+    s->noise_prev_total = total;
+    /* Background is quiet, or lies under the signal around it: the frame's
+     * energy, as xi_0 of eq (40), under that of white noise at -30 dBFS (DVSI's
+     * encoder takes noise at -34 dBFS for noise from the start of a stream),
+     * or 15 dB under xi_max of eq (41) (its value before this frame), as
+     * background lies under speech (18 dB and more in DVSI's noisy vectors).
+     * A loud sustained sound does not become its own noise, unless a sound
+     * 15 dB louder came shortly before (xi_max falls about 0.04 dB a frame).
+     * The first frame sees mostly the zeroed history. */
+    const float xi0 = total / (t->w_r_sum * t->w_r_sum);
+    const int quiet = xi0 < fmaxf(NOISE_CEILING, NOISE_BELOW_PEAK * s->xi_max);
+    const int take = aperiodic && steady && quiet && s->noise_frames > 0;
+    if (s->noise_frames < NOISE_IDLE_FRAMES) {
+        s->noise_frames++;
+    }
+    if (!take) {
+        if (s->noise_idle < NOISE_IDLE_FRAMES) {
+            s->noise_idle++;
+            if (s->noise_idle == NOISE_IDLE_FRAMES) {
+                noise_clear(s);
+            }
+        }
+        return;
+    }
+    s->noise_idle = 0;
+    noise_take(s);
+    noise_estimate(s);
+}
+
+/* The noise estimate summed over each analysed harmonic's band. */
+static void
+noise_bands(const struct mbe_analysis_state* s, struct mbe_analysis_result* r) {
+    const float f0_bins = r->f0 * (float)ANALYSIS_FFT;
+    for (int l = 1; l <= r->harmonics; ++l) {
+        int lo;
+        int hi;
+        band_edges(f0_bins, l, &lo, &hi);
+        float noise = 0.0f;
+        for (int m = lo; m < hi && m < lo + BAND_BINS_MAX && m < MBE_ANALYSIS_BINS; ++m) {
+            noise += s->noise[m];
+        }
+        r->noise_energy[l] = noise;
+    }
+}
+
+/*
+ * E at the tracked pitch candidate on the history high-passed at 100 Hz
+ * (gate_buf), for the noise estimator; w is reused as scratch.
+ */
+static int
+gate_error(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, mbe_acf_plan* acf,
+           struct pitch_work* w, int index, float* error) {
+    float energy;
+    int status = pitch_autocorrelation(t, s->gate_buf, acf, w, &energy);
+    if (status < 0) {
+        return status;
+    }
+    pitch_error_group(t, w, energy, index, index + 1, PITCH_SPAN_GRID / (PITCH_MIN_GRID + index));
+    *error = w->error[index];
+    return 0;
+}
+
 int
 mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis_state* state, mbe_fft_plan* fft,
                    mbe_acf_plan* acf, struct mbe_analysis_result* result) {
@@ -660,7 +907,7 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     }
     struct pitch_work work;
     float energy;
-    int acf_status = pitch_autocorrelation(tables, state, acf, &work, &energy);
+    int acf_status = pitch_autocorrelation(tables, state->buf, acf, &work, &energy);
     if (acf_status < 0) {
         return acf_status;
     }
@@ -677,19 +924,27 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
         initial = submultiple_index(work.error, initial_pitch * 0.5f);
         initial_pitch = pitch_of(initial);
     }
+    const float tracked_error = work.error[initial];
+    float band_error;
+    status = gate_error(tables, state, acf, &work, initial, &band_error);
+    if (status < 0) {
+        return status;
+    }
     float pitch = refine_pitch(tables, &sp, initial_pitch);
 
     memset(result, 0, sizeof(*result));
     result->f0 = 1.0f / pitch;
-    result->pitch_error = work.error[initial];
+    result->pitch_error = tracked_error;
     harmonic_measures(tables, &sp, result);
+    noise_track(tables, state, &sp, band_error > VOICING_ERROR_MAX);
+    noise_bands(state, result);
     result->energy_factor = energy_factor(tables, state, &sp);
 
     state->pitch_prev[1] = state->pitch_prev[0];
     state->pitch_prev[0] = initial_pitch;
     state->error_prev[1] = state->error_prev[0];
-    state->error_prev[0] = work.error[initial];
-    state->trusted = work.error[initial] <= PERIODIC_ERROR_MAX;
+    state->error_prev[0] = tracked_error;
+    state->trusted = tracked_error <= PERIODIC_ERROR_MAX;
     return 0;
 }
 
@@ -717,11 +972,21 @@ mbe_analysis_column_threshold(const struct mbe_analysis_state* state, const stru
     return voicing_threshold(state->columns_prev[column - 1], column, 0.1309f, result->energy_factor);
 }
 
+/* 500 Hz column of harmonic l at the analysed fundamental. */
+static int
+analysis_column(const struct mbe_analysis_result* result, int l) {
+    int column = (int)((float)l * 16.0f * result->f0);
+    return (column < MBE_ANALYSIS_COLUMNS) ? column : MBE_ANALYSIS_COLUMNS - 1;
+}
+
 int
 mbe_analysis_band_voicing(const struct mbe_analysis_result* result, int L, const unsigned char prev[MBE_ANALYSIS_BANDS],
                           unsigned char bands[MBE_ANALYSIS_BANDS]) {
     float error[MBE_ANALYSIS_BANDS + 1] = {0};
     float energy[MBE_ANALYSIS_BANDS + 1] = {0};
+    float column_energy[MBE_ANALYSIS_COLUMNS] = {0};
+    float column_noise[MBE_ANALYSIS_COLUMNS] = {0};
+    float column_noise_error[MBE_ANALYSIS_COLUMNS] = {0};
     if (L < 1) {
         L = 1;
     }
@@ -733,6 +998,10 @@ mbe_analysis_band_voicing(const struct mbe_analysis_result* result, int L, const
         int k = mbe_analysis_band_of(l);
         energy[k] += result->fit_energy[l];
         error[k] += result->fit_error[l] * result->fit_energy[l];
+        int column = analysis_column(result, l);
+        column_energy[column] += result->fit_energy[l];
+        column_noise[column] += result->noise_energy[l];
+        column_noise_error[column] += result->noise_fit_error[l] * result->fit_energy[l];
     }
     const float w0 = 2.0f * (float)M_PI * result->f0;
     for (int k = 1; k <= MBE_ANALYSIS_BANDS; k++) {
@@ -740,6 +1009,14 @@ mbe_analysis_band_voicing(const struct mbe_analysis_result* result, int L, const
         /* The gate of mbe_analysis_column_threshold(); see the header. */
         if (k <= K && result->pitch_error <= VOICING_ERROR_MAX) {
             theta = voicing_threshold(prev[k - 1], k, w0, result->energy_factor);
+        }
+        /* A band in a column of mostly noise is unvoiced: the column of its
+         * middle harmonic (band K runs from harmonic 3K - 2 to L). */
+        const int first = (3 * k) - 2;
+        const int last = (k < K) ? 3 * k : L;
+        int column = analysis_column(result, (first + last) / 2);
+        if (mbe_analysis_noise_dominated(column_energy[column], column_noise[column], column_noise_error[column])) {
+            theta = 0.0f;
         }
         /* eqs (35)-(36); an empty band is unvoiced. */
         bands[k - 1] = (unsigned char)(energy[k] > 0.0f && error[k] < theta * energy[k]);
