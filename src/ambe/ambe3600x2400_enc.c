@@ -26,8 +26,9 @@
  *    then reduced to the four 1 kHz bits D-STAR transmits by an
  *    energy-weighted choice.
  *  - Every parameter is quantized against the exact pitch law, harmonic
- *    count and tables the decoder dequantizes with (AmbePlusVuv/AmbePlusDg/
- *    AmbePlusPRBA24/AmbePlusPRBA58/AmbePlusHOCb5..b8), so the
+ *    count, voicing rule (mbe_ambe2400_harmonic_voiced()) and tables the
+ *    decoder dequantizes with (AmbePlusDg/AmbePlusPRBA24/AmbePlusPRBA58/
+ *    AmbePlusHOCb5..b8), so the
  *    reconstructed frame is bit-compatible with this library's
  *    mbe_decodeAmbe2400Parms()/mbe_processAmbe3600x2400*() path and follows
  *    the D-STAR AMBE bit layout (interleave, scrambler and Golay parity
@@ -290,11 +291,7 @@ ambe2400_enc_fill_parms(const struct ambe_enc_frame* q, mbe_parms* cur_mp) {
     cur_mp->K = 0;
     cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
     for (int l = 1; l <= q->L; l++) {
-        int jl = (int)((float)l * 16.0f * q->f0q);
-        if (jl > 7) {
-            jl = 7;
-        }
-        cur_mp->Vl[l] = AmbePlusVuv[q->b[1]][jl];
+        cur_mp->Vl[l] = mbe_ambe2400_harmonic_voiced(q->b[1], l, q->f0q);
         if (cur_mp->Vl[l] == 1) {
             cur_mp->K++;
         }

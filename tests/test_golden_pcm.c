@@ -59,18 +59,18 @@ golden_ambe_expected(int isa) {
     if (isa == MBE_CPU_ISA_AVX2) {
         e.ambe2450_f32 = 0xF94B4E66u;
         e.ambe2450_s16 = 0x76F4852Du;
-        e.ambe2400_f32 = 0x1DBCF5A4u;
-        e.ambe2400_s16 = 0xA5E1759Fu;
+        e.ambe2400_f32 = 0x841CFE25u;
+        e.ambe2400_s16 = 0x39CDDD1Bu;
     } else if (isa == MBE_CPU_ISA_SSE2) {
         e.ambe2450_f32 = 0x18DE570Du;
         e.ambe2450_s16 = 0x76F4852Du;
-        e.ambe2400_f32 = 0x6622C794u;
-        e.ambe2400_s16 = 0xAC44DD48u;
+        e.ambe2400_f32 = 0xDF0252F9u;
+        e.ambe2400_s16 = 0xDCD25872u;
     } else {
         e.ambe2450_f32 = 0x1ABEBAABu;
         e.ambe2450_s16 = 0x76F4852Du;
-        e.ambe2400_f32 = 0xEA3E6B8Au;
-        e.ambe2400_s16 = 0xAC44DD48u;
+        e.ambe2400_f32 = 0x66366AF8u;
+        e.ambe2400_s16 = 0x39CDDD1Bu;
     }
     return e;
 }
