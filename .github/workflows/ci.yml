@@ -487,9 +487,12 @@ jobs:
           set -euo pipefail
           /lib64/ld-linux-x86-64.so.2 --help | grep -F 'x86-64-v3 (supported'
       - name: Configure (Debug, SIMD, portable)
+        # Ubuntu 26.04's compiler defaults to x86-64-v3. Select SSE2 explicitly
+        # so this build exercises runtime dispatch instead of direct AVX2 calls.
         run: |
           set -euo pipefail
           cmake -S . -B build/dispatch -DCMAKE_BUILD_TYPE=Debug -DMBELIB_ENABLE_SIMD=ON \
+            -DCMAKE_C_FLAGS=-march=x86-64 -DMBELIB_ENABLE_NATIVE=OFF \
             -DMBELIB_TEST_REQUIRE_AVX2=ON | tee dispatch-configure.log
           grep -F 'AVX2 dispatch: -mavx2 -mfma kernels chosen at run time' dispatch-configure.log
       - name: Build (Debug, SIMD, portable)
@@ -554,7 +557,7 @@ jobs:
         if: env.CI_RUN_CHECK == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user-static
+          sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user
       - name: Configure ARM32 Release
         if: env.CI_RUN_CHECK == 'true'
         env:
@@ -567,7 +570,7 @@ jobs:
           fi
           cmake -S . -B build/arm32 \
             -DCMAKE_TOOLCHAIN_FILE=cmake/arm-linux-gnueabihf.cmake \
-            -DCMAKE_CROSSCOMPILING_EMULATOR='qemu-arm-static;-L;/usr/arm-linux-gnueabihf' \
+            -DCMAKE_CROSSCOMPILING_EMULATOR='qemu-arm;-L;/usr/arm-linux-gnueabihf' \
             -DCMAKE_BUILD_TYPE=Release \
             -DMBELIB_ENABLE_SIMD=ON \
             -DMBELIB_ENABLE_FAST_MATH=ON \
@@ -925,7 +928,7 @@ jobs:
       - name: Upload Semgrep SARIF
         if: always() && hashFiles('.semgrep.sarif') != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           sarif_file: .semgrep.sarif
       - name: Upload Semgrep output
