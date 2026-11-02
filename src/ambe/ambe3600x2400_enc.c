@@ -51,6 +51,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include "mbe_pitch_model_lut.h"
 
 #include "ambe3600x2400_const.h"
 #include "ambe3600x2400_internal.h"
@@ -176,32 +177,22 @@ ambe2400_enc_soft_voicing(float energy, float error, float threshold) {
  * (each covers two columns) by the energy-weighted squared error of
  * US 8,595,002. Columns follow the decoder's floor(16 l f0) assignment, so a
  * decision lands on the harmonics it was measured from; ties and empty bands
- * are unvoiced. A column of mostly background noise counts as unvoiced in the
- * cost, so a 1 kHz bit voices it only when the other column outweighs it.
+ * are unvoiced.
  */
 static void
 ambe2400_enc_voicing(struct ambe_enc_frame* q, const struct mbe_analysis_state* state,
                      const struct mbe_analysis_result* res, unsigned char columns[MBE_ANALYSIS_COLUMNS]) {
     float energy[MBE_ANALYSIS_COLUMNS] = {0};
     float error[MBE_ANALYSIS_COLUMNS] = {0};
-    float band_energy[MBE_ANALYSIS_COLUMNS] = {0};
-    float noise[MBE_ANALYSIS_COLUMNS] = {0};
-    float noise_error[MBE_ANALYSIS_COLUMNS] = {0};
     float lv[MBE_ANALYSIS_COLUMNS];
     for (int l = 1; l <= q->L && l <= res->harmonics; l++) {
         int column = ambe2400_enc_column(q, l);
         float e = res->magnitude[l] * res->magnitude[l];
         energy[column] += e;
         error[column] += res->fit_error[l] * e;
-        band_energy[column] += res->fit_energy[l];
-        noise[column] += res->noise_energy[l];
-        noise_error[column] += res->noise_fit_error[l] * res->fit_energy[l];
     }
     for (int k = 0; k < MBE_ANALYSIS_COLUMNS; k++) {
-        const float threshold = mbe_analysis_column_threshold(state, res, k + 1);
-        lv[k] = mbe_analysis_noise_dominated(band_energy[k], noise[k], noise_error[k])
-                    ? 0.0f
-                    : ambe2400_enc_soft_voicing(energy[k], error[k], threshold);
+        lv[k] = ambe2400_enc_soft_voicing(energy[k], error[k], mbe_analysis_column_threshold(state, res, k + 1));
     }
     q->b[1] = 0;
     for (int bit = 0; bit < 4; bit++) {
@@ -296,7 +287,7 @@ ambe2400_enc_pack(const struct ambe_enc_frame* q, char ambe_d[49]) {
 static void
 ambe2400_enc_fill_parms(const struct ambe_enc_frame* q, mbe_parms* cur_mp) {
     /* Write quantized parameters to cur_mp (decoder-equivalent state) */
-    cur_mp->w0 = q->f0q * (float)2 * M_PI;
+    cur_mp->w0 = ambe2400_pitch_w0[q->b[0]];
     cur_mp->L = q->L;
     cur_mp->K = 0;
     cur_mp->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
@@ -373,8 +364,8 @@ ambe2400_enc_tone_index(int tone_id) {
  * tone is never sent at the inaudible volume 0. */
 static int
 ambe2400_enc_tone_volume(float amplitude) {
-    double rms_db = 20.0 * log10(fmax((double)amplitude, 1e-3) / (M_SQRT2 * 32768.0));
-    long volume = lround(255.5 + ((rms_db - MBE_TONE_DSTAR_DB_AT_VOL255) / MBE_TONE_DSTAR_DB_PER_STEP));
+    float rms_db = 20.0f * log10f(fmaxf(amplitude, 1e-3f) / ((float)M_SQRT2 * 32768.0f));
+    long volume = lroundf(255.5f + ((rms_db - (float)MBE_TONE_DSTAR_DB_AT_VOL255) / (float)MBE_TONE_DSTAR_DB_PER_STEP));
     return (int)((volume < 1) ? 1 : ((volume > 255) ? 255 : volume));
 }
 

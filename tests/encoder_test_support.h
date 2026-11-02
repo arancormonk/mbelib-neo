@@ -202,12 +202,14 @@ enc_fixture_frame(struct enc_fixture* fx, int frame, float pcm[160]) {
 }
 
 struct enc_fixture_stats {
-    int frames;           /* settled voice frames */
-    int other_frames;     /* settled frames that are not voice frames */
-    int on_pitch;         /* decoded f0 within 3% of the input's */
-    int octave_errors;    /* decoded f0 off by more than 30% */
-    int voiced_harmonics; /* below 3 kHz */
-    int harmonics;        /* below 3 kHz */
+    int frames;                 /* settled voice frames */
+    int other_frames;           /* settled frames that are not voice frames */
+    int on_pitch;               /* decoded f0 within 3% of the input's */
+    int octave_errors;          /* decoded f0 off by more than 30% */
+    int upper_harmonics;        /* 1-3 kHz */
+    int voiced_upper_harmonics; /* 1-3 kHz */
+    int voiced_harmonics;       /* below 3 kHz */
+    int harmonics;              /* below 3 kHz */
 };
 
 /* Encode a fixture through the codec and judge the settled frames by the
@@ -239,6 +241,10 @@ enc_run_fixture(const struct enc_codec* c, void* enc, struct enc_fixture* fx, in
             for (int l = 1; l <= cur.L && (double)l * enc_f0_hz(&cur) < 3000.0; l++) {
                 st->voiced_harmonics += cur.Vl[l];
                 st->harmonics++;
+                if ((double)l * enc_f0_hz(&cur) >= 1000.0) {
+                    st->upper_harmonics++;
+                    st->voiced_upper_harmonics += cur.Vl[l];
+                }
             }
         }
         mbe_moveMbeParms(&cur, &prev);
@@ -486,10 +492,9 @@ enc_test_noise_unvoiced(const struct enc_codec* c, void* enc) {
     return 0;
 }
 
-/* Mains hum, at #149's level (-53 dBFS) and louder, is noise to the encoders:
- * it is learned as background, and from the 10th frame on at most one
- * harmonic in ten is voiced (the encoders used to voice all of them, at the
- * lowest pitch). */
+/* Hum is periodic, but must not voice the unrelated noise above it.
+ * Score harmonics above 1 kHz to exclude the coarsest codec's lowest voicing
+ * bit, which can legitimately voice the hum. No noise suppression is assumed. */
 static inline int
 enc_test_hum_unvoiced(const struct enc_codec* c, void* enc) {
     const struct {
@@ -501,16 +506,16 @@ enc_test_hum_unvoiced(const struct enc_codec* c, void* enc) {
         struct enc_fixture fx = {.kind = ENC_HUM, .f0 = cases[k].hz, .level = cases[k].level};
         struct enc_fixture_stats st;
         enc_rng = 0x149u + (uint32_t)k;
-        if (enc_run_fixture(c, enc, &fx, 200, 10, &st) != 0 || st.harmonics == 0 || st.other_frames != 0) {
+        if (enc_run_fixture(c, enc, &fx, 200, 10, &st) != 0 || st.upper_harmonics == 0 || st.other_frames != 0) {
             return 1;
         }
-        if (st.voiced_harmonics * 10 > st.harmonics) {
-            printf("%s %.0f Hz hum at %.4f: %d/%d voiced harmonics\n", c->name, cases[k].hz, cases[k].level,
-                   st.voiced_harmonics, st.harmonics);
+        if (st.voiced_upper_harmonics * 10 > st.upper_harmonics) {
+            printf("%s %.0f Hz hum at %.4f: %d/%d voiced upper harmonics\n", c->name, cases[k].hz, cases[k].level,
+                   st.voiced_upper_harmonics, st.upper_harmonics);
             return 1;
         }
     }
-    printf("%s: 50 and 60 Hz mains hum at most 10%% voiced\n", c->name);
+    printf("%s: 50 and 60 Hz mains hum: upper noise harmonics at most 10%% voiced\n", c->name);
     return 0;
 }
 

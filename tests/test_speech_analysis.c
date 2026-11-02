@@ -140,8 +140,9 @@ test_harmonic_fit(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     }
 }
 
-/* White noise: E(P) near 1 on average, fit errors large, and no
- * alternating-width ripple across harmonics on average. */
+/* White noise: E(P) near 1 on average and no alternating-width magnitude
+ * ripple. The global pitch gate leaves unused fit errors at 1; this is an
+ * unvoiced default, not a measured noise-disagreement value. */
 static void
 test_noise(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     struct mbe_analysis_state state;
@@ -150,6 +151,7 @@ test_noise(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     double ripple[MBE_ANALYSIS_HARMONICS + 1] = {0};
     int fit_count = 0;
     int frames = 0;
+    int gated_frames = 0;
     mbe_analysis_reset(&state);
     for (int f = 0; f < 300; f++) {
         float in[MBE_ANALYSIS_FRAME];
@@ -164,6 +166,25 @@ test_noise(mbe_fft_plan* fft, mbe_acf_plan* acf) {
         }
         frames++;
         error_sum += r.pitch_error;
+        if (r.pitch_error > 0.4f) { /* the existing global voicing gate */
+            gated_frames++;
+            for (int l = 1; l <= r.harmonics; l++) {
+                assert(r.fit_error[l] == 1.0f);
+            }
+            /* Even a previously voiced band cannot pass the closed gate. */
+            struct mbe_analysis_state voiced_state = state;
+            memset(voiced_state.columns_prev, 1, sizeof(voiced_state.columns_prev));
+            for (int k = 1; k <= MBE_ANALYSIS_COLUMNS; k++) {
+                assert(mbe_analysis_column_threshold(&voiced_state, &r, k) == 0.0f);
+            }
+            unsigned char prev[MBE_ANALYSIS_BANDS];
+            unsigned char bands[MBE_ANALYSIS_BANDS];
+            memset(prev, 1, sizeof(prev));
+            mbe_analysis_band_voicing(&r, r.harmonics, prev, bands);
+            for (int k = 0; k < MBE_ANALYSIS_BANDS; k++) {
+                assert(bands[k] == 0);
+            }
+        }
         const double f0_bins = r.f0 * 256.0;
         for (int l = 2; l < r.harmonics; l++) {
             fit_sum += r.fit_error[l];
@@ -172,8 +193,11 @@ test_noise(mbe_fft_plan* fft, mbe_acf_plan* acf) {
             ripple[l] += (r.magnitude[l] * r.magnitude[l]) / (2000.0 * 2000.0 * f0_bins / 256.0);
         }
     }
+    assert(gated_frames > 0);
     assert(error_sum / frames > 0.6);
-    assert(fit_sum / fit_count > 0.2); /* periodic signals stay below 0.05 */
+    /* Includes the unvoiced default on gated frames. Measured periodic fits
+     * remain covered by test_harmonic_fit() and the hum/voice regressions. */
+    assert(fit_sum / fit_count > 0.2);
     double lo = 1e9;
     double hi = 0.0;
     for (int l = 4; l <= 12; l++) {
@@ -192,34 +216,29 @@ analyse(mbe_fft_plan* fft, mbe_acf_plan* acf, struct mbe_analysis_state* state, 
     assert(mbe_analysis_frame(&tables, state, fft, acf, r) == 0);
 }
 
-/* Voiced bands of the frame, and its band count in *bands_out. */
+/* Count bands wholly above min_hz, and their voiced decisions. */
 static int
-voiced_bands(const struct mbe_analysis_result* r, int* bands_out) {
+voiced_bands(const struct mbe_analysis_result* r, double min_hz, int* bands_out) {
     unsigned char prev[MBE_ANALYSIS_BANDS] = {0};
     unsigned char bands[MBE_ANALYSIS_BANDS];
     const int L = (int)(0.9254 * 0.5 / r->f0);
     const int K = mbe_analysis_band_voicing(r, L, prev, bands);
     int voiced = 0;
+    *bands_out = 0;
     for (int k = 0; k < K; k++) {
-        voiced += bands[k];
+        if ((3 * k + 1) * r->f0 * 8000.0 >= min_hz) {
+            voiced += bands[k];
+            (*bands_out)++;
+        }
     }
-    *bands_out = K;
     return voiced;
-}
-
-static double
-noise_total(const struct mbe_analysis_state* state) {
-    double total = 0.0;
-    for (int m = 0; m < MBE_ANALYSIS_BINS; m++) {
-        total += state->noise[m];
-    }
-    return total;
 }
 
 /* Mains hum at the level of #149's quiet stretches (about 75 LSB, with weak
  * 2nd and 3rd harmonics) over its noise floor (13 LSB RMS), and over a nearly
- * silent one: after a second it is learned as noise, and at most one band in
- * twenty is voiced (all of them used to be). */
+ * silent one: at most one upper band in ten is voiced, as in the encoder
+ * noise regressions. The hum itself is periodic; it must not turn unrelated
+ * noise above 1 kHz into harmonics. */
 static void
 test_hum_unvoiced(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     const double mains[] = {60.0, 50.0, 60.0};
@@ -241,17 +260,17 @@ test_hum_unvoiced(mbe_fft_plan* fft, mbe_acf_plan* acf) {
             analyse(fft, acf, &state, in, &r);
             if (f >= 50) {
                 int count;
-                voiced += voiced_bands(&r, &count);
+                voiced += voiced_bands(&r, 1000.0, &count);
                 bands += count;
             }
         }
-        assert(voiced * 20 <= bands);
+        printf("hum %.0f Hz, noise %.0f LSB: %d/%d upper bands voiced\n", mains[c], floor_rms[c], voiced, bands);
+        assert(voiced * 10 <= bands);
     }
 }
 
 /* Steady voices at the bottom of the pitch range, the lowest the codecs send
- * (62.5 Hz) included, repeat in the voice band, so they never reach the noise
- * estimate: they keep their pitch, pass the periodicity gate and stay voiced. */
+ * (62.5 Hz) included, keep their pitch, pass the periodicity gate and stay voiced. */
 static void
 test_low_voices(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     const double f0s[] = {62.5, 66.0, 75.0};
@@ -270,10 +289,9 @@ test_low_voices(mbe_fft_plan* fft, mbe_acf_plan* acf) {
         }
         assert(near(1.0 / r.f0, 8000.0 / s.f0, 0.5));
         assert(r.pitch_error < 0.25f);
-        assert(noise_total(&state) == 0.0);
-        for (int l = 1; l <= r.harmonics; l++) {
-            assert(r.noise_energy[l] == 0.0f);
-        }
+        int bands;
+        const int voiced = voiced_bands(&r, 0.0, &bands);
+        assert(voiced * 10 >= bands * 9);
     }
 }
 
@@ -290,11 +308,8 @@ feed_noise(mbe_fft_plan* fft, mbe_acf_plan* acf, struct mbe_analysis_state* stat
     }
 }
 
-/* A loud sustained low voice whose harmonics are weak beside its fundamental
- * (1/h^2), in noise 10 dB down, is periodic in the voice band only faintly,
- * as hum is. Above -30 dBFS and within 15 dB of the loudest sound so far, on
- * its own or after a vowel 13 dB louder, it is never taken for noise, and
- * stays voiced. */
+/* A sustained low voice with weak upper harmonics (1/h^2), in noise 10 dB
+ * down, retains voicing both on its own and after a vowel 13 dB louder. */
 static void
 test_loud_low_voice(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     for (int history = 0; history <= 1; history++) {
@@ -325,43 +340,34 @@ test_loud_low_voice(mbe_fft_plan* fft, mbe_acf_plan* acf) {
             analyse(fft, acf, &state, in, &r);
             if (f >= 50) {
                 int bands;
-                voiced += voiced_bands(&r, &bands) > 0;
+                voiced += voiced_bands(&r, 0.0, &bands) > 0;
                 frames++;
             }
         }
-        assert(noise_total(&state) == 0.0);
         assert(voiced * 20 >= frames * 19);
     }
 }
 
-/* Steady white noise is learned, its estimate within a few dB of its power,
- * and the magnitudes are left as they are; a voice starting abruptly out of it
- * never raises the estimate and is voiced from the frame that fills the
- * analysis window. */
+/* Noise keeps its spectral magnitude; a voice starting abruptly out of it
+ * is voiced from the frame that fills the analysis window. */
 static void
-test_noise_estimate(mbe_fft_plan* fft, mbe_acf_plan* acf) {
+test_voice_onset(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     struct mbe_analysis_state state;
     struct mbe_analysis_result r;
     mbe_analysis_reset(&state);
     feed_noise(fft, acf, &state, 300.0, 100, &r);
-    double noise = 0.0;
-    double energy = 0.0;
     double magnitude = 0.0;
     int count = 0;
     for (int f = 0; f < 50; f++) {
         feed_noise(fft, acf, &state, 300.0, 1, &r);
         for (int l = 2; l < r.harmonics; l++) {
-            noise += r.noise_energy[l];
-            energy += r.fit_energy[l];
             /* M_l^2 = sigma^2 f0_bins / 256 for flat noise, as in test_noise() */
             magnitude += r.magnitude[l] * r.magnitude[l] / (300.0 * 300.0 * r.f0);
             count++;
         }
     }
-    assert(fabs(10.0 * log10(noise / energy)) < 3.0);    /* estimate within 3 dB */
     assert(fabs(10.0 * log10(magnitude / count)) < 1.5); /* magnitudes untouched */
 
-    const double settled = noise_total(&state);
     struct harmonic_signal s = {.f0 = 150.0, .amp = 4000.0, .count = 23};
     for (int f = 0; f < 10; f++) {
         float in[MBE_ANALYSIS_FRAME];
@@ -370,10 +376,9 @@ test_noise_estimate(mbe_fft_plan* fft, mbe_acf_plan* acf) {
             in[i] += (float)(300.0 * gauss());
         }
         analyse(fft, acf, &state, in, &r);
-        assert(noise_total(&state) <= settled); /* the voice never raises it */
-        if (f >= 1) {                           /* once the onset fills the analysis window */
+        if (f >= 1) { /* once the onset fills the analysis window */
             int bands;
-            const int voiced = voiced_bands(&r, &bands);
+            const int voiced = voiced_bands(&r, 0.0, &bands);
             assert(voiced * 2 >= bands);
             for (int h = 1; h <= 4; h++) {
                 assert(fabs(20.0 * log10(r.magnitude[h] / ((s.amp / h) / 2.0))) < 1.5);
@@ -382,11 +387,8 @@ test_noise_estimate(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     }
 }
 
-/* A noise estimate that no longer applies is forgotten 50 frames after the last
- * noise-like frame: after
- * noise that stops under a quieter sustained vowel, or under digital silence.
- * At 150 Hz, where the voicing test needs no help from it, the vowel is voiced
- * throughout. */
+/* A quieter sustained vowel following loud noise, directly or after silence,
+ * promptly recovers its voicing and magnitude. */
 static void
 test_noise_recovery(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     for (int silence = 0; silence <= 1; silence++) {
@@ -394,34 +396,22 @@ test_noise_recovery(mbe_fft_plan* fft, mbe_acf_plan* acf) {
         struct mbe_analysis_result r;
         mbe_analysis_reset(&state);
         feed_noise(fft, acf, &state, 700.0, 100, &r); /* -33 dBFS */
-        assert(noise_total(&state) > 0.0);
         if (silence) {
             feed_noise(fft, acf, &state, 0.0, 10, &r);
         }
         struct harmonic_signal s = {.f0 = 150.0, .amp = 400.0, .count = 23}; /* under the noise */
-        /* Held until 50 frames after the last noise-like one (the vowel's
-         * first frame may still be one), and forgotten at the 50th. */
-        int idle_seen = 0;
         for (int f = 0; f < 60; f++) {
             float in[MBE_ANALYSIS_FRAME];
             synthesize(&s, in);
             analyse(fft, acf, &state, in, &r);
-            if (state.noise_idle < 50) {
-                assert(noise_total(&state) > 0.0 || silence); /* silence drops it to 0 at once */
-            } else {
-                assert(noise_total(&state) == 0.0);
-                idle_seen = 1;
-            }
             if (f >= 3) {
                 int bands;
-                const int voiced = voiced_bands(&r, &bands);
+                const int voiced = voiced_bands(&r, 0.0, &bands);
                 assert(voiced * 2 >= bands);
             }
         }
-        assert(idle_seen);
-        assert(noise_total(&state) == 0.0);
         int bands;
-        const int voiced = voiced_bands(&r, &bands);
+        const int voiced = voiced_bands(&r, 0.0, &bands);
         assert(voiced * 2 >= bands); /* most bands voiced */
         for (int h = 1; h <= 8; h++) {
             assert(fabs(20.0 * log10(r.magnitude[h] / ((s.amp / h) / 2.0))) < 1.5);
@@ -568,7 +558,7 @@ main(void) {
     test_noise(fft, acf);
     test_hum_unvoiced(fft, acf);
     test_low_voices(fft, acf);
-    test_noise_estimate(fft, acf);
+    test_voice_onset(fft, acf);
     test_loud_low_voice(fft, acf);
     test_noise_recovery(fft, acf);
     test_thresholds();

@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "mbe_pitch_model_lut.h"
 
 #include "imbe4400_internal.h"
 #include "imbe7200x4400_const.h"
@@ -97,7 +98,7 @@ imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_L9) {
 
     cur_mp->w0 = ((float)(4 * M_PI) / (float)((float)b0 + 39.5));
 
-    int L = (int)(0.9254 * (int)((M_PI / cur_mp->w0) + 0.25));
+    int L = imbe_pitch_harmonics[b0];
     if ((L > 56) || (L < 9)) {
 #ifdef IMBE_DEBUG
         fprintf(stderr, "invalid L: %i\n", L);

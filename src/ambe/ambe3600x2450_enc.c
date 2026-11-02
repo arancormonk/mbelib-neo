@@ -129,14 +129,23 @@ mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[M
      * disagreement with the band decisions; ties keep the lower index. */
     const float f0q = mbe_ambe2450_f0(b0);
     const int L = mbe_ambe2450_harmonic_count(b0);
+    float amplitude_squared[57];
+    unsigned char column[57];
+    unsigned char voiced[57];
+    /* These harmonic quantities are shared by all codewords. Keep each
+     * codeword's distance sum in harmonic order to preserve rounding. */
+    for (int l = 1; l <= L; l++) {
+        amplitude_squared[l] = m[l] * m[l];
+        column[l] = (unsigned char)ambe2450_enc_column(f0q, l);
+        voiced[l] = bands[mbe_analysis_band_of(l) - 1];
+    }
     int best = 0;
     float best_distance = 0.0f;
     for (int n = 0; n < AMBE2450_VUV_CODES; n++) {
         float distance = 0.0f;
         for (int l = 1; l <= L; l++) {
-            int voiced = bands[mbe_analysis_band_of(l) - 1];
-            if (AmbeVuv[n][ambe2450_enc_column(f0q, l)] != voiced) {
-                distance += m[l] * m[l];
+            if (AmbeVuv[n][column[l]] != voiced[l]) {
+                distance += amplitude_squared[l];
             }
         }
         if (n == 0 || distance < best_distance) {
@@ -232,8 +241,9 @@ ambe2450_enc_pack_tone(int tone_id, int ad, char ambe_d[49]) {
  * nearly all others. */
 static int
 ambe2450_enc_tone_level(float amplitude) {
-    double rms_db = 20.0 * log10(fmax((double)amplitude, 1e-3) / (M_SQRT2 * 32768.0));
-    long ad = lround(127.5 + ((rms_db - MBE_TONE_AMBE2450_DB_AT_AD127) / MBE_TONE_AMBE2450_DB_PER_STEP));
+    float rms_db = 20.0f * log10f(fmaxf(amplitude, 1e-3f) / ((float)M_SQRT2 * 32768.0f));
+    long ad =
+        lroundf(127.5f + ((rms_db - (float)MBE_TONE_AMBE2450_DB_AT_AD127) / (float)MBE_TONE_AMBE2450_DB_PER_STEP));
     return (int)((ad < 0) ? 0 : ((ad > 127) ? 127 : ad));
 }
 

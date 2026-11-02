@@ -22,8 +22,11 @@
 #include "ambe3600x2400_const.h"
 #include "ambe3600x2400_internal.h"
 #include "ambe_common.h"
+#define MBE_DEFINE_AMBE_DCT_LUT
+#include "ambe_dct_lut.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_pitch_model_lut.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
@@ -33,8 +36,8 @@
 /**
  * @brief Thread-local cache for AMBE DCT cosine coefficients.
  *
- * Pre-computes the cosine terms used in the Ri inverse DCT and per-block
- * inverse DCT loops to eliminate repeated cosf() calls per frame.
+ * Copies the precomputed float cosine terms used in the Ri inverse DCT
+ * and per-block inverse DCT loops; no runtime angle calculation is needed.
  *
  * Ri DCT: cosf(M_PI * (m-1) * (i-0.5) / 8) for m=1..8, i=1..8
  * Per-block IDCT: cosf(M_PI * (k-1) * (j-0.5) / ji) for ji=1..17, j=1..ji, k=1..ji
@@ -44,7 +47,7 @@ static MBE_THREAD_LOCAL struct ambe_dct_cache ambe_cache = {0};
 /**
  * @brief Initialize or return the thread-local AMBE DCT cache.
  *
- * Fills the cosine tables on first use. Because the cache is thread-local,
+ * Copies the cosine tables on first use. Because the cache is thread-local,
  * no locking is required.
  *
  * @return Pointer to the initialized cache.
@@ -55,18 +58,19 @@ mbe_ambe2400_get_dct_cache(void) {
         return &ambe_cache;
     }
 
-    /* Fill Ri DCT cosine table: cosf(M_PI * (m-1) * (i-0.5) / 8) */
+    /* Preserve the original table order and unused zero entries. */
+    int coefficient = 0;
     for (int m = 1; m <= 8; m++) {
         for (int i = 1; i <= 8; i++) {
-            ambe_cache.ri_cos[m][i] = cosf((M_PI * (float)(m - 1) * ((float)i - 0.5f)) / 8.0f);
+            ambe_cache.ri_cos[m][i] = mbe_ambe_dct_coefficients[coefficient++];
         }
     }
 
-    /* Fill per-block IDCT cosine table: cosf(M_PI * (k-1) * (j-0.5) / ji) */
+    /* Per-block IDCT coefficients follow the Ri coefficients. */
     for (int ji = 1; ji <= 17; ji++) {
         for (int j = 1; j <= ji; j++) {
             for (int k = 1; k <= ji; k++) {
-                ambe_cache.idct_cos[ji][j][k] = cosf((M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
+                ambe_cache.idct_cos[ji][j][k] = mbe_ambe_dct_coefficients[coefficient++];
             }
         }
     }
@@ -209,7 +213,8 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
         return;
     }
     *f0 = mbe_ambe2400_f0(b0);
-    cur_mp->w0 = *f0 * (float)2 * M_PI;
+    /* Share the encoder's canonical model even when pitch-law arithmetic contracts. */
+    cur_mp->w0 = ambe2400_pitch_w0[b0];
     *L = mbe_ambe2400_harmonic_count(*f0);
     cur_mp->L = *L;
 }

@@ -154,7 +154,7 @@ test_voiced_across_isas(void) {
 
 static void
 test_tone_fit_across_isas(void) {
-    const double pairs[][2] = {{350, 440}, {697, 1209}, {941, 1633}};
+    const float pairs[][2] = {{350, 440}, {697, 1209}, {941, 1633}};
     for (unsigned p = 0; p < sizeof(pairs) / sizeof(pairs[0]); ++p) {
         float samples[160];
         for (int i = 0; i < 160; ++i) {
@@ -163,14 +163,16 @@ test_tone_fit_across_isas(void) {
         }
         for (int count = 1; count <= 2; ++count) {
             for (int n = 100; n <= 160; n += 7) {
-                double amp_sse2[2] = {0}, amp_avx2[2] = {0};
+                float amp_sse2[2] = {0}, amp_avx2[2] = {0};
                 assert(mbe_cpu_select_isa(MBE_CPU_ISA_SSE2) == 0);
-                const double e_sse2 = mbe_tone_fit(samples, n, pairs[p], count, amp_sse2);
+                const float e_sse2 = mbe_tone_fit(samples, n, pairs[p], count, amp_sse2);
                 assert(mbe_cpu_select_isa(MBE_CPU_ISA_AVX2) == 0);
-                const double e_avx2 = mbe_tone_fit(samples, n, pairs[p], count, amp_avx2);
-                assert(fabs(e_sse2 - e_avx2) <= 1e-9 * fmax(1.0, fabs(e_sse2)));
+                const float e_avx2 = mbe_tone_fit(samples, n, pairs[p], count, amp_avx2);
+                /* Float reductions use different lane widths; match the
+                 * accuracy contract checked against the scalar tone oracle. */
+                assert(fabsf(e_sse2 - e_avx2) <= 1e-4f * fmaxf(1.0f, fabsf(e_sse2)));
                 for (int k = 0; k < count; ++k) {
-                    assert(fabs(amp_sse2[k] - amp_avx2[k]) <= 1e-9 * fmax(1.0, amp_sse2[k]));
+                    assert(fabsf(amp_sse2[k] - amp_avx2[k]) <= 1e-3f * fmaxf(1.0f, amp_sse2[k]));
                 }
             }
         }

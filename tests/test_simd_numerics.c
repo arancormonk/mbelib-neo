@@ -184,13 +184,16 @@ test_tone_fit(void) {
                         (float)(1000.0 * cos(2.0 * PI * pairs[p][0] * i / 8000.0 + 0.77)
                                 + 500.0 * sin(2.0 * PI * pairs[p][1] * i / 8000.0) + 0.1 * (double)(rng >> 24));
                 }
-                double expected_amp[2], actual_amp[2];
+                double expected_amp[2];
+                float actual_amp[2];
+                const float hz[2] = {(float)pairs[p][0], (float)pairs[p][1]};
+                const double reference_hz[2] = {hz[0], hz[1]};
                 /* Offset tests unaligned loads and every possible scalar tail. */
-                double expected = reference_tone(samples + 1, n, pairs[p], count, expected_amp);
-                double actual = mbe_tone_fit(samples + 1, n, pairs[p], count, actual_amp);
-                assert(fabs(actual - expected) <= 1e-9 * fmax(1.0, fabs(expected)));
+                double expected = reference_tone(samples + 1, n, reference_hz, count, expected_amp);
+                float actual = mbe_tone_fit(samples + 1, n, hz, count, actual_amp);
+                assert(fabs(actual - expected) <= 1e-4 * fmax(1.0, fabs(expected)));
                 for (int k = 0; k < count; ++k) {
-                    assert(fabs(actual_amp[k] - expected_amp[k]) <= 1e-9 * fmax(1.0, expected_amp[k]));
+                    assert(fabs(actual_amp[k] - expected_amp[k]) <= 1e-3 * fmax(1.0, expected_amp[k]));
                 }
             }
         }

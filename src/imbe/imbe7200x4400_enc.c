@@ -36,6 +36,7 @@
 
 #include "imbe4400_internal.h"
 #include "imbe7200x4400_const.h"
+#include "imbe_enc_dct_lut.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
 #include "mbe_math.h"
@@ -106,7 +107,7 @@ struct imbe_enc_frame {
 /* eq 45 for the refined fundamental f0 (cycles per sample), within 6.1's range. */
 static int
 imbe_enc_pitch(float f0) {
-    long b0 = lround(floor((2.0 / (double)f0) - 39.0)); /* 4 pi / w0 with w0 = 2 pi f0 */
+    long b0 = lroundf(floorf((2.0f / f0) - 39.0f)); /* 4 pi / w0 with w0 = 2 pi f0 */
     return (int)((b0 < 0) ? 0 : ((b0 > IMBE_ENC_MAX_B0) ? IMBE_ENC_MAX_B0 : b0));
 }
 
@@ -115,8 +116,8 @@ imbe_enc_pitch(float f0) {
 static void
 imbe_enc_set_pitch(struct imbe_enc_frame* q, int b0) {
     q->b[0] = (b0 < 0) ? 0 : ((b0 > IMBE_ENC_MAX_B0) ? IMBE_ENC_MAX_B0 : b0);
-    float w0 = (float)(4 * M_PI) / ((float)q->b[0] + 39.5f);
-    int L = (int)(0.9254 * (int)((M_PI / w0) + 0.25));
+    float w0 = (float)(4 * (float)M_PI) / ((float)q->b[0] + 39.5f);
+    int L = (int)(0.9254f * (int)(((float)M_PI / w0) + 0.25f));
     q->L = (L < 9) ? 9 : ((L > 56) ? 56 : L);
     q->K = (q->L < 37) ? (q->L + 2) / 3 : 12;
 }
@@ -170,21 +171,24 @@ imbe_enc_transform(struct imbe_enc_frame* q) {
     int l = 1;
     for (int i = 1; i <= 6; i++) {
         const int J = ImbeJi[L9][i - 1];
+        const float* basis = imbe_enc_dct_basis + imbe_enc_dct_offset[J];
         for (int k = 1; k <= J; k++) {
-            double sum = 0.0;
+            float sum = 0.0f;
             for (int j = 1; j <= J; j++) {
-                sum += (double)q->Tl[l + j - 1] * cos(M_PI * (double)(k - 1) * ((double)j - 0.5) / (double)J);
+                sum += q->Tl[l + j - 1] * basis[(k - 1) * J + j - 1];
             }
-            q->C[i][k] = (float)(sum / (double)J);
+            q->C[i][k] = sum / (float)J;
         }
         l += J;
     }
+    /* The gain DCT uses the same length-six basis as the block transform. */
+    const float* gain_basis = imbe_enc_dct_basis + imbe_enc_dct_offset[6];
     for (int m = 1; m <= 6; m++) {
-        double sum = 0.0;
+        float sum = 0.0f;
         for (int i = 1; i <= 6; i++) {
-            sum += (double)q->C[i][1] * cos(M_PI * (double)(m - 1) * ((double)i - 0.5) / 6.0);
+            sum += q->C[i][1] * gain_basis[(m - 1) * 6 + i - 1];
         }
-        q->G[m] = (float)(sum / 6.0);
+        q->G[m] = sum / 6.0f;
     }
 }
 
@@ -193,11 +197,11 @@ imbe_enc_transform(struct imbe_enc_frame* q) {
 static int
 imbe_enc_uniform(float value, int bits, float step) {
     const long half = 1L << (bits - 1);
-    double cell = floor((double)value / (double)step);
-    if (cell < (double)-half) {
+    float cell = floorf(value / step);
+    if (cell < (float)-half) {
         return 0;
     }
-    if (cell >= (double)half) {
+    if (cell >= (float)half) {
         return (int)((2 * half) - 1);
     }
     return (int)((long)cell + half);

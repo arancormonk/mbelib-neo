@@ -1306,6 +1306,106 @@ test_vowels_voiced(mbe_ambe2400_encoder* enc) {
     return 0;
 }
 
+enum hum_noise_section {
+    HUM_NOISE_START,
+    HUM_HARMONICS,
+    HUM_NOISE_RETURN,
+    HUM_TONE,
+    HUM_NOISY_VOICE,
+    HUM_SECTION_COUNT
+};
+
+enum { HUM_SECTION_FRAMES = 30, HUM_SETTLE_FRAMES = 5, HUM_SCORED_FRAMES = HUM_SECTION_FRAMES - HUM_SETTLE_FRAMES };
+
+static void
+hum_noise_frame(float pcm[160], int frame, double frequency, double amplitude) {
+    int section = frame / HUM_SECTION_FRAMES;
+    /* 60 Hz lies below the analysis range; the voiced controls use a
+     * representable fundamental even in that case. */
+    double hz = section == HUM_HARMONICS || section >= HUM_TONE ? fmax(frequency, 63.0) : frequency;
+    for (int i = 0; i < 160; i++) {
+        double phase = 2.0 * M_PI * hz * (frame * 160 + i) / 8000.0;
+        double v = sin(phase);
+        if (section == HUM_HARMONICS || section == HUM_NOISY_VOICE) {
+            for (int h = 2; h * hz < 3500.0; h++) {
+                v += sin(h * phase + 0.7 * h * h) / h;
+            }
+            if (section == HUM_NOISY_VOICE) {
+                v += 0.3 * gauss_noise();
+            }
+        } else if (section != HUM_TONE) {
+            v += 0.15 * gauss_noise();
+        }
+        pcm[i] = (float)(amplitude * v / 32768.0);
+    }
+}
+
+static int
+test_hum_noise_case(mbe_ambe2400_encoder* enc, double frequency, double amplitude) {
+    mbe_parms cur, prev, enhanced;
+    mbe_ambe2400EncoderReset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    rng = 0x937u;
+    int noise_voiced = 0, harmonic_voiced = 0, tone_voiced = 0, noisy_voice = 0;
+    for (int frame = 0; frame < HUM_SECTION_COUNT * HUM_SECTION_FRAMES; frame++) {
+        int section = frame / HUM_SECTION_FRAMES;
+        float pcm[160];
+        hum_noise_frame(pcm, frame, frequency, amplitude);
+        char d[49];
+        if (mbe_encodeAmbe2400Parms(enc, pcm, d, &cur, &prev) != 0) {
+            return 1;
+        }
+        /* Allow the analysis and transmitted-voicing history to settle
+         * after each transition; score the remaining 25 frames. */
+        if (frame % HUM_SECTION_FRAMES >= HUM_SETTLE_FRAMES) {
+            int b1 = (d[38] << 3) | (d[39] << 2) | (d[40] << 1) | d[41];
+            if (section == HUM_HARMONICS) {
+                harmonic_voiced += b1 == 15;
+            } else if (section == HUM_TONE) {
+                tone_voiced += (b1 & 8) != 0;
+            } else if (section == HUM_NOISY_VOICE) {
+                noisy_voice += (b1 & 8) != 0;
+            } else {
+                noise_voiced += ((b1 >> 2) & 1) + ((b1 >> 1) & 1) + (b1 & 1);
+            }
+        }
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    /* Score three upper bands in each of the two noise sections. At most
+     * 10% may be voiced; each voiced control may miss one frame. A pure
+     * tone only needs its lowest band to stay voiced. */
+    const int noise_decisions = 2 * HUM_SCORED_FRAMES * 3;
+    const int minimum_voiced = HUM_SCORED_FRAMES - 1;
+    if (noise_voiced > noise_decisions / 10 || harmonic_voiced < minimum_voiced || tone_voiced < minimum_voiced
+        || noisy_voice < minimum_voiced) {
+        printf("hum %.0f Hz amplitude %.0f: upper noise bands voiced %d/%d, "
+               "harmonics %d/%d, tone %d/%d, noisy voice %d/%d\n",
+               frequency, amplitude, noise_voiced, noise_decisions, harmonic_voiced, HUM_SCORED_FRAMES, tone_voiced,
+               HUM_SCORED_FRAMES, noisy_voice, HUM_SCORED_FRAMES);
+        return 1;
+    }
+    return 0;
+}
+
+/* A hum must not turn the broadband noise above it into a harmonic comb.
+ * Its own band may be voiced. Quiet harmonics and tones must still be voiced:
+ * an absolute level gate would fail these controls. Noise -> harmonics ->
+ * noise also exercises recovery through the transmitted-voicing history. */
+static int
+test_hum_noise_voicing(mbe_ambe2400_encoder* enc) {
+    const double frequencies[] = {60.0, 63.0, 65.0, 70.0, 90.0, 120.0};
+    const double amplitudes[] = {30.0, 100.0, 1000.0};
+    for (size_t c = 0; c < sizeof(frequencies) / sizeof(frequencies[0]); c++) {
+        for (size_t level = 0; level < sizeof(amplitudes) / sizeof(amplitudes[0]); level++) {
+            if (test_hum_noise_case(enc, frequencies[c], amplitudes[level]) != 0) {
+                return 1;
+            }
+        }
+    }
+    puts("hum: upper noise bands stay unvoiced; quiet harmonics and tones retain voicing");
+    return 0;
+}
+
 /* Harmonics below 2 kHz with noise above are voiced only below 2 kHz. */
 static int
 test_mixed_bands(mbe_ambe2400_encoder* enc) {
@@ -1899,6 +1999,7 @@ main(void) {
     fails += test_noise_unvoiced(enc);
     fails += enc_test_hum_unvoiced(&dstar_codec, enc);
     fails += test_vowels_voiced(enc);
+    fails += test_hum_noise_voicing(enc);
     fails += test_mixed_bands(enc);
     fails += test_pitch_cases(enc);
     fails += test_contexts(enc);

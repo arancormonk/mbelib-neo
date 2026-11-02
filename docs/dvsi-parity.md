@@ -650,8 +650,35 @@ How much of the low-frequency loss comes from suppression and how much from DVSI
 unvoiced frames at one pitch (250.3 Hz D-STAR, 248.1 Hz P25, which leaves nothing below 125 Hz)
 cannot be separated from the bits.
 
-**This change.** The analysis estimates the background noise and uses it in the voicing decisions
-only; magnitudes are unchanged (`src/core/mbe_speech_analysis.c`, "Background noise").
+**Current analysis.** Voicing uses agreement between two tapered observations one pitch period
+apart. A harmonic repeats with the expected phase; unrelated noise does not. This replaces the
+single-spectrum fit error and the noise-estimate veto described below, while retaining the
+existing energy weighting, thresholds, hysteresis and codec-specific voicing quantization.
+
+- The local pitch refinement compares seven integer lags around the tracked coarse period using
+  a common window. It selects an interior minimum, interpolates its neighbors and rounds to an
+  eighth of a sample. The refinement signal combines the existing low-passed samples with the
+  input, retaining upper-harmonic timing. Coarse pitch history and its global error gate are
+  unchanged.
+- Two 256-point FFTs measure per-harmonic disagreement. A harmonic-centered phase rotation
+  accounts for the fractional period without resampling. Normalizing for shared noise samples
+  in the overlapping windows keeps white-noise error near one, including at short periods.
+- Both observations fit in the existing sample history. There is no added frame latency,
+  persistent noise estimate, level gate or pitch-floor exception. Spectral magnitude estimation
+  retains its existing formulas; its harmonic centers follow the refined pitch.
+
+The intent is to stop a low-frequency tone from voicing unrelated upper-band noise while
+retaining genuine harmonics. The tone's own band may remain voiced; this is not DVSI's
+background-noise suppression. Rapid amplitude or pitch variation can still reduce temporal
+agreement.
+
+**Version 2.6.5 experiment (historical).** The following design, gates and measurements describe
+the former noise estimator, not the current temporal classifier. They are retained as the
+record of that experiment; its DVSI vector scoreboard has not been rerun for the new classifier.
+
+The analysis estimated the background noise and used it in the voicing decisions
+only; magnitudes were unchanged (the 2.6.5 version of `src/core/mbe_speech_analysis.c`,
+"Background noise").
 
 - **Noise estimate.** Per spectrum bin: the lowest smoothed power of the last 48 or so noise-like
   frames, doubled and at most their mean (after minimum statistics, R. Martin, IEEE Trans. Speech
@@ -747,7 +774,7 @@ Still different:
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 | Voiced amplitude within a frame (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 133-135: harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS` | every harmonic at steady pitch, its fourth root linear | DVSI ([Voiced amplitude](#voiced-amplitude)) |
-| Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | at pitches below about 90 Hz a 500 Hz column holding little more than the learned background noise is unvoiced ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
+| Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | per-harmonic agreement across one period replaces the spectral fit and noise-estimate veto; existing band thresholds decide voicing ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
 
 The P25 attenuation is not adopted: no rule tried (eq 112-116 as printed, and instantaneous,
 clamped or leaky variants of it) explains it, and under channel errors our output stays closer to
