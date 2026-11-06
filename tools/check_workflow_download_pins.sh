@@ -29,7 +29,7 @@ mutable_release_downloads=$(
 report_violation "Mutable GitHub release download URL detected:" "$mutable_release_downloads"
 
 floating_ci_images=$(
-  rg -n '(archlinux:base-devel|ghcr[.]io/(gitleaks/gitleaks|google/osv-scanner):)' \
+  rg -n '(archlinux:base-devel|alpine:[0-9]|ghcr[.]io/(gitleaks/gitleaks|google/osv-scanner):)' \
     .github/workflows tools \
     --glob '!tools/check_workflow_download_pins.sh' |
     grep -v '@sha256:' ||
@@ -43,6 +43,7 @@ source tools/ci-dependency-pins.env
 
 for var in \
   ARCHLINUX_BASE_DEVEL_IMAGE \
+  ALPINE_IMAGE \
   GITLEAKS_IMAGE \
   OSV_SCANNER_IMAGE; do
   value=${!var:-}

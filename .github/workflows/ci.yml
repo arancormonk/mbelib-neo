@@ -290,6 +290,71 @@ jobs:
             ctest --test-dir build/multi-config -C "$config" --output-on-failure
           done
 
+  # The consumer defaults on musl: dsd-neo's Linux installer builds this library
+  # from source on Alpine, where fortify-headers check string calls against the
+  # bounds GCC infers for each pointer, more strictly than glibc's fortify. A
+  # memmove across the rows of a 2-D array read there as an overflow of its first
+  # row, and the -Werror Release build failed while every glibc job passed.
+  consumer-release-musl:
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped') &&
+      (needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false')
+    name: linux • Release • ctest (consumer defaults, Alpine musl)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ci-worker-12
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        # Dependabot and fork PRs get no Docker Hub secrets. The login is then skipped
+        # and the pull goes out anonymously.
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub secrets are not set for this run; pulling anonymously."
+          fi
+      - name: Login to Docker Hub (optional)
+        # The Alpine image below is pulled with `docker` inside a step, so it
+        # needs a login of its own.
+        if: steps.dockerhub.outputs.available == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        continue-on-error: true
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Build and test (Release, default options, Alpine)
+        run: |
+          set -euo pipefail
+          source tools/ci-dependency-pins.env
+          docker run --rm -v "$PWD:/src:ro" "$ALPINE_IMAGE" sh -euc '
+            apk add --no-cache build-base cmake git linux-headers ninja
+            cp -a /src /work
+            cmake -S /work -B /work/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMBELIB_BUILD_TESTS=ON
+            # The job exists for these defaults; fail if they change under it.
+            grep -Fx "MBELIB_WARNINGS_AS_ERRORS:BOOL=ON" /work/build/CMakeCache.txt
+            cmake --build /work/build --parallel
+            ctest --test-dir /work/build --output-on-failure
+          '
+
   # The same suite built by a current Clang, the macOS toolchain's compiler
   # family, which treats fast-math more aggressively than GCC or Ubuntu's Clang:
   # it folds bit tests on floats it computed or took as arguments (an
@@ -340,7 +405,7 @@ jobs:
         # The Arch toolchain image below is pulled with `docker` inside a step, so it
         # needs a login of its own.
         if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         continue-on-error: true
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -436,7 +501,7 @@ jobs:
         # The Arch toolchain image below is pulled with `docker` inside a step, so it
         # needs a login of its own.
         if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         continue-on-error: true
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -651,7 +716,7 @@ jobs:
         # The Arch toolchain image below is pulled with `docker` inside a step, so it
         # needs a login of its own.
         if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         continue-on-error: true
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -703,7 +768,7 @@ jobs:
         # The Arch toolchain image below is pulled with `docker` inside a step, so it
         # needs a login of its own.
         if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         continue-on-error: true
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -806,7 +871,7 @@ jobs:
         # The Arch toolchain image below is pulled with `docker` inside a step, so it
         # needs a login of its own.
         if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         continue-on-error: true
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -861,7 +926,7 @@ jobs:
         # The Arch toolchain image below is pulled with `docker` inside a step, so it
         # needs a login of its own.
         if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         continue-on-error: true
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -912,10 +977,10 @@ jobs:
 
           check = subprocess.run([sys.executable, "-m", "pip", "check"], capture_output=True, text=True)
           expected = sorted([
-              "semgrep 1.182.1 has requirement mcp==1.29.0, but you have mcp 1.30.0.",
-              "semgrep 1.182.1 has requirement opentelemetry-api~=1.37.0, but you have opentelemetry-api 1.45.1.",
-              "semgrep 1.182.1 has requirement opentelemetry-exporter-otlp-proto-http~=1.37.0, but you have opentelemetry-exporter-otlp-proto-http 1.45.1.",
-              "semgrep 1.182.1 has requirement opentelemetry-sdk~=1.37.0, but you have opentelemetry-sdk 1.45.1.",
+              "semgrep 1.184.0 has requirement mcp==1.29.0, but you have mcp 1.30.0.",
+              "semgrep 1.184.0 has requirement opentelemetry-api~=1.37.0, but you have opentelemetry-api 1.45.2.",
+              "semgrep 1.184.0 has requirement opentelemetry-exporter-otlp-proto-http~=1.37.0, but you have opentelemetry-exporter-otlp-proto-http 1.45.2.",
+              "semgrep 1.184.0 has requirement opentelemetry-sdk~=1.37.0, but you have opentelemetry-sdk 1.45.2.",
           ])
           if check.returncode != 1 or sorted(check.stdout.splitlines()) != expected or check.stderr:
               sys.exit(f"Unexpected Semgrep dependency check: {check.stdout}{check.stderr}")
@@ -928,7 +993,7 @@ jobs:
       - name: Upload Semgrep SARIF
         if: always() && hashFiles('.semgrep.sarif') != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: .semgrep.sarif
       - name: Upload Semgrep output
@@ -1011,7 +1076,7 @@ jobs:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
     runs-on: ubuntu-latest
     container:
-      image: archlinux:base-devel@sha256:6db772fd1dd128b9cf7b7231ca5284af70879596fe4ec754c911cfc4ac30d5eb
+      image: archlinux:base-devel@sha256:2de80105abb49f813a85393c6758a4334deb6bcec4a2411bd2f059c0bee6ee4c
       # Pulled before any step runs, so a login step cannot cover it: authenticate the pull itself.
       # GitHub rejects empty credentials before the job starts. That is safe only because this
       # job never runs on a pull request, where Dependabot and fork PRs have no secrets; a job
@@ -1221,7 +1286,7 @@ jobs:
     needs: [format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep, build-test, sanitize-linux, validate-release-tag]
     runs-on: ubuntu-latest
     container:
-      image: archlinux:base-devel@sha256:6db772fd1dd128b9cf7b7231ca5284af70879596fe4ec754c911cfc4ac30d5eb
+      image: archlinux:base-devel@sha256:2de80105abb49f813a85393c6758a4334deb6bcec4a2411bd2f059c0bee6ee4c
       # Pulled before any step runs, so a login step cannot cover it: authenticate the pull itself.
       # GitHub rejects empty credentials before the job starts. That is safe only because this
       # job never runs on a pull request, where Dependabot and fork PRs have no secrets; a job
@@ -1544,7 +1609,7 @@ jobs:
 
   package-release:
     name: package release (${{ matrix.os }})
-    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, lto-link-v4, dispatch-debug]
+    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, consumer-release-musl, lto-link-v4, dispatch-debug]
     # The PR-only classifier is skipped on tags. Explicit result checks avoid
     # success() propagating that skip through otherwise successful native jobs.
     if: >-
@@ -1553,8 +1618,8 @@ jobs:
       needs.cross-arm32.result == 'success' && needs.sanitize-linux.result == 'success' &&
       needs.install-and-consume.result == 'success' && needs.install-and-consume-win.result == 'success' &&
       needs.optimized-v3-ctest.result == 'success' && needs.optimized-v3-ctest-clang.result == 'success' &&
-      needs.consumer-release-gcc.result == 'success' && needs.lto-link-v4.result == 'success' &&
-      needs.dispatch-debug.result == 'success' &&
+      needs.consumer-release-gcc.result == 'success' && needs.consumer-release-musl.result == 'success' &&
+      needs.lto-link-v4.result == 'success' && needs.dispatch-debug.result == 'success' &&
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.rebuild_packages))
     runs-on: ${{ matrix.os }}
@@ -1825,7 +1890,7 @@ jobs:
         with:
           subject-path: dist/SHA256SUMS.txt
       - name: Upload release assets
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: ${{ needs.validate-release-tag.outputs.tag }}
           files: |
