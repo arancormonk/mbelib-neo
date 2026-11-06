@@ -32,6 +32,7 @@ TAG_CHECKS = {
 # revisions whose CI has them, so earlier releases stay recoverable.
 LATER_TAG_CHECKS = {
     (2, 6, 1): {"linux • Debug • SIMD (SSE2 baseline + AVX2 dispatch)"},
+    (2, 6, 6): {"linux • Release • ctest (consumer defaults, Alpine musl)"},
 }
 
 
