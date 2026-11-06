@@ -805,11 +805,17 @@ noise_take(struct mbe_analysis_state* s) {
     if (++s->noise_count < NOISE_WINDOW_FRAMES) {
         return;
     }
-    memmove(s->noise_min[1], s->noise_min[0], (MBE_ANALYSIS_NOISE_WINDOWS - 1) * sizeof(s->noise_min[0]));
+    /* Shift the rows one at a time, last first. One memmove across several rows reads as an overflow of the first
+     * row to a fortified memmove (Alpine's fortify-headers), which fails the -Werror build. */
+    for (int w = MBE_ANALYSIS_NOISE_WINDOWS - 1; w > 0; --w) {
+        memcpy(s->noise_min[w], s->noise_min[w - 1], sizeof(s->noise_min[w]));
+    }
     memcpy(s->noise_min[0], s->noise_cur, sizeof(s->noise_cur));
     s->noise_windows += (s->noise_windows < MBE_ANALYSIS_NOISE_WINDOWS);
     s->noise_count = 0;
-    memmove(s->noise_sum[1], s->noise_sum[0], MBE_ANALYSIS_NOISE_WINDOWS * sizeof(s->noise_sum[0]));
+    for (int w = MBE_ANALYSIS_NOISE_WINDOWS; w > 0; --w) {
+        memcpy(s->noise_sum[w], s->noise_sum[w - 1], sizeof(s->noise_sum[w]));
+    }
     memmove(s->noise_taken + 1, s->noise_taken, MBE_ANALYSIS_NOISE_WINDOWS * sizeof(s->noise_taken[0]));
     memset(s->noise_sum[0], 0, sizeof(s->noise_sum[0]));
     s->noise_taken[0] = 0;
