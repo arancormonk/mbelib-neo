@@ -70,7 +70,7 @@ CI and local quality tools are tracked through:
 Hashed Python requirements are used where Python tooling is installed in CI.
 GitHub Actions are pinned to immutable commit SHAs by policy.
 
-Semgrep 1.182.1 pins two vulnerable dependency ranges:
+Semgrep 1.184.0 pins two vulnerable dependency ranges:
 
 - `mcp==1.29.0`, which is affected by
   [GHSA-84m7-p3x7-pcfv](https://github.com/modelcontextprotocol/python-sdk/security/advisories/GHSA-84m7-p3x7-pcfv).
@@ -78,7 +78,7 @@ Semgrep 1.182.1 pins two vulnerable dependency ranges:
 - `opentelemetry-*~=1.37.0` and `~=0.58b0`, which hold `opentelemetry-api` below
   the fix for [GHSA-xcq7-p3pf-p88h](https://github.com/advisories/GHSA-xcq7-p3pf-p88h).
   The Semgrep requirements override the OpenTelemetry packages Semgrep names
-  with 1.45.1 and 0.66b1, so the family stays in step.
+  with 1.45.2 and 0.66b2, so the family stays in step.
 
 Regenerate the complete hashed lockfile with the command in its header, including
 `--override .github/requirements/semgrep.in`. Install it with

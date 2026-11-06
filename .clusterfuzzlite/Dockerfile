@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-FROM gcr.io/oss-fuzz-base/base-builder@sha256:0d2576e650679ea4e3dd99cf371badafff54412c96a012a11ac61ba3f06ae5bf
+FROM gcr.io/oss-fuzz-base/base-builder@sha256:1f9cf74bc3d7029b528494542f9d9851b256dceed38d3f420989434dc5ae0760
 
 COPY . $SRC/mbelib-neo
 WORKDIR $SRC/mbelib-neo
