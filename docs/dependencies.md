@@ -177,6 +177,17 @@ and disconnected mode, and both release/VCS recipes generated the expected
 `.SRCINFO` with makepkg. Windows, macOS and ARM execution remains covered by
 the existing CI matrix and was not run on this Linux x86 host.
 
+### PFFFT update to 80b9c01
+
+The update from `316f0b0` to `80b9c01` changes no output: none of the files
+this project compiles (`src/pffft.c`, `src/pffft_common.c` and the headers they
+include) changed. The fork's commits in between touch its CMake option and
+architecture detection, its CI, bench and test build files, its README and
+AGENTS notes, and `src/pffft_double.c`, which this project does not build. Its
+LICENSE and the compiled files' notices are unchanged, so only the pinned
+revision in the retained PFFFT text and its inventory hash were refreshed. Both
+pins were regenerated from the immutable archive.
+
 ### PFFFT update to 316f0b0
 
 The update from `548918d` to `316f0b0` changes no output. The fork's complex
