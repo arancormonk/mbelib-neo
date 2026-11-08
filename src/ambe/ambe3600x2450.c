@@ -843,7 +843,7 @@ static void
 ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2450);
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
-                                       MBE_VOICED_SYNTHESIS_DVSI);
+                                       MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 

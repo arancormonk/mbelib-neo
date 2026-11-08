@@ -1476,6 +1476,42 @@ test_ambe2450_vuv_rendering(void) {
     }
 }
 
+/* Eq 116 scales an error-free frame whose amplitudes sum past 20480 down to
+ * it; the IMBE and rate-33 paths, as DVSI's decoders, leave it unscaled. */
+static void
+test_amplitude_limit(void) {
+    for (int loud = 0; loud <= 1; ++loud) {
+        mbe_parms spec, none, prev, enhanced;
+        mbe_initMbeParms(&spec, &prev, &enhanced);
+        spec.w0 = (float)(2.0 * M_PI * 150.0 / 8000.0);
+        spec.L = 24;
+        for (int l = 1; l <= spec.L; ++l) {
+            spec.Vl[l] = 1;
+            spec.Ml[l] = loud ? 1500.0f : 100.0f; /* sums 36000 or 2400 */
+        }
+        prev = spec;
+        none = spec;
+        mbe_applyAdaptiveSmoothingWithRm0Limit(&spec, &prev, 1.0e6f, MBE_AMPLITUDE_LIMIT_SPEC);
+        mbe_applyAdaptiveSmoothingWithRm0Limit(&none, &prev, 1.0e6f, MBE_AMPLITUDE_LIMIT_NONE);
+        double spec_sum = 0.0, none_sum = 0.0;
+        for (int l = 1; l <= spec.L; ++l) {
+            spec_sum += spec.Ml[l];
+            none_sum += none.Ml[l];
+        }
+        if (loud) {
+            assert(fabs(spec_sum - (double)MBE_DEFAULT_AMPLITUDE_THRESHOLD) < 1.0);
+            assert(fabs(none_sum - 36000.0) < 1.0);
+        } else {
+            assert(fabs(spec_sum - 2400.0) < 1e-3 && fabs(none_sum - 2400.0) < 1e-3);
+        }
+        assert(spec.amplitudeThreshold == none.amplitudeThreshold);
+        uint32_t spec_energy, none_energy;
+        memcpy(&spec_energy, &spec.localEnergy, sizeof(spec_energy));
+        memcpy(&none_energy, &none.localEnergy, sizeof(none_energy));
+        assert(spec_energy == none_energy);
+    }
+}
+
 int
 main(void) {
     test_ambe2450_layout();
@@ -1495,6 +1531,7 @@ main(void) {
     test_dvsi_voiced_amplitude();
     test_dvsi_voiced_onset();
     test_ambe2450_vuv_rendering();
+    test_amplitude_limit();
     test_voiced_amplitude_law_gate();
     test_render_aliased_model();
     test_low_band_edge_cases();

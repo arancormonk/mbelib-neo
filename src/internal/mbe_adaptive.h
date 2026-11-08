@@ -65,6 +65,25 @@
 void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0);
 
 /**
+ * Whether adaptive smoothing scales a frame's amplitudes down to the threshold
+ * of TIA-102.BABA eqs 115-116; chosen by the codec path.
+ */
+enum mbe_amplitude_limit {
+    /** Eq 116 as specified: D-STAR and the public synthesis API. */
+    MBE_AMPLITUDE_LIMIT_SPEC,
+    /** No eq 116 scaling: the IMBE (P25 and ProVoice) and rate-33 paths. On identical bits
+     * DVSI's decoders play the frames it would scale (1.7% of rate 33's voice
+     * frames, 1% of P25's) 0.0-0.1 dB from their unscaled level, where eq 116
+     * left them 2.9 and 1.0 dB quieter (docs/dvsi-parity.md, "Amplitude
+     * limit"). */
+    MBE_AMPLITUDE_LIMIT_NONE,
+};
+
+/** @brief mbe_applyAdaptiveSmoothingWithRm0() with the eq 116 scaling chosen by @p limit. */
+void mbe_applyAdaptiveSmoothingWithRm0Limit(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0,
+                                            enum mbe_amplitude_limit limit);
+
+/**
  * @brief Apply spectral amplitude enhancement and return pre-enhancement RM0.
  * @param cur_mp In/out parameter set to enhance.
  * @param high_band_gain Height of the high-band shelf applied afterwards (1 for none).
@@ -155,9 +174,11 @@ int mbe_voiced_amplitude_law_applies(const float* prev, const float* cur);
  * @param rm0 Sum of squared pre-enhancement amplitudes.
  * @param mute_noise Noise output if the frame is muted.
  * @param voiced How the voiced harmonics move over the frame.
+ * @param limit Whether adaptive smoothing applies eq 116's amplitude scaling.
  */
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
-                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced);
+                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                                        enum mbe_amplitude_limit limit);
 
 /**
  * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.

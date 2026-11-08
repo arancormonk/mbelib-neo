@@ -681,6 +681,25 @@ development), past the 0.02 dB allowed, while moving 0.11 dB closer to DVSI; and
 vectors three windows of voice (D-STAR `knox_12`, rate-33 `cpvbad` twice) now read as a single tone
 to the detector where DVSI's output and ours before read none.
 
+### Amplitude limit
+
+TIA-102.BABA eqs 115-116 scale a frame's amplitudes down whenever they sum past a threshold, 20480
+with error-free bits. DVSI's P25 and rate-33 decoders do not: on identical bits, the frames that eq
+116 scales (1.7% of rate 33's loud voice frames on the development vectors, 1% of P25's) play
+within 0.01-0.13 dB (medians) of their unscaled level on DVSI's decoder, where eq 116 left them 2.95
+and 1.05 dB quieter. Those paths, ProVoice's with P25's, now skip the scaling; eqs 111-114 (the
+smoothed energy and the voicing threshold under errors) are unchanged. D-STAR keeps it: there its
+frames sit 0.22 dB under DVSI's with the scaling and 0.52 dB over it without, and the loudest
+D-STAR frames already play louder than a DVstick 30 (see [Known differences](#known-differences)).
+The public `mbe_synthesizeSpeechf()` keeps eq 116.
+
+On the scoreboard, against the voiced-phase change: the level offset from DVSI's decoder falls from
+a mean of 0.332 to 0.065 dB on rate-33 development (`lvl` -3.55 to +0.22 dB, `dam_10ov` -2.02 to
+-0.02) and from 0.195 to 0.131 on P25; log-spectral distance against DVSI falls 0.082 and 0.016 dB
+(development), 0.009 and 0.012 (validation). D-STAR's output, every encoder's bits, the channel and
+tone results are unchanged. The declared gate that rate 33's level move by at most 0.2 dB fails, on
+that move toward DVSI (`lvl`).
+
 ### Encoder voicing over background noise
 
 A recording encoded by this library's D-STAR encoder and played on DVSI hardware buzzed at the
@@ -813,6 +832,7 @@ Still different:
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 | Voiced amplitude within a frame (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 133-135: harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS` | every harmonic at steady pitch, its fourth root linear | DVSI ([Voiced amplitude](#voiced-amplitude)) |
 | Voiced phase (every mode) | eq 139: the phase advances by `l 80 (w0(-1) + w0(0))` per frame, through unvoiced frames too | the pitch moves 16 samples after mid-frame; a voiced onset restarts the phase from that frame alone | DVSI ([Voiced phase](#voiced-phase)) |
+| Amplitude limit (P25, rate 33) | eqs 115-116 scale a frame whose amplitudes sum past 20480 (error-free) | no scaling | DVSI ([Amplitude limit](#amplitude-limit)) |
 | Rate-33 V/UV vectors | Annex B rows and eq 5's columns; rows 17-31 all unvoiced | each voiced column reaches 250 Hz into an unvoiced one below; row 17 voices its lowest column | DVSI ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
 | Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | at pitches below about 90 Hz a 500 Hz column holding little more than the learned background noise is unvoiced ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
 

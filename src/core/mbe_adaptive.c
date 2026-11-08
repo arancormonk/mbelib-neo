@@ -74,6 +74,12 @@ amplitude_threshold(const mbe_parms* cur, int prior) {
 
 void
 mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0) {
+    mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, rm0, MBE_AMPLITUDE_LIMIT_SPEC);
+}
+
+void
+mbe_applyAdaptiveSmoothingWithRm0Limit(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0,
+                                       enum mbe_amplitude_limit limit) {
     if (!valid_harmonics(cur_mp) || !valid_harmonics(prev_mp)) {
         return;
     }
@@ -102,7 +108,8 @@ mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, f
     }
     cur_mp->amplitudeThreshold = amplitude_threshold(cur_mp, prior_threshold);
     float scale = 1.0f;
-    if (amplitude_sum > 0.0 && (double)cur_mp->amplitudeThreshold <= amplitude_sum) {
+    if (limit == MBE_AMPLITUDE_LIMIT_SPEC && amplitude_sum > 0.0
+        && (double)cur_mp->amplitudeThreshold <= amplitude_sum) {
         scale = mbe_round_to_float((float)((double)cur_mp->amplitudeThreshold / amplitude_sum));
     }
     if (scale < 0.0f) {

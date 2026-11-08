@@ -809,8 +809,10 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
 
     mbe_moveMbeParms(cur_mp, prev_mp);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
+    /* As DVSI's P25 decoder, without eq 116's scaling; ProVoice, which plays
+     * through the same path, likewise. */
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise,
-                                       MBE_VOICED_SYNTHESIS_DVSI);
+                                       MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

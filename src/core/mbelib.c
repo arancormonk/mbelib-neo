@@ -1431,7 +1431,8 @@ enum mbe_speech_smoothing {
 
 static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
-                         float pre_enh_rm0, enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced) {
+                         float pre_enh_rm0, enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                         enum mbe_amplitude_limit limit) {
 
     /* One frame length for the phase arithmetic, the window Ws and the
      * voiced kernels, which process exactly MBE_VOICED_FRAME samples. */
@@ -1449,7 +1450,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* TIA-102.BABA equations 111-116: advance smoothing state before the
      * mute decision so a muted frame retains its parameter progression. */
     if (smoothing == MBE_SMOOTHING_PRE_ENH_RM0) {
-        mbe_applyAdaptiveSmoothingWithRm0(cur_mp, prev_mp, pre_enh_rm0);
+        mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, pre_enh_rm0, limit);
     } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
@@ -1524,21 +1525,23 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 
 void
 mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
-                                   enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise, voiced);
+                                   enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                                   enum mbe_amplitude_limit limit) {
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise, voiced, limit);
 }
 
 void
 mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
                               enum mbe_voiced_synthesis voiced) {
     /* Repeat paths, which never mute inside synthesis. */
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC, voiced);
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC, voiced,
+                             MBE_AMPLITUDE_LIMIT_SPEC);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, MBE_MUTE_NOISE_COMFORT,
-                             MBE_VOICED_SYNTHESIS_SPEC);
+                             MBE_VOICED_SYNTHESIS_SPEC, MBE_AMPLITUDE_LIMIT_SPEC);
 }
 
 /**
