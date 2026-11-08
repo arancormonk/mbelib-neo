@@ -116,13 +116,6 @@ mbe_ambe2450_pitch_code(float f0) {
     return (int)((b0 < 0) ? 0 : ((b0 >= MBE_AMBE2450_PITCH_CODES) ? MBE_AMBE2450_PITCH_CODES - 1 : b0));
 }
 
-/* eq 5: the V/UV vector element of harmonic l at fundamental f0q. */
-static int
-ambe2450_enc_column(float f0q, int l) {
-    int jl = (int)((float)l * 16.0f * f0q);
-    return (jl > 7) ? 7 : jl;
-}
-
 int
 mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[MBE_ANALYSIS_BANDS]) {
     /* 4.2 eq 4: the vector minimizing the squared-amplitude weighted
@@ -135,7 +128,7 @@ mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[M
         float distance = 0.0f;
         for (int l = 1; l <= L; l++) {
             int voiced = bands[mbe_analysis_band_of(l) - 1];
-            if (AmbeVuv[n][ambe2450_enc_column(f0q, l)] != voiced) {
+            if (mbe_ambe2450_harmonic_voiced(AmbeVuv[n], l, f0q) != voiced) {
                 distance += m[l] * m[l];
             }
         }
@@ -154,7 +147,7 @@ ambe2450_enc_log_amplitudes(int b0, int b1, const float m[57], float a[57]) {
     const float f0q = mbe_ambe2450_f0(b0);
     const float unvoiced_offset = (0.5f * log2f(f0q * 2.0f * (float)M_PI)) + 2.289f;
     for (int l = 1; l <= mbe_ambe2450_harmonic_count(b0); l++) {
-        int voiced = AmbeVuv[b1][ambe2450_enc_column(f0q, l)];
+        int voiced = mbe_ambe2450_harmonic_voiced(AmbeVuv[b1], l, f0q);
         a[l] = log2f(m[l] + 1e-12f) + (voiced ? 0.0f : unvoiced_offset);
     }
 }

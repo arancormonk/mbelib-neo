@@ -116,6 +116,30 @@ enum mbe_voiced_synthesis {
     MBE_VOICED_SYNTHESIS_DVSI,
 };
 
+/*
+ * Voiced phase of MBE_VOICED_SYNTHESIS_DVSI, as DVSI's AMBE-3000 decoders keep
+ * it in every mode (docs/dvsi-parity.md, "Voiced phase"):
+ *  - The pitch moves from one frame's to the next 16 samples after the middle
+ *    of the frame: a harmonic's phase advances by l (96 w0(-1) + 64 w0(0))
+ *    over a frame, not TIA-102.BABA eq 139's l 80 (w0(-1) + w0(0)).
+ *  - The first frame with a voiced harmonic after a frame with none restarts
+ *    the phase from that frame alone: l w0 (N - 16 - delay) at its end, plus
+ *    the regenerated phase, whatever the phase was before the gap.
+ */
+#define MBE_PHASE_SWITCH_DELAY_DVSI 16
+/* The onset delay mbe_set_voicing_onset_delay() can give a model (samples). */
+#define MBE_VOICING_ONSET_LATE      80
+
+/**
+ * @brief Mark a decoded model whose voiced harmonics start late at an onset:
+ * @p late nonzero gives it MBE_VOICING_ONSET_LATE samples, zero none. The
+ * mark lives in the otherwise unused element 0 of PHIl.
+ */
+void mbe_set_voicing_onset_delay(mbe_parms* mp, int late);
+
+/** @brief The onset delay mbe_set_voicing_onset_delay() gave @p mp (0 if none). */
+int mbe_voicing_onset_delay(const mbe_parms* mp);
+
 /**
  * @brief Whether MBE_VOICED_SYNTHESIS_DVSI's fourth-root law moves a harmonic
  * between these rendered amplitudes: both positive and finite (otherwise the

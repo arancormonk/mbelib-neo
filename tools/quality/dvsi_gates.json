@@ -1900,5 +1900,289 @@
         "rule": "all_no_increase"
       }
     ]
+  },
+  "voiced-phase-development": {
+    "description": "Voiced phase (DVSI's onset restart and pitch-switch timing) and rate-33 V/UV rendering, development vectors: in every mode our decode of DVSI's bits correlates with DVSI's decoder waveform by at least 0.3 more, comes no further from it in log-spectral distance or envelope correlation, no further from the input than 0.02 dB, its level moves by at most 0.1 dB; the D-STAR and IMBE encoders' bits are unchanged and the rate-33 encoder's decode is no further from DVSI's encoding.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr",
+        "rule": "increase",
+        "value": 0.3
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "voiced-phase-validation": {
+    "description": "Voiced phase (DVSI's onset restart and pitch-switch timing) and rate-33 V/UV rendering, validation vectors: in every mode our decode of DVSI's bits correlates with DVSI's decoder waveform by at least 0.3 more, comes no further from it in log-spectral distance or envelope correlation, no further from the input than 0.02 dB, its level moves by at most 0.1 dB; the D-STAR and IMBE encoders' bits are unchanged and the rate-33 encoder's decode is no further from DVSI's encoding.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr",
+        "rule": "increase",
+        "value": 0.3
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "voiced-phase-final": {
+    "description": "Voiced phase (DVSI's onset restart and pitch-switch timing) and rate-33 V/UV rendering, final vectors: in every mode our decode of DVSI's bits correlates with DVSI's decoder waveform by at least 0.3 more, comes no further from it in log-spectral distance or envelope correlation, no further from the input than 0.02 dB, its level moves by at most 0.1 dB; the D-STAR and IMBE encoders' bits are unchanged and the rate-33 encoder's decode is no further from DVSI's encoding.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr",
+        "rule": "increase",
+        "value": 0.3
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "voiced-phase-channel": {
+    "description": "Voiced phase under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's as often as before at every error rate, hard or soft, and on the frames neither run nor DVSI mutes our hard-decision output is no further from DVSI's.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "voiced-phase-tones": {
+    "description": "Voiced phase on the tone vectors: no D-STAR or rate-33 tone vector's tone output agrees less often with DVSI's decoder or plays a wrong tone more often, and the encoders' tone frames agree with DVSI's as often as before.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "all_no_decrease"
+      }
+    ]
   }
 }

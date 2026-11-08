@@ -533,6 +533,22 @@ the input speech.
 P25 and D-STAR keep the data-bit counts: on DVSI's vectors full counts make P25 repeat where DVSI's
 output shows none, and make D-STAR repeat at 5% where DVSI does not.
 
+### Rate 33: V/UV vectors
+
+DVSI's rate-33 decoder voices a harmonic when its own 500 Hz column of the V/UV vector (Annex B, eq
+5) is voiced or when the column 250 Hz above it is: each voiced column reaches a quarter of a
+column into an unvoiced one below it, as D-STAR's bands do ([D-STAR voicing bands](#d-star-voicing-bands)).
+It also reads row 17 with its lowest column voiced, where Annex B lists rows 17 to 31 all
+unvoiced like row 16. The decoder, and the encoder's eqs 4 and 8, now read the voicing that way;
+the encoder still searches rows 0 to 16 (clause 4.2), so row 17 only changes how DVSI's bits play.
+On DVSI's speech vectors our decode of frames coded 17 comes 0.5 dB of log-spectral distance closer
+to DVSI's (27 frames), and of voiced frames generally 0.03 dB.
+
+Rows 1, 3, 13, 15 and 17 play some columns neither voiced nor unvoiced on DVSI's decoder (see
+[Known differences](#known-differences)); voiced is the nearer binary value for each (log-spectral
+distance against DVSI's decode on frames coded 13 or 15: 6.87 dB voiced, 7.56 dB unvoiced), so the
+table keeps Annex B's voiced columns there.
+
 ### Output high-pass phase
 
 DVSI's decoders, in every mode, roll off the band below 200 Hz like a second-order high-pass
@@ -615,6 +631,55 @@ the tone vectors, rate 33's `alltone` agrees with DVSI's tone detector on two mo
 1504, rendered with the crossfade as before, as its pitch jumps) now reads as a dual tone where
 DVSI's reads none, from the 0.15 dB of voiced gain, so `dvsi-parity-tones` and
 `voiced-amplitude-tones` fail on that window.
+
+### Voiced phase
+
+DVSI's decoders, in every mode, move the regenerated phase of the voiced harmonics by rules
+TIA-102.BABA does not state. With them our decode of DVSI's bits follows DVSI's waveform, where
+before it matched only the spectrum:
+
+- **Onsets restart the phase.** At the first frame with a voiced harmonic after a frame with
+  none, DVSI starts the linear phase (the pulse position) from that frame alone: `l w0 (N - 16)` at
+  its end, plus the regenerated phase, whatever the gap's length, the pitch of its frames or the
+  phase before it. Eq 139 integrates the phase through unvoiced frames, so after every unvoiced gap
+  our pulses sat at an arbitrary offset from DVSI's.
+- **The pitch moves 16 samples after mid-frame.** Over a frame a harmonic's phase advances by
+  `l (96 w0(-1) + 64 w0(0))`, where eq 139 has `l 80 (w0(-1) + w0(0))`. At steady pitch they agree;
+  at a pitch change eq 139's phase drifts away from DVSI's a little more with every frame.
+- **Rate 33, b1 15.** A rate-33 frame coded with V/UV vector 15 after an unvoiced one starts its
+  voiced harmonics 80 samples later than any other row: `l w0 (N - 96)`, as if voicing began
+  mid-frame. Most onsets in DVSI's speech pass through such a frame (unvoiced, 15, voiced), so
+  without it rate 33 gains almost nothing from the restart.
+
+The constants are sharp on DVSI's rate-33 decodes. Median correlation of our waveform with DVSI's
+on voiced frames, at lag 0: 0.96 with the restart at 16 samples, 0.25 at 12 and 0.15 at 20; 0.96
+with b1 15 at 80 samples, below 0 at 70 or 90; 0.96 with the pitch moving at 16 samples, 0.90 at 8
+or 24. Before the change it was 0.02 for D-STAR, 0.00 for P25 and -0.04 for rate 33 on loud voiced
+frames; after it 0.91, 0.94 and 0.96. The public `mbe_synthesizeSpeechf()` keeps eq 139.
+
+The model and its stored state carry no new field: the restart reads the voicing of the two
+frames, and rate 33's late onset is marked in the unused element 0 of `PHIl`.
+
+On the scoreboard, at joint lags, against `main` (`vs_dvsi.waveform_corr` is the correlation of
+our waveform with DVSI's decode over active frames, mean over the partition's vectors):
+
+| Codec | Partition | Waveform corr. vs DVSI | LSD vs DVSI (dB) | LSD vs input (dB) |
+|---|---|---|---|---|
+| D-STAR | development | 0.075 → 0.644 | 3.346 → 3.240 | 6.521 → 6.541 |
+| D-STAR | validation | 0.082 → 0.655 | 2.893 → 2.777 | 4.921 → 4.950 |
+| P25 | development | 0.085 → 0.795 | 3.460 → 3.331 | 6.457 → 6.444 |
+| P25 | validation | 0.028 → 0.849 | 2.916 → 2.778 | 4.820 → 4.819 |
+| Rate 33 | development | 0.081 → 0.892 | 3.256 → 3.088 | 6.454 → 6.446 |
+| Rate 33 | validation | 0.083 → 0.922 | 2.750 → 2.582 | 4.940 → 4.942 |
+
+Envelope correlation with DVSI rises 0.012-0.017 and the level does not move (within 0.002 dB).
+Under channel errors mute decisions are unchanged and the frames neither decoder mutes come
+0.02-0.15 dB closer to DVSI's. The D-STAR and IMBE encoders' bits are unchanged; the rate-33
+encoder's decode is as close to DVSI's encoding as before (within 0.001 dB). Two declared gates
+fail: D-STAR moves 0.029 dB of log-spectral distance away from the input on validation (0.020 on
+development), past the 0.02 dB allowed, while moving 0.11 dB closer to DVSI; and on the tone
+vectors three windows of voice (D-STAR `knox_12`, rate-33 `cpvbad` twice) now read as a single tone
+to the detector where DVSI's output and ours before read none.
 
 ### Encoder voicing over background noise
 
@@ -747,6 +812,8 @@ Still different:
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 | Voiced amplitude within a frame (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 133-135: harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS` | every harmonic at steady pitch, its fourth root linear | DVSI ([Voiced amplitude](#voiced-amplitude)) |
+| Voiced phase (every mode) | eq 139: the phase advances by `l 80 (w0(-1) + w0(0))` per frame, through unvoiced frames too | the pitch moves 16 samples after mid-frame; a voiced onset restarts the phase from that frame alone | DVSI ([Voiced phase](#voiced-phase)) |
+| Rate-33 V/UV vectors | Annex B rows and eq 5's columns; rows 17-31 all unvoiced | each voiced column reaches 250 Hz into an unvoiced one below; row 17 voices its lowest column | DVSI ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
 | Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | at pitches below about 90 Hz a 500 Hz column holding little more than the learned background noise is unvoiced ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
 
 The P25 attenuation is not adopted: no rule tried (eq 112-116 as printed, and instantaneous,
@@ -758,8 +825,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
 
 - Soft-decision D-STAR streams are not muted on the error level, where DVSI mutes some of them
   (see above).
-- After a fully unvoiced gap DVSI repositions the voiced pulse train in a way no simple rule
-  reproduced; within voiced runs, including pitch steps, our pulse positions follow DVSI's.
+- Rate-33 V/UV rows 1, 3, 13, 15 and 17: DVSI's decoder plays some of their columns between voiced
+  and unvoiced, a state the binary voicing of `mbe_parms` cannot hold; this library plays them
+  voiced, the nearer value. Rows 24 and 25 play all unvoiced here, as Annex B gives them, and those
+  frames stay further from DVSI's output than other unvoiced frames (log-spectral distance 7.9 dB
+  against 7.2 for row 16 on DVSI's speech vectors, 1.7% of its voice frames).
 - DVSI hard-clips at full scale; this library clips at 0.95 of full scale. Clipping at full
   scale moved no metric, so it is not adopted.
 - A frame at the largest D-STAR gain and b3 (b2 63, b3 511; `9E B0 6F EE F8 7B 9F FE 74`) held

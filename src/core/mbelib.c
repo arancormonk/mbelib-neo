@@ -1193,17 +1193,67 @@ mbe_reconcile_speech_model_lengths(mbe_parms* cur_mp, mbe_parms* prev_mp) {
     return maxl;
 }
 
+/* 80.0f, the only nonzero onset delay, as stored in PHIl[0]. */
+#define MBE_VOICING_ONSET_LATE_BITS 0x42A00000u
+
+void
+mbe_set_voicing_onset_delay(mbe_parms* mp, int late) {
+    mp->PHIl[0] = late ? (float)MBE_VOICING_ONSET_LATE : 0.0f;
+}
+
+int
+mbe_voicing_onset_delay(const mbe_parms* mp) {
+    /* Compare the stored bits: only the exact mark counts, so any other value
+     * a caller left there (NaN included, even under fast-math) means none. */
+    uint32_t bits;
+    memcpy(&bits, &mp->PHIl[0], sizeof(bits));
+    return (bits == MBE_VOICING_ONSET_LATE_BITS) ? MBE_VOICING_ONSET_LATE : 0;
+}
+
+static int
+mbe_model_has_voiced_harmonic(const mbe_parms* mp) {
+    for (int l = 1; l <= mp->L; ++l) {
+        if (mp->Vl[l]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A voiced onset: the current model has a voiced harmonic and the previous
+ * none, each judged over its own harmonics (before the length reconciliation
+ * pads the shorter model with voiced ones). */
+static int
+mbe_is_voiced_onset(const mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    return mbe_model_has_voiced_harmonic(cur_mp) && !mbe_model_has_voiced_harmonic(prev_mp);
+}
+
 /**
  * PSIl is integrated linear phase (pulse position). PHIl is the phase at the
- * end of the frame: PSIl plus the regenerated spectral-envelope phase.
+ * end of the frame: PSIl plus the regenerated spectral-envelope phase. With
+ * MBE_VOICED_SYNTHESIS_DVSI the pitch moves MBE_PHASE_SWITCH_DELAY_DVSI
+ * samples after mid-frame, and an onset (@p onset) restarts PSIl from the
+ * current frame alone (see MBE_PHASE_SWITCH_DELAY_DVSI).
  */
 static void
-mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N) {
+mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N, enum mbe_voiced_synthesis voiced, int onset) {
     const float cw0 = cur_mp->w0;
     const float pw0 = prev_mp->w0;
+    const int dvsi = voiced == MBE_VOICED_SYNTHESIS_DVSI;
     float phi[57];
     mbe_regenerate_harmonic_phases(cur_mp, phi);
 
+    if (dvsi && onset) {
+        const float start = (float)(N - MBE_PHASE_SWITCH_DELAY_DVSI - mbe_voicing_onset_delay(cur_mp));
+        for (int l = 1; l <= 56; l++) {
+            cur_mp->PSIl[l] = cw0 * ((float)l * start);
+            cur_mp->PHIl[l] = cur_mp->PSIl[l] + phi[l];
+        }
+        return;
+    }
+
+    const float prev_span = (0.5f * (float)N) + (float)MBE_PHASE_SWITCH_DELAY_DVSI;
+    const float cur_span = (0.5f * (float)N) - (float)MBE_PHASE_SWITCH_DELAY_DVSI;
     for (int l = 1; l <= 56; l++) {
         float prev_psil_wrapped = fmodf(prev_mp->PSIl[l], MBE_TWO_PI);
         if (prev_psil_wrapped < 0.0f) {
@@ -1211,7 +1261,11 @@ mbe_update_speech_phases(mbe_parms* cur_mp, mbe_parms* prev_mp, int N) {
         }
         prev_mp->PSIl[l] = prev_psil_wrapped;
 
-        cur_mp->PSIl[l] = prev_psil_wrapped + ((pw0 + cw0) * ((float)(l * N) / 2.0f));
+        if (dvsi) {
+            cur_mp->PSIl[l] = prev_psil_wrapped + ((float)l * ((pw0 * prev_span) + (cw0 * cur_span)));
+        } else {
+            cur_mp->PSIl[l] = prev_psil_wrapped + ((pw0 + cw0) * ((float)(l * N) / 2.0f));
+        }
         cur_mp->PHIl[l] = cur_mp->PSIl[l] + phi[l];
     }
 }
@@ -1422,11 +1476,13 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* Initialize output buffer to zero */
     memset(aout_buf, 0, N * sizeof(float));
 
+    const int onset = mbe_is_voiced_onset(cur_mp, prev_mp);
+
     /* eq 128 and 129: Handle different L values between frames */
     int maxl = mbe_reconcile_speech_model_lengths(cur_mp, prev_mp);
 
     /* Integrate pulse position and regenerate phase from the spectral envelope. */
-    mbe_update_speech_phases(cur_mp, prev_mp, N);
+    mbe_update_speech_phases(cur_mp, prev_mp, N, voiced, onset);
 
     /* Render with the low-band roll-off and the voicing gains; both models
      * keep their decoded amplitudes and phases. A caller may pass one model as
