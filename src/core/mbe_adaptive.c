@@ -108,9 +108,10 @@ mbe_applyAdaptiveSmoothingWithRm0Limit(mbe_parms* cur_mp, const mbe_parms* prev_
     }
     cur_mp->amplitudeThreshold = amplitude_threshold(cur_mp, prior_threshold);
     float scale = 1.0f;
-    if (limit == MBE_AMPLITUDE_LIMIT_SPEC && amplitude_sum > 0.0
-        && (double)cur_mp->amplitudeThreshold <= amplitude_sum) {
-        scale = mbe_round_to_float((float)((double)cur_mp->amplitudeThreshold / amplitude_sum));
+    const double ceiling =
+        (limit == MBE_AMPLITUDE_LIMIT_SPEC) ? (double)cur_mp->amplitudeThreshold : MBE_AMPLITUDE_SAFETY_LIMIT;
+    if (amplitude_sum > 0.0 && ceiling <= amplitude_sum) {
+        scale = mbe_round_to_float((float)(ceiling / amplitude_sum));
     }
     if (scale < 0.0f) {
         scale = 0.0f;

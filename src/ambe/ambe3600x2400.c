@@ -201,6 +201,8 @@ ambe2400_special_frame(const char* ambe_d, int b0) {
  */
 static void
 ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
+    /* Only rate 33 marks late onsets; clear any mark a caller's state carries. */
+    mbe_set_voicing_onset_delay(cur_mp, 0);
     if (b0 == MBE_AMBE2400_SILENCE_B0) {
         cur_mp->w0 = MBE_AMBE_SILENCE_W0;
         *f0 = MBE_AMBE_SILENCE_W0 / (float)(2.0 * M_PI);

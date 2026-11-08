@@ -47,8 +47,8 @@ mbe_ambe2450_harmonic_count(int b0) {
  * Voicing of harmonic l at fundamental f0 (cycles per sample) from the V/UV
  * vector row (Annex B, eq 5's 500 Hz columns). DVSI's decoders voice a
  * harmonic whose own column, or the column 250 Hz above it, is voiced: each
- * voiced column reaches a quarter of a column into the unvoiced one below, as
- * D-STAR's bands do (mbe_ambe2400_harmonic_voiced()). The decoder and the
+ * voiced column reaches half a column into the unvoiced one below, as D-STAR's
+ * 1 kHz bands reach 250 Hz into theirs (mbe_ambe2400_harmonic_voiced()). The decoder and the
  * encoder (eqs 4 and 8) read the voicing through this.
  */
 int mbe_ambe2450_harmonic_voiced(const int row[8], int l, float f0);

@@ -1374,8 +1374,17 @@ same_frame_bits(const float a[160], const float b[160]) {
 
 /* An onset frame: an unvoiced model (`history` sets its phases and pitch)
  * followed by a voiced one at 200 Hz. */
+static void onset_frame_at(float out[160], mbe_parms* cur_out, float history, int late,
+                           enum mbe_voiced_synthesis voiced, double hz);
+
 static void
 onset_frame(float out[160], mbe_parms* cur_out, float history, int late, enum mbe_voiced_synthesis voiced) {
+    onset_frame_at(out, cur_out, history, late, voiced, 200.0);
+}
+
+static void
+onset_frame_at(float out[160], mbe_parms* cur_out, float history, int late, enum mbe_voiced_synthesis voiced,
+               double hz) {
     mbe_parms cur, prev, enhanced;
     mbe_initMbeParms(&cur, &prev, &enhanced);
     prev.w0 = (float)(2.0 * M_PI * (150.0 + 100.0 * history) / 8000.0);
@@ -1387,8 +1396,8 @@ onset_frame(float out[160], mbe_parms* cur_out, float history, int late, enum mb
         prev.PHIl[l] = 2.0f * history * (float)l;
     }
     cur = prev;
-    cur.w0 = (float)(2.0 * M_PI * 200.0 / 8000.0);
-    cur.L = 18;
+    cur.w0 = (float)(2.0 * M_PI * hz / 8000.0);
+    cur.L = (int)(3600.0 / hz);
     for (int l = 1; l <= cur.L; ++l) {
         cur.Vl[l] = 1;
         cur.Ml[l] = 16.0f;
@@ -1414,9 +1423,19 @@ test_dvsi_voiced_onset(void) {
         const float expect = w0 * ((float)l * (float)(160 - MBE_PHASE_SWITCH_DELAY_DVSI));
         assert(fabsf(ca.PSIl[l] - expect) <= 1e-4f * (1.0f + fabsf(expect)));
     }
-    /* A late onset (rate-33 b1 15) starts MBE_VOICING_ONSET_LATE samples later. */
+    /* A late onset (rate-33 b1 15) starts MBE_VOICING_ONSET_LATE samples later:
+     * at 230 Hz that is not a whole number of periods, so the waveform moves. */
+    float c[160], d[160];
+    mbe_parms cc;
+    onset_frame_at(c, &cc, 0.3f, 0, MBE_VOICED_SYNTHESIS_DVSI, 230.0);
+    onset_frame_at(d, &cc, 0.3f, 1, MBE_VOICED_SYNTHESIS_DVSI, 230.0);
+    double peak = 0.0, moved = 0.0;
+    for (int n = 0; n < 160; ++n) {
+        peak = fmax(peak, fabs((double)c[n]));
+        moved = fmax(moved, fabs((double)c[n] - (double)d[n]));
+    }
+    assert(peak > 0.0 && moved > 0.1 * peak);
     onset_frame(b, &cb, 0.3f, 1, MBE_VOICED_SYNTHESIS_DVSI);
-    assert(!same_frame_bits(a, b));
     for (int l = 1; l <= 56; ++l) {
         const float expect = w0 * ((float)l * (float)(160 - MBE_PHASE_SWITCH_DELAY_DVSI - MBE_VOICING_ONSET_LATE));
         assert(fabsf(cb.PSIl[l] - expect) <= 1e-4f * (1.0f + fabsf(expect)));
@@ -1512,6 +1531,130 @@ test_amplitude_limit(void) {
     }
 }
 
+/* Two frames through the IMBE path's synthesis: a voiced onset muted by the
+ * error rate, then the same model audible. `history` sets the phases and pitch
+ * before the unvoiced gap; the audible frame must not depend on it. */
+static void
+muted_onset_then_voice(float out[160], float history) {
+    mbe_parms cur, prev, enh;
+    float muted[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    enh.w0 = (float)(2.0 * M_PI * (150.0 + 100.0 * history) / 8000.0);
+    enh.L = 20;
+    for (int l = 1; l <= 56; ++l) {
+        enh.Vl[l] = 0;
+        enh.Ml[l] = 4.0f;
+        enh.PSIl[l] = history * (float)l;
+        enh.PHIl[l] = 2.0f * history * (float)l;
+    }
+    cur = enh;
+    cur.w0 = (float)(2.0 * M_PI * 230.0 / 8000.0);
+    cur.L = 15;
+    for (int l = 1; l <= cur.L; ++l) {
+        cur.Vl[l] = 1;
+        cur.Ml[l] = 16.0f;
+    }
+    cur.errorRate = 1.0f; /* past any muting threshold */
+    mbe_parms voiced = cur;
+    mbe_synthesizeSpeechWithPreEnhRm0f(muted, &cur, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+                                       MBE_AMPLITUDE_LIMIT_NONE);
+    enh = cur;
+    voiced.errorRate = 0.0f;
+    voiced.noiseSeed = cur.noiseSeed;
+    memcpy(voiced.noiseOverlap, cur.noiseOverlap, sizeof(voiced.noiseOverlap));
+    mbe_synthesizeSpeechWithPreEnhRm0f(out, &voiced, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+                                       MBE_AMPLITUDE_LIMIT_NONE);
+}
+
+/* A muted voiced onset still restarts the phase (the muted frame advances it),
+ * so the first audible frame plays the same whatever came before the gap. */
+static void
+test_dvsi_muted_onset(void) {
+    float a[160], b[160];
+    muted_onset_then_voice(a, 0.3f);
+    muted_onset_then_voice(b, 1.7f);
+    assert(same_frame_bits(a, b));
+}
+
+/* Without eq 116's scaling, an extreme but finite prediction history still
+ * synthesizes finite PCM (MBE_AMPLITUDE_SAFETY_LIMIT), here and after it. */
+static void
+test_amplitude_safety_limit(void) {
+    mbe_parms cur, prev, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    prev.gamma = 240.0f;
+    for (int l = 0; l <= 56; ++l) {
+        prev.log2Ml[l] = 0.0f;
+    }
+    int b[9] = {60, 16, 20, 100, 30, 10, 5, 5, 3};
+    char ambe_d[49];
+    mbe_ambe2450_pack(b, ambe_d);
+    for (int frame = 0; frame < 3; ++frame) {
+        float pcm[160];
+        mbe_process_result result;
+        memset(&result, 0, sizeof(result));
+        assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        for (int n = 0; n < 160; ++n) {
+            uint32_t bits;
+            memcpy(&bits, &pcm[n], sizeof(bits));
+            assert((bits & 0x7F800000u) != 0x7F800000u);
+        }
+    }
+}
+
+/* Only rate 33 marks late onsets: D-STAR and IMBE decoding clear a mark left in
+ * a caller's state, so it cannot move their phase. */
+static void
+test_onset_mark_cleared(void) {
+    mbe_parms cur, prev, enh;
+    char ambe_d[49] = {0};
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_set_voicing_onset_delay(&cur, 1);
+    assert(mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev) == 0);
+    assert(mbe_voicing_onset_delay(&cur) == 0);
+    char imbe_d[88] = {0};
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_set_voicing_onset_delay(&cur, 1);
+    assert(mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) == 0);
+    assert(mbe_voicing_onset_delay(&cur) == 0);
+}
+
+/* Rate 33 through its public data path: a voiced onset (b1 15) muted by the
+ * error rate keeps the last synthesized model, so the phase restarts at the
+ * first audible voiced frame, from that frame alone, whatever the voiced
+ * history before the unvoiced gap. */
+static void
+test_ambe2450_muted_onset(void) {
+    for (int history = 0; history < 2; ++history) {
+        mbe_parms cur, prev, enh;
+        mbe_initMbeParms(&cur, &prev, &enh);
+        char ambe_d[49];
+        float pcm[160];
+        mbe_process_result result;
+        for (int f = 0; f < 12; ++f) {
+            int b[9] = {history ? 70 : 40, (f < 8) ? 0 : 16, 20, 100, 30, 10, 5, 5, 3};
+            mbe_ambe2450_pack(b, ambe_d);
+            memset(&result, 0, sizeof(result));
+            assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        }
+        prev.errorRate = 0.102f; /* this frame's rate 0.0969 mutes; the next, 0.0921, does not */
+        int onset[9] = {60, 15, 20, 100, 30, 10, 5, 5, 3};
+        mbe_ambe2450_pack(onset, ambe_d);
+        memset(&result, 0, sizeof(result));
+        assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+        int voiced[9] = {60, 0, 20, 100, 30, 10, 5, 5, 3};
+        mbe_ambe2450_pack(voiced, ambe_d);
+        memset(&result, 0, sizeof(result));
+        assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
+        for (int l = 1; l <= 3; ++l) {
+            const float expect = enh.w0 * ((float)l * (float)(160 - MBE_PHASE_SWITCH_DELAY_DVSI));
+            assert(fabsf(enh.PSIl[l] - expect) <= 1e-4f * (1.0f + fabsf(expect)));
+        }
+    }
+}
+
 int
 main(void) {
     test_ambe2450_layout();
@@ -1532,6 +1675,10 @@ main(void) {
     test_dvsi_voiced_onset();
     test_ambe2450_vuv_rendering();
     test_amplitude_limit();
+    test_dvsi_muted_onset();
+    test_ambe2450_muted_onset();
+    test_amplitude_safety_limit();
+    test_onset_mark_cleared();
     test_voiced_amplitude_law_gate();
     test_render_aliased_model();
     test_low_band_edge_cases();

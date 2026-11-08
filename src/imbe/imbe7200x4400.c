@@ -96,6 +96,8 @@ imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_L9) {
     }
 
     cur_mp->w0 = ((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    /* Only rate 33 marks late onsets; clear any mark a caller's state carries. */
+    mbe_set_voicing_onset_delay(cur_mp, 0);
 
     int L = (int)(0.9254 * (int)((M_PI / cur_mp->w0) + 0.25));
     if ((L > 56) || (L < 9)) {

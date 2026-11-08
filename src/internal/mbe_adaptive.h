@@ -79,6 +79,11 @@ enum mbe_amplitude_limit {
     MBE_AMPLITUDE_LIMIT_NONE,
 };
 
+/* The amplitude sum MBE_AMPLITUDE_LIMIT_NONE still scales down to: a numeric
+ * guard only, about 94 dB over eq 115's 20480 and far past full-scale output,
+ * so an extreme (finite) prediction history cannot overflow the synthesis. */
+#define MBE_AMPLITUDE_SAFETY_LIMIT 1.0e9
+
 /** @brief mbe_applyAdaptiveSmoothingWithRm0() with the eq 116 scaling chosen by @p limit. */
 void mbe_applyAdaptiveSmoothingWithRm0Limit(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0,
                                             enum mbe_amplitude_limit limit);

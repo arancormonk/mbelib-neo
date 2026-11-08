@@ -2186,7 +2186,7 @@
     ]
   },
   "amplitude-limit-development": {
-    "description": "Amplitude limit (no eq 116 scaling on the IMBE and rate-33 paths, as DVSI's decoders), development vectors: P25 and rate 33 come no further from DVSI's decoder in log-spectral distance, envelope or waveform correlation and no further from the input than 0.02 dB, their level moves by at most 0.2 dB; D-STAR's output and every encoder's bits are unchanged.",
+    "description": "Amplitude limit (no eq 116 scaling on the IMBE and rate-33 paths, as DVSI's decoders), development vectors: P25 and rate 33 come no further from DVSI's decoder in log-spectral distance, envelope or waveform correlation and no further from the input than 0.02 dB, their level moves by at most 0.2 dB; D-STAR's PCM and every encoder's bits are unchanged.",
     "partition": "development",
     "checks": [
       {
@@ -2238,9 +2238,9 @@
         "mode": [
           "dstar"
         ],
-        "metric": "vs_dvsi.lsd_db",
-        "rule": "abs_delta_max",
-        "value": 0.0
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
       },
       {
         "mode": [
@@ -2255,7 +2255,7 @@
     ]
   },
   "amplitude-limit-validation": {
-    "description": "Amplitude limit (no eq 116 scaling on the IMBE and rate-33 paths, as DVSI's decoders), validation vectors: P25 and rate 33 come no further from DVSI's decoder in log-spectral distance, envelope or waveform correlation and no further from the input than 0.02 dB, their level moves by at most 0.2 dB; D-STAR's output and every encoder's bits are unchanged.",
+    "description": "Amplitude limit (no eq 116 scaling on the IMBE and rate-33 paths, as DVSI's decoders), validation vectors: P25 and rate 33 come no further from DVSI's decoder in log-spectral distance, envelope or waveform correlation and no further from the input than 0.02 dB, their level moves by at most 0.2 dB; D-STAR's PCM and every encoder's bits are unchanged.",
     "partition": "validation",
     "checks": [
       {
@@ -2307,9 +2307,9 @@
         "mode": [
           "dstar"
         ],
-        "metric": "vs_dvsi.lsd_db",
-        "rule": "abs_delta_max",
-        "value": 0.0
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
       },
       {
         "mode": [

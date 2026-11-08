@@ -33,9 +33,10 @@ appear here.
   as 4-bit soft decisions, show when DVSI repeats and mutes frames.
 - **Scoreboard.** `tools/quality/dvsi_scoreboard.py` measures every change on all of it
   ([DVSI scoreboard](testing.md#dvsi-scoreboard)). Its development and validation partitions
-  were examined while these changes were made, so their results are retrospective; the final
-  partition (`irstia`, `mark`) was scored only after the changes were fixed (twice; see [Scoring
-  history](#scoring-history)).
+  were examined while these changes were made, so their results are retrospective; for the
+  October 2026 changes the final partition (`irstia`, `mark`) was scored only after they were
+  fixed (twice; see [Scoring history](#scoring-history)). For the voiced phase it was not: `mark`
+  was among the vectors its constants were scanned on ([Voiced phase](#voiced-phase)).
 
 ## Changes
 
@@ -536,8 +537,8 @@ output shows none, and make D-STAR repeat at 5% where DVSI does not.
 ### Rate 33: V/UV vectors
 
 DVSI's rate-33 decoder voices a harmonic when its own 500 Hz column of the V/UV vector (Annex B, eq
-5) is voiced or when the column 250 Hz above it is: each voiced column reaches a quarter of a
-column into an unvoiced one below it, as D-STAR's bands do ([D-STAR voicing bands](#d-star-voicing-bands)).
+5) is voiced or when the column 250 Hz above it is: each voiced column reaches half a column
+(250 Hz) into an unvoiced one below it, as D-STAR's 1 kHz bands reach 250 Hz into theirs ([D-STAR voicing bands](#d-star-voicing-bands)).
 It also reads row 17 with its lowest column voiced, where Annex B lists rows 17 to 31 all
 unvoiced like row 16. The decoder, and the encoder's eqs 4 and 8, now read the voicing that way;
 the encoder still searches rows 0 to 16 (clause 4.2), so row 17 only changes how DVSI's bits play.
@@ -658,28 +659,40 @@ or 24. Before the change it was 0.02 for D-STAR, 0.00 for P25 and -0.04 for rate
 frames; after it 0.91, 0.94 and 0.96. The public `mbe_synthesizeSpeechf()` keeps eq 139.
 
 The model and its stored state carry no new field: the restart reads the voicing of the two
-frames, and rate 33's late onset is marked in the unused element 0 of `PHIl`.
+frames, and rate 33's late onset is marked in the unused element 0 of `PHIl` (the D-STAR and IMBE
+decoders clear it). On the P25 and ProVoice paths a frame the synthesis mutes still advances the
+phase, so an onset muted by the error rate restarts it and the next audible frame continues from
+there. Rate 33's mute instead keeps the last synthesized model and silences it, so there the
+restart falls on the first audible voiced frame. Either way the audible frames after a muted onset do not depend on the phase before the gap;
+DVSI's vectors do not show which of the two its decoders do.
 
-On the scoreboard, at joint lags, against `main` (`vs_dvsi.waveform_corr` is the correlation of
-our waveform with DVSI's decode over active frames, mean over the partition's vectors):
+On the scoreboard, at joint lags, this branch (the voiced phase, the rate-33 V/UV rendering and
+the [amplitude limit](#amplitude-limit) below) against `main`. `vs_dvsi.waveform_corr` is the
+correlation of our waveform with DVSI's decode over active frames; level is the mean absolute
+offset from DVSI's decode; all are means over the partition's vectors:
 
-| Codec | Partition | Waveform corr. vs DVSI | LSD vs DVSI (dB) | LSD vs input (dB) |
-|---|---|---|---|---|
-| D-STAR | development | 0.075 → 0.644 | 3.346 → 3.240 | 6.521 → 6.541 |
-| D-STAR | validation | 0.082 → 0.655 | 2.893 → 2.777 | 4.921 → 4.950 |
-| P25 | development | 0.085 → 0.795 | 3.460 → 3.331 | 6.457 → 6.444 |
-| P25 | validation | 0.028 → 0.849 | 2.916 → 2.778 | 4.820 → 4.819 |
-| Rate 33 | development | 0.081 → 0.892 | 3.256 → 3.088 | 6.454 → 6.446 |
-| Rate 33 | validation | 0.083 → 0.922 | 2.750 → 2.582 | 4.940 → 4.942 |
+| Codec | Partition | Waveform corr. vs DVSI | LSD vs DVSI (dB) | LSD vs input (dB) | Level vs DVSI (dB) |
+|---|---|---|---|---|---|
+| D-STAR | development | 0.128 → 0.674 | 3.346 → 3.240 | 6.521 → 6.541 | 0.163 → 0.161 |
+| D-STAR | validation | 0.108 → 0.655 | 2.893 → 2.777 | 4.921 → 4.950 | 0.055 → 0.056 |
+| D-STAR | final | 0.049 → 0.499 | 4.152 → 3.987 | 5.697 → 5.737 | 0.175 → 0.177 |
+| P25 | development | 0.110 → 0.831 | 3.460 → 3.315 | 6.457 → 6.442 | 0.195 → 0.131 |
+| P25 | validation | 0.110 → 0.851 | 2.916 → 2.766 | 4.820 → 4.824 | 0.132 → 0.078 |
+| P25 | final | 0.082 → 0.818 | 3.886 → 3.642 | 5.548 → 5.554 | 0.100 → 0.099 |
+| Rate 33 | development | 0.120 → 0.896 | 3.256 → 3.006 | 6.454 → 6.401 | 0.333 → 0.065 |
+| Rate 33 | validation | 0.109 → 0.923 | 2.750 → 2.574 | 4.944 → 4.947 | 0.111 → 0.035 |
+| Rate 33 | final | 0.115 → 0.867 | 3.895 → 3.716 | 5.704 → 5.694 | 0.046 → 0.046 |
 
-Envelope correlation with DVSI rises 0.012-0.017 and the level does not move (within 0.002 dB).
-Under channel errors mute decisions are unchanged and the frames neither decoder mutes come
-0.02-0.15 dB closer to DVSI's. The D-STAR and IMBE encoders' bits are unchanged; the rate-33
-encoder's decode is as close to DVSI's encoding as before (within 0.001 dB). Two declared gates
-fail: D-STAR moves 0.029 dB of log-spectral distance away from the input on validation (0.020 on
-development), past the 0.02 dB allowed, while moving 0.11 dB closer to DVSI; and on the tone
-vectors three windows of voice (D-STAR `knox_12`, rate-33 `cpvbad` twice) now read as a single tone
-to the detector where DVSI's output and ours before read none.
+Envelope correlation with DVSI rises 0.012-0.024 in every mode and partition. The D-STAR and IMBE
+encoders' bits are unchanged; the rate-33 encoder's decode is as close to DVSI's encoding as before
+(within 0.003 dB). Declared gates that fail (`voiced-phase-*`): D-STAR moves away from the input by
+0.029 dB of log-spectral distance on validation and 0.041 on final (0.020 on development), past the
+0.02 dB allowed, while moving 0.12-0.17 dB closer to DVSI; rate 33's development level moves 0.29
+dB, toward DVSI (the amplitude limit, `lvl`); and on the tone vectors three windows of voice (D-STAR
+`knox_12`, rate-33 `cpvbad` twice) read as a single tone to the detector where DVSI's output and
+ours before read none. The final partition was not untouched this time: `mark` (with the
+validation vector `tambf32b`) was among the vectors the three constants above were scanned on, so
+its scores confirm less than a held-out set would.
 
 ### Amplitude limit
 
@@ -688,7 +701,9 @@ with error-free bits. DVSI's P25 and rate-33 decoders do not: on identical bits,
 116 scales (1.7% of rate 33's loud voice frames on the development vectors, 1% of P25's) play
 within 0.01-0.13 dB (medians) of their unscaled level on DVSI's decoder, where eq 116 left them 2.95
 and 1.05 dB quieter. Those paths, ProVoice's with P25's, now skip the scaling; eqs 111-114 (the
-smoothed energy and the voicing threshold under errors) are unchanged. D-STAR keeps it: there its
+smoothed energy and the voicing threshold under errors) are unchanged. As a numeric guard they
+still scale a frame whose amplitudes sum past 10^9, about 94 dB over 20480 and far beyond
+full-scale output. D-STAR keeps it: there its
 frames sit 0.22 dB under DVSI's with the scaling and 0.52 dB over it without, and the loudest
 D-STAR frames already play louder than a DVstick 30 (see [Known differences](#known-differences)).
 The public `mbe_synthesizeSpeechf()` keeps eq 116.
@@ -873,8 +888,9 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
 - Small pitch differences remain: P25 codes up to 0.07% from DVSI's (rounding-like), D-STAR codes
   within 0.03%.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2
-  searches 0-16 and keeps the lowest index on ties. Those rows are all unvoiced, as row 16 is, so
-  the bits differ and the decoded voicing does not.
+  searches 0-16 and keeps the lowest index on ties. Rows 18-31 decode all unvoiced here, as row 16
+  does, so for them the bits differ and the decoded voicing does not; row 17 voices its lowest
+  column ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)).
 
 ## Measured results
 

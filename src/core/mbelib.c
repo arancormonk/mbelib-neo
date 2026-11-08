@@ -1429,6 +1429,24 @@ enum mbe_speech_smoothing {
     MBE_SMOOTHING_NONE,        /* frame repeat: synthesize the model unchanged */
 };
 
+/* A frame the core mutes: noise in place of speech (P25 IMBE uses the
+ * TIA-102.BABA 7.8 level, [-5, 5] on s(n); D-STAR, ProVoice and direct callers
+ * the library comfort-noise level), with the model's progression kept. With
+ * MBE_VOICED_SYNTHESIS_DVSI the voiced phase also runs on, so a voiced onset
+ * muted here still restarts it and the next audible frame continues from it. */
+static void
+mbe_render_muted_frame(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_mute_noise mute_noise,
+                       enum mbe_voiced_synthesis voiced, int onset) {
+    if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
+        mbe_update_speech_phases(cur_mp, prev_mp, MBE_VOICED_FRAME, voiced, onset);
+    }
+    if (mute_noise == MBE_MUTE_NOISE_SPEC) {
+        mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    } else {
+        mbe_synthesizeComfortNoisef(aout_buf);
+    }
+}
+
 static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
                          float pre_enh_rm0, enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
@@ -1455,17 +1473,12 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
 
+    const int onset = mbe_is_voiced_onset(cur_mp, prev_mp);
+
     /* The shared core checks repeat count and the IMBE error-rate threshold.
      * AMBE codec paths apply their own additional muting rules. */
     if (mbe_should_mute_speech(cur_mp)) {
-        /* Muted frames output noise while preserving model progression: P25
-         * IMBE uses the TIA-102.BABA 7.8 level ([-5, 5] on s(n)); D-STAR,
-         * ProVoice and direct callers use the library comfort-noise level. */
-        if (mute_noise == MBE_MUTE_NOISE_SPEC) {
-            mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
-        } else {
-            mbe_synthesizeComfortNoisef(aout_buf);
-        }
+        mbe_render_muted_frame(aout_buf, cur_mp, prev_mp, mute_noise, voiced, onset);
         return;
     }
 
@@ -1476,8 +1489,6 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 
     /* Initialize output buffer to zero */
     memset(aout_buf, 0, N * sizeof(float));
-
-    const int onset = mbe_is_voiced_onset(cur_mp, prev_mp);
 
     /* eq 128 and 129: Handle different L values between frames */
     int maxl = mbe_reconcile_speech_model_lengths(cur_mp, prev_mp);
