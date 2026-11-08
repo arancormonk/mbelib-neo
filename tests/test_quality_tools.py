@@ -166,6 +166,38 @@ def verify(evaluator, reframer, root):
     run(reframer, "--codec", "ambe2400", "--from-dvsi", vector, "--out", reframed, success=False)
 
 
+def verify_waveform(evaluator, root):
+    """waveform_corr: 1 for identical or scaled waveforms, found across a shift of up to 32 samples from the
+    lag used and not beyond it, and absent without speech."""
+    reference = root / "wave_ref.raw"
+    decoded = root / "wave_dec.raw"
+    report = root / "wave.json"
+    state, samples = 12345, []
+    for i in range(160 * 60):
+        state = (1103515245 * state + 12345) % (1 << 31)
+        samples.append(int(((state >> 8) % 8001 - 4000) * (0.5 + (i // 1600) % 3 * 0.25)))
+    write_pcm(reference, samples)
+
+    def measure(decoded_samples, *lag):
+        write_pcm(decoded, decoded_samples)
+        run(evaluator, "--decoded", decoded, "--ref", reference, "--json", report, *lag)
+        return json.loads(report.read_text())
+
+    for lag in (0, 80, -80):
+        metrics = measure([0] * lag + samples if lag >= 0 else samples[-lag:])
+        assert metrics["waveform_corr"] > 0.999 and metrics["waveform_shift_samples"] == 0, metrics
+    metrics = measure([v // 2 for v in samples])
+    assert metrics["waveform_corr"] > 0.999, metrics
+    for shift in (5, 32):
+        metrics = measure([0] * shift + samples[:-shift], "--lag-samples", 0)
+        assert metrics["waveform_corr"] > 0.99 and metrics["waveform_shift_samples"] == shift, metrics
+    metrics = measure([0] * 40 + samples[:-40], "--lag-samples", 0)
+    assert abs(metrics["waveform_corr"]) < 0.1, metrics
+    write_pcm(reference, [0] * 640)
+    metrics = measure([0] * 640)
+    assert metrics["waveform_corr"] is None, metrics
+
+
 def verify_soft_decode(evaluator, reframer, root):
     """Fully confident soft values decode as their hard decisions; --soft is explicit."""
     hard = root / "dam_e1_hd.bit"
@@ -230,5 +262,6 @@ if __name__ == "__main__":
         old_mask = os.umask(0)
         try:
             verify(sys.argv[1], sys.argv[2], Path(directory))
+            verify_waveform(sys.argv[1], Path(directory))
         finally:
             os.umask(old_mask)
