@@ -96,6 +96,8 @@ imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_L9) {
     }
 
     cur_mp->w0 = ((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    /* Only rate 33 marks late onsets; clear any mark a caller's state carries. */
+    mbe_set_voicing_onset_delay(cur_mp, 0);
 
     int L = (int)(0.9254 * (int)((M_PI / cur_mp->w0) + 0.25));
     if ((L > 56) || (L < 9)) {
@@ -809,8 +811,10 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
 
     mbe_moveMbeParms(cur_mp, prev_mp);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
+    /* As DVSI's P25 decoder, without eq 116's scaling; ProVoice, which plays
+     * through the same path, likewise. */
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise,
-                                       MBE_VOICED_SYNTHESIS_DVSI);
+                                       MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

@@ -43,6 +43,24 @@ mbe_ambe2450_harmonic_count(int b0) {
     return (L < 9) ? 9 : ((L > 56) ? 56 : L);
 }
 
+/*
+ * Voicing of harmonic l at fundamental f0 (cycles per sample) from the V/UV
+ * vector row (Annex B, eq 5's 500 Hz columns). DVSI's decoders voice a
+ * harmonic whose own column, or the column 250 Hz above it, is voiced: each
+ * voiced column reaches half a column into the unvoiced one below, as D-STAR's
+ * 1 kHz bands reach 250 Hz into theirs (mbe_ambe2400_harmonic_voiced()). The decoder and the
+ * encoder (eqs 4 and 8) read the voicing through this.
+ */
+int mbe_ambe2450_harmonic_voiced(const int row[8], int l, float f0);
+
+/*
+ * The voicing-onset delay of a decoded rate-33 model, in samples (see
+ * mbe_voicing_onset_delay()): DVSI's decoders start the voiced harmonics of a
+ * b1 15 frame that follows an unvoiced one half a frame later than those of
+ * any other voiced row.
+ */
+#define MBE_AMBE2450_VUV_LATE_ONSET 15
+
 /* Voice code nearest to f0 (cycles per sample) in log2, as DVSI's encoder
  * quantizes; clamped to 0..119. */
 int mbe_ambe2450_pitch_code(float f0);

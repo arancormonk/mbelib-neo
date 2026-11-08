@@ -201,6 +201,8 @@ ambe2400_special_frame(const char* ambe_d, int b0) {
  */
 static void
 ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
+    /* Only rate 33 marks late onsets; clear any mark a caller's state carries. */
+    mbe_set_voicing_onset_delay(cur_mp, 0);
     if (b0 == MBE_AMBE2400_SILENCE_B0) {
         cur_mp->w0 = MBE_AMBE_SILENCE_W0;
         *f0 = MBE_AMBE_SILENCE_W0 / (float)(2.0 * M_PI);
@@ -933,7 +935,7 @@ ambe2400_speech_under_tone(float* speech, mbe_parms* cur_mp, const mbe_parms* pr
     repeated.repeatCount = 0;
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(&repeated, MBE_HIGH_BAND_GAIN_AMBE2400);
     mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
-                                       MBE_VOICED_SYNTHESIS_DVSI);
+                                       MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_SPEC);
     /* The next frame's synthesis draws its unvoiced noise from cur_mp. */
     cur_mp->noiseSeed = repeated.noiseSeed;
     memcpy(cur_mp->noiseOverlap, repeated.noiseOverlap, sizeof(cur_mp->noiseOverlap));
@@ -1052,7 +1054,7 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, mbe_parms
         mbe_moveMbeParms(cur_mp, prev_mp);
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
         mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
-                                           MBE_VOICED_SYNTHESIS_DVSI);
+                                           MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_SPEC);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         if (ambe2400_error_rate_mutes(result, cur_mp)) {
             mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

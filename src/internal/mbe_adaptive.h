@@ -65,6 +65,30 @@
 void mbe_applyAdaptiveSmoothingWithRm0(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0);
 
 /**
+ * Whether adaptive smoothing scales a frame's amplitudes down to the threshold
+ * of TIA-102.BABA eqs 115-116; chosen by the codec path.
+ */
+enum mbe_amplitude_limit {
+    /** Eq 116 as specified: D-STAR and the public synthesis API. */
+    MBE_AMPLITUDE_LIMIT_SPEC,
+    /** No eq 116 scaling: the IMBE (P25 and ProVoice) and rate-33 paths. On identical bits
+     * DVSI's decoders play the frames it would scale (1.7% of rate 33's voice
+     * frames, 1% of P25's) 0.0-0.1 dB from their unscaled level, where eq 116
+     * left them 2.9 and 1.0 dB quieter (docs/dvsi-parity.md, "Amplitude
+     * limit"). */
+    MBE_AMPLITUDE_LIMIT_NONE,
+};
+
+/* The amplitude sum MBE_AMPLITUDE_LIMIT_NONE still scales down to: a numeric
+ * guard only, about 94 dB over eq 115's 20480 and far past full-scale output,
+ * so an extreme (finite) prediction history cannot overflow the synthesis. */
+#define MBE_AMPLITUDE_SAFETY_LIMIT 1.0e9
+
+/** @brief mbe_applyAdaptiveSmoothingWithRm0() with the eq 116 scaling chosen by @p limit. */
+void mbe_applyAdaptiveSmoothingWithRm0Limit(mbe_parms* cur_mp, const mbe_parms* prev_mp, float rm0,
+                                            enum mbe_amplitude_limit limit);
+
+/**
  * @brief Apply spectral amplitude enhancement and return pre-enhancement RM0.
  * @param cur_mp In/out parameter set to enhance.
  * @param high_band_gain Height of the high-band shelf applied afterwards (1 for none).
@@ -116,6 +140,30 @@ enum mbe_voiced_synthesis {
     MBE_VOICED_SYNTHESIS_DVSI,
 };
 
+/*
+ * Voiced phase of MBE_VOICED_SYNTHESIS_DVSI, as DVSI's AMBE-3000 decoders keep
+ * it in every mode (docs/dvsi-parity.md, "Voiced phase"):
+ *  - The pitch moves from one frame's to the next 16 samples after the middle
+ *    of the frame: a harmonic's phase advances by l (96 w0(-1) + 64 w0(0))
+ *    over a frame, not TIA-102.BABA eq 139's l 80 (w0(-1) + w0(0)).
+ *  - The first frame with a voiced harmonic after a frame with none restarts
+ *    the phase from that frame alone: l w0 (N - 16 - delay) at its end, plus
+ *    the regenerated phase, whatever the phase was before the gap.
+ */
+#define MBE_PHASE_SWITCH_DELAY_DVSI 16
+/* The onset delay mbe_set_voicing_onset_delay() can give a model (samples). */
+#define MBE_VOICING_ONSET_LATE      80
+
+/**
+ * @brief Mark a decoded model whose voiced harmonics start late at an onset:
+ * @p late nonzero gives it MBE_VOICING_ONSET_LATE samples, zero none. The
+ * mark lives in the otherwise unused element 0 of PHIl.
+ */
+void mbe_set_voicing_onset_delay(mbe_parms* mp, int late);
+
+/** @brief The onset delay mbe_set_voicing_onset_delay() gave @p mp (0 if none). */
+int mbe_voicing_onset_delay(const mbe_parms* mp);
+
 /**
  * @brief Whether MBE_VOICED_SYNTHESIS_DVSI's fourth-root law moves a harmonic
  * between these rendered amplitudes: both positive and finite (otherwise the
@@ -131,9 +179,11 @@ int mbe_voiced_amplitude_law_applies(const float* prev, const float* cur);
  * @param rm0 Sum of squared pre-enhancement amplitudes.
  * @param mute_noise Noise output if the frame is muted.
  * @param voiced How the voiced harmonics move over the frame.
+ * @param limit Whether adaptive smoothing applies eq 116's amplitude scaling.
  */
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
-                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced);
+                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                                        enum mbe_amplitude_limit limit);
 
 /**
  * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.

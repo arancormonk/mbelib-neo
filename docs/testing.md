@@ -706,6 +706,14 @@ Schema-2 metrics preserve the original supported formulas:
   `lsd_db` is mean active-frame log-spectral distance: symmetric 256-point Hann,
   80-sample hop, bins 2…118, reference-derived power floor
   `max(1e-6 * max(reference power), 1e-20)`.
+- `waveform_corr` is the normalized correlation of the two waveforms over the
+  active frames, the best within 32 samples either side of the lag used
+  (`waveform_shift_samples`), since that lag comes from envelopes at 8-sample
+  hops and can land 16 samples from the waveforms' common timing. The other
+  metrics see relative harmonic phase only indirectly (crest factor,
+  short-window envelopes and spectra); this one sees the waveform itself, so two
+  decoders with equal spectra and unrelated pulse positions score near 0, while
+  a pulse train shifted by up to 32 samples as a whole still scores high.
 - `env_corr` correlates log 40-sample RMS envelopes, floored 60 dB below each
   maximum. `crest_ref_db`, `crest_dec_db`, and `crest_delta_db` are mean 20-ms
   peak/RMS values and decoded-minus-reference difference. `band_delta_db_*`
@@ -900,8 +908,8 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
 ```
 
 - **Speech:** ours vs the input, DVSI's decoder vs the input, and ours vs
-  DVSI's decoder, with the `mbe_quality_eval` metrics above (absolute level and
-  RMS-matched spectra).
+  DVSI's decoder, with the `mbe_quality_eval` metrics above (absolute level,
+  RMS-matched spectra and, against DVSI's decoder, `waveform_corr`).
 - **Pitch:** a harmonic-peak f0 estimator measures our output, DVSI's output
   and the input on stable voiced frames and reports each against the pitch our
   decoder coded, by f0 band. A decoder that plays sharp or flat shows up as a

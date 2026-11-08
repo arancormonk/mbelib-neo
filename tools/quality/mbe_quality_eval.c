@@ -623,6 +623,45 @@ correlation(const double* a, const double* b, size_t n, double* value) {
     return 1;
 }
 
+/* Waveform correlation over the active frames: the best normalized
+ * correlation of r and d shifted by up to WAVEFORM_SHIFT samples either way,
+ * since the alignment lag comes from envelopes at 8-sample hops and lands up
+ * to 16 samples from two decoders' common timing. */
+#define WAVEFORM_SHIFT 32
+
+static double
+waveform_correlation(const double* r, const double* d, size_t n, const unsigned char* active, size_t nf, int* shift) {
+    double best = 0.0;
+    int found = 0;
+    *shift = 0;
+    for (int s = -WAVEFORM_SHIFT; s <= WAVEFORM_SHIFT; ++s) {
+        double rd = 0.0, rr = 0.0, dd = 0.0;
+        for (size_t f = 0; f < nf; ++f) {
+            if (!active[f]) {
+                continue;
+            }
+            for (size_t i = f * 160; i < (f + 1) * 160; ++i) {
+                long j = (long)i + s;
+                if (j < 0 || (size_t)j >= n) {
+                    continue;
+                }
+                rd += r[i] * d[j];
+                rr += r[i] * r[i];
+                dd += d[j] * d[j];
+            }
+        }
+        if (rr > 0.0 && dd > 0.0) {
+            double c = rd / sqrt(rr * dd);
+            if (!found || c > best) {
+                best = c;
+                *shift = s;
+                found = 1;
+            }
+        }
+    }
+    return best;
+}
+
 static Alignment
 align(const Signal* ref, const Signal* dec) {
     Signal a = alignment_envelope(ref), b = alignment_envelope(dec);
@@ -833,6 +872,10 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
                       : ed <= 0  ? "silent_decoded"
                                  : "speech";
     metric("active_frames", (double)count);
+    int waveform_shift = 0;
+    double waveform = speech ? waveform_correlation(r, d, n, active, nf, &waveform_shift) : 0.0;
+    metric_valid("waveform_corr", waveform, speech);
+    metric_valid("waveform_shift_samples", (double)waveform_shift, speech);
     double gain = speech ? sqrt(er / ed) : 1;
     /* Match active-speech energy once for every subsequent comparative metric.
      * Keep the original decoded buffer intact for output and peak reporting. */

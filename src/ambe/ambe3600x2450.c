@@ -229,18 +229,28 @@ mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d) {
     return mbe_eccAmbe3600DataCounted_common(ambe_fr, ambe_d);
 }
 
+int
+mbe_ambe2450_harmonic_voiced(const int row[8], int l, float f0) {
+    const float column = mbe_round_to_float((float)l * 16.0f * f0);
+    int own = (int)column;
+    int above = (int)mbe_round_to_float(column + 0.5f);
+    own = (own > 7) ? 7 : own;
+    above = (above > 7) ? 7 : above;
+    return row[own] | row[above];
+}
+
 static void
 ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
     (void)b0;
     int b1 = ambe2450_field(ambe_d, 1);
 
+    mbe_set_voicing_onset_delay(cur_mp, (silence == 0) && (b1 == MBE_AMBE2450_VUV_LATE_ONSET));
     for (int l = 1; l <= L; l++) {
-        int jl = (int)((float)l * (float)16.0 * f0);
         if (silence == 0) {
-            cur_mp->Vl[l] = AmbeVuv[b1][jl];
+            cur_mp->Vl[l] = mbe_ambe2450_harmonic_voiced(AmbeVuv[b1], l, f0);
         }
 #ifdef AMBE_DEBUG
-        fprintf(stderr, "jl[%i]:%i Vl[%i]:%i\n", l, jl, l, cur_mp->Vl[l]);
+        fprintf(stderr, "Vl[%i]:%i\n", l, cur_mp->Vl[l]);
 #endif
     }
 #ifdef AMBE_DEBUG
@@ -833,7 +843,7 @@ static void
 ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2450);
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
-                                       MBE_VOICED_SYNTHESIS_DVSI);
+                                       MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
