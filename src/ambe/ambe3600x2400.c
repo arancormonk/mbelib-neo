@@ -27,6 +27,7 @@
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -746,9 +747,11 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
     silent.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
     /* The next frame's synthesis draws its unvoiced noise from cur_mp, as
-     * after any synthesized frame. */
+     * after any synthesized frame; the overlap goes with the mark that says
+     * whose it is. */
     cur_mp->noiseSeed = silent.noiseSeed;
     memcpy(cur_mp->noiseOverlap, silent.noiseOverlap, sizeof(cur_mp->noiseOverlap));
+    memcpy(cur_mp->previousUw, silent.previousUw, sizeof(cur_mp->previousUw));
     mbe_moveMbeParms(&silent, prev_mp_enhanced);
     mbe_copy_error_state(prev_mp_enhanced, cur_mp);
     ambe2400_mute_noise(noise);
@@ -851,6 +854,8 @@ ambe2400_resume_after_mute(mbe_parms* prev_mp_enhanced, const mbe_parms* history
     prev_mp_enhanced->L = resumed.L;
     prev_mp_enhanced->w0 = resumed.w0;
     ambe2400_resume_overlap(prev_mp_enhanced->previousUw, &resumed);
+    /* A subframe's overlap, whatever rendering the state came from. */
+    mbe_subframe_state_adopt(prev_mp_enhanced);
 }
 
 /*
@@ -931,16 +936,28 @@ ambe2400_last_frame_audible(const mbe_parms* prev_mp) {
 static void
 ambe2400_speech_under_tone(float* speech, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_parms repeated = *cur_mp;
+    /* Read now: a caller may keep one state as cur_mp and prev_mp_enhanced. */
+    const float seed = cur_mp->noiseSeed;
+    float overlap[sizeof(prev_mp_enhanced->previousUw) / sizeof(prev_mp_enhanced->previousUw[0])] = {0.0f};
+    /* The overlap the frame before left, if it is a subframe's: the other
+     * rendering's (a caller's mbe_synthesizeSpeechf()) is not, and stays out. */
+    if (mbe_subframe_state_is_marked(prev_mp_enhanced)) {
+        memcpy(overlap, prev_mp_enhanced->previousUw, sizeof(overlap));
+    }
     mbe_repeat_load_model(&repeated, prev_mp);
     repeated.repeatCount = 0;
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(&repeated, MBE_HIGH_BAND_GAIN_AMBE2400);
     mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
                                        MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_SPEC);
-    /* The next frame's synthesis draws its unvoiced noise from cur_mp. */
-    cur_mp->noiseSeed = repeated.noiseSeed;
-    memcpy(cur_mp->noiseOverlap, repeated.noiseOverlap, sizeof(cur_mp->noiseOverlap));
     mbe_moveMbeParms(&repeated, prev_mp_enhanced);
     mbe_copy_error_state(prev_mp_enhanced, cur_mp);
+    /* DVSI's noise generator stands still through a tone frame: the voice
+     * after the tone draws from where the frame before it left off, over the
+     * unvoiced overlap that frame left (the repeat's belongs to noise the
+     * voice has yet to draw). */
+    mbe_copy_generator_state(prev_mp_enhanced, cur_mp);
+    prev_mp_enhanced->noiseSeed = seed;
+    memcpy(prev_mp_enhanced->previousUw, overlap, sizeof(overlap));
 }
 
 static void

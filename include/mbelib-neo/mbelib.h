@@ -1017,7 +1017,10 @@ MBE_API const char* mbe_versionString(void);
 
 /**
  * @brief Set thread-local RNG seeds used by synthesis noise generators.
- *        Applies to comfort noise and unvoiced LCG cold-start state.
+ *        Applies to comfort noise and to the unvoiced noise of
+ *        mbe_synthesizeSpeechf() from a fresh state. The codec process
+ *        functions draw their unvoiced noise from DVSI's generator, which
+ *        starts every stream from the same state and takes no seed.
  * @param seed Any 32-bit seed value. A zero seed is accepted and remapped to
  *             an internal non-zero state.
  */

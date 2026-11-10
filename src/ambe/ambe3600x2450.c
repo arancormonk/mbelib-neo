@@ -27,6 +27,7 @@
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -835,6 +836,9 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mb
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
     mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    /* DVSI's noise generator runs through a muted frame (not through a tone). */
+    mbe_dvsi_noise_skip_frame(cur_mp);
+    prev_mp_enhanced->noiseSeed = cur_mp->noiseSeed;
     ambe2450_silence_last_synthesized(prev_mp_enhanced);
 }
 

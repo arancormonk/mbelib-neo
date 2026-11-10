@@ -158,12 +158,30 @@ parms_equal(const mbe_parms* a, const mbe_parms* b) {
     return ints_equal && floats_equal && arrays_equal;
 }
 
-/** After a mute, the last synthesized frame is silenced: amplitudes and overlap zeroed, the rest kept. */
+/** After a tone, the last synthesized frame is silenced: amplitudes and overlap zeroed, the rest kept. */
 static int
 enhanced_silenced_from(const mbe_parms* after, const mbe_parms* before) {
     mbe_parms expected = *before;
     memset(expected.Ml, 0, sizeof(expected.Ml));
     memset(expected.previousUw, 0, sizeof(expected.previousUw));
+    return parms_equal(after, &expected);
+}
+
+/**
+ * After a mute, likewise, and the unvoiced noise generator has moved one frame
+ * on: DVSI's (x <- 173 x + 13849 mod 2^16) runs through muted frames, and
+ * stands still only through tones.
+ */
+static int
+enhanced_muted_from(const mbe_parms* after, const mbe_parms* before) {
+    mbe_parms expected = *before;
+    uint32_t state = (uint32_t)before->noiseSeed;
+    for (int i = 0; i < 160; ++i) {
+        state = (173u * state + 13849u) & 0xFFFFu;
+    }
+    memset(expected.Ml, 0, sizeof(expected.Ml));
+    memset(expected.previousUw, 0, sizeof(expected.previousUw));
+    expected.noiseSeed = (float)state;
     return parms_equal(after, &expected);
 }
 
@@ -262,7 +280,7 @@ test_erasure_run_repeats_then_mutes(void) {
         assert(history_equal(&s.prev, &history));
         if (muted) {
             assert_mute_noise(s.out);
-            assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
+            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
         } else {
             /* A repeat replays the loud voice model, not comfort noise. */
             assert(peak_abs(s.out) > 5.0f);
@@ -327,7 +345,7 @@ test_error_rate_mute_boundary(void) {
         assert(history_equal(&s.prev, &dec_cur));
         if (n == 21) {
             assert_mute_noise(s.out);
-            assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
+            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
         }
     }
 }
@@ -820,6 +838,68 @@ test_fade_in_after_tone(void) {
     (void)steady;
 }
 
+/* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
+ * per output sample. */
+static float
+noise_state_after(int frames) {
+    uint32_t state = 0u;
+    for (int i = 0; i < frames * 160; ++i) {
+        state = (173u * state + 13849u) & 0xFFFFu;
+    }
+    return (float)state;
+}
+
+/*
+ * DVSI's noise generator runs through every frame that is not a tone frame:
+ * voice, silence, repeats and mutes each move it 160 samples on, and a tone
+ * frame, the zero-amplitude one included, leaves it where it was.
+ */
+static void
+test_noise_generator_through_frame_kinds(void) {
+    static const int k_silence[9] = {124, 0, 0, 0, 0, 0, 0, 0, 0};
+    struct stream s;
+    char d[49];
+    int frames = 0;
+
+    stream_init(&s);
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    stream_frame_b(&s, k_voice_next, 0, 0);
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    /* Three repeats, then two mutes at the repeat limit. */
+    for (int i = 0; i < 5; ++i) {
+        stream_frame_b(&s, k_erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == (i >= 3));
+        ++frames;
+        assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+        assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    }
+    pack_tone(d, 7);
+    for (int i = 0; i < 2; ++i) {
+        stream_frame(&s, d, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+        assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    }
+    pack_tone(d, 255);
+    stream_frame(&s, d, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    pack_b(d, k_silence);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
+    stream_frame(&s, d, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    /* The thread seed does not move it: every stream starts DVSI's generator from 0. */
+    assert(frames == 9);
+}
+
 int
 main(void) {
     test_repeat_preserves_model();
@@ -834,6 +914,7 @@ main(void) {
     test_erasure_run_repeats_then_mutes();
     test_repeat_advances_error_rate();
     test_error_rate_mute_boundary();
+    test_noise_generator_through_frame_kinds();
     test_valid_tone_keeps_state();
     test_invalid_tone_is_erasure();
     test_unverified_tone_is_erasure();

@@ -2585,9 +2585,15 @@ main(void) {
         prev.errorRate = 1.0f;
         cur.repeatCount = 0;
 
-        float noise_seed_before = prev_enh.noiseSeed;
+        assert(prev_enh.noiseSeed < 0.0f);
         assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
-        assert(float_bits_equal(prev_enh.noiseSeed, noise_seed_before));
+        /* Muted: no unvoiced noise is drawn, and the generator moves one
+         * frame on from a fresh stream's start, as DVSI's does through a mute. */
+        assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+        assert(float_bits_equal(prev_enh.noiseSeed, (float)mbe_dvsi_noise_skip(0u, 160)));
+        for (int n = 0; n < 256; ++n) {
+            assert(prev_enh.previousUw[n] == 0.0f);
+        }
     }
 
     return 0;

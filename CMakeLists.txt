@@ -1448,6 +1448,7 @@ if(MBELIB_BUILD_TESTS)
             test_tetra_decoder
             test_tetra_simd
             test_dsp_equations
+            test_unvoiced_subframes
             test_adaptive_equations
             test_ambe2400_frame_types
     )
@@ -2079,6 +2080,7 @@ if(MBELIB_BUILD_TESTS)
     set(_MBELIB_TEST_TARGETS
         test_cpu_dispatch
         test_dsp_equations
+        test_unvoiced_subframes
         test_adaptive_equations
         test_assertions
         test_api

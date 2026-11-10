@@ -1422,6 +1422,112 @@ mbe_render_voiced_speech(float* aout_buf, const mbe_parms* cur_mp, const mbe_par
     }
 }
 
+/* A positive, finite float, read from its bit pattern so that fast-math
+ * cannot fold the test into accepting NaN (see mbe_encoder.c). */
+static int
+mbe_positive_finite(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return bits - 1u < 0x7F7FFFFFu;
+}
+
+/* The model's harmonic nearest angular frequency w, 1..L. */
+static int
+mbe_model_harmonic_at(const mbe_parms* mp, float w) {
+    const float position = (w / mp->w0) + 0.5f;
+    if (!(position >= 1.0f)) {
+        return 1;
+    }
+    return (position >= (float)mp->L) ? mp->L : (int)position;
+}
+
+/* Amplitude of the model's noise at angular frequency w, where its nearest
+ * harmonic is unvoiced: linear between the two harmonics around w when both
+ * are unvoiced, the nearest one's otherwise and past either end. */
+static float
+mbe_model_noise_amplitude_at(const mbe_parms* mp, float w) {
+    const float position = w / mp->w0;
+    const int nearest = mbe_model_harmonic_at(mp, w);
+    if (!(position >= 1.0f) || position >= (float)mp->L) {
+        return mp->Ml[nearest];
+    }
+    const int below = (int)position;
+    if (mp->Vl[below] != 0 || mp->Vl[below + 1] != 0) {
+        return mp->Ml[nearest];
+    }
+    const float t = position - (float)below;
+    return mp->Ml[below] + (t * (mp->Ml[below + 1] - mp->Ml[below]));
+}
+
+/*
+ * The mid-frame subframe of DVSI's unvoiced synthesis (docs/dvsi-parity.md,
+ * "Unvoiced synthesis"): a model between the previous frame's and this one's.
+ * Its fundamental is their geometric mean; a band carries noise where both
+ * frames are unvoiced at its frequency, at the geometric mean of their
+ * amplitudes there (a band either frame voices belongs to the voiced part).
+ */
+static void
+mbe_unvoiced_mid_subframe(const mbe_parms* prev_mp, const mbe_parms* cur_mp, struct mbe_unvoiced_subframe* sub) {
+    const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
+    const int longer = (prev_mp->L < cur_mp->L) ? cur_mp->L : prev_mp->L;
+
+    memset(sub, 0, sizeof(*sub));
+    if (!mbe_positive_finite(&prev_mp->w0) || !mbe_positive_finite(&cur_mp->w0)) {
+        return;
+    }
+    sub->w0 = sqrtf(prev_mp->w0 * cur_mp->w0);
+    if (!mbe_positive_finite(&sub->w0)) {
+        sub->w0 = 0.0f;
+        return;
+    }
+    const float harmonics = floorf((0.9254f * (float)M_PI) / sub->w0);
+    sub->L = (harmonics < (float)shorter) ? shorter : ((harmonics > (float)longer) ? longer : (int)harmonics);
+    for (int l = 1; l <= sub->L; l++) {
+        const float w = sub->w0 * (float)l;
+        if (prev_mp->Vl[mbe_model_harmonic_at(prev_mp, w)] != 0 || cur_mp->Vl[mbe_model_harmonic_at(cur_mp, w)] != 0) {
+            continue;
+        }
+        const float before = mbe_model_noise_amplitude_at(prev_mp, w);
+        const float after = mbe_model_noise_amplitude_at(cur_mp, w);
+        if (mbe_positive_finite(&before) && mbe_positive_finite(&after)) {
+            sub->amplitude[l] = MBE_UNVOICED_SUBFRAME_SCALE * sqrtf(before * after);
+        }
+    }
+}
+
+/* The frame's own subframe: its unvoiced bands at their amplitudes. */
+static void
+mbe_unvoiced_own_subframe(const mbe_parms* mp, struct mbe_unvoiced_subframe* sub) {
+    memset(sub, 0, sizeof(*sub));
+    sub->w0 = mp->w0;
+    sub->L = mp->L;
+    for (int l = 1; l <= mp->L; l++) {
+        if (mp->Vl[l] == 0 && mbe_positive_finite(&mp->Ml[l])) {
+            sub->amplitude[l] = MBE_UNVOICED_SUBFRAME_SCALE * mp->Ml[l];
+        }
+    }
+}
+
+/* The frame's unvoiced part: DVSI's subframes on the codec paths, TIA-102.BABA
+ * equations 117-126 for the public synthesis. Without a transform plan the
+ * DVSI generator still runs on, as it does through every frame but a tone. */
+static void
+mbe_render_unvoiced(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, const float* noise_buffer,
+                    int subframe_overlap, const struct mbe_unvoiced_subframe* subframes) {
+    mbe_fft_plan* plan = mbe_get_fft_plan();
+    if (subframes == NULL) {
+        if (plan) {
+            mbe_synthesizeUnvoicedFFTFrom(aout_buf, cur_mp, prev_mp, plan, noise_buffer, subframe_overlap);
+        }
+        return;
+    }
+    if (plan) {
+        mbe_synthesizeUnvoicedSubframes(aout_buf, cur_mp, prev_mp, plan, &subframes[0], &subframes[1]);
+    } else {
+        mbe_dvsi_noise_skip_frame(cur_mp);
+    }
+}
+
 /* How the synthesis core applies adaptive smoothing (Algorithms #111-116). */
 enum mbe_speech_smoothing {
     MBE_SMOOTHING_FROM_MODEL,  /* derive the pre-enhancement energy from cur_mp */
@@ -1439,6 +1545,8 @@ mbe_render_muted_frame(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, e
                        enum mbe_voiced_synthesis voiced, int onset) {
     if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
         mbe_update_speech_phases(cur_mp, prev_mp, MBE_VOICED_FRAME, voiced, onset);
+        /* DVSI's noise generator runs through a muted frame. */
+        mbe_dvsi_noise_skip_frame(cur_mp);
     }
     if (mute_noise == MBE_MUTE_NOISE_SPEC) {
         mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
@@ -1483,9 +1591,19 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     }
 
     /* Algorithm #117: generate the unvoiced noise buffer first, preserving
-     * per-stream overlap and LCG consumption independently of voiced phase. */
+     * per-stream overlap and LCG consumption independently of voiced phase.
+     * The codec paths render DVSI's subframes instead, whose models are read
+     * here, before the render gains and the length reconciliation. */
+    const int dvsi = voiced == MBE_VOICED_SYNTHESIS_DVSI;
     float noise_buffer[256];
-    mbe_generate_noise_with_overlap(noise_buffer, &cur_mp->noiseSeed, cur_mp->noiseOverlap);
+    int subframe_overlap = 0;
+    struct mbe_unvoiced_subframe subframes[2];
+    if (dvsi) {
+        mbe_unvoiced_mid_subframe(prev_mp, cur_mp, &subframes[0]);
+        mbe_unvoiced_own_subframe(cur_mp, &subframes[1]);
+    } else {
+        subframe_overlap = mbe_spec_frame_noise(noise_buffer, cur_mp, prev_mp);
+    }
 
     /* Initialize output buffer to zero */
     memset(aout_buf, 0, N * sizeof(float));
@@ -1515,12 +1633,9 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
      */
     mbe_render_voiced_speech(aout_buf, cur_mp, prev_mp, maxl, N, voiced);
 
-    /* Synthesize unvoiced components from the same per-frame noise buffer
-     * (TIA-102.BABA equations 117-126). */
-    mbe_fft_plan* plan = mbe_get_fft_plan();
-    if (plan) {
-        mbe_synthesizeUnvoicedFFTWithNoise(aout_buf, cur_mp, prev_mp, plan, noise_buffer);
-    }
+    /* Synthesize unvoiced components: from the same per-frame noise buffer
+     * (TIA-102.BABA equations 117-126), or DVSI's subframes. */
+    mbe_render_unvoiced(aout_buf, cur_mp, prev_mp, noise_buffer, subframe_overlap, dvsi ? subframes : NULL);
 
     mbe_render_restore(cur_mp, &cur_saved);
     if (!shared_model) {
