@@ -2412,7 +2412,8 @@
         ],
         "metric": "vs_dvsi.waveform_corr_unshifted",
         "rule": "increase",
-        "value": 0.005
+        "value": 0.005,
+        "every_vector": true
       },
       {
         "mode": [
@@ -2488,7 +2489,8 @@
         ],
         "metric": "vs_dvsi.waveform_corr_unshifted",
         "rule": "increase",
-        "value": 0.005
+        "value": 0.005,
+        "every_vector": true
       },
       {
         "mode": [
@@ -2564,7 +2566,8 @@
         ],
         "metric": "vs_dvsi.waveform_corr_unshifted",
         "rule": "increase",
-        "value": 0.005
+        "value": 0.005,
+        "every_vector": true
       },
       {
         "mode": [
@@ -2685,7 +2688,8 @@
         ],
         "metric": "vs_dvsi.waveform_corr_unshifted",
         "rule": "increase",
-        "value": 0.03
+        "value": 0.03,
+        "every_vector": true
       },
       {
         "mode": [
@@ -2761,7 +2765,8 @@
         ],
         "metric": "vs_dvsi.waveform_corr_unshifted",
         "rule": "increase",
-        "value": 0.03
+        "value": 0.03,
+        "every_vector": true
       },
       {
         "mode": [
@@ -2837,7 +2842,8 @@
         ],
         "metric": "vs_dvsi.waveform_corr_unshifted",
         "rule": "increase",
-        "value": 0.03
+        "value": 0.03,
+        "every_vector": true
       },
       {
         "mode": [
@@ -3002,12 +3008,36 @@
         "mode": "dstar",
         "metric": "tone.level_abs_error_db",
         "rule": "abs_delta_max",
-        "value": 0.0
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.freq_rel_error",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
       },
       {
         "mode": "dstar",
         "metric": "tone.detector_agreement",
-        "rule": "all_no_decrease"
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
       }
     ]
   },

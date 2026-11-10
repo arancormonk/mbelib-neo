@@ -467,6 +467,63 @@ def check_every_vector_rules(board):
     assert board.check_gates(falling, {}, comparison)[0]
 
 
+def check_metric_on_every_vector(board):
+    # A metric neither run reports for a vector is not unpaired, so a check passes on the vectors
+    # that have it; "every_vector" fails it instead.
+    names = [f"v{i}" for i in range(4)]
+
+    def run(lsd, without):
+        vectors = [vector(n, "validation", lsd, 0.88) for n in names]
+        for index, entry in enumerate(vectors):
+            if index not in without:
+                entry["vs_dvsi"]["waveform_corr_unshifted"] = 0.5 + 0.1 * lsd + 0.01 * index
+        return {"vectors": vectors}
+
+    gate = {"partition": "validation", "checks": [
+        {"mode": "dstar", "metric": "vs_dvsi.waveform_corr_unshifted", "rule": "increase"}]}
+    comparison = board.compare(run(2.0, {3}), run(1.0, {3}))
+    entry = comparison["dstar/validation"]["vs_dvsi.waveform_corr_unshifted"]
+    assert entry["n"] == 3 and entry["vectors"] == 4 and entry["unpaired"] == [], entry
+    assert board.check_gates(gate, {}, comparison)[0]
+    gate["checks"][0]["every_vector"] = True
+    passed, lines = board.check_gates(gate, {}, comparison)
+    assert not passed and any("3 of the group's 4" in line for line in lines), lines
+    assert board.check_gates(gate, {}, board.compare(run(2.0, set()), run(1.0, set())))[0]
+    # The declared waveform checks ask for it.
+    declared = json.loads((Path(__file__).resolve().parents[1] / "tools/quality/dvsi_gates.json").read_text())
+    asking = [check for gates in declared.values() if isinstance(gates, dict) for check in gates.get("checks", [])
+              if check["metric"] == "vs_dvsi.waveform_corr_unshifted"]
+    assert asking and all(check.get("every_vector") for check in asking), asking
+
+
+def check_tone_fade_gate_holds_dstar(board):
+    # The rate-33 tone-fade gate says no D-STAR tone vector changes in level, frequency, twist, detector
+    # agreement or wrong-tone rate: a change in any of them on one vector fails it, and so do level changes
+    # on two vectors that cancel in the mean.
+    declared = json.loads((Path(__file__).resolve().parents[1] / "tools/quality/dvsi_gates.json").read_text())
+    gate = declared["ambe2450-tone-fade-tones"]
+    gate = dict(gate, checks=[check for check in gate["checks"] if check["mode"] == "dstar"])
+    names = ("dtmf", "alltone", "knox_1")
+
+    def run(changes):
+        vectors = []
+        for name in names:
+            tone = {"level_abs_error_db": 0.2, "freq_rel_error": 0.001, "balance_abs_error_db": 0.5,
+                    "detector_agreement": 0.99, "wrong_tone_fraction": 0.0, "steady_tone_windows": 10}
+            tone.update(changes.get(name, {}))
+            vectors.append({"mode": "dstar", "name": name, "partition": "tones", "tone": tone})
+        return {"vectors": vectors}
+
+    baseline = run({})
+    assert board.check_gates(gate, {}, board.compare(run({}), baseline))[0]
+    for metric, value in (("freq_rel_error", 0.002), ("balance_abs_error_db", 0.6), ("wrong_tone_fraction", 0.01),
+                          ("detector_agreement", 1.0), ("level_abs_error_db", 0.21)):
+        passed, lines = board.check_gates(gate, {}, board.compare(run({"alltone": {metric: value}}), baseline))
+        assert not passed and any(line.startswith(f"FAIL dstar/tones tone.{metric}") for line in lines), lines
+    cancelling = run({"dtmf": {"level_abs_error_db": 0.3}, "alltone": {"level_abs_error_db": 0.1}})
+    assert not board.check_gates(gate, {}, board.compare(cancelling, baseline))[0]
+
+
 def check_frozen_lag_pairing(board):
     # With lags frozen from the baseline, a vector measured at other lags (one whose baseline recorded
     # none, or a lag the run had to search) is not a pair: all its metrics go unpaired.
@@ -788,6 +845,8 @@ def main():
     check_recordings(board)
     check_group_bootstrap(board)
     check_every_vector_rules(board)
+    check_metric_on_every_vector(board)
+    check_tone_fade_gate_holds_dstar(board)
     check_frozen_lag_pairing(board)
     check_joint_lags(board)
     check_decoder_identity(board)

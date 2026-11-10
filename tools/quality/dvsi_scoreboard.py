@@ -1099,12 +1099,13 @@ def compare(candidate, baseline):
     check_encoder_decoders(candidate, baseline)
     raw = {(result["mode"], result["name"]): result for result in baseline["vectors"]}
     base = {key: flatten(result) for key, result in raw.items()}
-    report, unpaired, coverage = {}, {}, {}
+    report, unpaired, coverage, scored = {}, {}, {}, {}
     for result in candidate["vectors"]:
         before = base.get((result["mode"], result["name"]), {})
         after = flatten(result)
         name = f"{result['mode']}/{result['partition']}"
         group = report.setdefault(name, {})
+        scored[name] = scored.get(name, 0) + 1
         twin = raw.get((result["mode"], result["name"]))
         if candidate.get("lags_from") and twin is not None and result.get("lags") != twin.get("lags"):
             # Measured at other lags than the baseline's: not a pair.
@@ -1146,7 +1147,7 @@ def compare(candidate, baseline):
             summary[group][key] = {"mean": mean(deltas), "ci95": bootstrap_interval(list(recordings.values())),
                                    "worst": max(items, key=lambda item: abs(item[1])) if items else None,
                                    "min": min(deltas) if deltas else None, "max": max(deltas) if deltas else None,
-                                   "n": len(items), "groups": len(recordings),
+                                   "n": len(items), "groups": len(recordings), "vectors": scored.get(group, 0),
                                    "unpaired": unpaired.get(group, {}).get(key, [])}
             shares = coverage.get(group, {}).get(key)
             if shares is not None:
@@ -1226,6 +1227,10 @@ def evaluate_check(check, metric, means, deltas):
         return False, "no paired data"
     if entry.get("unpaired"):
         return False, f"unpaired vectors {entry['unpaired']}"
+    if check.get("every_vector") and entry["n"] < entry.get("vectors", 0):
+        # A metric neither run reports for a vector (one only reported under a condition, say) is not
+        # unpaired; a check that needs it everywhere says so.
+        return False, f"measured on {entry['n']} of the group's {entry['vectors']} vectors"
     delta, interval = entry["mean"], entry["ci95"]
     detail = f"mean delta={delta:+.4g} ci95={interval} worst={entry['worst']}"
     if "min_coverage" in check:

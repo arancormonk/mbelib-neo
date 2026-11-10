@@ -1016,7 +1016,9 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   vector in only one of the two runs.
   `all_no_increase` and `all_no_decrease` hold every vector to the limit, not
   just the mean, and a check's `min_coverage` fails it when its common frames
-  are too few.
+  are too few. A metric that neither run reports for a vector (as
+  `waveform_corr_unshifted` at a lag past 32 samples) leaves that vector out
+  of a check; `every_vector` fails the check instead.
 
 `mbe_quality_eval --params frames.jsonl` writes one JSON record per frame:
 `bits` (the frame's parameter bits after FEC), `decoded` (the frame's own
