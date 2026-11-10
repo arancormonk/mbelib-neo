@@ -77,7 +77,8 @@ BAND_KEYS = tuple(
     f"band_delta_db_{band}"
     for band in ("0_250", "0_500", "500_1000", "1000_2000", "2000_3000", "3000_4000", "3500_4000")
 )
-SPEECH_KEYS = ("level_offset_db", "lsd_db", "env_corr", "waveform_corr", "crest_delta_db", "pcm_rail_samples") + BAND_KEYS
+SPEECH_KEYS = ("level_offset_db", "lsd_db", "env_corr", "waveform_corr", "waveform_corr_unshifted",
+               "waveform_shift_samples", "crest_delta_db", "pcm_rail_samples") + BAND_KEYS
 # DVSI's encoders delay the speech more than ours (about 200 samples more in D-STAR and rate 33, 125 in
 # P25), past the evaluator's -160-sample lag search, so our decoded encoding is delayed by this much
 # before DVSI's is used as its reference.

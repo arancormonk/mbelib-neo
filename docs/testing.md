@@ -714,6 +714,11 @@ Schema-2 metrics preserve the original supported formulas:
   short-window envelopes and spectra); this one sees the waveform itself, so two
   decoders with equal spectra and unrelated pulse positions score near 0, while
   a pulse train shifted by up to 32 samples as a whole still scores high.
+  `waveform_corr_unshifted` is the same correlation with the two files sample
+  against sample (the lag undone, no search), reported when the lag used is
+  within 32 samples. Two decoders of the same bits share their timing, so
+  between them a sample of delay, or a noise sequence one sample off, shows
+  here and not in `waveform_corr`.
 - `env_corr` correlates log 40-sample RMS envelopes, floored 60 dB below each
   maximum. `crest_ref_db`, `crest_dec_db`, and `crest_delta_db` are mean 20-ms
   peak/RMS values and decoded-minus-reference difference. `band_delta_db_*`
