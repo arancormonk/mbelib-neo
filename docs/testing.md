@@ -17,7 +17,9 @@ The CTest suite includes:
 - MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, the FFT autocorrelation against the direct sum, and the voicing thresholds (`test_speech_analysis`)
 - Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven, for the D-STAR, AMBE+2 and IMBE encoders) clean up fully; after successful allocation, encoding (tone frames included) and reset allocate nothing (`test_ambe2400_encoder_oom`, `test_ambe2450_encoder_oom`, `test_imbe7200_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
-- parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit, and the codec paths' voiced amplitude (every harmonic at steady pitch, the 8th and above included, following the fourth-root law against a steady frame, fades from a silent model and pitch steps rendered as the specification's at the codec paths' voiced gain)
+- parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
+- the codec paths' unvoiced synthesis: DVSI's noise generator (its period, its first samples, a cold start and a skipped frame), a subframe against the equations it implements, the window's squares summing to one, a level step inside a frame, the public `mbe_synthesizeSpeechf()` keeping the specification's rendering, a state handed from one rendering to the other, invalid arguments and models, and two streams replaying alike (`test_unvoiced_subframes`)
+- the codec paths' voiced synthesis in subframes: a steady model adding up to its harmonics, an onset starting the pulse train, a late onset, a pitch step keeping the train, the mid-frame model against an independent evaluation, linear crossfades into and out of silence, a muted frame moving the train on, stored pulse state that is not a frame's own being dropped, invalid models (harmonic counts, pitches and magnitudes of any value) leaving the neighbouring state alone, and the frame marks the decoders set: every P25 and D-STAR pitch code of an unvoiced frame, P25 voicing that stays under 505 Hz, and the previous voicing lasting to mid-frame through the P25 data path (`test_subframe_synthesis`)
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)
 - D-STAR voicing: every b1 value at four pitches, each voiced band reaching 250 Hz into the band below (`test_ambe2400_frame_types`)
 - D-STAR frame classes outside plain voice: b0 125, tone frames without a tone and b0 127 frames repeating like error repeats through the hard, soft and parameter-bit APIs and sharing the repeat limit, the null frame and b0 120..124 as voice (b0 124 with the AMBE+2 silence model, all 16 b1 values playing alike on every API and committed to the prediction history), zero-volume tones, C0 words with four errors (every pattern of weight 4 and none lighter, hard and soft) playing as lost frames whose decode the next frame predicts from, through a lost frame or a tone after them, corrections repeating no frame and tones with corrections playing, lost frames after a single tone (the tail fading out, then silence) and after a dual tone (the tone going on until the repeat limit), tones muted with the error level, the repeat-limit mute (fade-out, DVSI-level noise, prediction kept), the voice after it starting from the prediction history (that frame alone changing; a held or initial history fading in from silence; a b0 124 or still-muted frame after it) and the error-level mute and its noise level, and the all-ones DV frame as a lost frame for runs of 1, 3 and 20, the 80-sample crossfades into and out of a tone against a stream with a lost frame in its place, and a tone's volume step ramping over 80 samples before the clip while a new index starts at once (`test_ambe2400_frame_types`)
@@ -321,6 +323,12 @@ on AVX2), preserving the original sample order and stream state exactly.
 recurrence across three consecutive frames, including the overlap and next
 seed. This oracle also runs on ARM32 and AArch64 under QEMU.
 
+These kernels now serve the public `mbe_synthesizeSpeechf()`. The codec paths
+render in subframes ([DVSI parity](dvsi-parity.md#synthesis-in-subframes)) with
+scalar loops: DVSI's 16-bit noise generator one sample at a time, and each
+pitch pulse's harmonics by rotation. They share the transform, the phase
+regeneration and the PCM conversion with the specification's rendering.
+
 On AVX2 compile targets, float kernels process eight lanes, including voiced
 oscillators, unvoiced windowing/overlap and PCM conversion. Portable x86-64
 builds still require only SSE2; their voiced oscillators, tone fits, soft ECC
@@ -509,6 +517,24 @@ ARM32 QEMU runs use a PID namespace to stay within Bionic's 16-bit PID limit.
 Gitleaks history and worktree-diff scans are also clean; the history scan
 mounts the worktree's common Git directory as well as the worktree.
 DVSI inputs, audio, comparison reports and benchmark logs stay local.
+
+### Subframe synthesis
+
+The codec paths' synthesis in 10 ms subframes ([DVSI parity](dvsi-parity.md#synthesis-in-subframes))
+renders each pitch pulse's harmonics by rotation in scalar code, where the rendering it replaces
+there used the vector oscillator kernels. Measured as above (Ryzen 9
+5950X, GCC 16.2.1, Release with fast-math and LTO on both sides, `bench_replay hard <codec> 10 5`
+on DVSI's `dam` stream, the median of five alternating comparisons pinned to CPU 6), against main
+at `8875729`. Portable is `MBELIB_ENABLE_NATIVE=OFF`, whose AVX2 kernel copies run on this CPU.
+
+| Complete frame decode | Build | Before | After | Time added |
+| --- | --- | ---: | ---: | ---: |
+| D-STAR, hard | portable | 4.807 us | 5.814 us | 20.9% |
+| AMBE+2, hard | portable | 5.174 us | 6.388 us | 23.5% |
+| IMBE, hard | portable | 5.117 us | 6.140 us | 20.0% |
+| D-STAR, hard | host-tuned | 4.363 us | 5.108 us | 17.1% |
+| AMBE+2, hard | host-tuned | 4.662 us | 5.599 us | 20.1% |
+| IMBE, hard | host-tuned | 4.623 us | 5.463 us | 18.2% |
 
 ## TETRA Conformance
 

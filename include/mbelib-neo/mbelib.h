@@ -131,9 +131,10 @@ struct mbe_parameters {
     /* === FFT-based unvoiced synthesis state === */
     /** Previous frame inverse FFT output for WOLA (256 samples). */
     float previousUw[256];
-    /** LCG noise generator state (seed). */
+    /** Noise generator state (seed). */
     float noiseSeed;
-    /** Noise buffer overlap for continuity (96 samples). */
+    /** Noise buffer overlap for continuity (96 samples). The codec process
+     *  functions keep the state of their pitch-pulse train here instead. */
     float noiseOverlap[96];
 };
 
