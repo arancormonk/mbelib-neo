@@ -32,7 +32,9 @@ mbe_copy_error_state(mbe_parms* dst, const mbe_parms* src) {
 
 /**
  * Tone oscillator phases and unvoiced-noise generator state, which must
- * continue rather than replay the previous frame's.
+ * continue rather than replay the previous frame's. The overlap buffers go
+ * together: noiseOverlap says, in its last element, which rendering wrote
+ * previousUw (mbe_unvoiced_fft.h).
  */
 static inline void
 mbe_copy_generator_state(mbe_parms* dst, const mbe_parms* src) {
@@ -40,6 +42,7 @@ mbe_copy_generator_state(mbe_parms* dst, const mbe_parms* src) {
     dst->tonePhase = src->tonePhase;
     dst->noiseSeed = src->noiseSeed;
     memcpy(dst->noiseOverlap, src->noiseOverlap, sizeof(dst->noiseOverlap));
+    memcpy(dst->previousUw, src->previousUw, sizeof(dst->previousUw));
 }
 
 /**

@@ -186,11 +186,19 @@ def verify_waveform(evaluator, root):
     for lag in (0, 80, -80):
         metrics = measure([0] * lag + samples if lag >= 0 else samples[-lag:])
         assert metrics["waveform_corr"] > 0.999 and metrics["waveform_shift_samples"] == 0, metrics
+        # Sample against sample is only measured near the lag used: the files here are 80 apart.
+        unshifted = metrics["waveform_corr_unshifted"]
+        assert (unshifted > 0.999) if lag == 0 else (unshifted is None), metrics
     metrics = measure([v // 2 for v in samples])
-    assert metrics["waveform_corr"] > 0.999, metrics
+    assert metrics["waveform_corr"] > 0.999 and metrics["waveform_corr_unshifted"] > 0.999, metrics
     for shift in (5, 32):
         metrics = measure([0] * shift + samples[:-shift], "--lag-samples", 0)
         assert metrics["waveform_corr"] > 0.99 and metrics["waveform_shift_samples"] == shift, metrics
+        # No search: a decoder whose output sits a few samples off does not correlate.
+        assert abs(metrics["waveform_corr_unshifted"]) < 0.1, metrics
+    # The lag used is undone, so a forced lag does not hide the offset either.
+    metrics = measure([0] * 8 + samples[:-8], "--lag-samples", 8)
+    assert metrics["waveform_corr"] > 0.99 and abs(metrics["waveform_corr_unshifted"]) < 0.1, metrics
     metrics = measure([0] * 40 + samples[:-40], "--lag-samples", 0)
     assert abs(metrics["waveform_corr"]) < 0.1, metrics
     write_pcm(reference, [0] * 640)

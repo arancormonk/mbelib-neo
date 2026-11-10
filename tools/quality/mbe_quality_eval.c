@@ -623,6 +623,33 @@ correlation(const double* a, const double* b, size_t n, double* value) {
     return 1;
 }
 
+/* Normalized correlation of r and d over the active frames, with d shifted by
+ * s samples. Returns 0 when either has no energy there. */
+static int
+waveform_correlation_at(const double* r, const double* d, size_t n, const unsigned char* active, size_t nf, int s,
+                        double* value) {
+    double rd = 0.0, rr = 0.0, dd = 0.0;
+    for (size_t f = 0; f < nf; ++f) {
+        if (!active[f]) {
+            continue;
+        }
+        for (size_t i = f * 160; i < (f + 1) * 160; ++i) {
+            long j = (long)i + s;
+            if (j < 0 || (size_t)j >= n) {
+                continue;
+            }
+            rd += r[i] * d[j];
+            rr += r[i] * r[i];
+            dd += d[j] * d[j];
+        }
+    }
+    if (!(rr > 0.0 && dd > 0.0)) {
+        return 0;
+    }
+    *value = rd / sqrt(rr * dd);
+    return 1;
+}
+
 /* Waveform correlation over the active frames: the best normalized
  * correlation of r and d shifted by up to WAVEFORM_SHIFT samples either way,
  * since the alignment lag comes from envelopes at 8-sample hops and lands up
@@ -635,28 +662,11 @@ waveform_correlation(const double* r, const double* d, size_t n, const unsigned 
     int found = 0;
     *shift = 0;
     for (int s = -WAVEFORM_SHIFT; s <= WAVEFORM_SHIFT; ++s) {
-        double rd = 0.0, rr = 0.0, dd = 0.0;
-        for (size_t f = 0; f < nf; ++f) {
-            if (!active[f]) {
-                continue;
-            }
-            for (size_t i = f * 160; i < (f + 1) * 160; ++i) {
-                long j = (long)i + s;
-                if (j < 0 || (size_t)j >= n) {
-                    continue;
-                }
-                rd += r[i] * d[j];
-                rr += r[i] * r[i];
-                dd += d[j] * d[j];
-            }
-        }
-        if (rr > 0.0 && dd > 0.0) {
-            double c = rd / sqrt(rr * dd);
-            if (!found || c > best) {
-                best = c;
-                *shift = s;
-                found = 1;
-            }
+        double c;
+        if (waveform_correlation_at(r, d, n, active, nf, s, &c) && (!found || c > best)) {
+            best = c;
+            *shift = s;
+            found = 1;
         }
     }
     return best;
@@ -876,6 +886,12 @@ measure(const Signal* dec, const Signal* reference, int forced_lag, int have_lag
     double waveform = speech ? waveform_correlation(r, d, n, active, nf, &waveform_shift) : 0.0;
     metric_valid("waveform_corr", waveform, speech);
     metric_valid("waveform_shift_samples", (double)waveform_shift, speech);
+    /* The same correlation with the two files sample against sample (the lag
+     * undone, no search): what two decoders of the same bits must share. */
+    double unshifted = 0.0;
+    int have_unshifted =
+        speech && abs(lag) <= WAVEFORM_SHIFT && waveform_correlation_at(r, d, n, active, nf, -lag, &unshifted);
+    metric_valid("waveform_corr_unshifted", unshifted, have_unshifted);
     double gain = speech ? sqrt(er / ed) : 1;
     /* Match active-speech energy once for every subsequent comparative metric.
      * Keep the original decoded buffer intact for output and peak reporting. */

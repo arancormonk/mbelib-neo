@@ -171,6 +171,123 @@ void mbe_synthesizeUnvoicedFFTWithNoise(float* output, mbe_parms* cur_mp, const 
                                         const float* noise_buffer);
 
 /**
+ * @brief Draw a frame's noise for the TIA-102.BABA rendering (eq 117).
+ *
+ * As mbe_generate_noise_with_overlap() on cur_mp's noise state. Returns
+ * whether prev_mp's previousUw is the subframe rendering's (see
+ * MBE_SUBFRAME_STATE_MARK), for mbe_synthesizeUnvoicedFFTFrom(): read before
+ * the draw, which replaces the mark where one state serves as both frames.
+ * prev_mp is not written. What the subframe rendering left in cur_mp, which
+ * this frame replaces, is given up with its mark.
+ *
+ * @param noise   Receives MBE_FFT_SIZE noise samples.
+ * @param cur_mp  Current frame: noise state in and out.
+ * @param prev_mp Previous frame.
+ * @return Nonzero when prev_mp's overlap is not a transform output to window in.
+ */
+int mbe_spec_frame_noise(float* noise, mbe_parms* cur_mp, const mbe_parms* prev_mp);
+
+/**
+ * @brief mbe_synthesizeUnvoicedFFTWithNoise() for noise drawn by
+ *        mbe_spec_frame_noise(), with what that returned.
+ */
+void mbe_synthesizeUnvoicedFFTFrom(float* output, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
+                                   const float* noise_buffer, int subframe_overlap);
+
+/*
+ * DVSI's unvoiced synthesis (docs/dvsi-parity.md, "Unvoiced synthesis"), which
+ * the codec paths render with MBE_VOICED_SYNTHESIS_DVSI. DVSI's decoders, in
+ * every mode, synthesize a 10 ms subframe at a time: the noise under a
+ * square-root triangular window two subframes long, a 256-point transform,
+ * each unvoiced band scaled against its own noise power, the inverse
+ * transform, the same window again and overlap-add. A frame carries two
+ * subframes: one mid-frame, whose model lies between the previous frame's and
+ * this one's, and the frame's own at its end.
+ */
+#define MBE_SUBFRAME                80
+#define MBE_SUBFRAME_WINDOW         160 /* two subframes */
+
+/* DVSI's noise generator, identical in every mode and stream:
+ * x <- 173 x + 13849 mod 2^16 from x = 0, read as a signed 16-bit sample, one
+ * step per output sample of every frame that is not a tone frame. */
+#define MBE_DVSI_NOISE_MULTIPLIER   173u
+#define MBE_DVSI_NOISE_INCREMENT    13849u
+
+/* Where previousUw keeps the second half of a frame's own subframe. */
+#define MBE_UNVOICED_TAIL_OFFSET    128
+
+/* The two renderings keep different things in the same fields: the subframe
+ * rendering a subframe's windowed second half in previousUw and the pulse
+ * train in noiseOverlap, the TIA-102.BABA rendering a whole transform output
+ * and noise samples. A state the subframe rendering wrote holds this value in
+ * the last element of noiseOverlap, where the other keeps a noise sample
+ * (never negative), and neither rendering plays what the other left: a caller
+ * that moves a stream from one to the other gets a fade-in, not the other's
+ * buffer as audio. */
+#define MBE_SUBFRAME_STATE_SLOT     (MBE_NOISE_OVERLAP - 1)
+#define MBE_SUBFRAME_STATE_MARK     (-1.0f)
+
+/* An unvoiced band's amplitude against its normalised noise:
+ * MBE_UNVOICED_SCALE_COEFF * sqrt(MBE_SUBFRAME_WINDOW / MBE_FFT_SIZE). */
+#define MBE_UNVOICED_SUBFRAME_SCALE (MBE_UNVOICED_SCALE_COEFF * 0.790569415f)
+
+/** What one subframe's noise is shaped by. */
+struct mbe_unvoiced_subframe {
+    float w0;            /**< Fundamental, radians per sample. */
+    int L;               /**< Harmonic count. */
+    float amplitude[57]; /**< [1..L]: scaled amplitude of each band's noise; 0 for a band with none. */
+};
+
+/** @brief Mark a state's overlap buffers as the subframe rendering's. */
+void mbe_subframe_state_mark(mbe_parms* mp);
+
+/** @brief Whether a state's overlap buffers are the subframe rendering's. */
+int mbe_subframe_state_is_marked(const mbe_parms* mp);
+
+/**
+ * @brief Make a state the subframe rendering's before a subframe overlap is
+ *        written into it: one that is not marked loses the other rendering's
+ *        noise overlap (which is no pulse train) and is marked.
+ */
+void mbe_subframe_state_adopt(mbe_parms* mp);
+
+/** @brief DVSI's noise generator: the state one sample on. */
+uint32_t mbe_dvsi_noise_next(uint32_t state);
+
+/** @brief DVSI's noise generator: the state @p samples samples on. */
+uint32_t mbe_dvsi_noise_skip(uint32_t state, int samples);
+
+/**
+ * @brief Move a stream's DVSI noise state one frame on without drawing from it.
+ *
+ * For a frame that plays no synthesized speech but is not a tone frame (a
+ * mute): DVSI's generator runs through those and stands still through tones.
+ * The second half of the last subframe is dropped, since nothing it could
+ * overlap was played.
+ *
+ * @param mp Parameter set holding the stream's noise state (noiseSeed, previousUw).
+ */
+void mbe_dvsi_noise_skip_frame(mbe_parms* mp);
+
+/**
+ * @brief Add a frame's unvoiced part, as DVSI's decoders synthesize it.
+ *
+ * Draws MBE_VOICED_FRAME + MBE_SUBFRAME samples of DVSI's noise from
+ * cur_mp->noiseSeed and moves the state one frame on. A negative noiseSeed
+ * (a fresh stream) starts the generator from 0, as every DVSI stream does;
+ * mbe_setThreadRngSeed() does not seed it.
+ *
+ * @param output  160 samples; the unvoiced part is added.
+ * @param cur_mp  Current frame: noise state in and out, previousUw out.
+ * @param prev_mp Previous frame: previousUw holds the last subframe's second half.
+ * @param plan    Transform plan.
+ * @param mid     The mid-frame subframe's model.
+ * @param own     The frame's own subframe's model.
+ */
+void mbe_synthesizeUnvoicedSubframes(float* output, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
+                                     const struct mbe_unvoiced_subframe* mid, const struct mbe_unvoiced_subframe* own);
+
+/**
  * @brief Look up the shared synthesis window at an offset from its center.
  *
  * The window is defined for indices -105 to +105.

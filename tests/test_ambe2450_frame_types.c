@@ -158,12 +158,52 @@ parms_equal(const mbe_parms* a, const mbe_parms* b) {
     return ints_equal && floats_equal && arrays_equal;
 }
 
-/** After a mute, the last synthesized frame is silenced: amplitudes and overlap zeroed, the rest kept. */
+/** After a tone, the last synthesized frame is silenced: amplitudes and overlap
+ * zeroed, the rest kept, and element 0 of Vl records the tone left sounding
+ * (@p held: 0 for none, else bit 16 with the amplitude field and the ID). */
 static int
-enhanced_silenced_from(const mbe_parms* after, const mbe_parms* before) {
+enhanced_silenced_from(const mbe_parms* after, const mbe_parms* before, int held) {
     mbe_parms expected = *before;
     memset(expected.Ml, 0, sizeof(expected.Ml));
     memset(expected.previousUw, 0, sizeof(expected.previousUw));
+    expected.Vl[0] = held;
+    return parms_equal(after, &expected);
+}
+
+/** Gain of the incoming signal at sample n of a tone transition (80 samples, linear). */
+static float
+fade_in_gain(int n) {
+    return (n >= 80) ? 1.0f : (float)n / 80.0f;
+}
+
+/** Whether `out` is `incoming` faded in over `outgoing` across the first 80 samples. */
+static int
+is_crossfade(const float* out, const float* incoming, const float* outgoing) {
+    for (int n = 0; n < 160; ++n) {
+        const float gain = fade_in_gain(n);
+        const double want = ((double)gain * (double)incoming[n]) + ((1.0 - (double)gain) * (double)outgoing[n]);
+        if (!(fabs((double)out[n] - want) <= 1e-4 * (1.0 + fabs(want)))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * After a mute, likewise, and the unvoiced noise generator has moved one frame
+ * on: DVSI's (x <- 173 x + 13849 mod 2^16) runs through muted frames, and
+ * stands still only through tones.
+ */
+static int
+enhanced_muted_from(const mbe_parms* after, const mbe_parms* before) {
+    mbe_parms expected = *before;
+    uint32_t state = (uint32_t)before->noiseSeed;
+    for (int i = 0; i < 160; ++i) {
+        state = (173u * state + 13849u) & 0xFFFFu;
+    }
+    memset(expected.Ml, 0, sizeof(expected.Ml));
+    memset(expected.previousUw, 0, sizeof(expected.previousUw));
+    expected.noiseSeed = (float)state;
     return parms_equal(after, &expected);
 }
 
@@ -262,7 +302,7 @@ test_erasure_run_repeats_then_mutes(void) {
         assert(history_equal(&s.prev, &history));
         if (muted) {
             assert_mute_noise(s.out);
-            assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
+            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
         } else {
             /* A repeat replays the loud voice model, not comfort noise. */
             assert(peak_abs(s.out) > 5.0f);
@@ -327,7 +367,7 @@ test_error_rate_mute_boundary(void) {
         assert(history_equal(&s.prev, &dec_cur));
         if (n == 21) {
             assert_mute_noise(s.out);
-            assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
+            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
         }
     }
 }
@@ -338,8 +378,10 @@ test_error_rate_mute_boundary(void) {
  */
 static void
 test_valid_tone_keeps_state(void) {
+    static const float silence[160] = {0};
     struct stream s;
     char tone[49];
+    char erasure[49];
     stream_init(&s);
     stream_frame_b(&s, k_voice_loud, 0, 0);
     const mbe_parms history = s.prev;
@@ -351,19 +393,40 @@ test_valid_tone_keeps_state(void) {
     mbe_parms tone_state = s.cur;
     float expected[160];
     mbe_synthesizeTonef(expected, tone, &tone_state);
+    /* What a lost frame would repeat: the last frame, which fades out under
+     * the tone's first 80 samples while the tone fades in. */
+    struct stream repeat = s;
+    pack_b(erasure, k_erasure);
+    stream_frame(&repeat, erasure, 0, 0);
+    assert(has_flag(&repeat, MBE_PROCESS_FLAG_REPEAT) && peak_abs(repeat.out) > 0.0f);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
-    assert(float_array_bits_equal(s.out, expected, 160));
+    assert(is_crossfade(s.out, expected, repeat.out));
+    assert(float_array_bits_equal(s.out + 80, expected + 80, 80));
     assert(history_equal(&s.prev, &history));
-    assert(enhanced_silenced_from(&s.prev_enh, &enh_before));
+    assert(enhanced_silenced_from(&s.prev_enh, &enh_before, (1 << 16) | (127 << 8) | 7));
 
-    /* Table 9 / 7.3: ID 255 is a valid zero-amplitude tone. */
+    /* The tone goes on at once: its second frame is the tone alone. */
+    mbe_synthesizeTonef(expected, tone, &tone_state);
+    stream_frame(&s, tone, 0, 0);
+    assert(float_array_bits_equal(s.out, expected, 160));
+
+    /* Table 9 / 7.3: ID 255 is a valid zero-amplitude tone. The tone before it
+     * goes on from its phases through the first 80 samples, fading out. */
+    mbe_synthesizeTonef(expected, tone, &tone_state);
     pack_tone(tone, 255);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(s.cur.repeatCount == 0);
+    assert(is_crossfade(s.out, silence, expected));
+    for (int i = 80; i < 160; ++i) {
+        assert(float_bits_equal(s.out[i], 0.0f));
+    }
+    assert(s.prev_enh.Vl[0] == 0);
+    /* Nothing is left sounding after it. */
+    stream_frame(&s, tone, 0, 0);
     for (int i = 0; i < 160; ++i) {
         assert(float_bits_equal(s.out[i], 0.0f));
     }
@@ -786,8 +849,10 @@ test_fade_in_after_tone(void) {
     char erasure[49];
     char voice[49];
     char tone[49];
+    char silent_tone[49];
     pack_b(erasure, k_erasure);
     pack_b(voice, k_voice_next);
+    pack_tone(silent_tone, 255);
 
     for (int k = 0; k < 8; ++k) {
         const int tone_id = tone_ids[k & 1];
@@ -802,22 +867,101 @@ test_fade_in_after_tone(void) {
             stream_frame(&s, erasure, 0, 0);
         }
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == mute_before);
+        /* The same stream with the silent tone in the tone's place: the frame
+         * after it plays as it does after the audible tone, which adds only
+         * its own tail. */
+        struct stream quiet = s;
+        stream_frame(&quiet, silent_tone, 0, 0);
         pack_tone(tone, tone_id);
         stream_frame(&s, tone, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
         assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        float tail[160] = {0};
+        if (tone_id != 255) {
+            mbe_parms tone_state = s.cur;
+            mbe_synthesizeTonef(tail, tone, &tone_state);
+        }
         if (!repeat_after) {
+            stream_frame(&quiet, voice, 0, 0);
             stream_frame(&s, voice, 0, 0);
-            assert(float_bits_equal(s.out[0], 0.0f));
-            assert(head_rms(s.out) < 0.5 * steady);
+            assert(float_bits_equal(quiet.out[0], 0.0f));
+            assert(head_rms(quiet.out) < 0.5 * steady);
         } else {
+            stream_frame(&quiet, voice, 4, 0);
             stream_frame(&s, voice, 4, 0);
             assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
             assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-            assert(peak_abs(s.out) < 1.0f);
+            assert(peak_abs(quiet.out) < 1.0f);
         }
+        /* The tone that was sounding goes on through the first 80 samples,
+         * fading out as the frame fades in; after the silent tone nothing does. */
+        assert(is_crossfade(s.out, quiet.out, tail));
+        assert(float_array_bits_equal(s.out + 80, quiet.out + 80, 80));
+        assert(s.prev_enh.Vl[0] == 0);
     }
     (void)steady;
+}
+
+/* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
+ * per output sample. */
+static float
+noise_state_after(int frames) {
+    uint32_t state = 0u;
+    for (int i = 0; i < frames * 160; ++i) {
+        state = (173u * state + 13849u) & 0xFFFFu;
+    }
+    return (float)state;
+}
+
+/*
+ * DVSI's noise generator runs through every frame that is not a tone frame:
+ * voice, silence, repeats and mutes each move it 160 samples on, and a tone
+ * frame, the zero-amplitude one included, leaves it where it was.
+ */
+static void
+test_noise_generator_through_frame_kinds(void) {
+    static const int k_silence[9] = {124, 0, 0, 0, 0, 0, 0, 0, 0};
+    struct stream s;
+    char d[49];
+    int frames = 0;
+
+    stream_init(&s);
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    stream_frame_b(&s, k_voice_next, 0, 0);
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    /* Three repeats, then two mutes at the repeat limit. */
+    for (int i = 0; i < 5; ++i) {
+        stream_frame_b(&s, k_erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == (i >= 3));
+        ++frames;
+        assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+        assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    }
+    pack_tone(d, 7);
+    for (int i = 0; i < 2; ++i) {
+        stream_frame(&s, d, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+        assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    }
+    pack_tone(d, 255);
+    stream_frame(&s, d, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    stream_frame_b(&s, k_voice_loud, 0, 0);
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    pack_b(d, k_silence);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
+    stream_frame(&s, d, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+    ++frames;
+    assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+    assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    /* The thread seed does not move it: every stream starts DVSI's generator from 0. */
+    assert(frames == 9);
 }
 
 int
@@ -834,6 +978,7 @@ main(void) {
     test_erasure_run_repeats_then_mutes();
     test_repeat_advances_error_rate();
     test_error_rate_mute_boundary();
+    test_noise_generator_through_frame_kinds();
     test_valid_tone_keeps_state();
     test_invalid_tone_is_erasure();
     test_unverified_tone_is_erasure();

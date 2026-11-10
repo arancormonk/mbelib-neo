@@ -29,6 +29,7 @@
 #include "ambe3600x2400_internal.h"
 #include "mbe_adaptive.h"
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
 #define NVOICE 6
@@ -675,6 +676,163 @@ test_tone_muted_by_error_rate(void) {
 }
 
 /*
+ * The unvoiced noise across a tone. DVSI's generator stands still through a
+ * tone frame, so the voice after the tone draws the noise the frame before
+ * the tone left off at, over the overlap that frame left. With unvoiced
+ * speech on both sides of a tone, the frame after the tone is then the frame
+ * an unbroken stream plays there, fading in over its first 80 samples under
+ * the tone's tail.
+ */
+static void
+test_noise_overlap_across_a_tone(void) {
+    char voice[NVOICE][49], tone[49];
+    make_voice(voice);
+    for (int f = 0; f < NVOICE; ++f) {
+        for (int i = 38; i <= 41; ++i) {
+            voice[f][i] = 0; /* b1 0: no voiced band */
+        }
+    }
+    pack_tone(tone, 126, 130, 0);
+    mbe_parms cur, prev, enh, ucur, uprev, uenh;
+    mbe_process_result r;
+    float out[160], unbroken[160], tail[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_initMbeParms(&ucur, &uprev, &uenh);
+    for (int i = 0; i < 4; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(unbroken, &r, voice[i], &ucur, &uprev, &uenh) == 0);
+    }
+    float energy = 0.0f;
+    for (int n = 0; n < 160; ++n) {
+        energy += unbroken[n] * unbroken[n];
+    }
+    assert(energy > 160.0f); /* the speech is there to compare */
+    mbe_parms tone_state = cur;
+    mbe_synthesizeTonefdstar(tail, tone, &tone_state, 130);
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_TONE) != 0u);
+    assert_same_pcm(&cur.noiseSeed, &ucur.noiseSeed, 1, "noise seed through a tone frame");
+    assert_same_pcm(enh.previousUw, uenh.previousUw, 256, "unvoiced overlap through a tone frame");
+    /* The tone goes on from its phases through the first 80 samples of the next frame. */
+    mbe_synthesizeTonefdstar(tail, tone, &tone_state, 130);
+    for (int i = 4; i < 6; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(unbroken, &r, voice[i], &ucur, &uprev, &uenh) == 0);
+        for (int n = 0; n < 160; ++n) {
+            const float gain = (i > 4 || n >= 80) ? 1.0f : (float)n / 80.0f;
+            const float want = (gain * unbroken[n]) + ((1.0f - gain) * tail[n]);
+            assert_close_sample(out[n], want, "unvoiced speech after a tone", n);
+        }
+    }
+    /* After a frame the other rendering played (a caller's own mbe_synthesizeSpeechf()),
+     * there is no subframe overlap to keep: the tone and the voice after it play as from
+     * a state with none. */
+    float plain[160], kept[160];
+    for (int with_overlap = 0; with_overlap < 2; ++with_overlap) {
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int i = 0; i < 4; ++i) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        }
+        mbe_parms model = enh;
+        mbe_synthesizeSpeechf(out, &model, &enh);
+        enh = model;
+        cur.noiseSeed = enh.noiseSeed;
+        memcpy(cur.noiseOverlap, enh.noiseOverlap, sizeof(cur.noiseOverlap));
+        if (!with_overlap) {
+            memset(enh.previousUw, 0, sizeof(enh.previousUw));
+        }
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(with_overlap ? kept : plain, &r, voice[4], &cur, &prev, &enh) == 0);
+    }
+    assert_same_pcm(kept, plain, 160, "voice after a tone after the other rendering");
+    puts("tones: the unvoiced noise goes on after a tone where it stopped before it");
+}
+
+/*
+ * A caller may keep one state as cur_mp and prev_mp_enhanced. The buffers a
+ * stream carries then stay its own through the frames that load a model from
+ * elsewhere or bypass the synthesis: a lost frame repeats the history's model,
+ * not what the history state holds in previousUw and noiseOverlap; a tone
+ * leaves the noise generator where it was; and the repeat limit's mute hands
+ * cur_mp the overlap that goes with the pulse state it hands it.
+ */
+static void
+test_one_state_as_current_and_last(void) {
+    char voice[NVOICE][49], lost[49], tone[49];
+    make_voice(voice);
+    for (int f = 0; f < NVOICE; ++f) {
+        voice[f][39] = 0; /* an unvoiced band in every frame: there is an overlap to mix up */
+    }
+    memcpy(lost, voice[3], sizeof(lost));
+    put_b0(lost, 125);
+    pack_tone(tone, 126, 130, 180);
+    mbe_process_result r;
+    float out[2][160];
+
+    for (int foreign = 0; foreign < 2; ++foreign) {
+        mbe_parms cur, prev, unused;
+        mbe_initMbeParms(&cur, &prev, &unused);
+        for (int i = 0; i < 3; ++i) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out[foreign], &r, voice[i], &cur, &prev, &cur) == 0);
+        }
+        if (foreign) {
+            /* As a caller's own mbe_synthesizeSpeechf() on the history state leaves them. */
+            for (int n = 0; n < 256; ++n) {
+                prev.previousUw[n] = 400.0f * sinf(0.31f * (float)n);
+            }
+            for (int n = 0; n < 96; ++n) {
+                prev.noiseOverlap[n] = (float)((n * 977) % 53125);
+            }
+        }
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out[foreign], &r, lost, &cur, &prev, &cur) == 0);
+        assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+    }
+    assert_same_pcm(out[0], out[1], 160, "lost frame with one state as current and last");
+
+    mbe_parms cur, prev, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 3; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out[0], &r, voice[i], &cur, &prev, &cur) == 0);
+    }
+    const float seed_before_tone = cur.noiseSeed;
+    make_result(&r, 0);
+    assert(mbe_processAmbe2400Dataf(out[0], &r, tone, &cur, &prev, &cur) == 0);
+    assert((r.flags & MBE_PROCESS_FLAG_TONE) != 0u);
+    assert_same_pcm(&cur.noiseSeed, &seed_before_tone, 1,
+                    "noise seed through a tone with one state as current and last");
+
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 3; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out[0], &r, voice[i], &cur, &prev, &enh) == 0);
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (i == 3) {
+            for (int n = 0; n < 256; ++n) {
+                cur.previousUw[n] = 400.0f * sinf(0.31f * (float)n);
+            }
+        }
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out[0], &r, lost, &cur, &prev, &enh) == 0);
+    }
+    assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    assert(mbe_subframe_state_is_marked(&cur));
+    assert_same_pcm(cur.previousUw, enh.previousUw, 256, "overlap handed to cur_mp by the repeat limit's mute");
+    puts("state: one state as current and last keeps its own buffers");
+}
+
+/*
  * Tone transitions, as on DVSI's decoder: the first tone frame crossfades
  * linearly over its first 80 samples from the last frame repeated (what a lost
  * frame plays there) to the tone, and the first voice frame after it from the
@@ -705,6 +863,7 @@ test_tone_transitions(void) {
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
     assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
+    const float seed_before_lost = lcur.noiseSeed;
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(ref, &r, lost, &lcur, &lprev, &lenh) == 0);
     for (int n = 0; n < 160; ++n) {
@@ -712,6 +871,14 @@ test_tone_transitions(void) {
         const float want = (gain * plain[n]) + ((1.0f - gain) * ref[n]);
         assert_close_sample(out[n], want, "tone frame crossfade", n);
     }
+    /* A tone frame draws no unvoiced noise (DVSI's generator stands still
+     * through it) and a lost frame does: put the reference's generator back,
+     * so the voice after it draws the same noise in both streams. */
+    const float seed_after_lost = (float)mbe_dvsi_noise_skip((uint32_t)seed_before_lost, 160);
+    assert_same_pcm(&lcur.noiseSeed, &seed_after_lost, 1, "noise seed after a lost frame");
+    assert_same_pcm(&cur.noiseSeed, &seed_before_lost, 1, "noise seed through a tone frame");
+    lcur.noiseSeed = seed_before_lost;
+    lenh.noiseSeed = seed_before_lost;
     /* The voice after it: the tone going on and fading out, the voice fading in. */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
     make_result(&r, 0);
@@ -919,6 +1086,37 @@ test_repeat_limit_noise_continuity(void) {
     puts("repeat limit: the noise generator advances on every frame");
 }
 
+/* DVSI's noise generator runs through every frame but a tone: on its tone
+ * vectors the unvoiced noise after a tone continues from where the voice before
+ * it left off (docs/dvsi-parity.md, "Unvoiced synthesis"). The first tone frame
+ * plays the last frame's speech fading out and still draws nothing. */
+static void
+test_tone_frames_hold_noise_generator(void) {
+    char voice[NVOICE][49], tone[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 32, 180);
+    mbe_parms cur, prev, enh, rcur, rprev, renh;
+    mbe_process_result r;
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    mbe_initMbeParms(&rcur, &rprev, &renh);
+    for (int i = 0; i < 9; ++i) {
+        const int is_tone = (i >= 3 && i < 6);
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, is_tone ? tone : voice[i % NVOICE], &cur, &prev, &enh) == 0);
+        assert(((r.flags & MBE_PROCESS_FLAG_TONE) != 0u) == is_tone);
+        if (!is_tone) {
+            make_result(&r, 0);
+            assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &rcur, &rprev, &renh) == 0);
+        }
+        assert_same_pcm(&cur.noiseSeed, &rcur.noiseSeed, 1, "noise seed across a tone");
+        assert_same_pcm(&enh.noiseSeed, &cur.noiseSeed, 1, "noise seed of the last synthesized frame");
+    }
+    const float seed_after_six = (float)mbe_dvsi_noise_skip(0u, 6 * 160);
+    assert_same_pcm(&cur.noiseSeed, &seed_after_six, 1, "noise seed after six voice frames");
+    puts("tones: the noise generator stands still through tone frames");
+}
+
 /* How the frames before the voice that follows the repeat limit's mute run. */
 enum resume_lead {
     RESUME_AFTER_VOICE,         /* voice, then lost frames */
@@ -1098,6 +1296,57 @@ test_resume_after_repeat_limit(void) {
         resume_run(RESUME_AFTER_VOICE, 3, unvoiced, UNAFFECTED);
     }
     puts("repeat limit: the voice after it starts from the prediction history");
+}
+
+/* The start from the history installs a subframe's overlap in the last
+ * synthesized frame. Where a caller rendered that frame itself, with
+ * mbe_synthesizeSpeechf(), the state is the other rendering's: the overlap
+ * installed still plays, and that rendering's noise is not taken for pulses.
+ * The frame is the one a state of this rendering with no pulses gives. */
+static void
+test_resume_after_the_other_rendering(void) {
+    char voice[NVOICE][49], b125[49];
+    make_voice(voice);
+    for (int f = 0; f < NVOICE; ++f) {
+        for (int i = 38; i <= 41; ++i) {
+            voice[f][i] = 0; /* b1 0: unvoiced speech, whose overlap is the one at stake */
+        }
+    }
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    float out[160], expected[160], silent_start[160];
+    mbe_parms cur, prev, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 4; ++i) {
+        resume_frame(out, voice[i], 0, &cur, &prev, &enh);
+    }
+    for (int i = 0; i < 5; ++i) {
+        resume_frame(out, b125, 0, &cur, &prev, &enh);
+    }
+    mbe_parms model = enh;
+    model.repeatCount = 0; /* a frame the caller plays, not another repeat at the limit */
+    mbe_synthesizeSpeechf(out, &model, &enh);
+    model.repeatCount = enh.repeatCount;
+    enh = model;
+    cur.noiseSeed = enh.noiseSeed;
+    memcpy(cur.noiseOverlap, enh.noiseOverlap, sizeof(cur.noiseOverlap));
+    assert(!mbe_subframe_state_is_marked(&enh));
+
+    mbe_parms ecur = cur, eprev = prev, eenh = enh;
+    memset(eenh.noiseOverlap, 0, sizeof(eenh.noiseOverlap));
+    mbe_subframe_state_mark(&eenh);
+    mbe_parms scur = cur, sprev = prev, senh = enh;
+    sprev.repeatCount = 0; /* no mute to resume from: the fade-in from silence */
+    resume_frame(out, voice[4], 0, &cur, &prev, &enh);
+    resume_frame(expected, voice[4], 0, &ecur, &eprev, &eenh);
+    resume_frame(silent_start, voice[4], 0, &scur, &sprev, &senh);
+    assert_same_pcm(out, expected, 160, "first voice frame after a mute and the other rendering");
+    float difference = 0.0f;
+    for (int n = 0; n < 80; ++n) {
+        difference += fabsf(out[n] - silent_start[n]);
+    }
+    assert(difference > 1.0f); /* the start from the history is there */
+    puts("repeat limit: the start from the history holds after the other rendering");
 }
 
 /* A history whose w0 is not in (0, pi] (caller-owned state can hold
@@ -1805,13 +2054,17 @@ main(void) {
     test_zero_volume_tone();
     test_tone_ends_repeat_run();
     test_tone_muted_by_error_rate();
+    test_one_state_as_current_and_last();
     test_tone_transitions();
+    test_noise_overlap_across_a_tone();
     test_tone_transitions_after_mute();
     test_repeat_limit_mute();
     test_error_rate_mute_level();
     test_repeat_limit_under_error_mute();
     test_repeat_limit_noise_continuity();
+    test_tone_frames_hold_noise_generator();
     test_resume_after_repeat_limit();
+    test_resume_after_the_other_rendering();
     test_resume_guards();
     test_resume_edge_frames();
     test_all_ones_frame();

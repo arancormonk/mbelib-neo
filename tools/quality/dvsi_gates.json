@@ -2379,5 +2379,682 @@
         "rule": "all_no_increase"
       }
     ]
+  },
+  "unvoiced-subframes-development": {
+    "description": "Unvoiced synthesis as DVSI's decoders render it (DVSI's noise sequence, 10 ms subframes under square-root triangular windows, a mid-frame subframe between the two frames' models), development vectors: in every mode our decode of DVSI's bits comes at least 0.5 dB closer to DVSI's decoder in log-spectral distance and no further on any vector, correlates with its waveform sample against sample at least 0.005 more, keeps its envelope correlation, comes no further from the input than 0.02 dB, its level moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "unvoiced-subframes-validation": {
+    "description": "Unvoiced synthesis as DVSI's decoders render it (DVSI's noise sequence, 10 ms subframes under square-root triangular windows, a mid-frame subframe between the two frames' models), validation vectors: in every mode our decode of DVSI's bits comes at least 0.5 dB closer to DVSI's decoder in log-spectral distance and no further on any vector, correlates with its waveform sample against sample at least 0.005 more, keeps its envelope correlation, comes no further from the input than 0.02 dB, its level moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "unvoiced-subframes-final": {
+    "description": "Unvoiced synthesis as DVSI's decoders render it (DVSI's noise sequence, 10 ms subframes under square-root triangular windows, a mid-frame subframe between the two frames' models), final vectors: in every mode our decode of DVSI's bits comes at least 0.5 dB closer to DVSI's decoder in log-spectral distance and no further on any vector, correlates with its waveform sample against sample at least 0.005 more, keeps its envelope correlation, comes no further from the input than 0.02 dB, its level moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.5
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "unvoiced-subframes-channel": {
+    "description": "Unvoiced synthesis under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's as often as before at every error rate, hard or soft, and on the frames neither run nor DVSI mutes our hard-decision output is no further from DVSI's.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "unvoiced-subframes-tones": {
+    "description": "Unvoiced synthesis on the tone vectors: no D-STAR or rate-33 tone vector's tone output agrees less often with DVSI's decoder or plays a wrong tone more often, and the encoders' tone frames agree with DVSI's as often as before.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "all_no_decrease"
+      }
+    ]
+  },
+  "voiced-subframes-development": {
+    "description": "Voiced synthesis as DVSI's decoders render it (two 10 ms subframes per frame, pitch pulses playing each model's response, and the frame marks that start and end voiced runs), development vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.03 more, comes no further from DVSI's decoder in log-spectral distance and by at most 0.05 dB on any vector, keeps its envelope correlation, comes no further from the input than 0.02 dB, its level moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "voiced-subframes-validation": {
+    "description": "Voiced synthesis as DVSI's decoders render it (two 10 ms subframes per frame, pitch pulses playing each model's response, and the frame marks that start and end voiced runs), validation vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.03 more, comes no further from DVSI's decoder in log-spectral distance and by at most 0.05 dB on any vector, keeps its envelope correlation, comes no further from the input than 0.02 dB, its level moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "voiced-subframes-final": {
+    "description": "Voiced synthesis as DVSI's decoders render it (two 10 ms subframes per frame, pitch pulses playing each model's response, and the frame marks that start and end voiced runs), final vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.03 more, comes no further from DVSI's decoder in log-spectral distance and by at most 0.05 dB on any vector, keeps its envelope correlation, comes no further from the input than 0.02 dB, its level moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "voiced-subframes-channel": {
+    "description": "Voiced synthesis in subframes under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's as often as before at every error rate, hard or soft, and on the frames neither run nor DVSI mutes our hard-decision output is no further from DVSI's.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "voiced-subframes-tones": {
+    "description": "Voiced synthesis in subframes on the tone vectors: no D-STAR or rate-33 tone vector's tone output agrees less often with DVSI's decoder or plays a wrong tone more often, and the encoders' tone frames agree with DVSI's as often as before.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "all_no_decrease"
+      }
+    ]
+  },
+  "ambe2450-tone-fade-tones": {
+    "description": "Rate-33 tones crossfaded with the frames around them over 80 samples, as DVSI's decoder plays them: no rate-33 tone vector's tone level, frequency or twist moves further from DVSI's decoder, none agrees less often with its tone output or plays a wrong tone more often, and no D-STAR tone vector changes in any of these.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0001
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.freq_rel_error",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
+  },
+  "ambe2450-tone-fade-speech": {
+    "description": "Rate-33 tone crossfades: the speech vectors hold no tone frame, so every mode's decode of them is unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }

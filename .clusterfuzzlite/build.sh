@@ -57,6 +57,7 @@ sources=(
   src/core/mbe_adaptive.c
   src/core/mbe_encoder.c
   src/core/mbe_speech_analysis.c
+  src/core/mbe_subframe.c
   src/core/mbe_tone_detect.c
   src/core/mbe_tone_fit.c
   src/core/mbe_tone_fit_avx2.c

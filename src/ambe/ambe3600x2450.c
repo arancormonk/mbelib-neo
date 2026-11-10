@@ -15,6 +15,7 @@
  */
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -27,6 +28,7 @@
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -140,6 +142,16 @@ ambe2450_read_tone_id(const char ambe_d[49]) {
         id1 = (id1 << 1) | (int)ambe_d[i];
     }
     return id1;
+}
+
+/* The tone amplitude field AD: the low six bits of U0, then bit 4 of U3. */
+static int
+ambe2450_read_tone_ad(const char ambe_d[49]) {
+    int ad = 0;
+    for (int i = 6; i < 12; i++) {
+        ad = (ad << 1) | (int)ambe_d[i];
+    }
+    return (ad << 1) | (int)ambe_d[44];
 }
 
 /**
@@ -835,6 +847,9 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mb
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
     mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    /* DVSI's noise generator runs through a muted frame (not through a tone). */
+    mbe_dvsi_noise_skip_frame(cur_mp);
+    prev_mp_enhanced->noiseSeed = cur_mp->noiseSeed;
     ambe2450_silence_last_synthesized(prev_mp_enhanced);
 }
 
@@ -850,33 +865,35 @@ ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_
 /**
  * 5.6 steps 2-3: synthesize the repeated model as-is (no re-enhancement and
  * no adaptive smoothing, which could change its voicing and amplitudes), or
- * mute (5.7) instead of the 4th consecutive repeat.
+ * mute (5.7) instead of the 4th consecutive repeat. Returns whether it muted.
  */
-static void
+static int
 ambe2450_repeat(float* aout_buf, mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     if (mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp)) {
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
-        return;
+        return 1;
     }
     /* Step 2 repeats the previous frame's model, enhanced amplitudes included
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     mbe_synthesizeRepeatedSpeechf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+    return 0;
 }
 
 /**
  * Invalid frame: repeat criteria or erasure (5.6), or a tone frame with an
  * unusable tone index (7.3). The frame is ignored in later processing (5.6
  * step 1); the 4th consecutive invalid frame mutes instead of repeating (5.7).
+ * Returns whether the frame was muted.
  */
-static void
+static int
 ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned extra_flags, mbe_parms* cur_mp,
                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_result_set_flag(result, extra_flags | MBE_PROCESS_FLAG_REPEAT);
     cur_mp->repeatCount = mbe_repeat_next_count(prev_mp->repeatCount);
     mbe_copy_error_state(prev_mp, cur_mp);
-    ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced);
+    return ambe2450_repeat(aout_buf, result, cur_mp, prev_mp_enhanced);
 }
 
 /**
@@ -884,9 +901,10 @@ ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned e
  * the encoder updated its predictor on it, so it commits even when the error
  * rate then mutes the output (5.7 does not say either way). A silence frame is
  * synthesized but never used for prediction (4.3; 4.4.1 eq 26; 4.4.3 eq 43):
- * only the per-frame decoder values advance.
+ * only the per-frame decoder values advance. Returns whether the frame was
+ * muted.
  */
-static void
+static int
 ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence, mbe_parms* cur_mp, mbe_parms* prev_mp,
                        mbe_parms* prev_mp_enhanced) {
     cur_mp->repeatCount = 0;
@@ -898,46 +916,156 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
     }
     if (mbe_requiresMuting(cur_mp)) {
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
-        return;
+        return 1;
     }
     ambe2450_synthesize_decoded(aout_buf, cur_mp, prev_mp_enhanced);
+    return 0;
+}
+
+/*
+ * Tone transitions, as DVSI's decoder plays them (docs/dvsi-parity.md, "Rate
+ * 33 tone transitions"): a tone fades in linearly over the first
+ * AMBE2450_TONE_FADE samples of its first frame while the last frame's speech,
+ * synthesized as a repeat of it, fades out; and it goes on through the first
+ * AMBE2450_TONE_FADE samples of the frame after its last, fading out while
+ * that frame's output fades in. TIA-102.BABA-1 does not say how a tone frame
+ * joins the frames around it. Vl[0] (Vl is indexed from 1, so element 0 is
+ * otherwise unused) of the last synthesized frame records the tone a frame
+ * leaves sounding; its phases are the tone state cur_mp carries.
+ */
+#define AMBE2450_TONE_FADE 80
+#define AMBE2450_TONE_HELD (1 << 16)
+
+struct ambe2450_tone_tail {
+    int sounding;
+    int id;
+    int ad;
+    int swn;
+    uint32_t tone_phase;
+};
+
+/* The tone the last frame left sounding, read and cleared at a frame's start. */
+static void
+ambe2450_take_held_tone(const mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, struct ambe2450_tone_tail* held) {
+    const int stored = prev_mp_enhanced->Vl[0];
+    held->sounding = (stored & AMBE2450_TONE_HELD) != 0;
+    held->id = stored & 0xFF;
+    held->ad = (stored >> 8) & 0x7F;
+    held->swn = cur_mp->swn;
+    held->tone_phase = cur_mp->tonePhase;
+    prev_mp_enhanced->Vl[0] = 0;
+}
+
+/* Gain of the incoming signal at sample n of a transition frame. */
+static float
+ambe2450_fade_in_gain(int n) {
+    return (n >= AMBE2450_TONE_FADE) ? 1.0f : (float)n / (float)AMBE2450_TONE_FADE;
+}
+
+/* Crossfade from `outgoing` to the frame in aout_buf over the fade span. */
+static void
+ambe2450_fade_in_over(float* aout_buf, const float* outgoing) {
+    for (int n = 0; n < AMBE2450_TONE_FADE; ++n) {
+        const float gain = ambe2450_fade_in_gain(n);
+        aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * outgoing[n]);
+    }
+}
+
+/* The frame after a tone: the tone goes on from its phases and fades out. */
+static void
+ambe2450_fade_in_from_tone(float* aout_buf, const struct ambe2450_tone_tail* held) {
+    float tail[160];
+    mbe_parms tone;
+    memset(&tone, 0, sizeof(tone));
+    tone.swn = held->swn;
+    tone.tonePhase = held->tone_phase;
+    mbe_renderToneAmbe2450f(tail, &tone, held->id, held->ad);
+    ambe2450_fade_in_over(aout_buf, tail);
+}
+
+/* Under a tone's first frame, the last synthesized frame repeated, to be
+ * faded out. Only scratch copies are synthesized: a tone frame leaves the
+ * noise generator and the synthesis state where they stood. */
+static void
+ambe2450_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
+    mbe_parms repeated = *cur_mp;
+    mbe_parms last = *prev_mp_enhanced;
+    mbe_repeat_load_model(&repeated, &last);
+    repeated.repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(speech, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI);
 }
 
 /**
  * Tone frame with a usable index (7.3): output the tone, or silence for the
  * zero-amplitude ID 255, instead of synthesized speech. The prediction history
  * is not touched (4.3); the last synthesized frame is silenced (not in the
- * spec, see ambe2450_silence_last_synthesized).
+ * spec, see ambe2450_silence_last_synthesized). Returns whether the frame was
+ * muted.
  */
-static void
-ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], mbe_parms* cur_mp,
-                      mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+static int
+ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
+                      const struct ambe2450_tone_tail* held, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                      mbe_parms* prev_mp_enhanced) {
+    const int id = ambe2450_read_tone_id(ambe_d);
+    const int silent = id == AMBE2450_TONE_ID_ZERO_AMPLITUDE;
+    float speech[160];
+
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
     cur_mp->repeatCount = 0;
     mbe_copy_error_state(prev_mp, cur_mp);
     if (mbe_requiresMuting(cur_mp)) {
         ambe2450_mute(aout_buf, result, cur_mp, prev_mp_enhanced);
-        return;
+        return 1;
     }
-    if (ambe2450_read_tone_id(ambe_d) == AMBE2450_TONE_ID_ZERO_AMPLITUDE) {
+    if (!held->sounding) {
+        ambe2450_speech_under_tone(speech, cur_mp, prev_mp_enhanced);
+    }
+    if (silent) {
         mbe_synthesizeSilencef(aout_buf);
     } else {
         mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
     }
+    if (!held->sounding) {
+        ambe2450_fade_in_over(aout_buf, speech);
+    } else if (silent) {
+        ambe2450_fade_in_from_tone(aout_buf, held);
+    }
     ambe2450_silence_last_synthesized(prev_mp_enhanced);
+    if (!silent) {
+        prev_mp_enhanced->Vl[0] = AMBE2450_TONE_HELD | (ambe2450_read_tone_ad(ambe_d) << 8) | id;
+    }
+    return 0;
 }
+
+/* A frame the repeat criteria reject before it is classified (5.6). */
+#define AMBE2450_FRAME_REJECTED (-1)
 
 static void
 ambe2450_process_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int kind, mbe_parms* cur_mp,
                        mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+    struct ambe2450_tone_tail held;
+    int muted;
+
+    ambe2450_take_held_tone(cur_mp, prev_mp_enhanced, &held);
+    cur_mp->Vl[0] = 0;
     if (kind == MBE_AMBE2450_FRAME_TONE) {
-        ambe2450_process_tone(aout_buf, result, ambe_d, cur_mp, prev_mp, prev_mp_enhanced);
+        (void)ambe2450_process_tone(aout_buf, result, ambe_d, &held, cur_mp, prev_mp, prev_mp_enhanced);
+        return;
+    }
+    if (kind == AMBE2450_FRAME_REJECTED) {
+        muted = ambe2450_process_invalid(aout_buf, result, 0u, cur_mp, prev_mp, prev_mp_enhanced);
     } else if (kind == MBE_AMBE2450_FRAME_ERASURE) {
         /* A tone frame with an unusable index is flagged as both. */
         const unsigned tone = ambe2450_is_tone_frame(ambe_d) ? MBE_PROCESS_FLAG_TONE : 0u;
-        ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_ERASURE | tone, cur_mp, prev_mp, prev_mp_enhanced);
+        muted = ambe2450_process_invalid(aout_buf, result, MBE_PROCESS_FLAG_ERASURE | tone, cur_mp, prev_mp,
+                                         prev_mp_enhanced);
     } else {
-        ambe2450_process_valid(aout_buf, result, kind == MBE_AMBE2450_FRAME_SILENCE, cur_mp, prev_mp, prev_mp_enhanced);
+        muted = ambe2450_process_valid(aout_buf, result, kind == MBE_AMBE2450_FRAME_SILENCE, cur_mp, prev_mp,
+                                       prev_mp_enhanced);
+    }
+    /* A muted frame plays its noise alone. */
+    if (held.sounding && !muted) {
+        ambe2450_fade_in_from_tone(aout_buf, &held);
     }
 }
 
@@ -962,7 +1090,7 @@ mbe_processAmbe2450Dataf_internal(float* aout_buf, mbe_process_result* result, c
 
     /* 5.6: the repeat criteria apply to every frame type, before classification. */
     if (ambe2450_repeat_required(ambe_d, total_errors, c0_errors, c0_errors_valid)) {
-        ambe2450_process_invalid(aout_buf, result, 0u, cur_mp, prev_mp, prev_mp_enhanced);
+        ambe2450_process_frame(aout_buf, result, ambe_d, AMBE2450_FRAME_REJECTED, cur_mp, prev_mp, prev_mp_enhanced);
         return result ? result->total_errors : total_errors;
     }
 

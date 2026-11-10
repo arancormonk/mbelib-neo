@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.6.7 LANGUAGES C)
+project(mbelib-neo VERSION 2.6.8 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -312,6 +312,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/core/mbe_adaptive.c
     src/core/mbe_encoder.c
     src/core/mbe_speech_analysis.c
+    src/core/mbe_subframe.c
     src/core/mbe_tone_detect.c
     src/core/mbe_tone_fit.c
     src/core/mbe_tone_fit_avx2.c
@@ -1448,6 +1449,8 @@ if(MBELIB_BUILD_TESTS)
             test_tetra_decoder
             test_tetra_simd
             test_dsp_equations
+            test_unvoiced_subframes
+            test_subframe_synthesis
             test_adaptive_equations
             test_ambe2400_frame_types
     )
@@ -2079,6 +2082,8 @@ if(MBELIB_BUILD_TESTS)
     set(_MBELIB_TEST_TARGETS
         test_cpu_dispatch
         test_dsp_equations
+        test_unvoiced_subframes
+        test_subframe_synthesis
         test_adaptive_equations
         test_assertions
         test_api

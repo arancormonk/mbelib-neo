@@ -128,31 +128,23 @@ enum mbe_mute_noise {
     MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE and AMBE 3600x2450 paths. */
 };
 
-/** How voiced harmonics move from one frame's model to the next; chosen by the codec path. */
+/** How a frame's model is rendered; chosen by the codec path. */
 enum mbe_voiced_synthesis {
     /** TIA-102.BABA: at steady pitch the amplitudes of harmonics 1..7 move
-     * linearly over the frame and the others crossfade with the window Ws.
-     * The public mbe_synthesizeSpeechf() renders this way. */
+     * linearly over the frame and the others crossfade with the window Ws;
+     * the unvoiced part is one transform per frame (eq 117-126). The public
+     * mbe_synthesizeSpeechf() renders this way. */
     MBE_VOICED_SYNTHESIS_SPEC,
-    /** Every codec path, as DVSI's AMBE-3000 decoders: at steady pitch every
-     * harmonic's amplitude moves between two levels with its fourth root
-     * linear over the frame (docs/dvsi-parity.md, "Voiced amplitude"). */
+    /** Every codec path, as DVSI's AMBE-3000 decoders: two 10 ms subframes
+     * per frame, the voiced part a train of pitch pulses and the unvoiced
+     * part DVSI's noise (mbe_subframe.h; docs/dvsi-parity.md, "Synthesis in
+     * subframes"). */
     MBE_VOICED_SYNTHESIS_DVSI,
 };
 
-/*
- * Voiced phase of MBE_VOICED_SYNTHESIS_DVSI, as DVSI's AMBE-3000 decoders keep
- * it in every mode (docs/dvsi-parity.md, "Voiced phase"):
- *  - The pitch moves from one frame's to the next 16 samples after the middle
- *    of the frame: a harmonic's phase advances by l (96 w0(-1) + 64 w0(0))
- *    over a frame, not TIA-102.BABA eq 139's l 80 (w0(-1) + w0(0)).
- *  - The first frame with a voiced harmonic after a frame with none restarts
- *    the phase from that frame alone: l w0 (N - 16 - delay) at its end, plus
- *    the regenerated phase, whatever the phase was before the gap.
- */
-#define MBE_PHASE_SWITCH_DELAY_DVSI 16
-/* The onset delay mbe_set_voicing_onset_delay() can give a model (samples). */
-#define MBE_VOICING_ONSET_LATE      80
+/* The onset delay mbe_set_voicing_onset_delay() can give a model (samples):
+ * its voiced bands then start in the frame's second subframe. */
+#define MBE_VOICING_ONSET_LATE 80
 
 /**
  * @brief Mark a decoded model whose voiced harmonics start late at an onset:
@@ -164,12 +156,46 @@ void mbe_set_voicing_onset_delay(mbe_parms* mp, int late);
 /** @brief The onset delay mbe_set_voicing_onset_delay() gave @p mp (0 if none). */
 int mbe_voicing_onset_delay(const mbe_parms* mp);
 
+/* Where a frame's voicing must reach for it to hold at a subframe the frame
+ * does not own: DVSI's decoders keep the voicing of the frame before a frame
+ * marked MBE_FRAME_MARK_PITCH_ABSENT through that frame's first half, and
+ * start a P25 onset at once, only when a voiced harmonic lies at or above this
+ * frequency. On DVSI's P25 decodes three voiced harmonics reaching 502.6 Hz
+ * (pitch code 56) do not count and three reaching 507.9 Hz (code 55) do. */
+#define MBE_VOICING_REACH_HZ 505.0f
+
 /**
- * @brief Whether MBE_VOICED_SYNTHESIS_DVSI's fourth-root law moves a harmonic
- * between these rendered amplitudes: both positive and finite (otherwise the
- * harmonic renders as the specification's).
+ * What a codec's decoder tells the synthesizer about a frame beyond its model
+ * (docs/dvsi-parity.md, "Voiced onsets and offsets"). A model carries one mark
+ * at most, in the otherwise unused element 0 of PHIl, stored as the mark's
+ * value in float.
  */
-int mbe_voiced_amplitude_law_applies(const float* prev, const float* cur);
+enum mbe_frame_mark {
+    MBE_FRAME_MARK_NONE = 0,
+    /* No voiced band, and the pitch enters the mid-frame pitch of a voiced
+     * frame after it. */
+    MBE_FRAME_MARK_PITCH_CARRIES = 1,
+    /* No voiced band, at a pitch code other than those DVSI's encoders keep
+     * for such frames: the voicing of the frame before it lasts to mid-frame. */
+    MBE_FRAME_MARK_PITCH_ABSENT = 2,
+    /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
+    MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
+};
+
+/** @brief Give @p mp a mark, replacing any it had. */
+void mbe_set_frame_mark(mbe_parms* mp, enum mbe_frame_mark mark);
+
+/** @brief The mark of @p mp; MBE_FRAME_MARK_NONE for any other stored value. */
+enum mbe_frame_mark mbe_frame_mark(const mbe_parms* mp);
+
+/**
+ * @brief Regenerate harmonic phases from a spectral envelope (US 5,701,390).
+ * @param Ml  Amplitudes, [1..L] read.
+ * @param L   Harmonic count, 1..56.
+ * @param phi Receives the phases of harmonics 1..56 (those past L from the
+ *            envelope's extrapolation); element 0 is not written.
+ */
+void mbe_regenerate_phases(const float Ml[57], int L, float phi[57]);
 
 /**
  * @brief Synthesize speech using a captured pre-enhancement RM0 value.
@@ -178,7 +204,7 @@ int mbe_voiced_amplitude_law_applies(const float* prev, const float* cur);
  * @param prev_mp Previous enhanced frame parameters.
  * @param rm0 Sum of squared pre-enhancement amplitudes.
  * @param mute_noise Noise output if the frame is muted.
- * @param voiced How the voiced harmonics move over the frame.
+ * @param voiced How the frame is rendered.
  * @param limit Whether adaptive smoothing applies eq 116's amplitude scaling.
  */
 void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
@@ -194,10 +220,23 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
  * @param aout_buf Output buffer of 160 float samples.
  * @param cur_mp Repeated (already enhanced) frame parameters.
  * @param prev_mp Previous enhanced frame parameters.
- * @param voiced How the voiced harmonics move over the frame.
+ * @param voiced How the frame is rendered.
  */
 void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
                                    enum mbe_voiced_synthesis voiced);
+
+/**
+ * @brief Render 160 samples of an AMBE 3600x2450 tone, continuing the tone phases in @p mp.
+ *
+ * mbe_synthesizeTonef() without the frame's bits, for a tone known by its
+ * fields. An ID with no tone renders silence.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param mp Parameter set carrying the tone phases (updated).
+ * @param id Tone ID (TIA-102.BABA-1 Table 9).
+ * @param ad Tone amplitude field, 0..127.
+ */
+void mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad);
 
 /**
  * @brief Render 160 samples of a D-STAR tone, continuing the tone phases in @p mp.
@@ -246,12 +285,13 @@ void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int fro
  * 0.32-0.40 dB quieter than this synthesis otherwise does, in all three modes.
  */
 #define MBE_RENDER_VOICED_GAIN        1.03514217f /* +0.3 dB */
-/* The voiced gain with MBE_VOICED_SYNTHESIS_DVSI (+0.45 dB). Its fourth-root
- * amplitude law carries less energy between two levels than linear
- * interpolation, so at +0.3 dB DVSI's voiced frames would again play 0.11-0.16
- * dB louder; +0.45 dB puts the per-frame medians where +0.3 dB put them with
- * the specification's rendering. */
-#define MBE_RENDER_VOICED_GAIN_DVSI   1.05317369f /* +0.45 dB */
+/* The voiced gain on the codec paths (MBE_VOICED_SYNTHESIS_DVSI), whose pitch
+ * pulses in 10 ms subframes (mbe_subframe.h) carry a little less energy
+ * between two levels than the rendering before them: at +0.55 dB DVSI's
+ * decoders play fully voiced frames within 0.02 dB of ours on identical bits
+ * (frame medians on development vectors, all three modes); at +0.45 dB they
+ * played them 0.09-0.12 dB louder. */
+#define MBE_RENDER_VOICED_GAIN_DVSI   1.06536876f /* +0.55 dB */
 #define MBE_RENDER_UNVOICED_GAIN      0.95499259f /* -0.4 dB */
 
 /**

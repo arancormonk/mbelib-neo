@@ -29,6 +29,7 @@ claim is met, valid, enforceable or infringed. No patent license was established
 | --- | --- | --- |
 | [US 8,595,002](https://patents.google.com/patent/US8595002B2/en) | Related half-rate family; parameter/FEC coding | Open; independently verify family and legal status. |
 | [US 5,701,390](https://patents.google.com/patent/US5701390A/en) | Regenerated phase equations used in synthesis | Historical algorithm reference; no clearance inferred from age. |
+| [US 8,200,497](https://patents.google.com/patent/US8200497B2/en) | Synthesis in 10 ms subframes (square-root triangular windows; an impulse sequence convolved with a pitch-dependent impulse response), which the codec paths render | Algorithm reference. The database record showed “Expired - Fee Related” on 2026-11-09; not verified against the official register, and no clearance inferred. |
 | [US 2025/0336405](https://patents.google.com/patent/US20250336405A1/en) | Voicing smoothing | Open; compare claimed method with speech analysis and adaptive smoothing. |
 | ETSI TETRA declarations ISLD-200101-005 and ISLD-190001-073 | Full-rate ACELP, including codebook and gain processing | Prior search is recorded in [tetra-acelp.md](../docs/tetra-acelp.md#ipr-search); completeness and legal conclusions remain open. |
 

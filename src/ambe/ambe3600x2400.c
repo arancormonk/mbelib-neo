@@ -27,6 +27,7 @@
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbe_validation.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -214,6 +215,43 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
     cur_mp->w0 = *f0 * (float)2 * M_PI;
     *L = mbe_ambe2400_harmonic_count(*f0);
     cur_mp->L = *L;
+}
+
+/* The pitch codes DVSI's D-STAR encoder gives a frame with no voiced band:
+ * b0 34 (a period of 32 samples) for most, and b0 64..119 for the rest. */
+#define AMBE2400_UNVOICED_CODES_FIRST 64
+#define AMBE2400_UNVOICED_CODES_LAST  119
+
+/*
+ * What the pitch code of a frame with no voiced band tells DVSI's decoder
+ * (docs/dvsi-parity.md, "Voiced onsets and offsets"):
+ *  - b0 64..119, which DVSI's encoder sends only with such frames: the voicing
+ *    of the frame before ends where this frame starts. Of these, b0 64..71,
+ *    88..103 and 112..119 carry their pitch into a voiced frame after them,
+ *    whose first 10 ms then run at the geometric mean of the two pitches (253
+ *    onsets of 253 on DVSI's vectors); after the others they run at the
+ *    voiced frame's own pitch (925 of 925, with b0 34), whatever that pitch
+ *    is.
+ *  - any other code, b0 34 among them: the voicing of the frame before lasts
+ *    through this frame's first 10 ms. On a DVMEGA DVstick 30 a frame whose
+ *    b1 alone is set to 0 plays exactly as its voiced neighbour would through
+ *    sample 80, at b0 20 and at the pitch code of the frame it was made from,
+ *    and departs from the frame's first sample at b0 100 (#157).
+ */
+static void
+ambe2400_mark_unvoiced_pitch(mbe_parms* cur_mp, int b0) {
+    static const unsigned char carries[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0};
+    enum mbe_frame_mark mark = MBE_FRAME_MARK_NONE;
+    int voiced = 0;
+    for (int l = 1; l <= cur_mp->L; l++) {
+        voiced |= cur_mp->Vl[l];
+    }
+    if (!voiced && b0 >= AMBE2400_UNVOICED_CODES_FIRST && b0 <= AMBE2400_UNVOICED_CODES_LAST) {
+        mark = carries[b0 >> 3] ? MBE_FRAME_MARK_PITCH_CARRIES : MBE_FRAME_MARK_NONE;
+    } else if (!voiced) {
+        mark = MBE_FRAME_MARK_PITCH_ABSENT;
+    }
+    mbe_set_frame_mark(cur_mp, mark);
 }
 
 static void
@@ -530,6 +568,7 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     float unvc = (float)0.2046 / sqrtf(cur_mp->w0);
 
     ambe2400_decode_vuv(ambe_d, cur_mp, b0, L, f0);
+    ambe2400_mark_unvoiced_pitch(cur_mp, b0);
     ambe2400_decode_gain(ambe_d, cur_mp);
     ambe2400_decode_ri(ambe_d, Ri);
     ambe2400_decode_cik(ambe_d, L, Ri, Cik, Ji);
@@ -746,9 +785,11 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mb
     silent.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
     /* The next frame's synthesis draws its unvoiced noise from cur_mp, as
-     * after any synthesized frame. */
+     * after any synthesized frame; the overlap goes with the mark that says
+     * whose it is. */
     cur_mp->noiseSeed = silent.noiseSeed;
     memcpy(cur_mp->noiseOverlap, silent.noiseOverlap, sizeof(cur_mp->noiseOverlap));
+    memcpy(cur_mp->previousUw, silent.previousUw, sizeof(cur_mp->previousUw));
     mbe_moveMbeParms(&silent, prev_mp_enhanced);
     mbe_copy_error_state(prev_mp_enhanced, cur_mp);
     ambe2400_mute_noise(noise);
@@ -851,6 +892,8 @@ ambe2400_resume_after_mute(mbe_parms* prev_mp_enhanced, const mbe_parms* history
     prev_mp_enhanced->L = resumed.L;
     prev_mp_enhanced->w0 = resumed.w0;
     ambe2400_resume_overlap(prev_mp_enhanced->previousUw, &resumed);
+    /* A subframe's overlap, whatever rendering the state came from. */
+    mbe_subframe_state_adopt(prev_mp_enhanced);
 }
 
 /*
@@ -913,10 +956,16 @@ ambe2400_held_tone(const mbe_parms* prev_mp, int* index, int* volume) {
     return 1;
 }
 
-/* Gain of the incoming signal at sample n of a transition frame. */
-static float
-ambe2400_fade_in_gain(int n) {
-    return (n >= MBE_AMBE2400_TONE_FADE) ? 1.0f : (float)n / (float)MBE_AMBE2400_TONE_FADE;
+/* Crossfade from `outgoing` to the frame in aout_buf over the first
+ * MBE_AMBE2400_TONE_FADE samples. The samples after them are not touched: a
+ * blend at a gain of 1 is not the frame's own sample in a build whose
+ * floating-point mode lets the compiler rearrange it. */
+static void
+ambe2400_fade_in_over(float* aout_buf, const float* outgoing) {
+    for (int n = 0; n < MBE_AMBE2400_TONE_FADE; ++n) {
+        const float gain = (float)n / (float)MBE_AMBE2400_TONE_FADE;
+        aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * outgoing[n]);
+    }
 }
 
 /* Whether the last frame played speech: not muted by the error level or at the
@@ -929,18 +978,30 @@ ambe2400_last_frame_audible(const mbe_parms* prev_mp) {
 /* Under the first tone frame, the last frame repeated, as a lost frame plays
  * it (the prediction history is unchanged), to be faded out. */
 static void
-ambe2400_speech_under_tone(float* speech, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+ambe2400_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_parms* prev_mp,
+                           mbe_parms* prev_mp_enhanced) {
     mbe_parms repeated = *cur_mp;
+    /* Read now: a caller may keep one state as cur_mp and prev_mp_enhanced. */
+    const float seed = cur_mp->noiseSeed;
+    float overlap[sizeof(prev_mp_enhanced->previousUw) / sizeof(prev_mp_enhanced->previousUw[0])] = {0.0f};
+    /* The overlap the frame before left, if it is a subframe's: the other
+     * rendering's (a caller's mbe_synthesizeSpeechf()) is not, and stays out. */
+    if (mbe_subframe_state_is_marked(prev_mp_enhanced)) {
+        memcpy(overlap, prev_mp_enhanced->previousUw, sizeof(overlap));
+    }
     mbe_repeat_load_model(&repeated, prev_mp);
     repeated.repeatCount = 0;
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(&repeated, MBE_HIGH_BAND_GAIN_AMBE2400);
     mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
                                        MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_SPEC);
-    /* The next frame's synthesis draws its unvoiced noise from cur_mp. */
-    cur_mp->noiseSeed = repeated.noiseSeed;
-    memcpy(cur_mp->noiseOverlap, repeated.noiseOverlap, sizeof(cur_mp->noiseOverlap));
     mbe_moveMbeParms(&repeated, prev_mp_enhanced);
     mbe_copy_error_state(prev_mp_enhanced, cur_mp);
+    /* DVSI's noise generator stands still through a tone frame: the voice
+     * after the tone draws from where the frame before it left off, over the
+     * unvoiced overlap that frame left (the repeat's belongs to noise the
+     * voice has yet to draw). */
+    prev_mp_enhanced->noiseSeed = seed;
+    memcpy(prev_mp_enhanced->previousUw, overlap, sizeof(overlap));
 }
 
 static void
@@ -963,10 +1024,7 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
         mbe_renderToneDstarf(aout_buf, cur_mp, index, volume);
     }
     if (entering) {
-        for (int n = 0; n < 160; ++n) {
-            const float gain = ambe2400_fade_in_gain(n);
-            aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * speech[n]);
-        }
+        ambe2400_fade_in_over(aout_buf, speech);
     }
     /* The error level mutes a tone as it mutes voice, after synthesis, so the
      * tone state advances: on DVSI's dam_e10_hd vector a channel error that
@@ -1008,10 +1066,7 @@ ambe2400_fade_in_from_tone(float* aout_buf, const struct ambe2400_tone_tail* hel
         tone.tonePhase = held->tone_phase;
         mbe_renderToneDstarf(tail, &tone, held->index, held->volume);
     }
-    for (int n = 0; n < 160; ++n) {
-        const float gain = ambe2400_fade_in_gain(n);
-        aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * tail[n]);
-    }
+    ambe2400_fade_in_over(aout_buf, tail);
 }
 
 /*

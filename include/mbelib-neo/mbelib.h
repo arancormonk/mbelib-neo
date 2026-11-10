@@ -131,9 +131,10 @@ struct mbe_parameters {
     /* === FFT-based unvoiced synthesis state === */
     /** Previous frame inverse FFT output for WOLA (256 samples). */
     float previousUw[256];
-    /** LCG noise generator state (seed). */
+    /** Noise generator state (seed). */
     float noiseSeed;
-    /** Noise buffer overlap for continuity (96 samples). */
+    /** Noise buffer overlap for continuity (96 samples). The codec process
+     *  functions keep the state of their pitch-pulse train here instead. */
     float noiseOverlap[96];
 };
 
@@ -1017,7 +1018,10 @@ MBE_API const char* mbe_versionString(void);
 
 /**
  * @brief Set thread-local RNG seeds used by synthesis noise generators.
- *        Applies to comfort noise and unvoiced LCG cold-start state.
+ *        Applies to comfort noise and to the unvoiced noise of
+ *        mbe_synthesizeSpeechf() from a fresh state. The codec process
+ *        functions draw their unvoiced noise from DVSI's generator, which
+ *        starts every stream from the same state and takes no seed.
  * @param seed Any 32-bit seed value. A zero seed is accepted and remapped to
  *             an internal non-zero state.
  */
