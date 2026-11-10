@@ -56,21 +56,17 @@ struct golden_ambe_expect {
 static struct golden_ambe_expect
 golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
-    if (isa == MBE_CPU_ISA_AVX2) {
-        e.ambe2450_f32 = 0xE4056545u;
-        e.ambe2450_s16 = 0x37D8E2BAu;
-        e.ambe2400_f32 = 0xAC43CD71u;
-        e.ambe2400_s16 = 0x7FC74F3Cu;
-    } else if (isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x7E115194u;
-        e.ambe2450_s16 = 0x49D47779u;
-        e.ambe2400_f32 = 0xBC9BD761u;
-        e.ambe2400_s16 = 0x7FC74F3Cu;
+    /* The codec paths use no kernel that differs between SSE2 and AVX2. */
+    if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
+        e.ambe2450_f32 = 0x4B7BDA7Eu;
+        e.ambe2450_s16 = 0x3FD92FB3u;
+        e.ambe2400_f32 = 0x53DFF28Du;
+        e.ambe2400_s16 = 0x2B52545Fu;
     } else {
-        e.ambe2450_f32 = 0xEC41CC14u;
-        e.ambe2450_s16 = 0x85373525u;
-        e.ambe2400_f32 = 0x3708557Fu;
-        e.ambe2400_s16 = 0x6F86D6A9u;
+        e.ambe2450_f32 = 0x5DCFBFEFu;
+        e.ambe2450_s16 = 0x3FD92FB3u;
+        e.ambe2400_f32 = 0x11429B9Cu;
+        e.ambe2400_s16 = 0x2B52545Fu;
     }
     return e;
 }

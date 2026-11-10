@@ -80,10 +80,17 @@ imbe_get_dct_cache(void) {
     return &imbe_cache;
 }
 
+/* The pitch codes DVSI's P25 encoder gives a frame with no voiced band: b0 25
+ * (a period of 32.25 samples, 14 harmonics) for most, and b0 128..183 for the
+ * rest. */
+#define IMBE_UNVOICED_CODES_FIRST 128
+#define IMBE_UNVOICED_CODES_LAST  183
+
 static int
-imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_L9) {
+imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
     int b0 = mbe_bits_by_index_to_int(imbe_d, b0_indices, sizeof(b0_indices) / sizeof(b0_indices[0]));
+    *out_b0 = b0;
     if (b0 > 207) {
 #ifdef IMBE_DEBUG
         if ((b0 >= 216) && (b0 <= 219)) {
@@ -96,8 +103,6 @@ imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_L9) {
     }
 
     cur_mp->w0 = ((float)(4 * M_PI) / (float)((float)b0 + 39.5));
-    /* Only rate 33 marks late onsets; clear any mark a caller's state carries. */
-    mbe_set_voicing_onset_delay(cur_mp, 0);
 
     int L = (int)(0.9254 * (int)((M_PI / cur_mp->w0) + 0.25));
     if ((L > 56) || (L < 9)) {
@@ -135,13 +140,27 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
     }
 }
 
+/*
+ * Reads the band voicing, and marks what it tells DVSI's decoder beyond the
+ * bands themselves (docs/dvsi-parity.md, "Voiced onsets and offsets"):
+ *  - no voiced band, at a pitch code other than the ones DVSI's encoder sends
+ *    only with such frames (IMBE_UNVOICED_CODES_*): the voicing of the frame
+ *    before it lasts to mid-frame;
+ *  - voiced bands, none reaching MBE_VOICING_REACH_HZ: after a frame with no
+ *    voiced band they start in the frame's second half.
+ */
 static void
-imbe_decode_voicing(mbe_parms* cur_mp, char bb[58][12]) {
+imbe_decode_voicing(mbe_parms* cur_mp, int b0, char bb[58][12]) {
+    enum mbe_frame_mark mark = MBE_FRAME_MARK_NONE;
     int j = 1;
     int k = cur_mp->K - 1;
+    int top = 0;
     for (int i = 1; i <= cur_mp->L; i++) {
         /* Cast via unsigned to avoid sign-extension when 'char' is signed */
         cur_mp->Vl[i] = (int)(unsigned char)bb[1][k];
+        if (cur_mp->Vl[i]) {
+            top = i;
+        }
         if (j == 3) {
             j = 1;
             if (k > 0) {
@@ -153,6 +172,14 @@ imbe_decode_voicing(mbe_parms* cur_mp, char bb[58][12]) {
             j++;
         }
     }
+    if (top == 0) {
+        if (b0 < IMBE_UNVOICED_CODES_FIRST || b0 > IMBE_UNVOICED_CODES_LAST) {
+            mark = MBE_FRAME_MARK_PITCH_ABSENT;
+        }
+    } else if ((float)top * cur_mp->w0 < MBE_VOICING_REACH_HZ * ((float)(2.0 * M_PI) / 8000.0f)) {
+        mark = MBE_FRAME_MARK_LATE_ONSET;
+    }
+    mbe_set_frame_mark(cur_mp, mark);
 }
 
 static void
@@ -546,6 +573,7 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
 int
 mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
+    int b0;
     int L9;
     float Cik[7][11] = {{0.0f}}, Tl[57] = {0.0f}, Gm[7], Ri[7];
     char bb[58][12];
@@ -559,7 +587,7 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
         return ret;
     }
 
-    if (imbe_decode_fundamental(imbe_d, cur_mp, &L9) != 0) {
+    if (imbe_decode_fundamental(imbe_d, cur_mp, &b0, &L9) != 0) {
         return 1;
     }
 
@@ -567,7 +595,7 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     imbe_read_bit_layout(imbe_d, L9, bb);
 
     // Vl
-    imbe_decode_voicing(cur_mp, bb);
+    imbe_decode_voicing(cur_mp, b0, bb);
 
     imbe_decode_gains(bb, L9, Gm);
 

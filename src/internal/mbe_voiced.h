@@ -22,21 +22,20 @@ struct mbe_voiced_component {
 void mbe_voiced_windowed(float out[MBE_VOICED_FRAME], const float window[2 * MBE_VOICED_FRAME],
                          const struct mbe_voiced_component* prev, const struct mbe_voiced_component* cur);
 /* Adds one harmonic whose amplitude moves linearly from prev_amp to cur_amp
- * over the frame; with fourth_power the moving value is raised to the fourth
- * power, so a caller passing fourth roots gets that amplitude law (DVSI's). */
+ * over the frame. */
 void mbe_voiced_interpolated(float out[MBE_VOICED_FRAME], float phase, float prev_amp, float cur_amp, float frequency,
-                             float pitch_delta, int harmonic, int fourth_power);
+                             float pitch_delta, int harmonic);
 
 /* The baseline and AVX2 copies behind the run-time dispatch (mbe_cpu.h). */
 #if defined(MBE_AVX2_DISPATCH) || defined(MBE_KERNEL_AVX2)
 void mbe_voiced_windowed_sse2(float out[MBE_VOICED_FRAME], const float window[2 * MBE_VOICED_FRAME],
                               const struct mbe_voiced_component* prev, const struct mbe_voiced_component* cur);
 void mbe_voiced_interpolated_sse2(float out[MBE_VOICED_FRAME], float phase, float prev_amp, float cur_amp,
-                                  float frequency, float pitch_delta, int harmonic, int fourth_power);
+                                  float frequency, float pitch_delta, int harmonic);
 void mbe_voiced_windowed_avx2(float out[MBE_VOICED_FRAME], const float window[2 * MBE_VOICED_FRAME],
                               const struct mbe_voiced_component* prev, const struct mbe_voiced_component* cur);
 void mbe_voiced_interpolated_avx2(float out[MBE_VOICED_FRAME], float phase, float prev_amp, float cur_amp,
-                                  float frequency, float pitch_delta, int harmonic, int fourth_power);
+                                  float frequency, float pitch_delta, int harmonic);
 #endif
 #endif
 #endif
