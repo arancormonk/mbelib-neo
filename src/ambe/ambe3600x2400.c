@@ -956,10 +956,16 @@ ambe2400_held_tone(const mbe_parms* prev_mp, int* index, int* volume) {
     return 1;
 }
 
-/* Gain of the incoming signal at sample n of a transition frame. */
-static float
-ambe2400_fade_in_gain(int n) {
-    return (n >= MBE_AMBE2400_TONE_FADE) ? 1.0f : (float)n / (float)MBE_AMBE2400_TONE_FADE;
+/* Crossfade from `outgoing` to the frame in aout_buf over the first
+ * MBE_AMBE2400_TONE_FADE samples. The samples after them are not touched: a
+ * blend at a gain of 1 is not the frame's own sample in a build whose
+ * floating-point mode lets the compiler rearrange it. */
+static void
+ambe2400_fade_in_over(float* aout_buf, const float* outgoing) {
+    for (int n = 0; n < MBE_AMBE2400_TONE_FADE; ++n) {
+        const float gain = (float)n / (float)MBE_AMBE2400_TONE_FADE;
+        aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * outgoing[n]);
+    }
 }
 
 /* Whether the last frame played speech: not muted by the error level or at the
@@ -1018,10 +1024,7 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
         mbe_renderToneDstarf(aout_buf, cur_mp, index, volume);
     }
     if (entering) {
-        for (int n = 0; n < 160; ++n) {
-            const float gain = ambe2400_fade_in_gain(n);
-            aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * speech[n]);
-        }
+        ambe2400_fade_in_over(aout_buf, speech);
     }
     /* The error level mutes a tone as it mutes voice, after synthesis, so the
      * tone state advances: on DVSI's dam_e10_hd vector a channel error that
@@ -1063,10 +1066,7 @@ ambe2400_fade_in_from_tone(float* aout_buf, const struct ambe2400_tone_tail* hel
         tone.tonePhase = held->tone_phase;
         mbe_renderToneDstarf(tail, &tone, held->index, held->volume);
     }
-    for (int n = 0; n < 160; ++n) {
-        const float gain = ambe2400_fade_in_gain(n);
-        aout_buf[n] = (gain * aout_buf[n]) + ((1.0f - gain) * tail[n]);
-    }
+    ambe2400_fade_in_over(aout_buf, tail);
 }
 
 /*
