@@ -1022,6 +1022,23 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
 #endif
 }
 
+void
+mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad) {
+#ifdef DISABLE_AMBE_TONES
+    (void)mp;
+    (void)id;
+    (void)ad;
+    mbe_synthesizeSilencef(aout_buf);
+#else
+    float freq1, freq2;
+    if (!mbe_tone_lookup_freqs(id, &freq1, &freq2)) {
+        mbe_synthesizeSilencef(aout_buf);
+        return;
+    }
+    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)));
+#endif
+}
+
 /**
  * @brief Synthesize a D-STAR style tone into 160 float samples.
  * @param aout_buf Output buffer of 160 float samples.

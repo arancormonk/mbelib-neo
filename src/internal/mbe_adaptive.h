@@ -226,6 +226,19 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
                                    enum mbe_voiced_synthesis voiced);
 
 /**
+ * @brief Render 160 samples of an AMBE 3600x2450 tone, continuing the tone phases in @p mp.
+ *
+ * mbe_synthesizeTonef() without the frame's bits, for a tone known by its
+ * fields. An ID with no tone renders silence.
+ *
+ * @param aout_buf Output buffer of 160 float samples.
+ * @param mp Parameter set carrying the tone phases (updated).
+ * @param id Tone ID (TIA-102.BABA-1 Table 9).
+ * @param ad Tone amplitude field, 0..127.
+ */
+void mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad);
+
+/**
  * @brief Render 160 samples of a D-STAR tone, continuing the tone phases in @p mp.
  *
  * mbe_synthesizeTonefdstar() without the bit validation, for a tone known by

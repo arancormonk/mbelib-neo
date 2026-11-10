@@ -2965,5 +2965,66 @@
         "rule": "all_no_decrease"
       }
     ]
+  },
+  "ambe2450-tone-fade-tones": {
+    "description": "Rate-33 tones crossfaded with the frames around them over 80 samples, as DVSI's decoder plays them: no rate-33 tone vector's tone level, frequency or twist moves further from DVSI's decoder, none agrees less often with its tone output or plays a wrong tone more often, and no D-STAR tone vector changes in any of these.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0001
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      }
+    ]
+  },
+  "ambe2450-tone-fade-speech": {
+    "description": "Rate-33 tone crossfades: the speech vectors hold no tone frame, so every mode's decode of them is unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }
