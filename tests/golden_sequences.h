@@ -28,6 +28,14 @@
 
 typedef int (*golden_ambe_process_fn)(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                       mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
+typedef int (*golden_ambe_process_short_fn)(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
+                                            mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
+
+/** A codec's float and int16 parameter-bit entry points. */
+struct golden_ambe_codec {
+    golden_ambe_process_fn process_float;
+    golden_ambe_process_short_fn process_short;
+};
 
 /** FNV-1a hashes of a whole decoded sequence (float and int16 PCM) plus its energy. */
 struct golden_hashes {
@@ -103,37 +111,51 @@ golden_fill_single_frame(mbe_parms* cur, mbe_parms* prev) {
 
 /**
  * @brief Decode an error-free voice-only AMBE sequence and hash its PCM.
- * @return 0 on success, or the negative status returned by @p process.
+ *
+ * The float hash covers the float entry point's output, the int16 hash what
+ * the codec's own int16 entry point returns (which rounds to nearest on the
+ * AMBE paths, unlike mbe_floattoshort()). Each pass starts from a freshly
+ * initialized and seeded state and decodes the same frames.
+ * @return 0 on success, or the negative status returned by an entry point.
  */
 static inline int
-golden_hash_ambe_voice_sequence(golden_ambe_process_fn process, uint32_t seed, struct golden_hashes* out) {
+golden_hash_ambe_voice_sequence(const struct golden_ambe_codec* codec, uint32_t seed, struct golden_hashes* out) {
     mbe_parms cur;
     mbe_parms prev;
     mbe_parms prev_enh;
     float pcm_f[160];
     short pcm_s[160];
     char ambe_d[49];
-    uint32_t state = seed;
 
     out->f32 = GOLDEN_FNV1A_OFFSET;
     out->s16 = GOLDEN_FNV1A_OFFSET;
     out->sumsq = 0.0;
-    mbe_setThreadRngSeed(GOLDEN_SYNTH_RNG_SEED);
-    mbe_initMbeParms(&cur, &prev, &prev_enh);
-    for (int f = 0; f < GOLDEN_AMBE_FRAMES; ++f) {
-        golden_fill_ambe_voice_frame(ambe_d, &state);
-        int rc = process(pcm_f, NULL, ambe_d, &cur, &prev, &prev_enh);
-        if (rc < 0) {
-            return rc;
+    for (int pass = 0; pass < 2; ++pass) {
+        uint32_t state = seed;
+        mbe_setThreadRngSeed(GOLDEN_SYNTH_RNG_SEED);
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        for (int f = 0; f < GOLDEN_AMBE_FRAMES; ++f) {
+            golden_fill_ambe_voice_frame(ambe_d, &state);
+            int rc = (pass == 0) ? codec->process_float(pcm_f, NULL, ambe_d, &cur, &prev, &prev_enh)
+                                 : codec->process_short(pcm_s, NULL, ambe_d, &cur, &prev, &prev_enh);
+            if (rc < 0) {
+                return rc;
+            }
+            if (pass == 0) {
+                for (int i = 0; i < 160; ++i) {
+                    out->sumsq += (double)pcm_f[i] * (double)pcm_f[i];
+                }
+                out->f32 = golden_fnv1a32_update(out->f32, pcm_f, sizeof(pcm_f));
+            } else {
+                out->s16 = golden_fnv1a32_update(out->s16, pcm_s, sizeof(pcm_s));
+            }
         }
-        mbe_floattoshort(pcm_f, pcm_s);
-        for (int i = 0; i < 160; ++i) {
-            out->sumsq += (double)pcm_f[i] * (double)pcm_f[i];
-        }
-        out->f32 = golden_fnv1a32_update(out->f32, pcm_f, sizeof(pcm_f));
-        out->s16 = golden_fnv1a32_update(out->s16, pcm_s, sizeof(pcm_s));
     }
     return 0;
 }
+
+/** The AMBE 3600x2450 and D-STAR entry points the golden sequences decode with. */
+static const struct golden_ambe_codec golden_ambe2450_codec = {mbe_processAmbe2450Dataf, mbe_processAmbe2450Data};
+static const struct golden_ambe_codec golden_ambe2400_codec = {mbe_processAmbe2400Dataf, mbe_processAmbe2400Data};
 
 #endif /* MBELIB_TESTS_GOLDEN_SEQUENCES_H */

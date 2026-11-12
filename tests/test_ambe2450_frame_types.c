@@ -291,21 +291,22 @@ rms(const float* x) {
     return sqrt(acc / 160.0);
 }
 
-/** The noise a muted frame plays: DVSI's mute level, uniform in [-1.5, 1.5]
- * on the 16-bit output scale (float samples times 7, as mbe_floattoshort()
- * applies), the level of D-STAR's. */
+/** The noise a muted frame plays: DVSI's mute level, uniform in
+ * [-MBE_AMBE_MUTE_NOISE_AMPLITUDE, MBE_AMBE_MUTE_NOISE_AMPLITUDE] on the 16-bit
+ * output scale (float samples times 7), the level of D-STAR's. */
 static void
 mute_noise_reference(float noise[160]) {
     mbe_setThreadRngSeed(K_NOISE_SEED);
     mbe_synthesizeUniformNoisef(noise, MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
 }
 
-/** Muted output that is the noise alone: bounded by the mute level, at its rms. */
+/** Muted output that is the noise alone: bounded by the mute level, at its rms
+ * (a uniform noise's is the amplitude over sqrt(3)). */
 static void
 assert_mute_noise(const float* x) {
-    assert(peak_abs(x) * 7.0f <= 1.5f + 1e-4f);
-    double r = rms(x) * 7.0;
-    assert(r > 0.6 && r < 1.1);
+    assert(peak_abs(x) * 7.0f <= MBE_AMBE_MUTE_NOISE_AMPLITUDE + 1e-4f);
+    double r = rms(x) * 7.0 / MBE_AMBE_MUTE_NOISE_AMPLITUDE;
+    assert(r > 0.4 && r < 0.733);
     (void)r;
 }
 

@@ -19,6 +19,23 @@
  *       `(7.0f / 32768.0f)` for normalized floats (approximately `[-0.95, +0.95]`
  *       after soft clipping).
  *
+ * @note 16-bit output: every `short` entry point scales by 7 and limits to
+ *       +-(32767 * 0.95) as mbe_floattoshort() does (NaN becomes 0). Those of
+ *       the D-STAR (AMBE 3600x2400) and AMBE 3600x2450 paths then round to
+ *       the nearest integer, halves away from zero, as DVSI's D-STAR and
+ *       AMBE 3600x2450 decoders round; the IMBE paths (P25, ProVoice),
+ *       mbe_synthesizeSpeech(), mbe_synthesizeComfortNoise() and
+ *       mbe_floattoshort() itself truncate toward zero. So the `short` output
+ *       of the two AMBE paths is not mbe_floattoshort() of their float twins'
+ *       output: a caller of their float entry points who wants the same 16-bit
+ *       samples rounds `7 * x` to nearest (halves away from zero, e.g. with
+ *       `roundf()`) after the same limit. DVSI's output separates rounding to
+ *       nearest from truncation, not one tie rule from another; halves away
+ *       from zero is this library's choice. The mute noise of both AMBE paths
+ *       is under one 16-bit step in the float output (at most 0.75 / 7), so a
+ *       caller who truncates it gets silence wherever a muted frame plays the
+ *       noise alone.
+ *
  * @note Process and decode APIs validate public hard and soft bit arrays
  *       strictly. Hard bits must be exactly 0 or 1, and soft bit `bit` fields
  *       must be exactly 0 or 1. Invalid arguments return
@@ -372,6 +389,7 @@ MBE_API int mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process AMBE 2400 parameters into 8 kHz 16-bit PCM.
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
  * @see mbe_processAmbe2400Dataf for details.
  */
 MBE_API int mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
@@ -529,6 +547,7 @@ MBE_API int mbe_processAmbe3600x2400Framef(float* aout_buf, mbe_process_result* 
                                            mbe_parms* prev_mp_enhanced);
 /**
  * @brief Process a complete AMBE 3600x2400 frame into 8 kHz 16-bit PCM.
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
  * @see mbe_processAmbe3600x2400Framef for details.
  */
 MBE_API int mbe_processAmbe3600x2400Frame(short* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
@@ -542,7 +561,10 @@ MBE_API int mbe_processAmbe3600x2400Frame(short* aout_buf, mbe_process_result* r
 MBE_API int mbe_processAmbe3600x2400SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
                                                mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
-/** @brief Process a soft AMBE 3600x2400 frame into int16 PCM; see float variant for result semantics. */
+/**
+ * @brief Process a soft AMBE 3600x2400 frame into int16 PCM; see float variant for result semantics.
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
+ */
 MBE_API int mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -648,7 +670,10 @@ MBE_API int mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
  */
 MBE_API int mbe_processAmbe2450Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
-/** @brief Process AMBE 2450 parameters into 16-bit PCM. */
+/**
+ * @brief Process AMBE 2450 parameters into 16-bit PCM.
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
+ */
 MBE_API int mbe_processAmbe2450Data(short* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
@@ -663,7 +688,10 @@ MBE_API int mbe_processAmbe2450Data(short* aout_buf, mbe_process_result* result,
 MBE_API int mbe_processAmbe3600x2450Framef(float* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
                                            char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                            mbe_parms* prev_mp_enhanced);
-/** @brief Process AMBE 3600x2450 frame into 16-bit PCM. */
+/**
+ * @brief Process AMBE 3600x2450 frame into 16-bit PCM.
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
+ */
 MBE_API int mbe_processAmbe3600x2450Frame(short* aout_buf, mbe_process_result* result, const char ambe_fr[4][24],
                                           char ambe_d[49], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                           mbe_parms* prev_mp_enhanced);
@@ -675,7 +703,10 @@ MBE_API int mbe_processAmbe3600x2450Frame(short* aout_buf, mbe_process_result* r
 MBE_API int mbe_processAmbe3600x2450SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
                                                mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
-/** @brief Process a soft AMBE 3600x2450 frame into int16 PCM; see float variant for result semantics. */
+/**
+ * @brief Process a soft AMBE 3600x2450 frame into int16 PCM; see float variant for result semantics.
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
+ */
 MBE_API int mbe_processAmbe3600x2450SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit ambe_fr[4][24], char ambe_d[49], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -1099,11 +1130,15 @@ MBE_API void mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms*
  * @brief Convert 160 float samples to clipped/scaled 16-bit PCM.
  *
  * Applies the same scaling used by the `short` entry points: a fixed gain of
- * `7.0` and soft clipping at 95% of int16 full-scale before converting to
- * `short`. Non-finite input samples are handled before conversion: NaN becomes
- * zero and infinities clip to the corresponding bound. This makes the output
- * equivalent to calling the corresponding `short` synthesis APIs with the same
- * input state.
+ * `7.0` and soft clipping at 95% of int16 full-scale, then truncates toward
+ * zero. Non-finite input samples are handled before conversion: NaN becomes
+ * zero and infinities clip to the corresponding bound. The output equals that
+ * of the IMBE (P25, ProVoice) `short` entry points and mbe_synthesizeSpeech()
+ * with the same input state. The `short` entry points of the D-STAR and
+ * AMBE 3600x2450 paths round to nearest instead (halves away from zero), so
+ * their output differs from this conversion of their float twins' output by
+ * one step wherever the fraction of `7 * x` is at least a half; see the
+ * 16-bit output note at the top of this header.
  * @param float_buf Input 160 float samples.
  * @param aout_buf  Output 160 16-bit samples.
  */

@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "mbe_quality_frames.h"
@@ -300,6 +301,39 @@ test_imbe7100_frame_paths(void) {
 
 enum fixture_mode { IMBE7200, IMBE7100, AMBE2450, AMBE2400 };
 
+/* The rule of the AMBE paths' short entry points, rendered independently:
+ * 7x limited to +-(32767 * 0.95), NaN 0, rounded to nearest with halves away
+ * from zero (roundf). */
+static short
+round_pcm_sample(float sample) {
+    const float limit = 32767.0f * 0.95f;
+    float value = sample * 7.0f;
+    if (value != value) {
+        value = 0.0f;
+    } else if (value > limit) {
+        value = limit;
+    } else if (value < -limit) {
+        value = -limit;
+    }
+    return (short)roundf(value);
+}
+
+/* The 16-bit samples a codec's short entry points return for its float output:
+ * the D-STAR and AMBE 3600x2450 paths round to nearest, the IMBE paths
+ * truncate as mbe_floattoshort() does. Returns how many samples differ from
+ * truncation. */
+static int
+short_from_float(enum fixture_mode mode, const float* pcm, short* out) {
+    short truncated[160];
+    int differ = 0;
+    mbe_floattoshort(pcm, truncated);
+    for (int i = 0; i < 160; ++i) {
+        out[i] = (mode == IMBE7200 || mode == IMBE7100) ? truncated[i] : round_pcm_sample(pcm[i]);
+        differ += out[i] != truncated[i];
+    }
+    return differ;
+}
+
 static const struct {
     const char* name;
     size_t data_count;
@@ -512,6 +546,7 @@ assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* r
         mbe_process_result expected_result[8], result;                                                                 \
         mbe_soft_bit soft[184];                                                                                        \
         mbe_parms cur, prev, enh;                                                                                      \
+        int rounded = 0;                                                                                               \
         for (int n = 0; n < 8; ++n) {                                                                                  \
             tagged_data(parameters[n], fixture_modes[MODE].data_count, (unsigned)n);                                   \
             memset(parameters[n], 0, 6); /* Keep the fundamental in the ordinary speech range. */                      \
@@ -561,7 +596,7 @@ assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* r
                 assert(memcmp(decoded, parameters[n], fixture_modes[MODE].data_count) == 0);                           \
                 if ((path & 1) == 0) {                                                                                 \
                     assert_float_pcm_sane(pcm);                                                                        \
-                    mbe_floattoshort(pcm, pcm_s);                                                                      \
+                    rounded += short_from_float(MODE, pcm, pcm_s);                                                     \
                 }                                                                                                      \
                 if (path == 0) {                                                                                       \
                     memcpy(expected_f[n], pcm, sizeof(pcm));                                                           \
@@ -576,6 +611,8 @@ assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* r
                 }                                                                                                      \
             }                                                                                                          \
         }                                                                                                              \
+        /* The fixture tells rounding from truncation on the AMBE paths. */                                            \
+        assert(((MODE) == IMBE7200 || (MODE) == IMBE7100) ? rounded == 0 : rounded > 0);                               \
     }
 
 DEFINE_FRAME_EQUIVALENCE(test_imbe7200_equivalence, IMBE7200, 23, mbe_processImbe7200x4400, mbe_processImbe4400)
@@ -748,7 +785,7 @@ test_ambe2400_accepted_tones(void) {
                         assert(float_array_equal_exact(pcm[n] + from, tone[n] + from, 160 - from));
                     } else if (n >= 4) {
                         short muted[160];
-                        mbe_floattoshort(pcm[n], muted);
+                        (void)short_from_float(AMBE2400, pcm[n], muted);
                         for (int i = 0; i < 160; ++i) {
                             assert(muted[i] >= -1 && muted[i] <= 1);
                         }
@@ -948,6 +985,99 @@ test_ambe2450_ecc_alias(void) {
     }
 }
 
+/* A codec path whose muted 16-bit output test_muted_short_noise() checks. */
+struct muted_short_path {
+    const char* name;
+    enum fixture_mode mode;
+    int (*dataf)(float*, mbe_process_result*, const char[49], mbe_parms*, mbe_parms*, mbe_parms*);
+    int (*data)(short*, mbe_process_result*, const char[49], mbe_parms*, mbe_parms*, mbe_parms*);
+    int errors;            /* corrected bits per frame, enough for the error rate to mute */
+    float noise_amplitude; /* of the mute noise, on the 16-bit scale */
+};
+
+#define MUTED_SHORT_FRAMES 200
+
+/* A voice frame of either AMBE codec: b0's top bit (bit 0) clear keeps b0
+ * below 64, clear of the tone, erasure and silence codes. */
+static void
+muted_short_voice_frame(char ambe_d[49], uint32_t* state) {
+    for (int i = 0; i < 49; ++i) {
+        *state ^= *state << 13;
+        *state ^= *state >> 17;
+        *state ^= *state << 5;
+        ambe_d[i] = (char)(*state & 1u);
+    }
+    ambe_d[0] = 0;
+}
+
+/* One pass over the stream through the float (pcm_f) or the short (pcm_s)
+ * entry point, from a freshly initialized and seeded state. */
+static void
+muted_short_pass(const struct muted_short_path* path, float (*pcm_f)[160], short (*pcm_s)[160], unsigned* flags) {
+    mbe_parms cur, prev, enh;
+    uint32_t state = 0x6d757465u;
+    init_params(&cur, &prev, &enh);
+    for (int n = 0; n < MUTED_SHORT_FRAMES; ++n) {
+        char ambe_d[49];
+        mbe_process_result result;
+        muted_short_voice_frame(ambe_d, &state);
+        mbe_initProcessResult(&result);
+        result.flags = MBE_PROCESS_FLAG_C0_VALID;
+        result.protected_errors = path->errors;
+        result.total_errors = path->errors;
+        const int ret = pcm_f ? path->dataf(pcm_f[n], &result, ambe_d, &cur, &prev, &enh)
+                              : path->data(pcm_s[n], &result, ambe_d, &cur, &prev, &enh);
+        assert(ret == path->errors);
+        flags[n] = result.flags;
+    }
+}
+
+/*
+ * A muted frame's noise: in the float output it stays within the path's noise
+ * amplitude (under one 16-bit step), and the short entry point rounds it to 0
+ * on about two thirds of the samples and +-1 on the rest, as DVSI's muted
+ * output is. The first muted frame of a run may carry the last frame fading
+ * out over its first 80 samples (rate 33), so only its second half counts. The
+ * short pass, run separately on the same stream, flags every frame as the
+ * float pass does and returns the rounding of its samples.
+ */
+static void
+test_muted_short_noise(const struct muted_short_path* path) {
+    static float pcm_f[MUTED_SHORT_FRAMES][160];
+    static short pcm_s[MUTED_SHORT_FRAMES][160];
+    unsigned flags_f[MUTED_SHORT_FRAMES], flags_s[MUTED_SHORT_FRAMES];
+    size_t counts[3] = {0, 0, 0}; /* -1, 0, +1 */
+    int muted = 0;
+    size_t total = 0;
+    muted_short_pass(path, pcm_f, NULL, flags_f);
+    muted_short_pass(path, NULL, pcm_s, flags_s);
+    for (int n = 0; n < MUTED_SHORT_FRAMES; ++n) {
+        short want[160];
+        assert(flags_s[n] == flags_f[n]);
+        (void)short_from_float(path->mode, pcm_f[n], want);
+        assert(memcmp(want, pcm_s[n], sizeof(want)) == 0);
+        if ((flags_f[n] & MBE_PROCESS_FLAG_MUTE) == 0u) {
+            continue;
+        }
+        ++muted;
+        const int onset = (n == 0) || (flags_f[n - 1] & MBE_PROCESS_FLAG_MUTE) == 0u;
+        for (int i = onset ? 80 : 0; i < 160; ++i) {
+            assert(fabsf(pcm_f[n][i]) * 7.0f <= path->noise_amplitude * 1.0001f);
+            assert(pcm_s[n][i] >= -1 && pcm_s[n][i] <= 1);
+            ++counts[pcm_s[n][i] + 1];
+            ++total;
+        }
+    }
+    assert(muted > 100);
+    const double zero = (double)counts[1] / (double)total;
+    const double minus = (double)counts[0] / (double)total;
+    const double plus = (double)counts[2] / (double)total;
+    printf("%s muted short output over %d frames: 0 %.3f, -1 %.3f, +1 %.3f\n", path->name, muted, zero, minus, plus);
+    assert(zero > 0.62 && zero < 0.71);
+    assert(minus > 0.13 && minus < 0.20);
+    assert(plus > 0.13 && plus < 0.20);
+}
+
 int
 main(void) {
     test_ambe2450_ecc_alias();
@@ -965,5 +1095,13 @@ main(void) {
     test_ambe2400_equivalence();
     test_imbe_fundamental_roundtrip();
     test_ambe2400_accepted_tones();
+    static const struct muted_short_path dstar = {
+        "ambe2400", AMBE2400, mbe_processAmbe2400Dataf, mbe_processAmbe2400Data, 7, 0.75f,
+    };
+    test_muted_short_noise(&dstar);
+    static const struct muted_short_path rate33 = {
+        "ambe2450", AMBE2450, mbe_processAmbe2450Dataf, mbe_processAmbe2450Data, 7, 0.75f,
+    };
+    test_muted_short_noise(&rate33);
     return 0;
 }

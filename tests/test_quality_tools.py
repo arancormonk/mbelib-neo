@@ -240,6 +240,51 @@ def verify_soft_decode(evaluator, reframer, root):
     assert b"--soft" in result.stderr
 
 
+def verify_int16_entry_points(evaluator, reframer, root):
+    """The decoded PCM is what the codec's own int16 entry points return: the AMBE
+    paths' mute noise, under one 16-bit step in the float output, rounds to 0 on
+    about two thirds of the samples and +-1 on the rest (truncating the float
+    output would leave the muted frames silent)."""
+    for codec in ("ambe2400", "ambe2450"):
+        parameters, frames = root / f"{codec}_bits.txt", root / f"{codec}_frames.txt"
+        wav, params = root / f"{codec}.wav", root / f"{codec}.jsonl"
+        state, rows = 0x2400C3C3, []
+        for _ in range(160):
+            bits = []
+            for _ in range(49):
+                state ^= (state << 13) & 0xFFFFFFFF
+                state ^= state >> 17
+                state ^= (state << 5) & 0xFFFFFFFF
+                bits.append(state & 1)
+            bits[0] = 0  # b0 below 64: voice
+            rows.append("".join(map(str, bits)))
+        parameters.write_text("".join(row + "\n" for row in rows))
+        run(reframer, "--codec", codec, "--in", parameters, "--out", frames)
+        damaged = []
+        for row in frames.read_text().splitlines():
+            cells = list(row)
+            # Three corrected C0 data bits and three corrected C1 bits a frame:
+            # enough for the error level (D-STAR) or rate (rate 33) to mute.
+            for k in (12, 13, 14, 35, 36, 37):
+                cells[k] = "1" if cells[k] == "0" else "0"
+            damaged.append("".join(cells))
+        frames.write_text("".join(row + "\n" for row in damaged))
+        run(evaluator, "--codec", codec, "--frames", frames, "--out", wav, "--params", params)
+        data = wav.read_bytes()[44:]
+        samples = struct.unpack(f"<{len(data) // 2}h", data)
+        records = [json.loads(line) for line in params.read_text().splitlines()]
+        assert len(samples) == 160 * len(records) == 160 * 160
+        assert all(record["errors"] == 6 for record in records), records[-1]
+        muted = [record["f"] for record in records if record["flags"] & 0x80]
+        assert len(muted) > 30, (codec, len(muted))
+        # The first muted frame of a run may fade the last frame out over its
+        # first 80 samples; its second half is the noise alone.
+        noise = [samples[160 * f + i] for f in muted for i in range(0 if f - 1 in muted else 80, 160)]
+        assert set(noise) <= {-1, 0, 1}, (codec, sorted(set(noise)))
+        nonzero = sum(1 for v in noise if v) / len(noise)
+        assert 0.27 < nonzero < 0.40, (codec, nonzero)
+
+
 def verify_dvsi_selection():
     """The fetcher takes every supported mode, its no-FEC variant and the transcodes between them."""
     path = Path(__file__).resolve().parents[1] / "tools" / "quality" / "fetch_dvsi_vectors.py"
@@ -271,5 +316,6 @@ if __name__ == "__main__":
         try:
             verify(sys.argv[1], sys.argv[2], Path(directory))
             verify_waveform(sys.argv[1], Path(directory))
+            verify_int16_entry_points(sys.argv[1], sys.argv[2], Path(directory))
         finally:
             os.umask(old_mask)

@@ -113,13 +113,15 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
 
 /*
  * Amplitude (int16 scale) of the uniform noise the D-STAR and rate-33 paths
- * mute to, the level of DVSI's muted output in both modes. The int16
- * conversion truncates, so it is 0 on two thirds of the samples and +-1 on the
- * rest, as DVSI's muted D-STAR output is (dam_e10_hd: 67% 0, 16.5% each +-1);
- * DVSI's muted rate-33 frames of dam_e10_hd have an rms of 0.60. P25's IMBE
- * path keeps TIA-102.BABA 7.8's MBE_SPEC_MUTE_NOISE_AMPLITUDE.
+ * mute to, the level of DVSI's muted output in both modes. The int16 output of
+ * both paths rounds to nearest (mbe_floattoshort_nearest()), so the noise is 0
+ * on two thirds of the samples and +-1 on the rest, as DVSI's muted D-STAR
+ * output is (dam_e10_hd: 67% 0, 16.5% each +-1); DVSI's muted rate-33 frames
+ * of dam_e10_hd have an rms of 0.60. The float noise stays under one 16-bit
+ * step: a caller of the float entry points who truncates hears silence. P25's
+ * IMBE path keeps TIA-102.BABA 7.8's MBE_SPEC_MUTE_NOISE_AMPLITUDE.
  */
-#define MBE_AMBE_MUTE_NOISE_AMPLITUDE 1.5f
+#define MBE_AMBE_MUTE_NOISE_AMPLITUDE 0.75f
 
 /**
  * @brief Set the initial AMBE model: w0, L, K = 0, gamma = 0, unit unvoiced amplitudes.
