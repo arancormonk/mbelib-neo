@@ -1129,11 +1129,40 @@ test_from_silence(void) {
     assert(same_bits(&muted.noiseSeed, &heard.noiseSeed, 1));
 }
 
+/* Whether the library is built with fast-math (CMake defines
+ * MBELIB_TEST_LIBRARY_FAST_MATH): the compiler may then compile the core once
+ * per output mode and round the two copies' samples apart by a few units in
+ * the last place, so the comparison below allows 1e-5 of the frame's largest
+ * magnitude there; in an IEEE build it is bit for bit. */
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define LIBRARY_FAST_MATH 1
+#else
+#define LIBRARY_FAST_MATH 0
+#endif
+
+static int
+same_or_close(const float* a, const float* b, int n) {
+    if (!LIBRARY_FAST_MATH) {
+        return same_bits(a, b, n);
+    }
+    double peak = 0.0;
+    for (int i = 0; i < n; ++i) {
+        peak = fmax(peak, fabs((double)b[i]));
+    }
+    for (int i = 0; i < n; ++i) {
+        if (!(fabs((double)a[i] - (double)b[i]) <= 1e-5 * (1.0 + peak))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /*
  * The output-limit option of the synthesis core: a frame left unlimited is
  * the limited frame before its limit, sample for sample (limiting it gives the
  * limited frame's bits), for a voiced, an unvoiced and a from-silence frame,
- * loud enough to pass the limit; and the state the two leave is the same.
+ * loud enough to pass the limit; and the state the two leave is the same
+ * (see same_or_close()).
  */
 static void
 test_output_limit_option(void) {
@@ -1168,10 +1197,10 @@ test_output_limit_option(void) {
         assert(past);
         assert(!same_bits(limited, unlimited, 160));
         mbe_clipFloatBuffer(unlimited, 160);
-        assert(same_bits(limited, unlimited, 160));
-        assert(same_bits(a.Ml, b.Ml, 57) && same_bits(a.PSIl, b.PSIl, 57) && same_bits(a.PHIl, b.PHIl, 57));
-        assert(same_bits(a.noiseOverlap, b.noiseOverlap, 96) && same_bits(a.previousUw, b.previousUw, 256));
-        assert(same_bits(&a.noiseSeed, &b.noiseSeed, 1) && same_bits(&a.localEnergy, &b.localEnergy, 1));
+        assert(same_or_close(limited, unlimited, 160));
+        assert(same_or_close(a.Ml, b.Ml, 57) && same_or_close(a.PSIl, b.PSIl, 57) && same_or_close(a.PHIl, b.PHIl, 57));
+        assert(same_or_close(a.noiseOverlap, b.noiseOverlap, 96) && same_or_close(a.previousUw, b.previousUw, 256));
+        assert(same_bits(&a.noiseSeed, &b.noiseSeed, 1) && same_or_close(&a.localEnergy, &b.localEnergy, 1));
         assert(memcmp(a.Vl, b.Vl, sizeof(a.Vl)) == 0 && a.amplitudeThreshold == b.amplitudeThreshold);
     }
 }

@@ -1032,24 +1032,33 @@ ambe2450_keep_last(mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, const mbe_par
  * mutes"). Its model goes on: a valid voice or silence frame (`own_model`)
  * becomes the kept model as an unheard synthesis of it leaves it, enhanced and
  * smoothed; any other keeps the last one. DVSI's noise generator runs one
- * frame. The frame is limited once, after the fade or the tail and the noise
- * are summed. Returns the word the frame leaves.
+ * frame. The noise is written to the output, and the fade or the tail added
+ * over the 80 samples it covers (the fade renders nothing after them); only
+ * those samples, where two signals are summed, are limited, once. A frame of
+ * noise alone is the generator's output untouched. Returns the word the frame
+ * leaves.
  */
 static int
 ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450_snapshot* in, int own_model,
               mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     const int fading = !in->held && !in->afresh && ambe2450_has_played(prev_mp_enhanced);
-    float noise[160];
     mbe_parms faded;
 
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
+    /* The noise goes straight to the output: a frame of noise alone is the
+     * generator's output, with nothing else done to its samples. */
+    mbe_synthesizeUniformNoisef(aout_buf, MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
     if (fading) {
-        ambe2450_fade_out_last(aout_buf, cur_mp, prev_mp_enhanced, &faded);
-    } else {
-        mbe_synthesizeSilencef(aout_buf);
-        if (in->held) {
-            ambe2450_add_tone_tail(aout_buf, in);
+        float fade[160];
+        ambe2450_fade_out_last(fade, cur_mp, prev_mp_enhanced, &faded);
+        for (int n = 0; n < AMBE2450_TONE_FADE; ++n) {
+            aout_buf[n] += fade[n];
         }
+    } else if (in->held) {
+        ambe2450_add_tone_tail(aout_buf, in);
+    }
+    if (fading || in->held) {
+        mbe_clipFloatBuffer(aout_buf, AMBE2450_TONE_FADE);
     }
     if (own_model) {
         float unheard[160];
@@ -1058,11 +1067,6 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
         ambe2450_keep_last(cur_mp, prev_mp_enhanced, fading ? &faded : NULL);
     }
     ambe2450_clear_overlap(cur_mp, prev_mp_enhanced);
-    mbe_synthesizeUniformNoisef(noise, MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
-    for (int n = 0; n < 160; ++n) {
-        aout_buf[n] += noise[n];
-    }
-    mbe_clipFloatBuffer(aout_buf, 160);
     return AMBE2450_STARTS_AFRESH;
 }
 

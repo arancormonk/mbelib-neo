@@ -139,15 +139,75 @@ float_bits_equal(float a, float b) {
     return ab == bb;
 }
 
-/** Prediction history equality (fields, not bytes: decode writes the eq 44-45 edge values). */
+/*
+ * Whether the library computes its floats as written. With
+ * MBELIB_ENABLE_FAST_MATH, CMake builds the library with fast-math and defines
+ * MBELIB_TEST_LIBRARY_FAST_MATH for this test (the compilers' own macros cover
+ * a test compiled that way itself). The compiler may then reorder or contract
+ * an expression, or compile a function inlined into one caller otherwise than
+ * where this test calls it (MSVC's link-time code generation inlined the noise
+ * generator into the mute), so the library's samples or state and a reference
+ * this test renders through the library or computes itself can differ by a
+ * few units in the last place of the magnitudes involved. Such comparisons are
+ * exact in an IEEE build (or keep their tolerance there, close_to() and
+ * close_mix()) and allow 1e-5 of those magnitudes under fast-math: far below
+ * what a wrong fade, a missing tail or noise in the wrong place changes.
+ * Comparisons between two streams the library runs the same way stay exact.
+ */
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define K_LIBRARY_FAST_MATH 1
+#else
+#define K_LIBRARY_FAST_MATH 0
+#endif
+#define K_FAST_MATH_TOLERANCE 1e-5
+
+static double
+peak_of(const float* x, int n) {
+    double m = 0.0;
+    for (int i = 0; i < n; ++i) {
+        m = fmax(m, fabs((double)x[i]));
+    }
+    return m;
+}
+
+/** A library float against a reference one: bit for bit in an IEEE build;
+ * under fast-math within 1e-5 of `scale` and the reference's magnitude. */
+static int
+float_matches(float out, float want, double scale) {
+    if (!K_LIBRARY_FAST_MATH) {
+        return float_bits_equal(out, want);
+    }
+    const double bound = K_FAST_MATH_TOLERANCE * (1.0 + scale + fabs((double)want));
+    return fabs((double)out - (double)want) <= bound;
+}
+
+/** Samples or state from the library against a reference this test renders:
+ * bit for bit in an IEEE build; under fast-math within 1e-5 of the largest
+ * magnitude the reference holds. */
+static int
+matches_reference(const float* out, const float* want, int n) {
+    const double scale = peak_of(want, n);
+    for (int i = 0; i < n; ++i) {
+        if (!float_matches(out[i], want[i], scale)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Prediction history equality (fields, not bytes: decode writes the eq 44-45
+ * edge values); under fast-math within the tolerance above, the voicing and
+ * band count exactly. */
 static int
 history_equal(const mbe_parms* a, const mbe_parms* b) {
-    if (a->L != b->L || !float_bits_equal(a->gamma, b->gamma) || !float_bits_equal(a->w0, b->w0)) {
+    if (a->L != b->L || !float_matches(a->gamma, b->gamma, 0.0) || !float_matches(a->w0, b->w0, 0.0)) {
         return 0;
     }
+    const double log2_scale = peak_of(&b->log2Ml[1], b->L);
+    const double scale = peak_of(&b->Ml[1], b->L);
     for (int l = 1; l <= a->L; ++l) {
-        if (a->Vl[l] != b->Vl[l] || !float_bits_equal(a->log2Ml[l], b->log2Ml[l])
-            || !float_bits_equal(a->Ml[l], b->Ml[l])) {
+        if (a->Vl[l] != b->Vl[l] || !float_matches(a->log2Ml[l], b->log2Ml[l], log2_scale)
+            || !float_matches(a->Ml[l], b->Ml[l], scale)) {
             return 0;
         }
     }
@@ -324,10 +384,13 @@ second_half_is_noise(const float* out) {
     return 1;
 }
 
+/* Whether `out` is `want` within 1e-5 of each sample's magnitude; under
+ * fast-math also of the frame's (see K_LIBRARY_FAST_MATH). */
 static int
 close_to(const float* out, const float* want, int from, int to) {
+    const double scale = K_LIBRARY_FAST_MATH ? peak_of(want + from, to - from) : 0.0;
     for (int n = from; n < to; ++n) {
-        if (!(fabs((double)out[n] - (double)want[n]) <= 1e-5 * (1.0 + fabs((double)want[n])))) {
+        if (!(fabs((double)out[n] - (double)want[n]) <= 1e-5 * (1.0 + scale + fabs((double)want[n])))) {
             return 0;
         }
     }
@@ -341,12 +404,16 @@ close_to(const float* out, const float* want, int from, int to) {
  * mix in a different order, or contract it into a fused multiply-add, as a
  * fast-math build does: they then differ by about 1e-7 of the largest part,
  * which can be far more than 1e-5 of a small result. Over these tests' parts
- * (below 30000) the tolerance stays under 0.31.
+ * (below 30000) the tolerance stays under 0.31. Under fast-math the parts'
+ * largest magnitudes over the frame count too (see K_LIBRARY_FAST_MATH): the
+ * library's rendering of a part may round apart from the reference's by a
+ * fraction of that, which keeps the bound under 0.61.
  */
 static int
 close_mix(const float* out, const float* want, const float* a, const float* b, int from, int to) {
+    const double scale = K_LIBRARY_FAST_MATH ? peak_of(a + from, to - from) + peak_of(b + from, to - from) : 0.0;
     for (int n = from; n < to; ++n) {
-        const double bound = 1e-5 * (1.0 + fabs((double)a[n]) + fabs((double)b[n]));
+        const double bound = 1e-5 * (1.0 + scale + fabs((double)a[n]) + fabs((double)b[n]));
         if (!(fabs((double)out[n] - (double)want[n]) <= bound)) {
             return 0;
         }
@@ -455,14 +522,16 @@ tail_reference(float tail[160], const char tone[49], const mbe_parms* phases) {
     }
 }
 
-/** The model fields of a parameter set (pitch, bands, voicing, amplitudes). */
+/** The model fields of a parameter set (pitch, bands, voicing, amplitudes): bit
+ * for bit in an IEEE build, within float_matches() under fast-math. */
 static int
 model_equal(const mbe_parms* a, const mbe_parms* b) {
-    if (a->L != b->L || !float_bits_equal(a->w0, b->w0)) {
+    if (a->L != b->L || !float_matches(a->w0, b->w0, 0.0)) {
         return 0;
     }
+    const double scale = peak_of(&b->Ml[1], b->L);
     for (int l = 1; l <= a->L; ++l) {
-        if (a->Vl[l] != b->Vl[l] || !float_bits_equal(a->Ml[l], b->Ml[l])) {
+        if (a->Vl[l] != b->Vl[l] || !float_matches(a->Ml[l], b->Ml[l], scale)) {
             return 0;
         }
     }
@@ -540,12 +609,12 @@ test_erasure_run_repeats_then_mutes(void) {
             assert(second_half_is_noise(s.out));
             /* The repeated model is kept, with the pulses and phases the fade left. */
             assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
-            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
-            assert(float_array_bits_equal(s.prev_enh.PSIl + 1, faded.PSIl + 1, 56));
-            assert(float_array_bits_equal(s.prev_enh.PHIl + 1, faded.PHIl + 1, 56));
+            assert(matches_reference(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
+            assert(matches_reference(s.prev_enh.PSIl + 1, faded.PSIl + 1, 56));
+            assert(matches_reference(s.prev_enh.PHIl + 1, faded.PHIl + 1, 56));
         } else if (i == 5) {
             /* A mute right after a mute is the noise alone. */
-            assert(float_array_bits_equal(s.out, noise, 160));
+            assert(matches_reference(s.out, noise, 160));
             assert_mute_noise(s.out);
             assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
             assert(float_array_bits_equal(s.prev_enh.noiseOverlap, enh_before.noiseOverlap, 96));
@@ -699,8 +768,8 @@ test_error_rate_mute_boundary(void) {
             own_model_reference(&own, &before, voice, &s);
             assert_muted_state(&s, &own, before.prev_enh.noiseSeed);
             assert(s.cur.repeatCount == 0);
-            assert(float_bits_equal(s.prev_enh.localEnergy, own.localEnergy));
-            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, own.noiseOverlap, 96));
+            assert(float_matches(s.prev_enh.localEnergy, own.localEnergy, 0.0));
+            assert(matches_reference(s.prev_enh.noiseOverlap, own.noiseOverlap, 96));
         }
     }
 }
@@ -743,7 +812,7 @@ test_valid_tone_keeps_state(void) {
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(close_mix(s.out, want, unlimited, speech, 0, 160));
-    assert(float_array_bits_equal(s.out + 80, expected + 80, 80));
+    assert(matches_reference(s.out + 80, expected + 80, 80));
     assert(history_equal(&s.prev, &history));
     assert(kept_through_tone(&s.prev_enh, &enh_before, tone_word(7)));
     assert(s.cur.Vl[0] == 0);
@@ -751,7 +820,7 @@ test_valid_tone_keeps_state(void) {
     /* The tone goes on at once: its second frame is the tone alone. */
     mbe_synthesizeTonef(expected, tone, &tone_state);
     stream_frame(&s, tone, 0, 0);
-    assert(float_array_bits_equal(s.out, expected, 160));
+    assert(matches_reference(s.out, expected, 160));
 
     /* The zero-amplitude ID 255 is a lost frame: the tone repeats, at once. */
     mbe_synthesizeTonef(expected, tone, &tone_state);
@@ -760,7 +829,7 @@ test_valid_tone_keeps_state(void) {
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE) && has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(s.cur.repeatCount == 1);
-    assert(float_array_bits_equal(s.out, expected, 160));
+    assert(matches_reference(s.out, expected, 160));
     assert(s.prev_enh.Vl[0] == tone_word(7));
 }
 
@@ -1523,7 +1592,7 @@ test_mute_onsets(void) {
             assert(s.cur.repeatCount == 0);
         } else {
             assert_muted_state(&s, &before.prev_enh, before.prev_enh.noiseSeed);
-            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
+            assert(matches_reference(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
             assert(s.cur.repeatCount == ((kind == 3) ? MBE_MAX_FRAME_REPEATS : 2));
         }
         assert(s.prev.repeatCount == s.cur.repeatCount);
@@ -1649,7 +1718,7 @@ test_mute_first_frame(void) {
         const mbe_parms enh_before = s.prev_enh;
         stream_frame(&s, invalid ? erasure : voice, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-        assert(float_array_bits_equal(s.out, noise, 160));
+        assert(matches_reference(s.out, noise, 160));
         assert(s.prev_enh.Vl[0] == W_AFRESH && s.cur.Vl[0] == 0);
         assert(overlap_cleared(&s.prev_enh));
         assert(float_bits_equal(s.prev_enh.noiseSeed, generator_after(-1.0f, 1)));
@@ -1694,7 +1763,7 @@ assert_release(struct stream* s, const char d[49], struct stream* released) {
     assert(fabsf(s->out[0]) < 1e-6f);
     assert(span_energy(want, 0, 160) > 160.0);
     assert(model_equal(&s->prev_enh, &model));
-    assert(float_array_bits_equal(s->prev_enh.noiseOverlap, model.noiseOverlap, 96));
+    assert(matches_reference(s->prev_enh.noiseOverlap, model.noiseOverlap, 96));
     assert(s->prev_enh.Vl[0] == 0 && s->cur.Vl[0] == 0);
     assert(float_bits_equal(s->prev_enh.noiseSeed, generator_after(before.prev_enh.noiseSeed, 1)));
 
@@ -2007,7 +2076,7 @@ test_lost_frames_repeat_a_tone(void) {
             assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_REPEAT));
         }
         stream_frame(&twin, tone, 0, 0);
-        assert(float_array_bits_equal(s.out, twin.out, 160));
+        assert(matches_reference(s.out, twin.out, 160));
         assert(!tones_sound() || peak_abs(s.out) > 1000.0f);
         assert(s.cur.repeatCount == i && s.prev.repeatCount == i);
         assert(fabsf(s.prev.errorRate - ((0.95f * error_rate) + (0.001064f * (float)s.cur.errorCountTotal))) < 1e-7f);
@@ -2055,7 +2124,7 @@ test_tone_after_repeated_tone(void) {
     for (int i = 0; i < 2; ++i) {
         stream_frame(&s, erasure, 0, 0);
         stream_frame(&twin, tone, 0, 0);
-        assert(float_array_bits_equal(s.out, twin.out, 160));
+        assert(matches_reference(s.out, twin.out, 160));
     }
     assert(s.cur.repeatCount == 2);
     const float error_rate = s.prev.errorRate;
@@ -2073,7 +2142,7 @@ test_tone_after_repeated_tone(void) {
     float want[160];
     mbe_synthesizeTonef(want, other, &phases);
     stream_frame(&s, other, 0, 0);
-    assert(float_array_bits_equal(s.out, want, 160));
+    assert(matches_reference(s.out, want, 160));
     assert(s.prev_enh.Vl[0] == tone_word(32) && s.cur.repeatCount == 0);
 }
 
@@ -2249,7 +2318,7 @@ test_unlimited_tone_rendering(void) {
             }
             assert(u.swn == l.swn && u.tonePhase == l.tonePhase);
             limit_sum(unlimited, 160);
-            assert(float_array_bits_equal(unlimited, limited, 160));
+            assert(matches_reference(unlimited, limited, 160));
             if (tones_sound() && ads[a] == 127 && (ids[i] == 32 || ids[i] == 129)) {
                 assert(envelope > (double)K_OUTPUT_LIMIT);
             }
@@ -2296,7 +2365,7 @@ test_loud_tone_tail(void) {
             mbe_synthesizeTonef(expected, tone, &phases);
             stream_frame(&s, erasure, 0, 0);
             assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && !has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-            assert(float_array_bits_equal(s.out, expected, 160));
+            assert(matches_reference(s.out, expected, 160));
         }
         tone_tails(tone, &s.cur, tail, old_tail);
         mute_noise_reference(noise);
@@ -2372,12 +2441,12 @@ test_loud_tone_first_frame(void) {
         stream_frame(&s, tone, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
         assert(close_mix(s.out, want, unlimited, speech, 0, 160));
-        assert(float_array_bits_equal(s.out + 80, limited + 80, 80));
+        assert(matches_reference(s.out + 80, limited + 80, 80));
         assert(!tones_sound() || differs_by(s.out, before_fix, K_LIMIT_TWICE_MARGIN));
         /* The steady tone: the limited renderer, bit for bit. */
         mbe_synthesizeTonef(limited, tone, &l);
         stream_frame(&s, tone, 0, 0);
-        assert(float_array_bits_equal(s.out, limited, 160));
+        assert(matches_reference(s.out, limited, 160));
     }
 }
 

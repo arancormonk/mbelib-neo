@@ -1464,6 +1464,15 @@ if(MBELIB_BUILD_TESTS)
                 "${PROJECT_SOURCE_DIR}/include"
                 "${PROJECT_SOURCE_DIR}/src/internal"
         )
+        # A library built with fast-math may round an expression otherwise
+        # than a test's reference does; tests that compare the two exactly in
+        # an IEEE build allow for it then.
+        if(MBELIB_ENABLE_FAST_MATH)
+            target_compile_definitions(
+                ${_mbelib_private_test}
+                PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
+            )
+        endif()
         if(_SAN_CFLAGS)
             target_compile_options(
                 ${_mbelib_private_test}
