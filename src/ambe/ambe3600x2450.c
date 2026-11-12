@@ -923,8 +923,8 @@ ambe2450_clear_overlap(mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
 /*
  * The tone the last frame left sounding, going on from its phases, added to
  * the frame's first AMBE2450_TONE_FADE samples as it fades out: (1 - n / 80)
- * tail[n]. The frame it is added to is unlimited; the caller limits the sum
- * once the mix is complete.
+ * tail[n]. The tail is rendered unlimited, as the frame it is added to is;
+ * the caller limits the sum once the mix is complete.
  */
 static void
 ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
@@ -933,7 +933,7 @@ ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
     memset(&tone, 0, sizeof(tone));
     tone.swn = in->swn;
     tone.tonePhase = in->tone_phase;
-    mbe_renderToneAmbe2450f(tail, &tone, in->id, in->ad);
+    mbe_renderToneAmbe2450f(tail, &tone, in->id, in->ad, MBE_OUTPUT_UNLIMITED);
     for (int n = 0; n < AMBE2450_TONE_FADE; ++n) {
         aout_buf[n] += (1.0f - ((float)n / (float)AMBE2450_TONE_FADE)) * tail[n];
     }
@@ -1098,7 +1098,7 @@ ambe2450_repeat(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* 
  */
 static int
 ambe2450_repeat_tone(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* cur_mp) {
-    mbe_renderToneAmbe2450f(aout_buf, cur_mp, in->id, in->ad);
+    mbe_renderToneAmbe2450f(aout_buf, cur_mp, in->id, in->ad, MBE_OUTPUT_LIMITED);
     return AMBE2450_TONE_HELD | AMBE2450_STARTS_AFRESH | (in->ad << 8) | in->id;
 }
 
@@ -1219,10 +1219,17 @@ ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char am
     if (!in->held && !in->afresh) {
         ambe2450_speech_under_tone(speech, cur_mp, prev_mp_enhanced);
     }
-    mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
-    if (!in->held) {
+    if (in->held) {
+        /* A tone that goes on mixes nothing: limited as it is rendered. */
+        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
+    } else {
+        /* A tone's first frame fades in over the repeat (or silence): the
+         * tone is rendered unlimited and the whole frame limited after the
+         * crossfade, so that its samples past the fade are the limited tone. */
+        mbe_renderToneAmbe2450f(aout_buf, cur_mp, ambe2450_read_tone_id(ambe_d), ambe2450_read_tone_ad(ambe_d),
+                                MBE_OUTPUT_UNLIMITED);
         ambe2450_fade_in_over(aout_buf, speech);
-        mbe_clipFloatBuffer(aout_buf, AMBE2450_TONE_FADE);
+        mbe_clipFloatBuffer(aout_buf, 160);
     }
     ambe2450_clear_overlap(cur_mp, prev_mp_enhanced);
     return AMBE2450_TONE_HELD | AMBE2450_STARTS_AFRESH | (ambe2450_read_tone_ad(ambe_d) << 8)

@@ -289,14 +289,18 @@ void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_
  * @brief Render 160 samples of an AMBE 3600x2450 tone, continuing the tone phases in @p mp.
  *
  * mbe_synthesizeTonef() without the frame's bits, for a tone known by its
- * fields. An ID with no tone renders silence.
+ * fields. An ID with no tone renders silence. Limited, it equals
+ * mbe_synthesizeTonef() bit for bit; unlimited, it is the same samples before
+ * their limit, for a caller that fades or mixes the tone and limits the
+ * result. The oscillator phases it leaves are the same either way.
  *
  * @param aout_buf Output buffer of 160 float samples.
  * @param mp Parameter set carrying the tone phases (updated).
  * @param id Tone ID (TIA-102.BABA-1 Table 9).
  * @param ad Tone amplitude field, 0..127.
+ * @param output Whether the samples are limited.
  */
-void mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad);
+void mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad, enum mbe_output_limit output);
 
 /**
  * @brief Render 160 samples of a D-STAR tone, continuing the tone phases in @p mp.

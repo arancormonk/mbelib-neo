@@ -918,9 +918,13 @@ mbe_toneAmplitude(double level_db) {
 }
 
 /* A tone whose gain moves linearly from from_gain to gain over the first
- * `ramp` samples (none for 0), clipped after the gain is applied. */
+ * `ramp` samples (none for 0), limited after the gain is applied unless the
+ * caller fades or mixes it and limits the result. Every sample is computed
+ * the same way either way, so limiting the unlimited rendering gives the
+ * limited one bit for bit. */
 static void
-mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp) {
+mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp,
+                    enum mbe_output_limit output) {
     if (out == NULL) {
         return;
     }
@@ -943,15 +947,18 @@ mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_ga
             phase2 += step2;
             value += g * phase_sine(phase2);
         }
-        out[n] = mbe_clipFloatSample(value);
+        out[n] = value;
+    }
+    if (output == MBE_OUTPUT_LIMITED) {
+        mbe_clipFloatBuffer(out, 160);
     }
     memcpy(&mp->swn, &phase1, sizeof(phase1));
     mp->tonePhase = phase2;
 }
 
 static void
-mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain) {
-    mbe_renderToneRampf(out, mp, f1, f2, gain, gain, 0);
+mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain, enum mbe_output_limit output) {
+    mbe_renderToneRampf(out, mp, f1, f2, gain, gain, 0, output);
 }
 #endif
 
@@ -1018,16 +1025,18 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
         return;
     }
 
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)));
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)),
+                    MBE_OUTPUT_LIMITED);
 #endif
 }
 
 void
-mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad) {
+mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad, enum mbe_output_limit output) {
 #ifdef DISABLE_AMBE_TONES
     (void)mp;
     (void)id;
     (void)ad;
+    (void)output;
     mbe_synthesizeSilencef(aout_buf);
 #else
     float freq1, freq2;
@@ -1035,7 +1044,7 @@ mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)));
+    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)), output);
 #endif
 }
 
@@ -1077,7 +1086,7 @@ mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)));
+    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), MBE_OUTPUT_LIMITED);
 #endif
 }
 
@@ -1098,7 +1107,8 @@ mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int from_vol
         return;
     }
     mbe_renderToneRampf(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(from_volume)),
-                        mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), (ramp > 0 && ramp <= 160) ? ramp : 0);
+                        mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), (ramp > 0 && ramp <= 160) ? ramp : 0,
+                        MBE_OUTPUT_LIMITED);
 #endif
 }
 

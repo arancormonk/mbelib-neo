@@ -30,6 +30,7 @@
 
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
+#include "mbe_tone.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Bit positions of quantizer values b0..b8 in the 49-bit parameter vector. */
@@ -209,19 +210,6 @@ fade_in_gain(int n) {
     return (n >= 80) ? 1.0f : (float)n / 80.0f;
 }
 
-/** Whether `out` is `incoming` faded in over `outgoing` across the first 80 samples. */
-static int
-is_crossfade(const float* out, const float* incoming, const float* outgoing) {
-    for (int n = 0; n < 160; ++n) {
-        const float gain = fade_in_gain(n);
-        const double want = ((double)gain * (double)incoming[n]) + ((1.0 - (double)gain) * (double)outgoing[n]);
-        if (!(fabs((double)out[n] - want) <= 1e-4 * (1.0 + fabs(want)))) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /** DVSI's unvoiced noise generator (x <- 173 x + 13849 mod 2^16, from 0 for a
  * fresh stream) `frames` frames on from `from`. */
 static float
@@ -346,6 +334,26 @@ close_to(const float* out, const float* want, int from, int to) {
     return 1;
 }
 
+/*
+ * Whether `out` is `want` within a tolerance relative to the two parts that
+ * were mixed (`a` and `b`, before the mix and its limit), not to the result.
+ * Where loud parts nearly cancel, the library and this test may evaluate the
+ * mix in a different order, or contract it into a fused multiply-add, as a
+ * fast-math build does: they then differ by about 1e-7 of the largest part,
+ * which can be far more than 1e-5 of a small result. Over these tests' parts
+ * (below 30000) the tolerance stays under 0.31.
+ */
+static int
+close_mix(const float* out, const float* want, const float* a, const float* b, int from, int to) {
+    for (int n = from; n < to; ++n) {
+        const double bound = 1e-5 * (1.0 + fabs((double)a[n]) + fabs((double)b[n]));
+        if (!(fabs((double)out[n] - (double)want[n]) <= bound)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /**
  * The first muted frame after a heard one, rendered independently of the
  * decoder from the last synthesized frame alone: a repeat of it toward a
@@ -378,12 +386,70 @@ tones_sound(void) {
     return peak_abs(out) > 1000.0f;
 }
 
+/* A tone frame's ID (u1's first eight bits) and amplitude field (u0's low six
+ * bits, then bit 4 of u3), read from its parameter bits. */
+static int
+tone_id_of(const char tone[49]) {
+    int id = 0;
+    for (int i = 12; i < 20; ++i) {
+        id = (id << 1) | tone[i];
+    }
+    return id;
+}
+
+static int
+tone_ad_of(const char tone[49]) {
+    int ad = 0;
+    for (int i = 6; i < 12; ++i) {
+        ad = (ad << 1) | tone[i];
+    }
+    return (ad << 1) | tone[44];
+}
+
+/*
+ * A tone as the decoder's oscillators play it, before any limit, computed
+ * here in double: each component's 32-bit phase accumulator, starting from
+ * the phases `phases` holds (swn, tonePhase), moves by round(f / 8000 * 2^32)
+ * a sample, and plays the sine of its phase a quarter turn back at the level
+ * law's amplitude sqrt(2) * 32768 * 10^(dB / 20) / 7, dB = -2.523 +
+ * (3.17 + 87.13) / 127 * (AD - 127) (docs/dvsi-parity.md). Frequencies are the
+ * tone table's. A build without tones renders none. `envelope` receives the
+ * sum of the components' amplitudes.
+ */
+static void
+tone_oscillator(double out[160], const mbe_parms* phases, int id, int ad, double* envelope) {
+    float f1 = 0.0f, f2 = 0.0f;
+    uint32_t p1, p2 = phases->tonePhase;
+    memcpy(&p1, &phases->swn, sizeof(p1));
+    memset(out, 0, 160 * sizeof(double));
+    *envelope = 0.0;
+    if (!tones_sound() || !mbe_tone_lookup_freqs(id, &f1, &f2)) {
+        return;
+    }
+    const double db = -2.523 + (((3.17 + 87.13) / 127.0) * (double)(ad - 127));
+    const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
+    const int dual = (f2 > 0.0f) && (fabs((double)f2 - (double)f1) > 1.0e-6);
+    const uint32_t s1 = (uint32_t)floor((((double)f1 / 8000.0) * 4294967296.0) + 0.5);
+    const uint32_t s2 = dual ? (uint32_t)floor((((double)f2 / 8000.0) * 4294967296.0) + 0.5) : 0u;
+    *envelope = dual ? 2.0 * amplitude : amplitude;
+    for (int n = 0; n < 160; ++n) {
+        p1 += s1;
+        out[n] = amplitude * sin(((double)p1 * (2.0 * M_PI / 4294967296.0)) - (M_PI / 2.0));
+        if (dual) {
+            p2 += s2;
+            out[n] += amplitude * sin(((double)p2 * (2.0 * M_PI / 4294967296.0)) - (M_PI / 2.0));
+        }
+    }
+}
+
 /** A held tone's tail as a mute or the frame after the tone adds it: the tone
- * going on from the phases `phases` holds, times (1 - n / 80) for n < 80. */
+ * going on from the phases `phases` holds, unlimited (the library's unlimited
+ * rendering, which test_unlimited_tone_rendering() checks against
+ * tone_oscillator()), times (1 - n / 80) for n < 80. */
 static void
 tail_reference(float tail[160], const char tone[49], const mbe_parms* phases) {
     mbe_parms state = *phases;
-    mbe_synthesizeTonef(tail, tone, &state);
+    mbe_renderToneAmbe2450f(tail, &state, tone_id_of(tone), tone_ad_of(tone), MBE_OUTPUT_UNLIMITED);
     for (int n = 0; n < 160; ++n) {
         tail[n] = (n < 80) ? (1.0f - ((float)n / 80.0f)) * tail[n] : 0.0f;
     }
@@ -648,28 +714,35 @@ static void
 test_valid_tone_keeps_state(void) {
     struct stream s;
     char tone[49];
-    char erasure[49];
     stream_init(&s);
     stream_frame_b(&s, k_voice_loud, 0, 0);
     const mbe_parms history = s.prev;
     const mbe_parms enh_before = s.prev_enh;
 
-    /* The linked renderer is the oracle in both ordinary and NOTONES builds. */
+    /* The library's renderers are the references in ordinary and NOTONES
+     * builds alike: the limited one for the tone alone, the unlimited one
+     * (test_unlimited_tone_rendering()) for the tone in the crossfade. */
     pack_tone(tone, 7);
     assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_TONE);
     mbe_parms tone_state = s.cur;
-    float expected[160];
+    mbe_parms unlimited_state = s.cur;
+    float expected[160], unlimited[160], speech[160], want[160];
     mbe_synthesizeTonef(expected, tone, &tone_state);
+    mbe_renderToneAmbe2450f(unlimited, &unlimited_state, 7, 127, MBE_OUTPUT_UNLIMITED);
     /* What a lost frame would repeat: the last frame, which fades out under
-     * the tone's first 80 samples while the tone fades in. */
-    struct stream repeat = s;
-    pack_b(erasure, k_erasure);
-    stream_frame(&repeat, erasure, 0, 0);
-    assert(has_flag(&repeat, MBE_PROCESS_FLAG_REPEAT) && peak_abs(repeat.out) > 0.0f);
+     * the tone's first 80 samples while the tone fades in; the crossfade is
+     * limited once. */
+    repeat_reference_out(speech, &s, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
+    assert(peak_abs(speech) > 0.0f);
+    for (int n = 0; n < 160; ++n) {
+        const float gain = fade_in_gain(n);
+        want[n] = (n < 80) ? (gain * unlimited[n]) + ((1.0f - gain) * speech[n]) : unlimited[n];
+    }
+    limit_sum(want, 160);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
-    assert(is_crossfade(s.out, expected, repeat.out));
+    assert(close_mix(s.out, want, unlimited, speech, 0, 160));
     assert(float_array_bits_equal(s.out + 80, expected + 80, 80));
     assert(history_equal(&s.prev, &history));
     assert(kept_through_tone(&s.prev_enh, &enh_before, tone_word(7)));
@@ -1310,18 +1383,18 @@ test_frame_after_tone(void) {
             stream_frame(&s, erasure, 0, 0);
             assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && s.prev_enh.Vl[0] == tone_word(7));
         }
-        float tail[160], want[160];
+        float tail[160], speech[160], want[160];
         mbe_parms model;
         tail_reference(tail, tone, &s.cur);
         const struct stream before = s;
         stream_frame(&s, voice, 0, 0);
         assert(s.result.flags == MBE_PROCESS_FLAG_C0_VALID);
-        frame_reference_out(want, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_UNLIMITED);
+        frame_reference_out(speech, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_UNLIMITED);
         for (int n = 0; n < 160; ++n) {
-            want[n] += tail[n];
+            want[n] = speech[n] + tail[n];
         }
         limit_sum(want, 160);
-        assert(close_to(s.out, want, 0, 160));
+        assert(close_mix(s.out, want, speech, tail, 0, 160));
         assert(!tones_sound() || peak_abs(tail) > 1000.0f);
         assert(model_equal(&s.prev_enh, &model));
         assert(s.prev_enh.Vl[0] == 0 && s.cur.Vl[0] == 0);
@@ -1542,11 +1615,12 @@ test_mute_fades_a_held_tone(void) {
     mute_noise_reference(noise);
     stream_frame(&s, voice, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) && !has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    float want[160];
     for (int n = 0; n < 160; ++n) {
-        tail[n] += noise[n];
+        want[n] = tail[n] + noise[n];
     }
-    limit_sum(tail, 160);
-    assert(close_to(s.out, tail, 0, 160));
+    limit_sum(want, 160);
+    assert(close_mix(s.out, want, tail, noise, 0, 160));
     assert(!tones_sound() || peak_abs(tail) > 100.0f);
     mbe_parms own;
     own_model_reference(&own, &before, voice, &s);
@@ -1766,16 +1840,20 @@ test_silence_frame_after_mute_or_tone(void) {
         stream_frame(&s, silence, 0, 0);
         assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_SILENCE));
         /* After a tone the frame mixes the tone's tail in, and is limited after the sum. */
-        frame_reference_out(want, &model, &before, silence, &s, MBE_SYNTHESIS_FROM_SILENCE,
+        float speech[160], limited_tail[160];
+        frame_reference_out(speech, &model, &before, silence, &s, MBE_SYNTHESIS_FROM_SILENCE,
                             (kind == 2) ? MBE_OUTPUT_UNLIMITED : MBE_OUTPUT_LIMITED);
         for (int n = 0; n < 160; ++n) {
-            assert(fabsf(want[n]) <= 3.0f * silence_peak);
-            want[n] += tail[n];
+            assert(fabsf(speech[n]) <= 3.0f * silence_peak);
+            want[n] = speech[n] + tail[n];
+            limited_tail[n] = tail[n];
         }
         limit_sum(want, 160);
-        assert(close_to(s.out, want, 0, 160));
+        limit_sum(limited_tail, 160);
+        assert(close_mix(s.out, want, speech, tail, 0, 160));
+        /* Besides the tail (as the limit leaves it), only the quiet silence model. */
         for (int n = 0; n < 160; ++n) {
-            assert(fabs((double)s.out[n] - (double)tail[n]) <= 3.0 * (double)silence_peak + 1e-3);
+            assert(fabs((double)s.out[n] - (double)limited_tail[n]) <= 3.0 * (double)silence_peak + 1e-3);
         }
         assert(s.prev_enh.Vl[0] == 0 && s.cur.Vl[0] == 0);
     }
@@ -1942,16 +2020,16 @@ test_lost_frames_repeat_a_tone(void) {
 
     /* The 4th: the tone's tail under the mute noise. */
     const struct stream before = s;
-    float want[160], noise[160];
-    tail_reference(want, tone, &before.cur);
+    float want[160], tail[160], noise[160];
+    tail_reference(tail, tone, &before.cur);
     mute_noise_reference(noise);
     for (int n = 0; n < 160; ++n) {
-        want[n] += noise[n];
+        want[n] = tail[n] + noise[n];
     }
     limit_sum(want, 160);
     stream_frame(&s, erasure, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) && s.cur.repeatCount == MBE_MAX_FRAME_REPEATS);
-    assert(close_to(s.out, want, 0, 160));
+    assert(close_mix(s.out, want, tail, noise, 0, 160));
     assert_muted_state(&s, &kept, generator);
 
     /* The voice after it starts from silence, with no tail. */
@@ -2014,26 +2092,6 @@ overloads_against(const float* x, const float* other, int from, int to) {
         }
     }
     return 0;
-}
-
-/*
- * Whether `out` is `want` within a tolerance relative to the two parts that
- * were mixed (`a` and `b`, before the mix and its limit), not to the result.
- * Where loud parts nearly cancel, the library and this test may evaluate the
- * mix in a different order, or contract it into a fused multiply-add, as a
- * fast-math build does: they then differ by about 1e-7 of the largest part,
- * which can be far more than 1e-5 of a small result. Over these tests' parts
- * (below 30000) the tolerance stays under 0.31.
- */
-static int
-close_mix(const float* out, const float* want, const float* a, const float* b, int from, int to) {
-    for (int n = from; n < to; ++n) {
-        const double bound = 1e-5 * (1.0 + fabs((double)a[n]) + fabs((double)b[n]));
-        if (!(fabs((double)out[n] - (double)want[n]) <= bound)) {
-            return 0;
-        }
-    }
-    return 1;
 }
 
 /* The margin by which a mix limited once differs from the same mix of a
@@ -2153,6 +2211,172 @@ test_limit_mute_over_speech(void) {
     limit_sum(want, 160);
     assert(overload);
     assert(close_mix(s.out, want, fade, noise, 0, 160));
+}
+
+/* ---- A tone is limited after its fade or mix ---- */
+
+/*
+ * The unlimited tone rendering is the oscillators' tone: within 1e-5 of its
+ * amplitude of tone_oscillator() at every sample, for single, dual and
+ * call-progress tones at several levels, from running phases; limited, it is
+ * the limited renderer (mbe_synthesizeTonef()) bit for bit; and the phases it
+ * leaves are the same either way. At AD 127 a single
+ * tone and a DTMF tone run past the output limit unlimited.
+ */
+static void
+test_unlimited_tone_rendering(void) {
+    static const int ids[4] = {32, 7, 129, 145};
+    static const int ads[3] = {127, 100, 60};
+    for (int i = 0; i < 4; ++i) {
+        for (int a = 0; a < 3; ++a) {
+            char tone[49];
+            float unlimited[160], limited[160];
+            double osc[160], envelope;
+            mbe_parms start, u, l;
+            memset(&start, 0, sizeof(start));
+            start.swn = (int)(0x1234567u * (unsigned)(i + 1));
+            start.tonePhase = 0x89ABCDEFu * (unsigned)(a + 1);
+            u = start;
+            l = start;
+            pack_tone_ad(tone, ids[i], ads[a]);
+            mbe_renderToneAmbe2450f(unlimited, &u, ids[i], ads[a], MBE_OUTPUT_UNLIMITED);
+            mbe_synthesizeTonef(limited, tone, &l);
+            tone_oscillator(osc, &start, ids[i], ads[a], &envelope);
+            for (int n = 0; n < 160; ++n) {
+                assert(fabs((double)unlimited[n] - osc[n]) <= 1e-5 * (1.0 + envelope));
+            }
+            assert(u.swn == l.swn && u.tonePhase == l.tonePhase);
+            limit_sum(unlimited, 160);
+            assert(float_array_bits_equal(unlimited, limited, 160));
+            if (tones_sound() && ads[a] == 127 && (ids[i] == 32 || ids[i] == 129)) {
+                assert(envelope > (double)K_OUTPUT_LIMIT);
+            }
+        }
+    }
+}
+
+/* The unlimited tone and its fading tail (1 - n / 80, n < 80) from `phases`,
+ * and the same from the limited renderer. */
+static void
+tone_tails(const char tone[49], const mbe_parms* phases, float unlimited[160], float limited[160]) {
+    mbe_parms u = *phases, l = *phases;
+    mbe_renderToneAmbe2450f(unlimited, &u, tone_id_of(tone), tone_ad_of(tone), MBE_OUTPUT_UNLIMITED);
+    mbe_synthesizeTonef(limited, tone, &l);
+    for (int n = 0; n < 160; ++n) {
+        const float fade = (n < 80) ? (1.0f - ((float)n / 80.0f)) : 0.0f;
+        unlimited[n] *= fade;
+        limited[n] *= fade;
+    }
+}
+
+/*
+ * Loud tones (a single tone, ID 32, and a DTMF tone, ID 129, at AD 127, past
+ * the output limit): three lost frames repeat the tone as the limited
+ * renderer plays it, bit for bit; the 4th is the unlimited tone's fading tail
+ * plus the mute noise, limited, not the limited tone faded. The voice frame
+ * right after the tone is the unlimited speech plus the unlimited tail,
+ * limited.
+ */
+static void
+test_loud_tone_tail(void) {
+    static const int ids[2] = {32, 129};
+    char tone[49], erasure[49], voice[49];
+    pack_b(erasure, k_erasure);
+    pack_b(voice, k_voice_next);
+    for (int i = 0; i < 2; ++i) {
+        struct stream s;
+        float tail[160], old_tail[160], noise[160], want[160], before_fix[160], expected[160];
+        pack_tone_ad(tone, ids[i], 127);
+        stream_init(&s);
+        stream_frame(&s, tone, 0, 0);
+        for (int r = 0; r < 3; ++r) {
+            mbe_parms phases = s.cur;
+            mbe_synthesizeTonef(expected, tone, &phases);
+            stream_frame(&s, erasure, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && !has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+            assert(float_array_bits_equal(s.out, expected, 160));
+        }
+        tone_tails(tone, &s.cur, tail, old_tail);
+        mute_noise_reference(noise);
+        for (int n = 0; n < 160; ++n) {
+            want[n] = tail[n] + noise[n];
+            before_fix[n] = old_tail[n] + noise[n];
+        }
+        limit_sum(want, 160);
+        limit_sum(before_fix, 160);
+        stream_frame(&s, erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        assert(close_mix(s.out, want, tail, noise, 0, 160));
+        assert(!tones_sound() || differs_by(s.out, before_fix, K_LIMIT_TWICE_MARGIN));
+
+        /* Voice right after the tone. */
+        struct stream v;
+        float speech[160];
+        mbe_parms model;
+        stream_settled(&v, k_voice_next);
+        stream_frame(&v, tone, 0, 0);
+        tone_tails(tone, &v.cur, tail, old_tail);
+        const struct stream before = v;
+        stream_frame(&v, voice, 0, 0);
+        frame_reference_out(speech, &model, &before, voice, &v, MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_UNLIMITED);
+        for (int n = 0; n < 160; ++n) {
+            want[n] = speech[n] + tail[n];
+            before_fix[n] = speech[n] + old_tail[n];
+        }
+        limit_sum(want, 160);
+        limit_sum(before_fix, 160);
+        assert(close_mix(v.out, want, speech, tail, 0, 160));
+        assert(!tones_sound() || differs_by(v.out, before_fix, K_LIMIT_TWICE_MARGIN));
+    }
+}
+
+/*
+ * A loud tone's first frame, over speech and after a mute: the unlimited tone
+ * fades in over the unlimited repeat of the last frame (over silence after a
+ * mute) and the crossfade is limited, not the limited tone's crossfade; past
+ * the fade the frame is the limited renderer's tone bit for bit. The tone's
+ * second frame is the limited renderer's bit for bit too.
+ */
+static void
+test_loud_tone_first_frame(void) {
+    static const int ids[2] = {32, 129};
+    char tone[49], erasure[49];
+    pack_b(erasure, k_erasure);
+    for (int k = 0; k < 4; ++k) {
+        const int after_mute = k & 1;
+        struct stream s;
+        float unlimited[160], limited[160], speech[160], want[160], before_fix[160];
+        pack_tone_ad(tone, ids[k >> 1], 127);
+        stream_settled(&s, k_voice_next);
+        for (int i = 0; after_mute && i < 4; ++i) {
+            stream_frame(&s, erasure, 0, 0);
+        }
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == after_mute);
+        mbe_parms u = s.cur, l = s.cur;
+        mbe_renderToneAmbe2450f(unlimited, &u, ids[k >> 1], 127, MBE_OUTPUT_UNLIMITED);
+        mbe_synthesizeTonef(limited, tone, &l);
+        if (after_mute) {
+            memset(speech, 0, sizeof(speech));
+        } else {
+            repeat_reference_out(speech, &s, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
+        }
+        for (int n = 0; n < 160; ++n) {
+            const float gain = (n < 80) ? (float)n / 80.0f : 1.0f;
+            want[n] = (n < 80) ? (gain * unlimited[n]) + ((1.0f - gain) * speech[n]) : unlimited[n];
+            before_fix[n] = (n < 80) ? (gain * limited[n]) + ((1.0f - gain) * speech[n]) : limited[n];
+        }
+        limit_sum(want, 160);
+        limit_sum(before_fix, 160);
+        stream_frame(&s, tone, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+        assert(close_mix(s.out, want, unlimited, speech, 0, 160));
+        assert(float_array_bits_equal(s.out + 80, limited + 80, 80));
+        assert(!tones_sound() || differs_by(s.out, before_fix, K_LIMIT_TWICE_MARGIN));
+        /* The steady tone: the limited renderer, bit for bit. */
+        mbe_synthesizeTonef(limited, tone, &l);
+        stream_frame(&s, tone, 0, 0);
+        assert(float_array_bits_equal(s.out, limited, 160));
+    }
 }
 
 /* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
@@ -2288,6 +2512,9 @@ main(void) {
     test_limit_after_tone_tail();
     test_limit_tone_over_speech();
     test_limit_mute_over_speech();
+    test_unlimited_tone_rendering();
+    test_loud_tone_tail();
+    test_loud_tone_first_frame();
     printf("test_ambe2450_frame_types: OK\n");
     return 0;
 }
