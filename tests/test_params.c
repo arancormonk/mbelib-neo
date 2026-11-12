@@ -1369,10 +1369,9 @@ test_onset_mark_cleared(void) {
     assert(mbe_voicing_onset_delay(&cur) == 0);
 }
 
-/* Rate 33 through its public data path: a voiced onset (b1 15) muted by the
- * error rate becomes the kept model as its unheard synthesis leaves it, which
- * starts the pulse train at its mid-frame (a late onset after unvoiced
- * frames), so the first audible voiced frame runs that train on, whatever the
+/* Rate 33 through its public data path: after a voiced onset (b1 15) muted by
+ * the error rate, the first audible voiced frame starts from silence, so its
+ * pulse train starts at its own start, from that frame alone, whatever the
  * voiced history before the unvoiced gap. */
 static void
 test_ambe2450_muted_onset(void) {
@@ -1399,11 +1398,10 @@ test_ambe2450_muted_onset(void) {
         memset(&result, 0, sizeof(result));
         assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
-        /* The pulse train started at the muted frame's mid-frame: harmonic l's
-         * phase at this frame's end is l w0 (240 - MBE_PULSE_PEAK), to whole
-         * turns. */
+        /* The pulse train started with this frame: harmonic l's phase at its
+         * end is l w0 (160 - MBE_PULSE_PEAK), to whole turns. */
         for (int l = 1; l <= 3; ++l) {
-            const double expect = (double)enh.w0 * (double)(l * (240 - MBE_PULSE_PEAK));
+            const double expect = (double)enh.w0 * (double)(l * (160 - MBE_PULSE_PEAK));
             assert(fabs(wrap_angle((double)enh.PSIl[l] - expect)) < 1e-3);
         }
     }

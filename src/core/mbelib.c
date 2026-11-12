@@ -1396,9 +1396,9 @@ enum mbe_speech_smoothing {
  * the next audible frame continues from where they stand. */
 static void
 mbe_render_muted_frame(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_mute_noise mute_noise,
-                       enum mbe_voiced_synthesis voiced) {
+                       enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start) {
     if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
-        mbe_advance_subframes(cur_mp, prev_mp);
+        mbe_advance_subframes(cur_mp, prev_mp, start == MBE_SYNTHESIS_FROM_SILENCE);
     }
     if (mute_noise == MBE_MUTE_NOISE_SPEC) {
         mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
@@ -1446,10 +1446,18 @@ mbe_render_spec_frame(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     }
 }
 
+/* The way a frame's rendering starts (mbe_synthesis_start) and what replaces
+ * it if the core mutes it. */
+struct mbe_speech_options {
+    enum mbe_mute_noise mute_noise;
+    enum mbe_voiced_synthesis voiced;
+    enum mbe_amplitude_limit limit;
+    enum mbe_synthesis_start start;
+};
+
 static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
-                         float pre_enh_rm0, enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
-                         enum mbe_amplitude_limit limit) {
+                         float pre_enh_rm0, const struct mbe_speech_options* options) {
 
     /* One frame length for the phase arithmetic, the window Ws and the
      * voiced kernels, which process exactly MBE_VOICED_FRAME samples. */
@@ -1467,7 +1475,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* TIA-102.BABA equations 111-116: advance smoothing state before the
      * mute decision so a muted frame retains its parameter progression. */
     if (smoothing == MBE_SMOOTHING_PRE_ENH_RM0) {
-        mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, pre_enh_rm0, limit);
+        mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, pre_enh_rm0, options->limit);
     } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
@@ -1475,14 +1483,15 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* The shared core checks repeat count and the IMBE error-rate threshold.
      * AMBE codec paths apply their own additional muting rules. */
     if (mbe_should_mute_speech(cur_mp)) {
-        mbe_render_muted_frame(aout_buf, cur_mp, prev_mp, mute_noise, voiced);
+        mbe_render_muted_frame(aout_buf, cur_mp, prev_mp, options->mute_noise, options->voiced, options->start);
         return;
     }
 
     memset(aout_buf, 0, N * sizeof(float));
-    if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
+    if (options->voiced == MBE_VOICED_SYNTHESIS_DVSI) {
         /* The codec paths render the frame in DVSI's subframes. */
-        mbe_synthesize_subframes(aout_buf, cur_mp, prev_mp, mbe_get_fft_plan(), MBE_RENDER_VOICED_GAIN_DVSI);
+        mbe_synthesize_subframes(aout_buf, cur_mp, prev_mp, mbe_get_fft_plan(), MBE_RENDER_VOICED_GAIN_DVSI,
+                                 options->start == MBE_SYNTHESIS_FROM_SILENCE);
     } else {
         mbe_render_spec_frame(aout_buf, cur_mp, prev_mp, N);
     }
@@ -1495,24 +1504,40 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 }
 
 void
+mbe_synthesizeSpeechWithPreEnhRm0Startf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                                        enum mbe_amplitude_limit limit, enum mbe_synthesis_start start) {
+    const struct mbe_speech_options options = {mute_noise, voiced, limit, start};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, &options);
+}
+
+void
 mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
                                    enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
                                    enum mbe_amplitude_limit limit) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise, voiced, limit);
+    mbe_synthesizeSpeechWithPreEnhRm0Startf(aout_buf, cur_mp, prev_mp, rm0, mute_noise, voiced, limit,
+                                            MBE_SYNTHESIS_CONTINUES);
+}
+
+void
+mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                                   enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start) {
+    /* Repeat paths, which never mute inside synthesis. */
+    const struct mbe_speech_options options = {MBE_MUTE_NOISE_SPEC, voiced, MBE_AMPLITUDE_LIMIT_SPEC, start};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, &options);
 }
 
 void
 mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
                               enum mbe_voiced_synthesis voiced) {
-    /* Repeat paths, which never mute inside synthesis. */
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC, voiced,
-                             MBE_AMPLITUDE_LIMIT_SPEC);
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp, voiced, MBE_SYNTHESIS_CONTINUES);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, MBE_MUTE_NOISE_COMFORT,
-                             MBE_VOICED_SYNTHESIS_SPEC, MBE_AMPLITUDE_LIMIT_SPEC);
+    const struct mbe_speech_options options = {MBE_MUTE_NOISE_COMFORT, MBE_VOICED_SYNTHESIS_SPEC,
+                                               MBE_AMPLITUDE_LIMIT_SPEC, MBE_SYNTHESIS_CONTINUES};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, &options);
 }
 
 /**

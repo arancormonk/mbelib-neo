@@ -107,22 +107,38 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * A frame whose harmonic count, or the previous frame's, is not 1..56 renders
  * nothing and leaves the state as it is.
  *
+ * A frame that starts from silence (@p from_silence, as DVSI's rate-33
+ * decoder renders the first frame heard after a mute or a tone) does not play
+ * the previous frame's own model, which counts as having no voiced band: its
+ * first subframe rises from silence to the mid-frame model, which is the
+ * ordinary one between the previous frame's model and this one's (a late
+ * onset keeps its meaning for it), save for a frame marked
+ * MBE_FRAME_MARK_PREVIOUS_HELD: the previous model was not heard and is not
+ * held, so such a frame (a rate-33 silence frame) rises from silence to its
+ * own model, which also stands at mid-frame. The pulse train the previous state
+ * carries is dropped, whatever its mark, and a new one starts at the frame's
+ * start with phase 0; no unvoiced overlap comes from the previous state. The
+ * noise generator runs as for any frame.
+ *
  * @param aout_buf     160 samples.
  * @param cur_mp       Current frame: enhanced, smoothed amplitudes without render gains.
  * @param prev_mp      Previous frame as synthesized.
  * @param plan         Transform plan, or NULL (no unvoiced part).
  * @param voiced_gain  Render gain of the voiced harmonics.
+ * @param from_silence Nonzero for a frame that starts from silence.
  */
 void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
-                              float voiced_gain);
+                              float voiced_gain, int from_silence);
 
 /**
  * @brief Move a stream's synthesis state one frame on without rendering it.
  *
  * For a frame muted inside the synthesis core: the pulse train and the noise
  * generator run on (the pulses still sounding are kept for the next frame),
- * and no unvoiced overlap is left for it.
+ * and no unvoiced overlap is left for it. @p from_silence starts the train as
+ * mbe_synthesize_subframes() does, so that the state left is the one
+ * rendering the frame leaves.
  */
-void mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp);
+void mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence);
 
 #endif /* MBEINT_MBE_SUBFRAME_H */

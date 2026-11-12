@@ -144,6 +144,24 @@ enum mbe_voiced_synthesis {
     MBE_VOICED_SYNTHESIS_DVSI,
 };
 
+/** How a frame's rendering starts; chosen per call, it has a meaning for
+ * MBE_VOICED_SYNTHESIS_DVSI only. */
+enum mbe_synthesis_start {
+    /** From the previous frame as it was synthesized: its model, the pulse
+     * train it carries and its unvoiced overlap. */
+    MBE_SYNTHESIS_CONTINUES,
+    /** From silence, as DVSI's rate-33 decoder renders the first frame heard
+     * after a mute or a tone (docs/dvsi-parity.md, "Rate 33 frames after a
+     * mute or a tone"): the previous frame's own model is not played (it
+     * counts as having no voiced band), the pulse train starts anew at the
+     * frame's start, and no unvoiced overlap comes from before. The
+     * mid-frame model is the ordinary one between the previous model and this
+     * frame's (mbe_subframe_mid_model()), save that a frame marked
+     * MBE_FRAME_MARK_PREVIOUS_HELD (a rate-33 silence frame) does not hold a
+     * previous model that was not heard: it rises from silence to its own. */
+    MBE_SYNTHESIS_FROM_SILENCE,
+};
+
 /* The onset delay mbe_set_voicing_onset_delay() can give a model (samples):
  * its voiced bands then start in the frame's second subframe. */
 #define MBE_VOICING_ONSET_LATE 80
@@ -220,6 +238,15 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
                                         enum mbe_amplitude_limit limit);
 
 /**
+ * @brief mbe_synthesizeSpeechWithPreEnhRm0f() with the way its rendering starts.
+ * @param start How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only;
+ *              a frame the core mutes moves its state on the same way).
+ */
+void mbe_synthesizeSpeechWithPreEnhRm0Startf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                             enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                                             enum mbe_amplitude_limit limit, enum mbe_synthesis_start start);
+
+/**
  * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.
  *
  * TIA-102.BABA-1 5.6 synthesizes the repeated model parameters unchanged;
@@ -232,6 +259,13 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
  */
 void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
                                    enum mbe_voiced_synthesis voiced);
+
+/**
+ * @brief mbe_synthesizeRepeatedSpeechf() with the way its rendering starts.
+ * @param start How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only).
+ */
+void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                                        enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start);
 
 /**
  * @brief Render 160 samples of an AMBE 3600x2450 tone, continuing the tone phases in @p mp.

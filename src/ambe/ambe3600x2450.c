@@ -934,24 +934,34 @@ ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
 }
 
 /*
- * Enhance and synthesize a decoded frame, then make it the last synthesized
- * frame. A frame that starts from silence (after a mute or a tone) is
- * synthesized over a silent copy of the kept model: nothing of it sounds in
- * its first 10 ms, and it fades in over its second.
+ * The frame after a mute or a tone starts from silence. TIA-102.BABA-1 does
+ * not say how. DVSI's decoder synthesizes the first frame heard again from
+ * the model it kept in the ordinary way, with two differences: the kept model
+ * itself is not played (the first subframe rises from silence to the
+ * mid-frame model, which is the ordinary one between the kept model and the
+ * frame's own; no unvoiced overlap comes from before), and the pulse train
+ * starts anew at the frame's start (MBE_SYNTHESIS_FROM_SILENCE). A silence
+ * frame, whose hold continues what was heard, does not hold the kept model,
+ * which was not: it rises from silence to its own model. On DVSI's
+ * dam_e10_hd the frames leaving a mute follow DVSI's decode at a median
+ * correlation of 0.95 / 0.95 / 0.96 (first half, second half, next frame)
+ * this way, against 0.00 / 0.04 / 0.09 for a fade-in from nothing, and over
+ * the first frames after the tones of DVSI's 52 rate-33 tone vectors the mean
+ * absolute level error falls from 0.58 to 0.37 dB (docs/dvsi-parity.md, "Rate
+ * 33 frames after a mute or a tone").
  */
+static enum mbe_synthesis_start
+ambe2450_start(int afresh) {
+    return afresh ? MBE_SYNTHESIS_FROM_SILENCE : MBE_SYNTHESIS_CONTINUES;
+}
+
+/* Enhance and synthesize a decoded frame, then make it the last synthesized frame. */
 static void
 ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, int afresh) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2450);
-    if (afresh) {
-        mbe_parms silent = *prev_mp_enhanced;
-        memset(silent.Ml, 0, sizeof(silent.Ml));
-        memset(silent.previousUw, 0, sizeof(silent.previousUw));
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, &silent, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
-                                           MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
-    } else {
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
-                                           MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
-    }
+    mbe_synthesizeSpeechWithPreEnhRm0Startf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
+                                            MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE,
+                                            ambe2450_start(afresh));
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
@@ -1031,7 +1041,7 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
     }
     if (own_model) {
         float unheard[160];
-        ambe2450_synthesize_decoded(unheard, cur_mp, prev_mp_enhanced, 0);
+        ambe2450_synthesize_decoded(unheard, cur_mp, prev_mp_enhanced, in->afresh);
     } else {
         ambe2450_keep_last(cur_mp, prev_mp_enhanced, fading ? &faded : NULL);
     }
@@ -1047,25 +1057,24 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
 /**
  * 5.6 steps 2-3: synthesize the repeated model as-is (no re-enhancement and
  * no adaptive smoothing, which could change its voicing and amplitudes).
- * After a mute or a tone the repeat is silent (with the tone left sounding
- * fading out over it) and the next frame still starts from silence. Returns
- * the word the frame leaves.
+ * After a mute the kept model is repeated from silence. While a tone is held
+ * the repeat is silent, the tone's tail fading out over it, and the next frame
+ * still starts from silence. Returns the word the frame leaves.
  */
 static int
 ambe2450_repeat(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     /* Step 2 repeats the previous frame's model, enhanced amplitudes included
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
-    if (in->afresh) {
+    if (in->held) {
         mbe_synthesizeSilencef(aout_buf);
-        if (in->held) {
-            ambe2450_add_tone_tail(aout_buf, in);
-        }
+        ambe2450_add_tone_tail(aout_buf, in);
         mbe_dvsi_noise_skip_frame(cur_mp);
         mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
         return AMBE2450_STARTS_AFRESH;
     }
-    mbe_synthesizeRepeatedSpeechf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI,
+                                       ambe2450_start(in->afresh));
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     return 0;
 }
