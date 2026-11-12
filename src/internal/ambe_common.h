@@ -117,7 +117,7 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
  * both paths rounds to nearest (mbe_floattoshort_nearest()), so the noise is 0
  * on two thirds of the samples and +-1 on the rest, as DVSI's muted D-STAR
  * output is (dam_e10_hd: 67% 0, 16.5% each +-1); DVSI's muted rate-33 frames
- * of dam_e10_hd have an rms of 0.60. The float noise stays under one 16-bit
+ * of dam_e10_hd have a median rms of 0.59. The float noise stays under one 16-bit
  * step: a caller of the float entry points who truncates hears silence. P25's
  * IMBE path keeps TIA-102.BABA 7.8's MBE_SPEC_MUTE_NOISE_AMPLITUDE.
  */

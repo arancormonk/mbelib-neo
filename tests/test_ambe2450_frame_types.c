@@ -104,14 +104,13 @@ put_bits(char d[49], int pos, int value, int n) {
 }
 
 /**
- * Tone frame in the TIA-102.BABA-1 7.2 Table 10 layout, at full amplitude
- * (AD = 127): u0 = 63 then AD(6..1); u1 = ID(7..0), ID(7..4); u2 = ID(3..0),
- * ID(7..1); u3 = ID(0), ID(7..0), AD(0), 0000. Parameter bits 0-11 carry u0,
- * 12-23 u1, 24-34 u2 and 35-48 u3.
+ * Tone frame in the TIA-102.BABA-1 7.2 Table 10 layout at amplitude field AD:
+ * u0 = 63 then AD(6..1); u1 = ID(7..0), ID(7..4); u2 = ID(3..0), ID(7..1);
+ * u3 = ID(0), ID(7..0), AD(0), 0000. Parameter bits 0-11 carry u0, 12-23 u1,
+ * 24-34 u2 and 35-48 u3.
  */
 static void
-pack_tone(char d[49], int tone_id) {
-    const int ad = 127;
+pack_tone_ad(char d[49], int tone_id, int ad) {
     put_bits(d, 0, 63, 6);
     put_bits(d, 6, ad >> 1, 6);
     put_bits(d, 12, tone_id, 8);
@@ -122,6 +121,12 @@ pack_tone(char d[49], int tone_id) {
     put_bits(d, 36, tone_id, 8);
     put_bits(d, 44, ad, 1);
     put_bits(d, 45, 0, 4);
+}
+
+/** A tone frame at full amplitude (AD = 127). */
+static void
+pack_tone(char d[49], int tone_id) {
+    pack_tone_ad(d, tone_id, 127);
 }
 
 static int
@@ -347,7 +352,7 @@ close_to(const float* out, const float* want, int from, int to) {
  * silent copy of itself (its amplitudes zeroed, no frame mark), which fades it
  * out over the first subframe, as D-STAR's repeat-limit mute renders. `faded`
  * receives the state the rendering leaves (pulse state, phases, noise
- * generator).
+ * generator). The fade is unlimited: the mute limits it with its noise.
  */
 static void
 fade_reference(float out[160], const mbe_parms* last_synthesized, mbe_parms* faded) {
@@ -356,7 +361,8 @@ fade_reference(float out[160], const mbe_parms* last_synthesized, mbe_parms* fad
     memset(faded->Ml, 0, sizeof(faded->Ml));
     mbe_set_frame_mark(faded, MBE_FRAME_MARK_NONE);
     faded->repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechf(out, faded, &last, MBE_VOICED_SYNTHESIS_DVSI);
+    mbe_synthesizeRepeatedSpeechStartf(out, faded, &last, MBE_VOICED_SYNTHESIS_DVSI, MBE_SYNTHESIS_CONTINUES,
+                                       MBE_OUTPUT_UNLIMITED);
 }
 
 /** Whether this build plays tones: one built with NOTONES renders them as
@@ -522,12 +528,13 @@ test_repeat_advances_error_rate(void) {
  * A valid frame `d` as the decoder synthesizes it from the state `before`:
  * decoded against the history, enhanced, smoothed with the frame's error
  * accounting (read from `after`, the stream once it took the frame) and
- * rendered as `start` says over the last synthesized frame. `model` receives
- * the state the synthesis leaves.
+ * rendered as `start` says over the last synthesized frame, its output
+ * limited or not as `output` says. `model` receives the state the synthesis
+ * leaves.
  */
 static void
-frame_reference(float out[160], mbe_parms* model, const struct stream* before, const char d[49],
-                const struct stream* after, enum mbe_synthesis_start start) {
+frame_reference_out(float out[160], mbe_parms* model, const struct stream* before, const char d[49],
+                    const struct stream* after, enum mbe_synthesis_start start, enum mbe_output_limit output) {
     mbe_parms prev = before->prev;
     mbe_parms enh = before->prev_enh;
     *model = before->cur;
@@ -543,7 +550,14 @@ frame_reference(float out[160], mbe_parms* model, const struct stream* before, c
     const float rm0 = mbe_spectralAmpEnhanceWithRm0(model, MBE_HIGH_BAND_GAIN_AMBE2450);
     enh.Vl[0] = 0;
     mbe_synthesizeSpeechWithPreEnhRm0Startf(out, model, &enh, rm0, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
-                                            MBE_AMPLITUDE_LIMIT_NONE, start);
+                                            MBE_AMPLITUDE_LIMIT_NONE, start, output);
+}
+
+/** frame_reference_out() with the output limited, as a frame that mixes nothing plays. */
+static void
+frame_reference(float out[160], mbe_parms* model, const struct stream* before, const char d[49],
+                const struct stream* after, enum mbe_synthesis_start start) {
+    frame_reference_out(out, model, before, d, after, start, MBE_OUTPUT_LIMITED);
 }
 
 /* How the decoder starts the next frame it synthesizes from this state. */
@@ -559,15 +573,22 @@ own_model_reference(mbe_parms* model, const struct stream* before, const char d[
     frame_reference(scratch, model, before, d, after, start_of(before));
 }
 
-/** The kept model repeated from the state `before`, starting as `start` says. */
+/** The kept model repeated from the state `before`, starting as `start` says,
+ * its output limited or not as `output` says. */
 static void
-repeat_reference(float out[160], const struct stream* before, enum mbe_synthesis_start start) {
+repeat_reference_out(float out[160], const struct stream* before, enum mbe_synthesis_start start,
+                     enum mbe_output_limit output) {
     mbe_parms repeated = before->prev_enh;
     mbe_parms last = before->prev_enh;
     repeated.Vl[0] = 0;
     last.Vl[0] = 0;
     repeated.repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechStartf(out, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI, start);
+    mbe_synthesizeRepeatedSpeechStartf(out, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI, start, output);
+}
+
+static void
+repeat_reference(float out[160], const struct stream* before, enum mbe_synthesis_start start) {
+    repeat_reference_out(out, before, start, MBE_OUTPUT_LIMITED);
 }
 
 /*
@@ -1274,7 +1295,7 @@ test_frame_after_tone(void) {
         const struct stream before = s;
         stream_frame(&s, voice, 0, 0);
         assert(s.result.flags == MBE_PROCESS_FLAG_C0_VALID);
-        frame_reference(want, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE);
+        frame_reference_out(want, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_UNLIMITED);
         for (int n = 0; n < 160; ++n) {
             want[n] += tail[n];
         }
@@ -1723,7 +1744,9 @@ test_silence_frame_after_mute_or_tone(void) {
         const struct stream before = s;
         stream_frame(&s, silence, 0, 0);
         assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_SILENCE));
-        frame_reference(want, &model, &before, silence, &s, MBE_SYNTHESIS_FROM_SILENCE);
+        /* After a tone the frame mixes the tone's tail in, and is limited after the sum. */
+        frame_reference_out(want, &model, &before, silence, &s, MBE_SYNTHESIS_FROM_SILENCE,
+                            (kind == 2) ? MBE_OUTPUT_UNLIMITED : MBE_OUTPUT_LIMITED);
         for (int n = 0; n < 160; ++n) {
             assert(fabsf(want[n]) <= 3.0f * silence_peak);
             want[n] += tail[n];
@@ -1951,6 +1974,162 @@ test_tone_after_repeated_tone(void) {
     assert(s.prev_enh.Vl[0] == tone_word(32) && s.cur.repeatCount == 0);
 }
 
+/* ---- Mixed frames are limited once, after the mix ---- */
+
+/* The library's float output limit (95% of full scale). */
+#define K_OUTPUT_LIMIT ((32767.0f * 0.95f) / 7.0f)
+
+/* Whether `x` exceeds the output limit at a sample of [from, to) where `other`
+ * is audible and of the opposite sign. */
+static int
+overloads_against(const float* x, const float* other, int from, int to) {
+    for (int n = from; n < to; ++n) {
+        if (fabsf(x[n]) > K_OUTPUT_LIMIT && fabsf(other[n]) > 1.0f && ((x[n] < 0.0f) != (other[n] < 0.0f))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Whether `out` is `want` within a tolerance relative to the two parts that
+ * were mixed (`a` and `b`, before the mix and its limit), not to the result.
+ * Where loud parts nearly cancel, the library and this test may evaluate the
+ * mix in a different order, or contract it into a fused multiply-add, as a
+ * fast-math build does: they then differ by about 1e-7 of the largest part,
+ * which can be far more than 1e-5 of a small result. Over these tests' parts
+ * (below 30000) the tolerance stays under 0.31.
+ */
+static int
+close_mix(const float* out, const float* want, const float* a, const float* b, int from, int to) {
+    for (int n = from; n < to; ++n) {
+        const double bound = 1e-5 * (1.0 + fabs((double)a[n]) + fabs((double)b[n]));
+        if (!(fabs((double)out[n] - (double)want[n]) <= bound)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The margin by which a mix limited once differs from the same mix of a
+ * limited part, somewhere: far above close_mix()'s tolerance. */
+#define K_LIMIT_TWICE_MARGIN 100.0f
+
+static int
+differs_by(const float* a, const float* b, float by) {
+    for (int n = 0; n < 160; ++n) {
+        if (fabsf(a[n] - b[n]) > by) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Twenty frames of loud voiced speech, whose synthesis runs past the limit. */
+static void
+stream_overloaded(struct stream* s) {
+    stream_init(s);
+    for (int i = 0; i < 20; ++i) {
+        stream_frame_b(s, k_voice_loud, 0, 0);
+    }
+}
+
+/*
+ * The frame after a tone over loud speech: the speech, unlimited, runs past
+ * the limit where the tone's fading tail has the opposite sign, and the frame
+ * is limit(speech + tail) at every sample, not limit(limit(speech) + tail).
+ */
+static void
+test_limit_after_tone_tail(void) {
+    char voice[49], tone[49];
+    float tail[160], speech[160], limited[160], want[160], twice[160];
+    mbe_parms model;
+    struct stream s;
+    pack_b(voice, k_voice_loud);
+    pack_tone_ad(tone, 7, 100);
+    stream_overloaded(&s);
+    stream_frame(&s, tone, 0, 0);
+    tail_reference(tail, tone, &s.cur);
+    const struct stream before = s;
+    stream_frame(&s, voice, 0, 0);
+    frame_reference_out(speech, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_UNLIMITED);
+    frame_reference_out(limited, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_LIMITED);
+    for (int n = 0; n < 160; ++n) {
+        want[n] = speech[n] + tail[n];
+        twice[n] = limited[n] + tail[n];
+    }
+    limit_sum(want, 160);
+    limit_sum(twice, 160);
+    assert(close_mix(s.out, want, speech, tail, 0, 160));
+    if (tones_sound()) {
+        assert(overloads_against(speech, tail, 0, 80));
+        assert(differs_by(s.out, twice, K_LIMIT_TWICE_MARGIN));
+    }
+}
+
+/*
+ * A tone's first frame over loud speech: the repeat of the last frame under
+ * the tone, unlimited, runs past the limit while it fades out, and the frame
+ * is limit(crossfade(tone, repeat)), not the crossfade of the limited repeat.
+ */
+static void
+test_limit_tone_over_speech(void) {
+    char tone[49];
+    float speech[160], limited[160], tone_out[160], want[160], twice[160];
+    struct stream s;
+    pack_tone_ad(tone, 7, 100);
+    stream_overloaded(&s);
+    const struct stream before = s;
+    mbe_parms phases = before.cur;
+    mbe_synthesizeTonef(tone_out, tone, &phases);
+    repeat_reference_out(speech, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
+    repeat_reference_out(limited, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
+    stream_frame(&s, tone, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n < 80) ? (float)n / 80.0f : 1.0f;
+        want[n] = (n < 80) ? (gain * tone_out[n]) + ((1.0f - gain) * speech[n]) : tone_out[n];
+        twice[n] = (n < 80) ? (gain * tone_out[n]) + ((1.0f - gain) * limited[n]) : tone_out[n];
+    }
+    limit_sum(want, 160);
+    limit_sum(twice, 160);
+    int overload = 0;
+    for (int n = 0; n < 40; ++n) {
+        overload |= fabsf(speech[n]) > 1.2f * K_OUTPUT_LIMIT;
+    }
+    assert(overload);
+    assert(close_mix(s.out, want, tone_out, speech, 0, 160));
+    assert(differs_by(s.out, twice, K_LIMIT_TWICE_MARGIN));
+}
+
+/*
+ * A mute's first frame over loud speech: the fade of the last frame,
+ * unlimited, runs past the limit, and the frame is limit(fade + noise).
+ */
+static void
+test_limit_mute_over_speech(void) {
+    char voice[49];
+    float fade[160], noise[160], want[160];
+    mbe_parms faded;
+    struct stream s;
+    pack_b(voice, k_voice_loud);
+    stream_overloaded(&s);
+    s.prev.errorRate = 0.2f;
+    const struct stream before = s;
+    fade_reference(fade, &before.prev_enh, &faded);
+    mute_noise_reference(noise);
+    stream_frame(&s, voice, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+    int overload = 0;
+    for (int n = 0; n < 160; ++n) {
+        overload |= fabsf(fade[n]) > K_OUTPUT_LIMIT;
+        want[n] = fade[n] + noise[n];
+    }
+    limit_sum(want, 160);
+    assert(overload);
+    assert(close_mix(s.out, want, fade, noise, 0, 160));
+}
+
 /* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
  * per output sample. */
 static float
@@ -2081,6 +2260,9 @@ main(void) {
     test_repeat_count_is_clamped();
     test_null_result();
     test_aliased_parms_rejected();
+    test_limit_after_tone_tail();
+    test_limit_tone_over_speech();
+    test_limit_mute_over_speech();
     printf("test_ambe2450_frame_types: OK\n");
     return 0;
 }

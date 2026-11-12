@@ -1112,13 +1112,60 @@ test_from_silence(void) {
     heard.errorRate = 0.0f;
     mbe_synthesizeSpeechWithPreEnhRm0Startf(out_scratch, &muted, &enh_a, 0.0f, MBE_MUTE_NOISE_SPEC,
                                             MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE,
-                                            MBE_SYNTHESIS_FROM_SILENCE);
+                                            MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_LIMITED);
     mbe_synthesizeSpeechWithPreEnhRm0Startf(out_scratch, &heard, &enh_b, 0.0f, MBE_MUTE_NOISE_SPEC,
                                             MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE,
-                                            MBE_SYNTHESIS_FROM_SILENCE);
+                                            MBE_SYNTHESIS_FROM_SILENCE, MBE_OUTPUT_LIMITED);
     assert(same_bits(muted.noiseOverlap, heard.noiseOverlap, 96));
     assert(same_bits(muted.PSIl, heard.PSIl, 57));
     assert(same_bits(&muted.noiseSeed, &heard.noiseSeed, 1));
+}
+
+/*
+ * The output-limit option of the synthesis core: a frame left unlimited is
+ * the limited frame before its limit, sample for sample (limiting it gives the
+ * limited frame's bits), for a voiced, an unvoiced and a from-silence frame,
+ * loud enough to pass the limit; and the state the two leave is the same.
+ */
+static void
+test_output_limit_option(void) {
+    static const struct {
+        int voiced;
+        enum mbe_synthesis_start start;
+    } cases[] = {
+        {18, MBE_SYNTHESIS_CONTINUES},
+        {0, MBE_SYNTHESIS_CONTINUES},
+        {18, MBE_SYNTHESIS_FROM_SILENCE},
+    };
+
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); ++k) {
+        float out[160], limited[160], unlimited[160];
+        mbe_parms last, model;
+        fresh_stream(&last);
+        set_model(&model, 187.5, 18, cases[k].voiced, 3000.0f);
+        next_frame(out, &last, &model);
+        last.noiseSeed = 777.0f;
+        mbe_parms a = last, b = last, prev_a = last, prev_b = last;
+        mbe_synthesizeSpeechWithPreEnhRm0Startf(limited, &a, &prev_a, 0.0f, MBE_MUTE_NOISE_SPEC,
+                                                MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE, cases[k].start,
+                                                MBE_OUTPUT_LIMITED);
+        mbe_synthesizeSpeechWithPreEnhRm0Startf(unlimited, &b, &prev_b, 0.0f, MBE_MUTE_NOISE_SPEC,
+                                                MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE, cases[k].start,
+                                                MBE_OUTPUT_UNLIMITED);
+        const float limit = (32767.0f * 0.95f) / 7.0f;
+        int past = 0;
+        for (int n = 0; n < 160; ++n) {
+            past |= fabsf(unlimited[n]) > limit;
+        }
+        assert(past);
+        assert(!same_bits(limited, unlimited, 160));
+        mbe_clipFloatBuffer(unlimited, 160);
+        assert(same_bits(limited, unlimited, 160));
+        assert(same_bits(a.Ml, b.Ml, 57) && same_bits(a.PSIl, b.PSIl, 57) && same_bits(a.PHIl, b.PHIl, 57));
+        assert(same_bits(a.noiseOverlap, b.noiseOverlap, 96) && same_bits(a.previousUw, b.previousUw, 256));
+        assert(same_bits(&a.noiseSeed, &b.noiseSeed, 1) && same_bits(&a.localEnergy, &b.localEnergy, 1));
+        assert(memcmp(a.Vl, b.Vl, sizeof(a.Vl)) == 0 && a.amplitudeThreshold == b.amplitudeThreshold);
+    }
 }
 
 /* Pulse state that no frame stores is dropped, and never read as an index or
@@ -1612,6 +1659,7 @@ main(void) {
     test_subframes_crossfade_linearly();
     test_muted_frame_advances();
     test_from_silence();
+    test_output_limit_option();
     test_pulse_state_is_validated();
     test_invalid_models();
     test_subnormal_pitch_is_no_pitch();

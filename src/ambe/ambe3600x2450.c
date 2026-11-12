@@ -923,7 +923,8 @@ ambe2450_clear_overlap(mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
 /*
  * The tone the last frame left sounding, going on from its phases, added to
  * the frame's first AMBE2450_TONE_FADE samples as it fades out: (1 - n / 80)
- * tail[n]. The sum is limited.
+ * tail[n]. The frame it is added to is unlimited; the caller limits the sum
+ * once the mix is complete.
  */
 static void
 ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
@@ -936,7 +937,6 @@ ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
     for (int n = 0; n < AMBE2450_TONE_FADE; ++n) {
         aout_buf[n] += (1.0f - ((float)n / (float)AMBE2450_TONE_FADE)) * tail[n];
     }
-    mbe_clipFloatBuffer(aout_buf, AMBE2450_TONE_FADE);
 }
 
 /*
@@ -950,8 +950,8 @@ ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
  * frame, whose hold continues what was heard, does not hold the kept model,
  * which was not: it rises from silence to its own model. On DVSI's
  * dam_e10_hd the frames leaving a mute follow DVSI's decode at a median
- * correlation of 0.95 / 0.95 / 0.96 (first half, second half, next frame)
- * this way, against 0.00 / 0.04 / 0.09 for a fade-in from nothing, and over
+ * correlation of 0.95 / 0.95 / 0.95 (first half, second half, next frame)
+ * this way, against 0.00 / 0.04 / 0.02 for a fade-in from nothing, and over
  * the first frames after the tones of DVSI's 52 rate-33 tone vectors the mean
  * absolute level error falls from 0.58 to 0.37 dB (docs/dvsi-parity.md, "Rate
  * 33 frames after a mute or a tone").
@@ -961,13 +961,16 @@ ambe2450_start(int afresh) {
     return afresh ? MBE_SYNTHESIS_FROM_SILENCE : MBE_SYNTHESIS_CONTINUES;
 }
 
-/* Enhance and synthesize a decoded frame, then make it the last synthesized frame. */
+/* Enhance and synthesize a decoded frame, then make it the last synthesized
+ * frame. Its output is left unlimited for a caller that mixes another signal
+ * into it; the state it leaves is the same either way. */
 static void
-ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, int afresh) {
+ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, int afresh,
+                            enum mbe_output_limit output) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2450);
     mbe_synthesizeSpeechWithPreEnhRm0Startf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
-                                            MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE,
-                                            ambe2450_start(afresh));
+                                            MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE, ambe2450_start(afresh),
+                                            output);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
@@ -984,6 +987,7 @@ ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_
  * second subframe), so the mid-frame model is the ordinary one between the
  * last model and silence, whatever kind of frame the last one was. Its PHIl[0]
  * reaches nothing kept (ambe2450_keep_last() copies phases from element 1).
+ * The fade is left unlimited: the mute limits it with its noise.
  */
 static void
 ambe2450_fade_out_last(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced, mbe_parms* faded) {
@@ -993,7 +997,8 @@ ambe2450_fade_out_last(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms
     memset(faded->Ml, 0, sizeof(faded->Ml));
     mbe_set_frame_mark(faded, MBE_FRAME_MARK_NONE);
     faded->repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechf(aout_buf, faded, &last, MBE_VOICED_SYNTHESIS_DVSI);
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, faded, &last, MBE_VOICED_SYNTHESIS_DVSI, MBE_SYNTHESIS_CONTINUES,
+                                       MBE_OUTPUT_UNLIMITED);
 }
 
 /*
@@ -1027,7 +1032,8 @@ ambe2450_keep_last(mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, const mbe_par
  * mutes"). Its model goes on: a valid voice or silence frame (`own_model`)
  * becomes the kept model as an unheard synthesis of it leaves it, enhanced and
  * smoothed; any other keeps the last one. DVSI's noise generator runs one
- * frame. The sum is limited. Returns the word the frame leaves.
+ * frame. The frame is limited once, after the fade or the tail and the noise
+ * are summed. Returns the word the frame leaves.
  */
 static int
 ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450_snapshot* in, int own_model,
@@ -1047,7 +1053,7 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
     }
     if (own_model) {
         float unheard[160];
-        ambe2450_synthesize_decoded(unheard, cur_mp, prev_mp_enhanced, in->afresh);
+        ambe2450_synthesize_decoded(unheard, cur_mp, prev_mp_enhanced, in->afresh, MBE_OUTPUT_LIMITED);
     } else {
         ambe2450_keep_last(cur_mp, prev_mp_enhanced, fading ? &faded : NULL);
     }
@@ -1072,7 +1078,7 @@ ambe2450_repeat(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* 
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI,
-                                       ambe2450_start(in->afresh));
+                                       ambe2450_start(in->afresh), MBE_OUTPUT_LIMITED);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     return 0;
 }
@@ -1125,8 +1131,8 @@ ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned e
  * rate then mutes the output (5.7 does not say either way). A silence frame is
  * synthesized but never used for prediction (4.3; 4.4.1 eq 26; 4.4.3 eq 43):
  * only the per-frame decoder values advance. After a tone the tone's tail
- * fades out over the frame's first 80 samples. Returns the word the frame
- * leaves.
+ * fades out over the frame's first 80 samples, added to the frame before it
+ * is limited: the sum is limited once. Returns the word the frame leaves.
  */
 static int
 ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence, const struct ambe2450_snapshot* in,
@@ -1141,10 +1147,13 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
     if (mbe_requiresMuting(cur_mp)) {
         return ambe2450_mute(aout_buf, result, in, 1, cur_mp, prev_mp_enhanced);
     }
-    ambe2450_synthesize_decoded(aout_buf, cur_mp, prev_mp_enhanced, in->afresh);
-    if (in->held) {
-        ambe2450_add_tone_tail(aout_buf, in);
+    if (!in->held) {
+        ambe2450_synthesize_decoded(aout_buf, cur_mp, prev_mp_enhanced, in->afresh, MBE_OUTPUT_LIMITED);
+        return 0;
     }
+    ambe2450_synthesize_decoded(aout_buf, cur_mp, prev_mp_enhanced, in->afresh, MBE_OUTPUT_UNLIMITED);
+    ambe2450_add_tone_tail(aout_buf, in);
+    mbe_clipFloatBuffer(aout_buf, 160);
     return 0;
 }
 
@@ -1176,15 +1185,17 @@ ambe2450_fade_in_over(float* aout_buf, const float* outgoing) {
 }
 
 /* Under a tone's first frame, the last synthesized frame repeated, to be
- * faded out. Only scratch copies are synthesized: a tone frame leaves the
- * noise generator and the synthesis state where they stood. */
+ * faded out, unlimited (the crossfade with the tone is limited). Only scratch
+ * copies are synthesized: a tone frame leaves the noise generator and the
+ * synthesis state where they stood. */
 static void
 ambe2450_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
     mbe_parms repeated = *cur_mp;
     mbe_parms last = *prev_mp_enhanced;
     mbe_repeat_load_model(&repeated, &last);
     repeated.repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechf(speech, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI);
+    mbe_synthesizeRepeatedSpeechStartf(speech, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI, MBE_SYNTHESIS_CONTINUES,
+                                       MBE_OUTPUT_UNLIMITED);
 }
 
 /**
@@ -1211,6 +1222,7 @@ ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char am
     mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
     if (!in->held) {
         ambe2450_fade_in_over(aout_buf, speech);
+        mbe_clipFloatBuffer(aout_buf, AMBE2450_TONE_FADE);
     }
     ambe2450_clear_overlap(cur_mp, prev_mp_enhanced);
     return AMBE2450_TONE_HELD | AMBE2450_STARTS_AFRESH | (ambe2450_read_tone_ad(ambe_d) << 8)

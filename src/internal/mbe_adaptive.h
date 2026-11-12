@@ -162,6 +162,17 @@ enum mbe_synthesis_start {
     MBE_SYNTHESIS_FROM_SILENCE,
 };
 
+/** Whether the synthesis core limits the frame it renders; chosen per call. */
+enum mbe_output_limit {
+    /** Limited to the float output limit (mbe_clipFloatBuffer()), as every
+     * frame the core renders otherwise is. */
+    MBE_OUTPUT_LIMITED,
+    /** Left unlimited: the caller mixes another signal into the frame (a
+     * tone's tail, a crossfade with a tone, mute noise) and limits the sum
+     * once, after the mix. */
+    MBE_OUTPUT_UNLIMITED,
+};
+
 /* The onset delay mbe_set_voicing_onset_delay() can give a model (samples):
  * its voiced bands then start in the frame's second subframe. */
 #define MBE_VOICING_ONSET_LATE 80
@@ -238,13 +249,17 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
                                         enum mbe_amplitude_limit limit);
 
 /**
- * @brief mbe_synthesizeSpeechWithPreEnhRm0f() with the way its rendering starts.
- * @param start How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only;
- *              a frame the core mutes moves its state on the same way).
+ * @brief mbe_synthesizeSpeechWithPreEnhRm0f() with the way its rendering starts
+ *        and whether its output is limited.
+ * @param start  How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only;
+ *               a frame the core mutes moves its state on the same way).
+ * @param output Whether the rendered frame is limited (a frame the core mutes
+ *               is noise either way). The state the call leaves is the same.
  */
 void mbe_synthesizeSpeechWithPreEnhRm0Startf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
                                              enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
-                                             enum mbe_amplitude_limit limit, enum mbe_synthesis_start start);
+                                             enum mbe_amplitude_limit limit, enum mbe_synthesis_start start,
+                                             enum mbe_output_limit output);
 
 /**
  * @brief Synthesize a frame-repeat model as-is, without adaptive smoothing.
@@ -261,11 +276,14 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
                                    enum mbe_voiced_synthesis voiced);
 
 /**
- * @brief mbe_synthesizeRepeatedSpeechf() with the way its rendering starts.
- * @param start How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only).
+ * @brief mbe_synthesizeRepeatedSpeechf() with the way its rendering starts and
+ *        whether its output is limited.
+ * @param start  How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only).
+ * @param output Whether the rendered frame is limited.
  */
 void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                        enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start);
+                                        enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start,
+                                        enum mbe_output_limit output);
 
 /**
  * @brief Render 160 samples of an AMBE 3600x2450 tone, continuing the tone phases in @p mp.

@@ -1453,6 +1453,7 @@ struct mbe_speech_options {
     enum mbe_voiced_synthesis voiced;
     enum mbe_amplitude_limit limit;
     enum mbe_synthesis_start start;
+    enum mbe_output_limit output;
 };
 
 static void
@@ -1496,18 +1497,22 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_render_spec_frame(aout_buf, cur_mp, prev_mp, N);
     }
 
-    /* Convert s(n) to output scale, then limit overloads to 95% headroom. */
+    /* Convert s(n) to output scale, then limit overloads to 95% headroom,
+     * unless the caller mixes another signal in and limits the sum. */
     for (int i = 0; i < N; i++) {
         aout_buf[i] *= MBE_SPEECH_OUTPUT_GAIN;
     }
-    mbe_clipFloatBuffer(aout_buf, N);
+    if (options->output == MBE_OUTPUT_LIMITED) {
+        mbe_clipFloatBuffer(aout_buf, N);
+    }
 }
 
 void
 mbe_synthesizeSpeechWithPreEnhRm0Startf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
                                         enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
-                                        enum mbe_amplitude_limit limit, enum mbe_synthesis_start start) {
-    const struct mbe_speech_options options = {mute_noise, voiced, limit, start};
+                                        enum mbe_amplitude_limit limit, enum mbe_synthesis_start start,
+                                        enum mbe_output_limit output) {
+    const struct mbe_speech_options options = {mute_noise, voiced, limit, start, output};
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, &options);
 }
 
@@ -1516,27 +1521,28 @@ mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms
                                    enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
                                    enum mbe_amplitude_limit limit) {
     mbe_synthesizeSpeechWithPreEnhRm0Startf(aout_buf, cur_mp, prev_mp, rm0, mute_noise, voiced, limit,
-                                            MBE_SYNTHESIS_CONTINUES);
+                                            MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
 }
 
 void
 mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                                   enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start) {
+                                   enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start,
+                                   enum mbe_output_limit output) {
     /* Repeat paths, which never mute inside synthesis. */
-    const struct mbe_speech_options options = {MBE_MUTE_NOISE_SPEC, voiced, MBE_AMPLITUDE_LIMIT_SPEC, start};
+    const struct mbe_speech_options options = {MBE_MUTE_NOISE_SPEC, voiced, MBE_AMPLITUDE_LIMIT_SPEC, start, output};
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, &options);
 }
 
 void
 mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
                               enum mbe_voiced_synthesis voiced) {
-    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp, voiced, MBE_SYNTHESIS_CONTINUES);
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp, voiced, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
     const struct mbe_speech_options options = {MBE_MUTE_NOISE_COMFORT, MBE_VOICED_SYNTHESIS_SPEC,
-                                               MBE_AMPLITUDE_LIMIT_SPEC, MBE_SYNTHESIS_CONTINUES};
+                                               MBE_AMPLITUDE_LIMIT_SPEC, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED};
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, &options);
 }
 
