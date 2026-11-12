@@ -918,10 +918,14 @@ mbe_toneAmplitude(double level_db) {
 }
 
 /* A tone whose gain moves linearly from from_gain to gain over the first
- * `ramp` samples (none for 0), limited after the gain is applied unless the
- * caller fades or mixes it and limits the result. Every sample is computed
- * the same way either way, so limiting the unlimited rendering gives the
- * limited one bit for bit. */
+ * `ramp` samples (none for 0), each sample limited after the gain is applied,
+ * unless the caller fades or mixes the tone and limits the result. The sample
+ * loop is the same in both modes: it limits every sample as it computes it
+ * (the limiter's classification keeps the loop scalar, so fast-math cannot
+ * vectorize it with other sine code) and keeps the unlimited sample beside
+ * it, and only after the loop is the unlimited frame chosen. So the limited
+ * rendering is computed exactly as before, and limiting the unlimited one
+ * gives it bit for bit. */
 static void
 mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp,
                     enum mbe_output_limit output) {
@@ -939,6 +943,7 @@ mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_ga
     uint32_t phase2 = mp->tonePhase;
     const uint32_t step1 = frequency_increment(f1);
     const uint32_t step2 = dual ? frequency_increment(f2) : 0;
+    float unlimited[160];
     for (int n = 0; n < 160; ++n) {
         const float g = (n < ramp) ? from_gain + ((gain - from_gain) * ((float)n / (float)ramp)) : gain;
         phase1 += step1;
@@ -947,10 +952,11 @@ mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_ga
             phase2 += step2;
             value += g * phase_sine(phase2);
         }
-        out[n] = value;
+        out[n] = mbe_clipFloatSample(value);
+        unlimited[n] = value;
     }
-    if (output == MBE_OUTPUT_LIMITED) {
-        mbe_clipFloatBuffer(out, 160);
+    if (output == MBE_OUTPUT_UNLIMITED) {
+        memcpy(out, unlimited, sizeof(unlimited));
     }
     memcpy(&mp->swn, &phase1, sizeof(phase1));
     mp->tonePhase = phase2;
