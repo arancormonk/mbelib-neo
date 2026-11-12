@@ -629,7 +629,8 @@ The library now plays it so:
 The three DTX vectors (`clean_dtx`, `dam_dtx`, `noisy_dtx`) hold 321 silence frames, each the first
 frame of a pause. The pause's other frames are the all-ones frames DVSI's host software writes for
 the frames its DTX simulation does not send ([D-STAR lost frames](#d-star-lost-frames); in rate 33
-the all-ones frame reads as a tone frame with ID 255). DVSI's `_dtx` decodes play comfort noise
+the all-ones frame decodes, after error correction, to a tone frame with index 180, which carries no
+tone, so it is a lost frame, as it was before these changes). DVSI's `_dtx` decodes play comfort noise
 through them, at the host software's request, where this library plays lost frames ([Rate 33 lost
 frames and tones](#rate-33-lost-frames-and-tones)), so only the silence frames themselves are
 compared. Our decode against DVSI's decode of the same bits:
@@ -804,9 +805,12 @@ the last frame played repeats three times, the fourth fades, silence follows, an
 frame plays at its level. The frame repeated is the last one played, so after a tone it is the
 tone, three times at full level, the fourth faded. DVSI's vectors cannot show either rule: none
 holds a tone frame with an unusable index or a lost frame next to a tone as DVSI's decoder plays
-it. The all-ones frames of the rate-33 DTX vectors are ID-255 tone frames, but DVSI's decodes there
-come from its host software's comfort-noise request, not from the chip decoding those bits, as with
-D-STAR's all-ones frame ([D-STAR lost frames](#d-star-lost-frames)).
+it. The all-ones frames of the rate-33 DTX vectors show neither: demodulated and corrected (no C0
+error, three corrected in all), each is a tone frame with index 180, which carries no tone, so a lost
+frame (`TONE`, `ERASURE` and `REPEAT`) before these changes as after them; only 49 all-ones
+parameter bits would read as ID 255. DVSI's decodes there come from its host software's
+comfort-noise request, not from the chip decoding those bits, as with D-STAR's all-ones frame
+([D-STAR lost frames](#d-star-lost-frames)).
 
 The library now follows those measurements:
 
@@ -826,10 +830,15 @@ The library now follows those measurements:
   runs through the mute that ends the run. The prediction history and the kept speech model stay
   those from before the tone.
 
-On the DTX vectors this shows in this library's own decode: after the silence frame that starts a
-pause, the all-ones frames now repeat the silence model three times and the 4th fades it out into
-the mute noise, where main played them as silence (the zero-amplitude tone). DVSI's decodes play
-comfort noise there, so those frames are not compared. Playing ID 255 as a lost frame is recorded
+On the DTX vectors the all-ones frames were lost frames on main too, and their per-frame flags are
+unchanged. What changes in this library's own decode is what those lost frames play: the repeated
+silence model is the 15-band one 13.8 dB lower ([Rate 33 silence
+frames](#rate-33-silence-frames)), the 4th lost frame fades it out instead of cutting to the noise,
+and the mute noise is DVSI's level ([Rate 33 mutes](#rate-33-mutes)). On `dam_dtx`, the RMS at 16
+bits of the silence frame's three repeats, the 4th lost frame and the two after it was 18.7, 18.5,
+17.8, then 2.35, 2.43, 2.37 on main, and is 3.8, 3.9, 3.7, then 1.74, 0.59, 0.54 now. None of that
+has to do with tone ID 255. DVSI's decodes play comfort noise there, so those frames are not
+compared. Playing ID 255 as a lost frame rests on the AMBE-3000R measurements alone and is recorded
 as a departure from Table 9.
 
 ### 16-bit output

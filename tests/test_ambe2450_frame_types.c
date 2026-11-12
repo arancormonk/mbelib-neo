@@ -2379,6 +2379,73 @@ test_loud_tone_first_frame(void) {
     }
 }
 
+/*
+ * The all-ones 72-bit frame, which DVSI's host software writes into its DTX
+ * vectors for the frames it does not send: demodulated and corrected, it is a
+ * tone frame (no C0 error, three corrected in all) whose index is not 255 and
+ * cannot be played, so an erasure flagged as a tone frame, repeating the frame
+ * before it, through the hard and the soft frame entry points alike. Beside
+ * it, a cleanly encoded ID-255 tone frame is an erasure too.
+ */
+static void
+test_all_ones_frame(void) {
+    static const unsigned lost = MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT;
+    char ones[4][24], d[49], ambe_d[49], tone[49];
+    mbe_soft_bit soft[4][24];
+    memset(ones, 1, sizeof(ones));
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 24; ++j) {
+            soft[i][j].bit = 1;
+            soft[i][j].reliability = 255;
+        }
+    }
+    for (int soft_input = 0; soft_input < 3; ++soft_input) {
+        struct stream s;
+        float want[160];
+        mbe_process_result result;
+        stream_settled(&s, k_voice_loud);
+        repeat_reference(want, &s, MBE_SYNTHESIS_CONTINUES);
+        int rc;
+        if (soft_input == 2) {
+            /* A cleanly encoded tone frame with ID 255. */
+            pack_tone(tone, 255);
+            char fr[4][24];
+            const int encoded = mbe_encodeAmbe3600x2450Frame(tone, fr);
+            assert(encoded == 0);
+            (void)encoded;
+            rc = mbe_processAmbe3600x2450Framef(s.out, &result, (const char (*)[24])fr, ambe_d, &s.cur, &s.prev,
+                                                &s.prev_enh);
+            assert(rc == 0 && result.c0_errors == 0);
+            assert(tone_id_of(ambe_d) == 255);
+        } else if (soft_input) {
+            rc = mbe_processAmbe3600x2450SoftFramef(s.out, &result, (const mbe_soft_bit(*)[24])soft, ambe_d, &s.cur,
+                                                    &s.prev, &s.prev_enh);
+            assert(rc == 3 && result.c0_errors == 0 && result.total_errors == 3);
+        } else {
+            rc = mbe_processAmbe3600x2450Framef(s.out, &result, (const char (*)[24])ones, ambe_d, &s.cur, &s.prev,
+                                                &s.prev_enh);
+            assert(rc == 3 && result.c0_errors == 0 && result.total_errors == 3);
+            memcpy(d, ambe_d, sizeof(d));
+        }
+        (void)rc;
+        const unsigned context = MBE_PROCESS_FLAG_C0_VALID | ((soft_input == 1) ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u);
+        assert(result.flags == (context | lost));
+        assert(close_to(s.out, want, 0, 160));
+        assert(s.cur.repeatCount == 1);
+        if (soft_input < 2) {
+            /* A tone frame whose index has no tone, and not the silent 255. */
+            int bits_set = 0;
+            for (int i = 0; i < 6; ++i) {
+                bits_set += ambe_d[i];
+            }
+            assert(bits_set == 6);
+            assert(tone_id_of(ambe_d) != 255);
+            assert(mbe_classifyAmbe2450Frame(ambe_d) == MBE_AMBE2450_FRAME_ERASURE);
+            assert(memcmp(ambe_d, d, sizeof(d)) == 0);
+        }
+    }
+}
+
 /* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
  * per output sample. */
 static float
@@ -2500,6 +2567,7 @@ main(void) {
     test_noise_generator_through_frame_kinds();
     test_valid_tone_keeps_state();
     test_tone_255_is_erasure();
+    test_all_ones_frame();
     test_lost_frames_repeat_a_tone();
     test_tone_after_repeated_tone();
     test_invalid_tone_is_erasure();
