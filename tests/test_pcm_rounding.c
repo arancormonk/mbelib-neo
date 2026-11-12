@@ -36,11 +36,20 @@
 static float inputs[MAX_INPUT];
 static size_t input_count;
 
+/* NaN, read from the bit pattern: a float compared with itself is folded
+ * away where the compiler assumes finite math. */
+static int
+is_nan_bits(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & UINT32_C(0x7FFFFFFF)) > UINT32_C(0x7F800000);
+}
+
 /* The scaled, limited sample both conversions start from. */
 static float
 reference_limited(float sample) {
     float value = sample * 7.0f;
-    if (value != value) {
+    if (is_nan_bits(value)) {
         return 0.0f;
     }
     if (value > LIMIT) {

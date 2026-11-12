@@ -612,7 +612,9 @@ test_error_rate_mute_boundary(void) {
         mbe_parms dec_cur = s.cur;
         mbe_parms dec_prev = s.prev;
         const struct stream before = s;
-        assert(mbe_decodeAmbe2450Parms(voice, &dec_cur, &dec_prev) == 0);
+        const int kind = mbe_decodeAmbe2450Parms(voice, &dec_cur, &dec_prev);
+        assert(kind == 0);
+        (void)kind;
 
         stream_frame(&s, voice, 1, 6);
         assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
@@ -702,7 +704,9 @@ test_invalid_tone_is_erasure(void) {
     mbe_parms dec_cur = s.cur;
     mbe_parms dec_prev = s.prev;
     assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_ERASURE);
-    assert(mbe_decodeAmbe2450Parms(tone, &dec_cur, &dec_prev) == MBE_AMBE2450_FRAME_ERASURE);
+    const int kind = mbe_decodeAmbe2450Parms(tone, &dec_cur, &dec_prev);
+    assert(kind == MBE_AMBE2450_FRAME_ERASURE);
+    (void)kind;
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE));
@@ -750,7 +754,9 @@ test_unverified_tone_is_erasure(void) {
     tone[48] = 1;  /* and the last four bits of u3 are not 0 */
     assert(mbe_classifyAmbe2450Frame(tone) == MBE_AMBE2450_FRAME_ERASURE);
     mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_decodeAmbe2450Parms(tone, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+    const int kind = mbe_decodeAmbe2450Parms(tone, &cur, &prev);
+    assert(kind == MBE_AMBE2450_FRAME_ERASURE);
+    (void)kind;
 
     stream_init(&s);
     stream_frame_b(&s, k_voice_loud, 0, 0);
@@ -776,13 +782,19 @@ test_classify_matches_decode(void) {
     pack_b(d, k_erasure);
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_ERASURE);
     mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+    const int kind = mbe_decodeAmbe2450Parms(d, &cur, &prev);
+    assert(kind == MBE_AMBE2450_FRAME_ERASURE);
+    (void)kind;
     pack_tone(d, 255);
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_ERASURE);
-    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+    const int kind2 = mbe_decodeAmbe2450Parms(d, &cur, &prev);
+    assert(kind2 == MBE_AMBE2450_FRAME_ERASURE);
+    (void)kind2;
     pack_tone(d, 7);
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_TONE);
-    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_TONE);
+    const int kind3 = mbe_decodeAmbe2450Parms(d, &cur, &prev);
+    assert(kind3 == MBE_AMBE2450_FRAME_TONE);
+    (void)kind3;
 
     d[0] = 2;
     assert(mbe_classifyAmbe2450Frame(d) == MBE_STATUS_INVALID_BITS);
@@ -856,9 +868,13 @@ test_null_result(void) {
     char d[49];
     stream_init(&s);
     pack_b(d, k_voice_loud);
-    assert(mbe_processAmbe2450Dataf(s.out, NULL, d, &s.cur, &s.prev, &s.prev_enh) >= 0);
+    const int rc = mbe_processAmbe2450Dataf(s.out, NULL, d, &s.cur, &s.prev, &s.prev_enh);
+    assert(rc >= 0);
+    (void)rc;
     pack_b(d, k_erasure);
-    assert(mbe_processAmbe2450Dataf(s.out, NULL, d, &s.cur, &s.prev, &s.prev_enh) >= 0);
+    const int rc2 = mbe_processAmbe2450Dataf(s.out, NULL, d, &s.cur, &s.prev, &s.prev_enh);
+    assert(rc2 >= 0);
+    (void)rc2;
     assert(s.cur.repeatCount == 1);
 }
 
@@ -877,8 +893,9 @@ test_aliased_parms_rejected(void) {
         {&s.cur, &s.prev, &s.prev},
     };
     for (int i = 0; i < 3; ++i) {
-        assert(mbe_processAmbe2450Dataf(s.out, NULL, d, aliases[i][0], aliases[i][1], aliases[i][2])
-               == MBE_STATUS_INVALID_ARGUMENT);
+        const int rc = mbe_processAmbe2450Dataf(s.out, NULL, d, aliases[i][0], aliases[i][1], aliases[i][2]);
+        assert(rc == MBE_STATUS_INVALID_ARGUMENT);
+        (void)rc;
     }
     assert(parms_equal(&s.cur, &before.cur));
     assert(parms_equal(&s.prev, &before.prev));
@@ -919,7 +936,9 @@ test_dvsi_silence_vector(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
     /* As in 2.1, the staged decode reports any decoded model as voice. */
-    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
+    const int kind = mbe_decodeAmbe2450Parms(d, &cur, &prev);
+    assert(kind == MBE_AMBE2450_FRAME_VOICE);
+    (void)kind;
     assert(cur.L == 15);
     assert(fabsf(cur.w0 - (float)(2.0 * M_PI / 32.0)) < 1e-6f);
     assert(silence_amplitudes_ok(&cur));
@@ -1213,7 +1232,9 @@ test_silence_flag_round_trip(void) {
     mbe_formatProcessResult(without_flag, sizeof(without_flag), &plain);
     assert(strcmp(with_flag, without_flag) == 0);
 
-    assert(mbe_processAmbe2450Dataf(s.out, &s.result, silence, &s.cur, &s.prev, &s.prev_enh) >= 0);
+    const int rc = mbe_processAmbe2450Dataf(s.out, &s.result, silence, &s.cur, &s.prev, &s.prev_enh);
+    assert(rc >= 0);
+    (void)rc;
     assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
 }
 
@@ -1815,7 +1836,9 @@ test_tone_255_is_erasure(void) {
     pack_tone(d, 255);
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_ERASURE);
     mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+    const int kind = mbe_decodeAmbe2450Parms(d, &cur, &prev);
+    assert(kind == MBE_AMBE2450_FRAME_ERASURE);
+    (void)kind;
 
     for (int total = 3; total <= 6; ++total) {
         struct stream s;
@@ -1833,7 +1856,9 @@ test_tone_255_is_erasure(void) {
         assert(s.cur.repeatCount == 1 && s.prev_enh.Vl[0] == 0);
     }
 
-    assert(mbe_encodeAmbe3600x2450Frame(d, fr) == 0);
+    const int encoded = mbe_encodeAmbe3600x2450Frame(d, fr);
+    assert(encoded == 0);
+    (void)encoded;
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 24; ++j) {
             soft[i][j].bit = (uint8_t)fr[i][j];

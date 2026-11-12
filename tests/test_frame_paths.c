@@ -301,6 +301,15 @@ test_imbe7100_frame_paths(void) {
 
 enum fixture_mode { IMBE7200, IMBE7100, AMBE2450, AMBE2400 };
 
+/* NaN, read from the bit pattern: a float compared with itself is folded
+ * away where the compiler assumes finite math. */
+static int
+is_nan_bits(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & UINT32_C(0x7FFFFFFF)) > UINT32_C(0x7F800000);
+}
+
 /* The rule of the AMBE paths' short entry points, rendered independently:
  * 7x limited to +-(32767 * 0.95), NaN 0, rounded to nearest with halves away
  * from zero (roundf). */
@@ -308,7 +317,7 @@ static short
 round_pcm_sample(float sample) {
     const float limit = 32767.0f * 0.95f;
     float value = sample * 7.0f;
-    if (value != value) {
+    if (is_nan_bits(value)) {
         value = 0.0f;
     } else if (value > limit) {
         value = limit;

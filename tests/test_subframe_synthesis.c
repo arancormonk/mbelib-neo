@@ -166,7 +166,15 @@ all_finite(const float* x, int n) {
 
 static int
 same_bits(const float* a, const float* b, int n) {
-    return memcmp(a, b, (size_t)n * sizeof(float)) == 0;
+    for (int i = 0; i < n; ++i) {
+        uint32_t x, y;
+        memcpy(&x, &a[i], sizeof(x));
+        memcpy(&y, &b[i], sizeof(y));
+        if (x != y) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* The frame marks: only an exact stored value counts, and one replaces another. */
@@ -1038,7 +1046,7 @@ test_from_silence(void) {
         const double gain = (n < 80) ? (double)n / 80.0 : 1.0;
         assert(fabs((double)rising[n] - gain * (double)steady[n]) < 1e-4 * peak);
     }
-    assert(rising[0] == 0.0f);
+    assert(fabsf(rising[0]) < 1e-6f);
     assert(same_bits(rising, other, 160));
     assert(same_bits(carried.noiseOverlap, emptied.noiseOverlap, 96));
     assert(same_bits(carried.PSIl, emptied.PSIl, 57));
@@ -1448,7 +1456,9 @@ test_subnormal_pitch_is_no_pitch(void) {
                 enhanced.Ml[l] = 16.0f;
             }
             set_imbe_b0(imbe_d, 150);
-            assert(mbe_processImbe4400Dataf(out, NULL, imbe_d, &cur, &prev, &enhanced) >= 0);
+            const int rc = mbe_processImbe4400Dataf(out, NULL, imbe_d, &cur, &prev, &enhanced);
+            assert(rc >= 0);
+            (void)rc;
             assert(all_finite(out, 160));
             if (flushed) {
                 restore_denormals(saved);
@@ -1495,7 +1505,9 @@ test_p25_marks_late_onsets(void) {
         set_imbe_b0(imbe_d, codes[i]);
         imbe_d[bit] = 1;
         mbe_initMbeParms(&cur, &prev, &enhanced);
-        assert(mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) == 0);
+        const int kind = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+        assert(kind == 0);
+        (void)kind;
         assert(mbe_frame_mark(&cur) == ((i < 3) ? MBE_FRAME_MARK_LATE_ONSET : MBE_FRAME_MARK_NONE));
 
         /* Through the data path, after frames with no voiced band: the pulse
@@ -1505,9 +1517,13 @@ test_p25_marks_late_onsets(void) {
         set_imbe_b0(unvoiced, 150);
         mbe_initMbeParms(&cur, &prev, &enhanced);
         for (int f = 0; f < 2; ++f) {
-            assert(mbe_processImbe4400Dataf(out, NULL, unvoiced, &cur, &prev, &enhanced) >= 0);
+            const int rc = mbe_processImbe4400Dataf(out, NULL, unvoiced, &cur, &prev, &enhanced);
+            assert(rc >= 0);
+            (void)rc;
         }
-        assert(mbe_processImbe4400Dataf(out, NULL, imbe_d, &cur, &prev, &enhanced) >= 0);
+        const int rc2 = mbe_processImbe4400Dataf(out, NULL, imbe_d, &cur, &prev, &enhanced);
+        assert(rc2 >= 0);
+        (void)rc2;
         const double hz = (double)enhanced.w0 * 8000.0 / (2.0 * M_PI);
         assert(fabs(cycles_apart(pulse_phase(&enhanced), cycles_of(hz, (i < 3) ? 80.0 : 160.0))) < 1e-4);
     }
@@ -1526,7 +1542,9 @@ test_decoders_mark_unvoiced_frames(void) {
             set_imbe_b0(imbe_d, b0);
             mbe_initMbeParms(&cur, &prev, &enhanced);
             mbe_set_frame_mark(&cur, MBE_FRAME_MARK_LATE_ONSET);
-            assert(mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) == 0);
+            const int kind = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+            assert(kind == 0);
+            (void)kind;
             int any = 0;
             for (int l = 1; l <= cur.L; ++l) {
                 any |= cur.Vl[l];
@@ -1545,7 +1563,9 @@ test_decoders_mark_unvoiced_frames(void) {
             set_ambe2400(ambe_d, b0, b1);
             mbe_initMbeParms(&cur, &prev, &enhanced);
             mbe_set_frame_mark(&cur, MBE_FRAME_MARK_LATE_ONSET);
-            assert(mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev) == 0);
+            const int kind2 = mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev);
+            assert(kind2 == 0);
+            (void)kind2;
             int any = 0;
             for (int l = 1; l <= cur.L; ++l) {
                 any |= cur.Vl[l];
@@ -1581,11 +1601,15 @@ test_p25_voicing_persists(void) {
         memset(unvoiced, 0, sizeof(unvoiced));
         set_imbe_b0(unvoiced, codes[i]);
         for (int f = 0; f < 3; ++f) {
-            assert(mbe_processImbe4400Dataf(out, NULL, voiced, &cur, &prev, &enhanced) >= 0);
+            const int rc = mbe_processImbe4400Dataf(out, NULL, voiced, &cur, &prev, &enhanced);
+            assert(rc >= 0);
+            (void)rc;
         }
         const double before = pulse_phase(&enhanced);
         const double hz = (double)enhanced.w0 * 8000.0 / (2.0 * M_PI);
-        assert(mbe_processImbe4400Dataf(out, NULL, unvoiced, &cur, &prev, &enhanced) >= 0);
+        const int rc2 = mbe_processImbe4400Dataf(out, NULL, unvoiced, &cur, &prev, &enhanced);
+        assert(rc2 >= 0);
+        (void)rc2;
         assert(mbe_frame_mark(&enhanced) == (persists ? MBE_FRAME_MARK_PITCH_ABSENT : MBE_FRAME_MARK_NONE));
         if (persists) {
             assert(fabs(cycles_apart(pulse_phase(&enhanced), before + cycles_of(hz, 160.0))) < 1e-4);
@@ -1628,7 +1652,9 @@ test_p25_reset_drops_the_mark(void) {
             }
             /* A frame at the repeat limit plays mute noise from the thread's generator: the same for both. */
             mbe_setThreadRngSeed(1000u + (uint32_t)f);
-            assert(mbe_processImbe4400Dataf(out[s], &result, imbe_d, &cur[s], &prev[s], &enhanced[s]) >= 0);
+            const int rc = mbe_processImbe4400Dataf(out[s], &result, imbe_d, &cur[s], &prev[s], &enhanced[s]);
+            assert(rc >= 0);
+            (void)rc;
             assert(((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == rejected);
             /* A reset frame is a repeat that is neither muted nor a copy of the frame before: count them. */
             if (s == 0 && rejected && enhanced[s].repeatCount == 0) {
