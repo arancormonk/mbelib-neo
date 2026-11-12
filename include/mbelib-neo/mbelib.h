@@ -573,6 +573,8 @@ MBE_API int mbe_eccAmbe3600x2450Data(char ambe_fr[4][24], char* ambe_d);
 /**
  * AMBE 2450 frame type: erasure (b0 120-123, or a tone frame whose tone index is
  * invalid or whose redundant fields disagree, TIA-102.BABA-1 7.3); a frame repeat.
+ * Tone ID 255, which Table 9 lists as a zero-amplitude tone, is an erasure too,
+ * as DVSI's decoder plays it.
  */
 #define MBE_AMBE2450_FRAME_ERASURE 2
 /** AMBE 2450 frame type: tone frame with a usable tone index (TIA-102.BABA-1 7, 7.3). */

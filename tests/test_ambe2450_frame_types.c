@@ -622,7 +622,6 @@ test_error_rate_mute_boundary(void) {
  */
 static void
 test_valid_tone_keeps_state(void) {
-    static const float silence[160] = {0};
     struct stream s;
     char tone[49];
     char erasure[49];
@@ -657,24 +656,15 @@ test_valid_tone_keeps_state(void) {
     stream_frame(&s, tone, 0, 0);
     assert(float_array_bits_equal(s.out, expected, 160));
 
-    /* Table 9 / 7.3: ID 255 is a valid zero-amplitude tone. The tone before it
-     * goes on from its phases through the first 80 samples, fading out. */
+    /* The zero-amplitude ID 255 is a lost frame: the tone repeats, at once. */
     mbe_synthesizeTonef(expected, tone, &tone_state);
     pack_tone(tone, 255);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
-    assert(!has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
-    assert(s.cur.repeatCount == 0);
-    assert(is_crossfade(s.out, silence, expected));
-    for (int i = 80; i < 160; ++i) {
-        assert(float_bits_equal(s.out[i], 0.0f));
-    }
-    assert(s.prev_enh.Vl[0] == W_AFRESH);
-    /* Nothing is left sounding after it. */
-    stream_frame(&s, tone, 0, 0);
-    for (int i = 0; i < 160; ++i) {
-        assert(float_bits_equal(s.out[i], 0.0f));
-    }
+    assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE) && has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
+    assert(s.cur.repeatCount == 1);
+    assert(float_array_bits_equal(s.out, expected, 160));
+    assert(s.prev_enh.Vl[0] == tone_word(7));
 }
 
 /* 7.3: an invalid tone index is an erasure; at the 4th invalid frame it mutes without a reset. */
@@ -766,6 +756,9 @@ test_classify_matches_decode(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
     pack_tone(d, 255);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_ERASURE);
+    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+    pack_tone(d, 7);
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_TONE);
     assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_TONE);
 
@@ -1241,28 +1234,22 @@ test_repeat_preserves_model(void) {
  * synthesized from the speech model kept through the tone, as the frame after
  * a mute is, and the tone goes on from its phases, fading out over the first
  * 80 samples, added on top; the sum is limited. This holds with or without a
- * mute before the tone. A twin stream that takes the zero-amplitude ID 255 in
- * the tone's place plays the same frame without the tail. A repeat right
- * after the zero-amplitude tone repeats the kept model from silence; while an
- * audible tone is held, a repeat is silent under the tail and the frame after
- * it still starts from silence.
+ * mute before the tone, and after lost frames that repeated the tone (whose
+ * phases the tail continues from). The frame after it continues as any does.
  */
 static void
 test_frame_after_tone(void) {
-    static const int tone_ids[2] = {255, 7};
     char erasure[49];
     char voice[49];
     char tone[49];
-    char silent_tone[49];
     pack_b(erasure, k_erasure);
     pack_b(voice, k_voice_next);
-    pack_tone(silent_tone, 255);
+    pack_tone(tone, 7);
 
-    for (int k = 0; k < 8; ++k) {
-        const int tone_id = tone_ids[k & 1];
-        const int repeat_after = (k >> 1) & 1;
-        const int mute_before = (k >> 2) & 1;
-        struct stream s;
+    for (int k = 0; k < 4; ++k) {
+        const int lost_after = k & 1;
+        const int mute_before = (k >> 1) & 1;
+        struct stream s, released;
         stream_init(&s);
         for (int i = 0; i < 8; ++i) {
             stream_frame(&s, voice, 0, 0);
@@ -1272,43 +1259,34 @@ test_frame_after_tone(void) {
         }
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == mute_before);
         const mbe_parms kept = s.prev_enh;
-        struct stream quiet = s;
-        stream_frame(&quiet, silent_tone, 0, 0);
-        pack_tone(tone, tone_id);
         stream_frame(&s, tone, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
         assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-        assert(model_equal(&s.prev_enh, &kept) && model_equal(&quiet.prev_enh, &kept));
-        float tail[160] = {0};
-        if (tone_id != 255) {
-            tail_reference(tail, tone, &s.cur);
+        assert(model_equal(&s.prev_enh, &kept));
+        for (int i = 0; lost_after && i < 2; ++i) {
+            stream_frame(&s, erasure, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && s.prev_enh.Vl[0] == tone_word(7));
         }
-        const struct stream quiet_before = quiet;
-        float want[160];
+        float tail[160], want[160];
         mbe_parms model;
-        if (!repeat_after) {
-            stream_frame(&quiet, voice, 0, 0);
-            stream_frame(&s, voice, 0, 0);
-            frame_reference(want, &model, &quiet_before, voice, &quiet, MBE_SYNTHESIS_FROM_SILENCE);
-            assert(close_to(quiet.out, want, 0, 160));
-            for (int n = 0; n < 160; ++n) {
-                want[n] = quiet.out[n] + tail[n];
-            }
-            limit_sum(want, 160);
-            assert(close_to(s.out, want, 0, 160));
-            assert(s.prev_enh.Vl[0] == 0);
-        } else {
-            stream_frame(&quiet, voice, 4, 0);
-            stream_frame(&s, voice, 4, 0);
-            assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
-            assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-            repeat_reference(want, &quiet_before, MBE_SYNTHESIS_FROM_SILENCE);
-            assert(close_to(quiet.out, want, 0, 160));
-            assert(close_to(s.out, (tone_id == 255) ? want : tail, 0, 160));
-            assert(s.prev_enh.Vl[0] == ((tone_id == 255) ? 0 : W_AFRESH));
+        tail_reference(tail, tone, &s.cur);
+        const struct stream before = s;
+        stream_frame(&s, voice, 0, 0);
+        assert(s.result.flags == MBE_PROCESS_FLAG_C0_VALID);
+        frame_reference(want, &model, &before, voice, &s, MBE_SYNTHESIS_FROM_SILENCE);
+        for (int n = 0; n < 160; ++n) {
+            want[n] += tail[n];
         }
-        assert(quiet.prev_enh.Vl[0] == 0);
-        assert(s.cur.Vl[0] == 0 && quiet.cur.Vl[0] == 0);
+        limit_sum(want, 160);
+        assert(close_to(s.out, want, 0, 160));
+        assert(!tones_sound() || peak_abs(tail) > 1000.0f);
+        assert(model_equal(&s.prev_enh, &model));
+        assert(s.prev_enh.Vl[0] == 0 && s.cur.Vl[0] == 0);
+        assert(s.cur.repeatCount == 0);
+        released = s;
+        stream_frame(&s, voice, 0, 0);
+        frame_reference(want, &model, &released, voice, &s, MBE_SYNTHESIS_CONTINUES);
+        assert(close_to(s.out, want, 0, 160));
     }
 }
 
@@ -1792,6 +1770,186 @@ test_repeat_after_mute_starts_from_silence(void) {
     assert(close_to(s.out, next_want, 0, 160));
 }
 
+/* ---- Lost frames and tones ---- */
+
+/*
+ * Table 9 lists ID 255 as a tone of zero amplitude; DVSI's decoder plays it as
+ * a lost frame, as it does any unusable index. It classifies and decodes as an
+ * erasure, and processes as an erasure flagged as a tone frame, a repeat of
+ * the last frame: from parameter bits without C0 context at total errors 3,
+ * 4 and 5, and from the hard and soft frame entry points (soft with
+ * reliabilities that differ from bit to bit). The repeat criteria still come
+ * first: without C0 context the 2.1 heuristic rejects the frame at 6 errors,
+ * flagged a repeat alone, and it repeats the same way.
+ */
+static void
+test_tone_255_is_erasure(void) {
+    static const unsigned erasure = MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT;
+    char d[49], ambe_d[49], fr[4][24];
+    mbe_soft_bit soft[4][24];
+    mbe_parms cur, prev, enh;
+    pack_tone(d, 255);
+    assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_ERASURE);
+    mbe_initMbeParms(&cur, &prev, &enh);
+    assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_ERASURE);
+
+    for (int total = 3; total <= 6; ++total) {
+        struct stream s;
+        float want[160];
+        mbe_process_result result;
+        stream_settled(&s, k_voice_loud);
+        repeat_reference(want, &s, MBE_SYNTHESIS_CONTINUES);
+        mbe_initProcessResult(&result);
+        result.total_errors = total;
+        const int rc = mbe_processAmbe2450Dataf(s.out, &result, d, &s.cur, &s.prev, &s.prev_enh);
+        assert(rc == total);
+        (void)rc;
+        assert(result.flags == ((total >= 6) ? MBE_PROCESS_FLAG_REPEAT : erasure));
+        assert(close_to(s.out, want, 0, 160));
+        assert(s.cur.repeatCount == 1 && s.prev_enh.Vl[0] == 0);
+    }
+
+    assert(mbe_encodeAmbe3600x2450Frame(d, fr) == 0);
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 24; ++j) {
+            soft[i][j].bit = (uint8_t)fr[i][j];
+            soft[i][j].reliability = (uint8_t)(40 + ((37 * ((i * 24) + j)) % 216));
+        }
+    }
+    for (int soft_input = 0; soft_input < 2; ++soft_input) {
+        struct stream s;
+        float want[160];
+        mbe_process_result result;
+        stream_settled(&s, k_voice_loud);
+        repeat_reference(want, &s, MBE_SYNTHESIS_CONTINUES);
+        const int rc = soft_input ? mbe_processAmbe3600x2450SoftFramef(s.out, &result, (const mbe_soft_bit(*)[24])soft,
+                                                                       ambe_d, &s.cur, &s.prev, &s.prev_enh)
+                                  : mbe_processAmbe3600x2450Framef(s.out, &result, (const char (*)[24])fr, ambe_d,
+                                                                   &s.cur, &s.prev, &s.prev_enh);
+        assert(rc == 0);
+        (void)rc;
+        assert(memcmp(ambe_d, d, sizeof(d)) == 0);
+        assert(result.flags == (MBE_PROCESS_FLAG_C0_VALID | erasure | (soft_input ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u)));
+        assert(close_to(s.out, want, 0, 160));
+    }
+}
+
+/* A stream that plays a tone of this ID after settled speech. */
+static void
+stream_into_tone(struct stream* s, char tone[49], int tone_id) {
+    stream_settled(s, k_voice_loud);
+    pack_tone(tone, tone_id);
+    stream_frame(s, tone, 0, 0);
+    assert(has_flag(s, MBE_PROCESS_FLAG_TONE) && !has_flag(s, MBE_PROCESS_FLAG_REPEAT));
+}
+
+/*
+ * A lost frame repeats the frame last played, a tone included: three lost
+ * frames of any kind (an erasure, a tone frame with the zero-amplitude ID 255,
+ * a frame the repeat criteria reject) after a tone play exactly what three
+ * more tone frames play, from the running tone phases, at full level; each
+ * counts toward the repeat limit and advances the error accounting, and the
+ * tone, the kept model and the noise generator stay where they were. The
+ * 4th fades the tone out under the mute noise, which does not fade, and runs
+ * the generator one frame; the next frame starts from silence.
+ */
+static void
+test_lost_frames_repeat_a_tone(void) {
+    char tone[49], erasure[49], silent_tone[49], voice[49];
+    struct stream s, twin;
+    pack_b(erasure, k_erasure);
+    pack_tone(silent_tone, 255);
+    pack_b(voice, k_voice_next);
+    stream_into_tone(&s, tone, 7);
+    twin = s;
+    const mbe_parms kept = s.prev_enh;
+    const float generator = s.prev_enh.noiseSeed;
+
+    for (int i = 1; i <= 3; ++i) {
+        const float error_rate = s.prev.errorRate;
+        if (i == 1) {
+            stream_frame(&s, erasure, 0, 0);
+            assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
+        } else if (i == 2) {
+            stream_frame(&s, silent_tone, 0, 0);
+            assert(s.result.flags
+                   == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
+                       | MBE_PROCESS_FLAG_TONE));
+        } else {
+            stream_frame(&s, tone, 4, 2);
+            assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_REPEAT));
+        }
+        stream_frame(&twin, tone, 0, 0);
+        assert(float_array_bits_equal(s.out, twin.out, 160));
+        assert(!tones_sound() || peak_abs(s.out) > 1000.0f);
+        assert(s.cur.repeatCount == i && s.prev.repeatCount == i);
+        assert(fabsf(s.prev.errorRate - ((0.95f * error_rate) + (0.001064f * (float)s.cur.errorCountTotal))) < 1e-7f);
+        assert(s.cur.swn == twin.cur.swn && s.cur.tonePhase == twin.cur.tonePhase);
+        assert(kept_through_tone(&s.prev_enh, &kept, tone_word(7)));
+        assert(float_bits_equal(s.cur.noiseSeed, generator));
+        assert(s.cur.Vl[0] == 0);
+        (void)error_rate;
+    }
+
+    /* The 4th: the tone's tail under the mute noise. */
+    const struct stream before = s;
+    float want[160], noise[160];
+    tail_reference(want, tone, &before.cur);
+    mute_noise_reference(noise);
+    for (int n = 0; n < 160; ++n) {
+        want[n] += noise[n];
+    }
+    limit_sum(want, 160);
+    stream_frame(&s, erasure, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) && s.cur.repeatCount == MBE_MAX_FRAME_REPEATS);
+    assert(close_to(s.out, want, 0, 160));
+    assert_muted_state(&s, &kept, generator);
+
+    /* The voice after it starts from silence, with no tail. */
+    struct stream released;
+    assert_release(&s, voice, &released);
+}
+
+/*
+ * A valid tone frame after lost frames that repeated the tone goes on at once,
+ * with no fade, ends the repeat run and advances the error accounting; a
+ * different tone changes at once too.
+ * Lost frames inside a tone are not heard: tone, two erasures, tone plays as
+ * four tone frames.
+ */
+static void
+test_tone_after_repeated_tone(void) {
+    char tone[49], other[49], erasure[49];
+    struct stream s, twin;
+    pack_b(erasure, k_erasure);
+    pack_tone(other, 32);
+    stream_into_tone(&s, tone, 7);
+    twin = s;
+    for (int i = 0; i < 2; ++i) {
+        stream_frame(&s, erasure, 0, 0);
+        stream_frame(&twin, tone, 0, 0);
+        assert(float_array_bits_equal(s.out, twin.out, 160));
+    }
+    assert(s.cur.repeatCount == 2);
+    const float error_rate = s.prev.errorRate;
+    stream_frame(&s, tone, 1, 1);
+    stream_frame(&twin, tone, 0, 0);
+    assert(float_array_bits_equal(s.out, twin.out, 160));
+    assert(s.cur.repeatCount == 0 && s.prev.repeatCount == 0);
+    assert(fabsf(s.prev.errorRate - ((0.95f * error_rate) + (0.001064f * 2.0f))) < 1e-7f);
+    (void)error_rate;
+    assert(s.prev_enh.Vl[0] == tone_word(7));
+
+    /* Another tone after a repeated tone. */
+    stream_frame(&s, erasure, 0, 0);
+    mbe_parms phases = s.cur;
+    float want[160];
+    mbe_synthesizeTonef(want, other, &phases);
+    stream_frame(&s, other, 0, 0);
+    assert(float_array_bits_equal(s.out, want, 160));
+    assert(s.prev_enh.Vl[0] == tone_word(32) && s.cur.repeatCount == 0);
+}
+
 /* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
  * per output sample. */
 static float
@@ -1804,9 +1962,9 @@ noise_state_after(int frames) {
 }
 
 /*
- * DVSI's noise generator runs through every frame that is not a tone frame:
+ * DVSI's noise generator runs through every frame that does not play a tone:
  * voice, silence, repeats and mutes each move it 160 samples on (a mute once,
- * whatever it renders), and a tone frame, the zero-amplitude one included,
+ * whatever it renders), and a tone frame, or a lost frame that repeats a tone,
  * leaves it where it was.
  */
 static void
@@ -1837,9 +1995,10 @@ test_noise_generator_through_frame_kinds(void) {
         assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
         assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
     }
+    /* ID 255 is a lost frame, which repeats the tone. */
     pack_tone(d, 255);
     stream_frame(&s, d, 0, 0);
-    assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    assert(has_flag(&s, MBE_PROCESS_FLAG_TONE) && has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
     stream_frame_b(&s, k_voice_loud, 0, 0);
     ++frames;
@@ -1867,8 +2026,21 @@ test_noise_generator_through_frame_kinds(void) {
         assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
         assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
     }
+    /* A tone, three lost frames repeating it (still), then the repeat
+     * limit's mute fading it out (one frame). */
+    s.prev.errorRate = 0.0f;
+    pack_tone(d, 7);
+    stream_frame(&s, d, 0, 0);
+    assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+    for (int i = 0; i < 4; ++i) {
+        stream_frame_b(&s, k_erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == (i == 3));
+        frames += (i == 3) ? 1 : 0;
+        assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+        assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    }
     /* The thread seed does not move it: every stream starts DVSI's generator from 0. */
-    assert(frames == 11);
+    assert(frames == 12);
 }
 
 int
@@ -1898,6 +2070,9 @@ main(void) {
     test_mute_first_frame();
     test_noise_generator_through_frame_kinds();
     test_valid_tone_keeps_state();
+    test_tone_255_is_erasure();
+    test_lost_frames_repeat_a_tone();
+    test_tone_after_repeated_tone();
     test_invalid_tone_is_erasure();
     test_unverified_tone_is_erasure();
     test_classify_matches_decode();

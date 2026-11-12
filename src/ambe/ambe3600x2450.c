@@ -521,20 +521,25 @@ ambe2450_tone_verified(const char* ambe_d) {
     return ambe2450_is_tone_frame(ambe_d) && ambe2450_tone_fields_consistent(ambe_d);
 }
 
-#define AMBE2450_TONE_ID_ZERO_AMPLITUDE 255 /* Table 9 / 7.3 */
-
-/** 7.3: a tone index the decoder can output, including the zero-amplitude ID 255. */
+/**
+ * 7.3: a tone index the decoder can output. Table 9 also lists ID 255 as a
+ * tone of zero amplitude; DVSI's decoder does not play it as a tone but as a
+ * lost frame, as it does any unusable index (measurements of an AMBE-3000R
+ * published with mbevocoder: ID 255 and ID 200 play as lost frames). This
+ * decoder follows DVSI (docs/dvsi-parity.md, "Rate 33 lost frames and
+ * tones"): ID 255 is an erasure.
+ */
 static int
 ambe2450_tone_id_usable(const char* ambe_d) {
-    const int tone_id = ambe2450_read_tone_id(ambe_d);
-    return (tone_id == AMBE2450_TONE_ID_ZERO_AMPLITUDE) || mbe_tone_id_is_valid(tone_id);
+    return mbe_tone_id_is_valid(ambe2450_read_tone_id(ambe_d));
 }
 
 /**
  * Frame type from the parameter bits alone. A tone frame (7) is recognised
  * before b0: its other bits follow Table 10, not Tables 5-8, so its b0 reads
  * 120-127 (a single tone can read as silence). A tone frame whose index is
- * invalid (Table 9), or whose redundant fields disagree, is an erasure (7.3).
+ * invalid (Table 9) or the zero-amplitude ID 255 (ambe2450_tone_id_usable()),
+ * or whose redundant fields disagree, is an erasure (7.3).
  * Otherwise b0 gives the type (4.1 Table 4); b0 126/127 without the tone
  * identifier cannot be decoded as a tone and is an erasure too.
  */
@@ -1057,33 +1062,45 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
 /**
  * 5.6 steps 2-3: synthesize the repeated model as-is (no re-enhancement and
  * no adaptive smoothing, which could change its voicing and amplitudes).
- * After a mute the kept model is repeated from silence. While a tone is held
- * the repeat is silent, the tone's tail fading out over it, and the next frame
- * still starts from silence. Returns the word the frame leaves.
+ * After a mute or a tone the kept model is repeated from silence. Returns the
+ * word the frame leaves.
  */
 static int
 ambe2450_repeat(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     /* Step 2 repeats the previous frame's model, enhanced amplitudes included
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
-    if (in->held) {
-        mbe_synthesizeSilencef(aout_buf);
-        ambe2450_add_tone_tail(aout_buf, in);
-        mbe_dvsi_noise_skip_frame(cur_mp);
-        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-        return AMBE2450_STARTS_AFRESH;
-    }
     mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI,
                                        ambe2450_start(in->afresh));
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     return 0;
 }
 
+/*
+ * A lost frame while a tone sounds. TIA-102.BABA-1 5.6 repeats the last
+ * synthesized frame's model, and says nothing of a tone. DVSI's decoder
+ * repeats the frame last played, a tone included (measurements of an
+ * AMBE-3000R published with mbevocoder: a lost frame after a tone replays the
+ * tone; docs/dvsi-parity.md, "Rate 33 lost frames and tones"). Like any
+ * repeat, the tone goes on at its level for up to three lost frames, the
+ * repeat count running, and the fourth, the repeat limit's mute, fades it out
+ * under the mute noise (ambe2450_mute()); lost frames inside a tone are not
+ * heard. The held tone plays again from the oscillator phases cur_mp carries,
+ * as a tone frame advances them; the kept model and the word stay as they
+ * are, and the noise generator stands still, as through a tone frame.
+ */
+static int
+ambe2450_repeat_tone(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* cur_mp) {
+    mbe_renderToneAmbe2450f(aout_buf, cur_mp, in->id, in->ad);
+    return AMBE2450_TONE_HELD | AMBE2450_STARTS_AFRESH | (in->ad << 8) | in->id;
+}
+
 /**
  * Invalid frame: repeat criteria or erasure (5.6), or a tone frame with an
  * unusable tone index (7.3). The frame is ignored in later processing (5.6
  * step 1); the 4th consecutive invalid frame mutes instead of repeating (5.7).
- * Returns the word the frame leaves.
+ * While a tone sounds it is the tone that repeats. Returns the word the frame
+ * leaves.
  */
 static int
 ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned extra_flags,
@@ -1094,6 +1111,9 @@ ambe2450_process_invalid(float* aout_buf, mbe_process_result* result, unsigned e
     mbe_copy_error_state(prev_mp, cur_mp);
     if (mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp)) {
         return ambe2450_mute(aout_buf, result, in, 0, cur_mp, prev_mp_enhanced);
+    }
+    if (in->held) {
+        return ambe2450_repeat_tone(aout_buf, in, cur_mp);
     }
     return ambe2450_repeat(aout_buf, in, cur_mp, prev_mp_enhanced);
 }
@@ -1131,11 +1151,12 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
  * Tone transitions, as DVSI's decoder plays them (docs/dvsi-parity.md, "Rate
  * 33 tone transitions"): a tone fades in linearly over the first
  * AMBE2450_TONE_FADE samples of its first frame while the last frame's speech,
- * synthesized as a repeat of it, fades out (nothing does after a mute or
- * another tone); and it goes on through the first AMBE2450_TONE_FADE samples
- * of the frame after its last, fading out on top of that frame's output.
- * TIA-102.BABA-1 does not say how a tone frame joins the frames around it.
- * Its phases are the tone state cur_mp carries.
+ * synthesized as a repeat of it, fades out (nothing does after a mute); a
+ * tone that changes while it sounds, or comes back after lost frames, changes
+ * at once; and the last tone goes on through the first AMBE2450_TONE_FADE
+ * samples of the frame after it, fading out on top of that frame's output
+ * (or of a mute's noise). TIA-102.BABA-1 does not say how a tone frame joins
+ * the frames around it. Its phases are the tone state cur_mp carries.
  */
 
 /* Gain of the incoming signal at sample n of a transition frame. */
@@ -1166,17 +1187,15 @@ ambe2450_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_par
 }
 
 /**
- * Tone frame with a usable index (7.3): output the tone, or silence for the
- * zero-amplitude ID 255, instead of synthesized speech. The prediction history
- * is not touched (4.3), nor the kept model (save its unvoiced overlap), and
- * the noise generator stands still. Returns the word the frame leaves.
+ * Tone frame with a usable index (7.3): output the tone instead of
+ * synthesized speech. The prediction history is not touched (4.3), nor the
+ * kept model (save its unvoiced overlap), and the noise generator stands
+ * still. Returns the word the frame leaves.
  */
 static int
 ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                       const struct ambe2450_snapshot* in, mbe_parms* cur_mp, mbe_parms* prev_mp,
                       mbe_parms* prev_mp_enhanced) {
-    const int id = ambe2450_read_tone_id(ambe_d);
-    const int silent = id == AMBE2450_TONE_ID_ZERO_AMPLITUDE;
     float speech[160] = {0};
 
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_TONE);
@@ -1188,21 +1207,13 @@ ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char am
     if (!in->held && !in->afresh) {
         ambe2450_speech_under_tone(speech, cur_mp, prev_mp_enhanced);
     }
-    if (silent) {
-        mbe_synthesizeSilencef(aout_buf);
-    } else {
-        mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
-    }
+    mbe_synthesizeTonef(aout_buf, ambe_d, cur_mp);
     if (!in->held) {
         ambe2450_fade_in_over(aout_buf, speech);
-    } else if (silent) {
-        ambe2450_add_tone_tail(aout_buf, in);
     }
     ambe2450_clear_overlap(cur_mp, prev_mp_enhanced);
-    if (silent) {
-        return AMBE2450_STARTS_AFRESH;
-    }
-    return AMBE2450_TONE_HELD | AMBE2450_STARTS_AFRESH | (ambe2450_read_tone_ad(ambe_d) << 8) | id;
+    return AMBE2450_TONE_HELD | AMBE2450_STARTS_AFRESH | (ambe2450_read_tone_ad(ambe_d) << 8)
+           | ambe2450_read_tone_id(ambe_d);
 }
 
 /* A frame the repeat criteria reject before it is classified (5.6). */
