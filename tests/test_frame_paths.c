@@ -316,7 +316,10 @@ is_nan_bits(float x) {
 static short
 round_pcm_sample(float sample) {
     const float limit = 32767.0f * 0.95f;
-    float value = sample * 7.0f;
+    /* Stored to a volatile float: excess precision (x87) must not keep a
+     * product the float product is not. */
+    volatile float scaled = sample * 7.0f;
+    float value = scaled;
     if (is_nan_bits(value)) {
         value = 0.0f;
     } else if (value > limit) {

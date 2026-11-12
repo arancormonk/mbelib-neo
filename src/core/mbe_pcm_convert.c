@@ -3,6 +3,7 @@
 #include "mbe_pcm_convert.h"
 
 #include "mbe_compiler.h"
+#include "mbe_math.h"
 #include "mbelib-neo/mbelib.h"
 
 #include <math.h>
@@ -171,10 +172,15 @@ convert_pcm(const float* src, short* dest) {
     }
 }
 
+/* The limited value is rounded to float first: where float arithmetic keeps
+ * excess precision (x87), the product 7 x of an input whose float product is
+ * a half can sit just below it (0x3f249249: 4.5f, extended 4.4999999404),
+ * and the fraction would then round the wrong way. The truncating
+ * conversion above keeps its code as it was. */
 static void
 convert_pcm_nearest(const float* src, short* dest) {
     for (int i = 0; i < 160; ++i) {
-        const float value = limited_sample(src[i]);
+        const float value = mbe_round_to_float(limited_sample(src[i]));
         const int truncated = (int)value;
         const float fraction = value - (float)truncated;
         int rounded = truncated;

@@ -45,10 +45,13 @@ is_nan_bits(float x) {
     return (bits & UINT32_C(0x7FFFFFFF)) > UINT32_C(0x7F800000);
 }
 
-/* The scaled, limited sample both conversions start from. */
+/* The scaled, limited sample both conversions start from. The product is
+ * stored to a volatile float, so that excess precision (x87) cannot keep a
+ * value the float product is not. */
 static float
 reference_limited(float sample) {
-    float value = sample * 7.0f;
+    volatile float scaled = sample * 7.0f;
+    const float value = scaled;
     if (is_nan_bits(value)) {
         return 0.0f;
     }
@@ -296,6 +299,30 @@ check_named_cases(void) {
             assert(truncated == cases[c].truncated);
         }
         (void)found;
+    }
+
+    /* Inputs given by their bits, whose float product 7 x is a half or next to
+     * one while the exact product is not: with excess precision (x87) a
+     * product kept unrounded, 4.4999999404 for 0x3f249249, rounds to 4, where
+     * the float product, exactly 4.5, rounds to 5. */
+    static const struct {
+        uint32_t bits;
+        short nearest, truncated;
+    } raw[] = {
+        {0x3f249246u, 4, 4}, {0x3f249247u, 4, 4},   {0x3f249248u, 4, 4},   {0x3f249249u, 5, 4},   {0x3f24924au, 5, 4},
+        {0x3f24924bu, 5, 4}, {0xbf249249u, -5, -4}, {0xbf249248u, -4, -4}, {0xbf24924au, -5, -4},
+    };
+
+    for (size_t c = 0; c < sizeof(raw) / sizeof(raw[0]); ++c) {
+        float x;
+        memcpy(&x, &raw[c].bits, sizeof(x));
+        assert(reference_nearest(x) == raw[c].nearest);
+        for (int lane = 0; lane < 8; ++lane) {
+            short nearest, truncated;
+            convert_one(x, 152 + lane, &nearest, &truncated);
+            assert(nearest == raw[c].nearest);
+            assert(truncated == raw[c].truncated);
+        }
     }
     /* The limit 31128.65 rounds to 31129 and truncates to 31128. */
     static const float beyond[] = {INFINITY, 1e30f, 4448.0f, LIMIT / 7.0f};
