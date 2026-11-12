@@ -168,10 +168,11 @@ same_bits(const float* a, const float* b, int n) {
 static void
 test_frame_marks(void) {
     static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE, MBE_FRAME_MARK_PITCH_CARRIES,
-                                                MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_LATE_ONSET};
+                                                MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
+                                                MBE_FRAME_MARK_LATE_ONSET};
 
-    static const uint32_t others[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0x80000000u, 0x3F800001u,
-                                      0x40400000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
+    static const uint32_t others[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0x80000000u, 0x3F800001u, 0x40400001u,
+                                      0x40800000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
     mbe_parms mp;
     memset(&mp, 0, sizeof(mp));
     assert(mbe_frame_mark(&mp) == MBE_FRAME_MARK_NONE);
@@ -454,10 +455,18 @@ test_waveform_through_changes(void) {
         {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE},           /* voicing ends with the frame's start */
         {120.0, 28, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET},   /* voiced bands from mid-frame */
         {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE},          /* the longest period: responses span frames */
-        {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE},          {110.0, 30, 30, 16.0f, MBE_FRAME_MARK_NONE},
+        {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE},
+        {110.0, 30, 30, 16.0f, MBE_FRAME_MARK_NONE},
         {250.0, 14, 0, 8.0f, MBE_FRAME_MARK_PITCH_ABSENT}, /* the train runs on through this frame, */
         {65.0, 52, 6, 16.0f, MBE_FRAME_MARK_LATE_ONSET},   /* then starts anew at mid-frame: its pulses, */
         {65.0, 52, 30, 16.0f, MBE_FRAME_MARK_NONE},        /* under a period longer than a subframe, stay out */
+        {150.0, 24, 20, 16.0f, MBE_FRAME_MARK_NONE},
+        {250.0, 15, 0, 1.6f, MBE_FRAME_MARK_PREVIOUS_HELD}, /* the model before stands at mid-frame, */
+        {170.0, 22, 22, 16.0f, MBE_FRAME_MARK_NONE},        /* and the train runs on into the frame after */
+        {140.0, 26, 4, 16.0f, MBE_FRAME_MARK_NONE},         /* voiced low only, held the same way */
+        {250.0, 15, 0, 1.6f, MBE_FRAME_MARK_PREVIOUS_HELD},
+        {250.0, 15, 0, 1.6f, MBE_FRAME_MARK_PREVIOUS_HELD}, /* a second such frame stops the train */
+        {170.0, 22, 22, 16.0f, MBE_FRAME_MARK_NONE},        /* and a new one starts */
     };
 
     const size_t frame_count = sizeof(frames) / sizeof(frames[0]);
@@ -486,8 +495,10 @@ test_waveform_through_changes(void) {
         mbe_subframe_mid_model(&last, &cur, late, &models[1]);
         mbe_subframe_own_model(&cur, &models[2]);
 
-        /* The train starts afresh after a frame with no voiced band, unless that frame lacked a pitch. */
-        if (!models[0].any_voiced && mbe_frame_mark(&last) != MBE_FRAME_MARK_PITCH_ABSENT) {
+        /* The train starts afresh after a frame with no voiced band, unless that
+         * frame lacked a pitch or held the model before it to mid-frame. */
+        if (!models[0].any_voiced && mbe_frame_mark(&last) != MBE_FRAME_MARK_PITCH_ABSENT
+            && mbe_frame_mark(&last) != MBE_FRAME_MARK_PREVIOUS_HELD) {
             train.phase = 0.0;
             train.count = 0;
         }
@@ -719,6 +730,86 @@ test_mid_model(void) {
     mbe_subframe_own_model(&cur, &own);
     assert(own.w0 == cur.w0 && own.L == 20 && own.any_voiced);
     assert(own.voiced[2] == 1 && own.voiced[3] == 0 && own.voiced[4] > 1 && own.magnitude[2] == 20.0f);
+}
+
+static int
+same_model(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
+    return same_bits(&a->w0, &b->w0, 1) && a->L == b->L && a->any_voiced == b->any_voiced
+           && memcmp(a->voiced, b->voiced, sizeof(a->voiced)) == 0 && same_bits(a->magnitude, b->magnitude, 57)
+           && same_bits(a->phase, b->phase, 57);
+}
+
+/* A frame marked MBE_FRAME_MARK_PREVIOUS_HELD (a rate-33 silence frame, as
+ * DVSI's decoder plays it) has the previous frame's own model at mid-frame,
+ * whatever the voicing of either frame and whatever the late-onset flag; the
+ * marks P25 and D-STAR set keep their rules. The pulse train runs on through
+ * such a frame at the held pitch, and rendering and advancing it leave the
+ * same state. */
+static void
+test_previous_model_held(void) {
+    static const int voiced_before[3] = {24, 3, 0};
+    float out[160];
+    mbe_parms prev, cur, enhanced;
+    struct mbe_subframe_model mid, own;
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+
+    for (int k = 0; k < 3; ++k) {
+        set_model(&prev, 150.0, 24, voiced_before[k], 10.0f);
+        for (int l = 1; l <= 24; ++l) {
+            prev.Ml[l] = 4.0f + (float)l;
+        }
+        mbe_subframe_own_model(&prev, &own);
+        for (int cur_voiced = 0; cur_voiced <= 15; cur_voiced += 15) {
+            set_model(&cur, 250.0, 15, cur_voiced, 1.6f);
+            mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PREVIOUS_HELD);
+            for (int late = 0; late < 2; ++late) {
+                mbe_subframe_mid_model(&prev, &cur, late, &mid);
+                assert(same_model(&mid, &own));
+            }
+        }
+        /* The same frame marked as P25's and D-STAR's decoders mark one with
+         * no voiced band and no pitch meets the two frames' magnitudes. */
+        set_model(&cur, 250.0, 15, 0, 1.6f);
+        mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PITCH_ABSENT);
+        mbe_subframe_mid_model(&prev, &cur, 0, &mid);
+        assert(!same_model(&mid, &own));
+    }
+
+    /* After three voiced frames: one held frame runs the train on at 157 Hz. */
+    mbe_parms last, voiced, held;
+    fresh_stream(&last);
+    set_model(&voiced, 157.0, 23, 12, 16.0f);
+    for (int f = 0; f < 3; ++f) {
+        next_frame(out, &last, &voiced);
+    }
+    const double before = pulse_phase(&last);
+    set_model(&held, 250.0, 15, 0, 1.6f);
+    mbe_set_frame_mark(&held, MBE_FRAME_MARK_PREVIOUS_HELD);
+
+    mbe_parms rendered = last, advanced = last;
+    rendered.w0 = advanced.w0 = held.w0;
+    rendered.L = advanced.L = held.L;
+    memcpy(rendered.Vl, held.Vl, sizeof(held.Vl));
+    memcpy(advanced.Vl, held.Vl, sizeof(held.Vl));
+    memcpy(rendered.Ml, held.Ml, sizeof(held.Ml));
+    memcpy(advanced.Ml, held.Ml, sizeof(held.Ml));
+    mbe_set_frame_mark(&rendered, MBE_FRAME_MARK_PREVIOUS_HELD);
+    mbe_set_frame_mark(&advanced, MBE_FRAME_MARK_PREVIOUS_HELD);
+    memset(out, 0, sizeof(out));
+    mbe_synthesize_subframes(out, &rendered, &last, NULL, 1.0f);
+    mbe_advance_subframes(&advanced, &last);
+    assert(same_bits(rendered.PSIl, advanced.PSIl, 57));
+    assert(same_bits(rendered.PHIl, advanced.PHIl, 57));
+    assert(same_bits(rendered.noiseOverlap, advanced.noiseOverlap, 96));
+    assert(fabs(cycles_apart(pulse_phase(&rendered), before + cycles_of(157.0, 160.0))) < 1e-4);
+    assert(rendered.noiseOverlap[0] >= 1.0f);
+
+    /* A voiced frame next continues that train. */
+    mbe_parms after;
+    set_model(&after, 190.0, 19, 19, 16.0f);
+    const double held_phase = pulse_phase(&rendered);
+    next_frame(out, &rendered, &after);
+    assert(fabs(cycles_apart(pulse_phase(&rendered), held_phase + cycles_of(190.0, 160.0))) < 1e-4);
 }
 
 /* Between two models a subframe crossfades linearly. A model with the voicing
@@ -1293,6 +1384,7 @@ main(void) {
     test_unvoiced_pitch_carries();
     test_voicing_persists_without_a_pitch();
     test_mid_model();
+    test_previous_model_held();
     test_subframes_crossfade_linearly();
     test_muted_frame_advances();
     test_pulse_state_is_validated();

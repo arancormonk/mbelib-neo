@@ -96,7 +96,9 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
 
 /** AMBE+2 silence-frame fundamental 2*pi/32, TIA-102.BABA-1 4.1 eq 1 (radians/sample). */
 #define MBE_AMBE_SILENCE_W0 ((float)0.19634954084936207)
-/** AMBE+2 silence-frame harmonic count, TIA-102.BABA-1 4.1 eq 2. */
+/** AMBE+2 silence-frame harmonic count, TIA-102.BABA-1 4.1 eq 2. D-STAR's b0 124
+ *  decodes with it; rate 33 plays its silence frames on 15 bands, as DVSI's
+ *  decoder does (MBE_AMBE2450_SILENCE_L in ambe3600x2450.c). */
 #define MBE_AMBE_SILENCE_L  14
 
 /*

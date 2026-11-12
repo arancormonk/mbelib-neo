@@ -251,12 +251,19 @@ mbe_ambe2450_harmonic_voiced(const int row[8], int l, float f0) {
     return row[own] | row[above];
 }
 
+/* The frame's voicing, and its mark: a silence frame is marked
+ * MBE_FRAME_MARK_PREVIOUS_HELD (ambe2450_set_silence_model()), a voice frame
+ * of row MBE_AMBE2450_VUV_LATE_ONSET a late onset, any other none. */
 static void
 ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
     (void)b0;
     int b1 = ambe2450_field(ambe_d, 1);
 
-    mbe_set_voicing_onset_delay(cur_mp, (silence == 0) && (b1 == MBE_AMBE2450_VUV_LATE_ONSET));
+    if (silence) {
+        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_PREVIOUS_HELD);
+    } else {
+        mbe_set_voicing_onset_delay(cur_mp, b1 == MBE_AMBE2450_VUV_LATE_ONSET);
+    }
     for (int l = 1; l <= L; l++) {
         if (silence == 0) {
             cur_mp->Vl[l] = mbe_ambe2450_harmonic_voiced(AmbeVuv[b1], l, f0);
@@ -548,15 +555,34 @@ ambe2450_classify_frame(const char* ambe_d) {
     return MBE_AMBE2450_FRAME_ERASURE;
 }
 
-/* TIA-102.BABA-1 4.1 eqs 1-3: w0 = 2*pi/32, L = 14, all bands unvoiced, for
- * both silence b0 values (the encoder sends 124). The spectral amplitudes are
- * decoded like a voice frame's (4.4). */
+/*
+ * Silence frames (b0 124 and 125; DVSI's encoder sends 124, and 125 is taken
+ * to play as it does). TIA-102.BABA-1 4.1 eqs 1-3 give w0 = 2*pi/32, L = 14
+ * and every band unvoiced, the spectral amplitudes decoded like a voice
+ * frame's (4.4); the spec says nothing of how the frame joins the one before.
+ * DVSI's decoder plays the frame on 15 bands at that pitch, its amplitudes a
+ * further factor 0.2046 (13.8 dB) down, and plays the previous frame's model
+ * (pitch, harmonic count, voicing, amplitudes) through the first 10 ms of the
+ * silence frame, crossfading to the silence model over the second; the pulse
+ * train runs on through one silence frame into a voiced frame after it. This
+ * decoder follows DVSI (docs/dvsi-parity.md, "Rate 33 silence frames"): the
+ * residual is reconstructed on 15 bands (block lengths AmbeLmprbl[15]) and
+ * predicted from the history at 15 bands' taps, by the voice frame's law; the
+ * extra factor scales Ml alone (log2Ml carries none of it); and the frame is
+ * marked MBE_FRAME_MARK_PREVIOUS_HELD, whose rules in the synthesizer hold
+ * the previous model to mid-frame and run the train on. A silence frame still
+ * never becomes the prediction history (4.3). D-STAR's b0 124 keeps
+ * MBE_AMBE_SILENCE_L.
+ */
+#define MBE_AMBE2450_SILENCE_L    15
+#define MBE_AMBE2450_SILENCE_GAIN 0.2046f
+
 static void
 ambe2450_set_silence_model(mbe_parms* cur_mp, int* L, float* f0, int* silence) {
     *silence = 1;
     *f0 = 1.0f / 32.0f;
     cur_mp->w0 = MBE_AMBE_SILENCE_W0;
-    *L = MBE_AMBE_SILENCE_L;
+    *L = MBE_AMBE2450_SILENCE_L;
     cur_mp->L = *L;
     for (int l = 1; l <= *L; l++) {
         cur_mp->Vl[l] = 0;
@@ -622,6 +648,9 @@ mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms
     }
 
     unvc = (float)0.2046 / sqrtf(cur_mp->w0);
+    if (silence) {
+        unvc *= MBE_AMBE2450_SILENCE_GAIN;
+    }
 
     // decode V/UV parameters
     ambe2450_decode_vuv(ambe_d, cur_mp, L, f0, silence, b0);

@@ -178,6 +178,12 @@ enum mbe_frame_mark {
     /* No voiced band, at a pitch code other than those DVSI's encoders keep
      * for such frames: the voicing of the frame before it lasts to mid-frame. */
     MBE_FRAME_MARK_PITCH_ABSENT = 2,
+    /* No voiced band, and the previous frame's model, as it stands at that
+     * frame's end, stands at this frame's mid-frame too: DVSI's rate-33
+     * decoder plays it through the first 10 ms of a silence frame and
+     * crossfades to the silence model over the second, the pulse train
+     * running on through the frame. */
+    MBE_FRAME_MARK_PREVIOUS_HELD = 3,
     /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };

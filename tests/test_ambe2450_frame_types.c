@@ -70,6 +70,18 @@ static const unsigned char k_dvsi_silence_bytes[7] = {0xF8, 0x01, 0xA9, 0x9F, 0x
 static const int k_dvsi_silence[9] = {124, 16, 1, 53, 78, 18, 14, 12, 1};
 static const float k_dg_b2_1 = -0.67f; /* Annex D gain level for b2 = 1 */
 
+/* Voice frames at one pitch (b0 60, a period of 50 samples) and one set of
+ * amplitude codes: voiced in every 500 Hz column (row 0), voiced only below
+ * 500 Hz (row 14), and unvoiced (row 16). */
+static const int k_voice_reach[9] = {60, 0, 20, 200, 90, 17, 11, 3, 6};
+static const int k_voice_low[9] = {60, 14, 20, 200, 90, 17, 11, 3, 6};
+static const int k_voice_unvoiced[9] = {60, 16, 20, 200, 90, 17, 11, 3, 6};
+#define K_VOICE_PERIOD 50
+
+/* The decoder's mark of a silence frame, in the otherwise unused PHIl[0]: the
+ * previous frame's model stands at mid-frame (stored as 3.0f). */
+static const float k_mark_previous_held = 3.0f;
+
 static void
 unpack_bytes(char d[49], const unsigned char bytes[7]) {
     for (int i = 0; i < 49; ++i) {
@@ -597,7 +609,25 @@ test_aliased_parms_rejected(void) {
     assert(parms_equal(&s.prev_enh, &before.prev_enh));
 }
 
-/* 4.1 eqs 1-3 on the standard DVSI silence vector: w0 = 2*pi/32, L = 14, unvoiced. */
+/*
+ * A silence frame's decoded amplitudes: every band unvoiced, Ml the voice law's
+ * unvoiced amplitude 0.2046 / sqrt(w0) * 2^log2Ml a further 0.2046 down
+ * (DVSI's decoder; TIA-102.BABA-1 4.1 gives no extra factor).
+ */
+static int
+silence_amplitudes_ok(const mbe_parms* cur) {
+    const float unvc = 0.2046f / sqrtf(cur->w0);
+    for (int l = 1; l <= cur->L; ++l) {
+        const double expected = 0.2046 * (double)unvc * exp2((double)cur->log2Ml[l]);
+        if (cur->Vl[l] != 0 || !(fabs((double)cur->Ml[l] - expected) <= 1e-5 * expected)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The standard DVSI silence vector: w0 = 2*pi/32 (4.1 eq 1), and, as DVSI's
+ * decoder plays it, 15 unvoiced bands 13.8 dB below the voice law. */
 static void
 test_dvsi_silence_vector(void) {
     char d[49];
@@ -614,16 +644,10 @@ test_dvsi_silence_vector(void) {
     assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
     /* As in 2.1, the staged decode reports any decoded model as voice. */
     assert(mbe_decodeAmbe2450Parms(d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
-    assert(cur.L == 14);
+    assert(cur.L == 15);
     assert(fabsf(cur.w0 - (float)(2.0 * M_PI / 32.0)) < 1e-6f);
-    const float unvc = 0.2046f / sqrtf(cur.w0);
-    for (int l = 1; l <= cur.L; ++l) {
-        assert(cur.Vl[l] == 0);
-        const float expected = unvc * exp2f(cur.log2Ml[l]);
-        assert(fabsf(cur.Ml[l] - expected) <= 1e-5f * expected);
-        (void)expected;
-    }
-    (void)unvc;
+    assert(silence_amplitudes_ok(&cur));
+    assert(float_bits_equal(cur.PHIl[0], k_mark_previous_held));
 }
 
 /*
@@ -647,7 +671,7 @@ test_silence_freezes_history(void) {
         assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_SILENCE));
         assert(fabsf(s.cur.gamma - silence_gamma) < 1e-5f);
         assert(history_equal(&s.prev, &history));
-        assert(s.prev_enh.L == 14);
+        assert(s.prev_enh.L == 15);
         assert(peak_abs(s.out) > 0.0f);
     }
     stream_frame_b(&s, k_voice_next, 0, 0);
@@ -659,6 +683,190 @@ test_silence_freezes_history(void) {
     stream_frame_b(&ref, k_voice_next, 0, 0);
     assert(history_equal(&s.prev, &ref.prev));
     (void)silence_gamma;
+}
+
+/* Silence frames b0 124 and 125, from the initial state and after a voice
+ * frame: L 15 at w0 = 2*pi/32, unvoiced, 13.8 dB below the voice law, marked;
+ * the staged decode reports them as voice and leaves the history as it was. */
+static void
+test_silence_model_both_codes(void) {
+    char d[49];
+    unpack_bytes(d, k_dvsi_silence_bytes);
+    for (int b0 = 124; b0 <= 125; ++b0) {
+        for (int after_voice = 0; after_voice <= 1; ++after_voice) {
+            mbe_parms cur, prev, enh;
+            mbe_initMbeParms(&cur, &prev, &enh);
+            if (after_voice) {
+                char voice[49];
+                pack_b(voice, k_voice_loud);
+                const int voice_kind = mbe_decodeAmbe2450Parms(voice, &cur, &prev);
+                assert(voice_kind == MBE_AMBE2450_FRAME_VOICE);
+                (void)voice_kind;
+                prev = cur;
+            }
+            const mbe_parms history = prev;
+            put_bits(d, 0, b0 >> 3, 4);
+            put_bits(d, 37, b0, 3);
+            assert(mbe_classifyAmbe2450Frame(d) == MBE_AMBE2450_FRAME_SILENCE);
+            const int kind = mbe_decodeAmbe2450Parms(d, &cur, &prev);
+            assert(kind == MBE_AMBE2450_FRAME_VOICE);
+            (void)kind;
+            assert(cur.L == 15);
+            assert(float_bits_equal(cur.w0, (float)(2.0 * M_PI / 32.0)));
+            assert(silence_amplitudes_ok(&cur));
+            assert(float_bits_equal(cur.PHIl[0], k_mark_previous_held));
+            assert(history_equal(&prev, &history));
+        }
+    }
+}
+
+static double
+span_energy(const float* x, int from, int to) {
+    double acc = 0.0;
+    for (int n = from; n < to; ++n) {
+        acc += (double)x[n] * (double)x[n];
+    }
+    return acc;
+}
+
+/* A settled stream, then `before`, then `silences` silence frames. */
+static void
+stream_into_silence(struct stream* s, const int before[9], int silences) {
+    char silence[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+    stream_init(s);
+    for (int i = 0; i < 8; ++i) {
+        stream_frame_b(s, k_voice_next, 0, 0);
+    }
+    stream_frame_b(s, before, 0, 0);
+    for (int i = 0; i < silences; ++i) {
+        stream_frame(s, silence, 0, 0);
+        assert(has_flag(s, MBE_PROCESS_FLAG_SILENCE));
+    }
+}
+
+/*
+ * As DVSI's decoder plays a silence frame, the previous frame's model stands
+ * at mid-frame: the first 10 ms play that model held steady, and the second
+ * crossfade from it to the silence model. A twin stream whose next frame is
+ * an erasure plays the same model held through the whole frame (a repeat),
+ * from the same pulse train and noise generator state:
+ *  - samples 0-79 of the silence frame equal the repeat's, whatever the voicing
+ *    of the frame before (every column, below 500 Hz only, none), within a
+ *    float tolerance (the repeat's mid-frame model passes through the log
+ *    domain; the silence frame's is the previous model itself);
+ *  - after a fully voiced frame, which leaves no unvoiced band, samples 80-159
+ *    are the repeat's faded out linearly, plus the silence model's own noise
+ *    rising, far below them.
+ */
+static void
+test_silence_holds_previous_model(void) {
+    const int* before[3] = {k_voice_reach, k_voice_low, k_voice_unvoiced};
+    char silence[49], erasure[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+    pack_b(erasure, k_erasure);
+
+    for (int k = 0; k < 3; ++k) {
+        struct stream s;
+        stream_into_silence(&s, before[k], 0);
+        struct stream held = s;
+        stream_frame(&s, silence, 0, 0);
+        stream_frame(&held, erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+        assert(has_flag(&held, MBE_PROCESS_FLAG_REPEAT) && !has_flag(&held, MBE_PROCESS_FLAG_MUTE));
+
+        assert(span_energy(held.out, 0, 80) > 80.0 * 50.0 * 50.0);
+        for (int n = 0; n < 80; ++n) {
+            assert(fabs((double)s.out[n] - (double)held.out[n]) <= 1e-3 * (1.0 + fabs((double)held.out[n])));
+        }
+        if (k == 0) {
+            double residual = 0.0;
+            for (int n = 80; n < 160; ++n) {
+                const double gain = 1.0 - ((double)(n - 80) / 80.0);
+                const double r = (double)s.out[n] - (gain * (double)held.out[n]);
+                residual += r * r;
+            }
+            assert(residual < 1e-4 * span_energy(held.out, 80, 160));
+            (void)residual;
+        }
+    }
+}
+
+/*
+ * The voiced frame after ONE silence frame continues the pulse train that ran
+ * through it (the silence frame's mark carries it): it plays otherwise than a
+ * twin whose silence frame lost its mark, which starts the train afresh. That
+ * holds whether the frame before the silence frame was voiced in every column
+ * or only below 500 Hz. After TWO silence frames the train has stopped (the
+ * second has no voiced band at either end of either half), and the voiced
+ * frame plays exactly as the twin that starts afresh; after an unvoiced frame
+ * no train ran at all.
+ */
+static double
+voiced_after_silence(const int before[9], int silences, float* out, float* afresh) {
+    struct stream s;
+    stream_into_silence(&s, before, silences);
+    struct stream twin = s;
+    twin.prev_enh.PHIl[0] = 0.0f;
+    stream_frame_b(&s, k_voice_next, 0, 0);
+    stream_frame_b(&twin, k_voice_next, 0, 0);
+    memcpy(out, s.out, sizeof(s.out));
+    memcpy(afresh, twin.out, sizeof(twin.out));
+    double diff = 0.0;
+    for (int n = 0; n < 160; ++n) {
+        diff += ((double)out[n] - (double)afresh[n]) * ((double)out[n] - (double)afresh[n]);
+    }
+    return diff;
+}
+
+static void
+test_pulse_train_through_one_silence_frame(void) {
+    float out[160], afresh[160];
+    const int* voiced[2] = {k_voice_reach, k_voice_low};
+    for (int k = 0; k < 2; ++k) {
+        /* The pulses the silence frames leave (their count in noiseOverlap[0]). */
+        struct stream s;
+        stream_into_silence(&s, voiced[k], 1);
+        assert(s.prev_enh.noiseOverlap[0] >= 1.0f);
+        stream_into_silence(&s, voiced[k], 2);
+        assert(float_bits_equal(s.prev_enh.noiseOverlap[0], 0.0f));
+        const double one = voiced_after_silence(voiced[k], 1, out, afresh);
+        assert(one > 0.1 * span_energy(out, 0, 160));
+        (void)one;
+        (void)voiced_after_silence(voiced[k], 2, out, afresh);
+        assert(float_array_bits_equal(out, afresh, 160));
+    }
+    (void)voiced_after_silence(k_voice_unvoiced, 1, out, afresh);
+    assert(float_array_bits_equal(out, afresh, 160));
+}
+
+/* Consecutive silence frames: each plays the 15-band model at its level and
+ * the history stays the last voice frame's. */
+static void
+test_consecutive_silence_frames(void) {
+    struct stream s;
+    stream_into_silence(&s, k_voice_reach, 0);
+    const mbe_parms history = s.prev;
+    char silence[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+    double level[4];
+    for (int i = 0; i < 4; ++i) {
+        stream_frame(&s, silence, 0, 0);
+        assert(s.result.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_SILENCE));
+        assert(s.prev_enh.L == 15);
+        assert(float_bits_equal(s.prev_enh.PHIl[0], k_mark_previous_held));
+        assert(history_equal(&s.prev, &history));
+        level[i] = rms(s.out);
+        /* From the second on, nothing voiced is left to run on. */
+        assert(i == 0 || float_bits_equal(s.prev_enh.noiseOverlap[0], 0.0f));
+    }
+    (void)history;
+    /* The first fades the voice frame out; the others hold the silence level. */
+    assert(level[1] < 0.05 * level[0]);
+    for (int i = 2; i < 4; ++i) {
+        assert(level[i] > 0.5 * level[1] && level[i] < 2.0 * level[1]);
+    }
+    (void)level;
 }
 
 /* A silence frame right after init leaves the spec initial history (L = 15, gamma = 0). */
@@ -679,7 +887,7 @@ test_silence_first_after_init(void) {
     assert(fabsf(s.cur.gamma - k_dg_b2_1) < 1e-6f);
 }
 
-/* 5.6: a repeat or erasure after silence repeats the silence model, not the last voice frame. */
+/* 5.6: a repeat or erasure after silence repeats the 15-band silence model, not the last voice frame. */
 static void
 test_repeat_after_silence_repeats_silence(void) {
     struct stream s;
@@ -692,17 +900,22 @@ test_repeat_after_silence_repeats_silence(void) {
     stream_frame_b(&s, k_voice_loud, 0, 0);
     const mbe_parms history = s.prev;
     stream_frame(&s, silence, 0, 0);
+    const mbe_parms silent = s.prev_enh;
 
     stream_frame_b(&s, k_voice_next, 4, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
-    assert(s.cur.L == 14);
+    assert(s.cur.L == 15);
     assert(fabsf(s.cur.w0 - (float)(2.0 * M_PI / 32.0)) < 1e-6f);
     assert(history_equal(&s.prev, &history));
+    for (int l = 1; l <= 15; ++l) {
+        assert(s.cur.Vl[l] == 0);
+        assert(float_bits_equal(s.cur.Ml[l], silent.Ml[l]));
+    }
 
     stream_frame(&s, erasure, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE));
-    assert(s.cur.L == 14);
+    assert(s.cur.L == 15);
     assert(history_equal(&s.prev, &history));
 }
 
@@ -972,6 +1185,10 @@ main(void) {
     test_fade_in_after_error_rate_mute();
     test_dvsi_silence_vector();
     test_silence_freezes_history();
+    test_silence_model_both_codes();
+    test_silence_holds_previous_model();
+    test_pulse_train_through_one_silence_frame();
+    test_consecutive_silence_frames();
     test_silence_first_after_init();
     test_repeat_after_silence_repeats_silence();
     test_silence_flag_round_trip();

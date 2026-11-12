@@ -249,6 +249,11 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     if (!mbe_harmonic_count_is_valid(prev_mp->L) || !mbe_harmonic_count_is_valid(cur_mp->L)) {
         return;
     }
+    if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {
+        /* The previous frame's model stands at mid-frame unchanged. */
+        mbe_subframe_own_model(prev_mp, model);
+        return;
+    }
     const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
     const int longer = (prev_mp->L < cur_mp->L) ? cur_mp->L : prev_mp->L;
     model->L = shorter;
@@ -278,9 +283,10 @@ struct pulse_train {
 
 /* The train a stream carries into a frame: the pulse phase reached at the last
  * frame's end and the pulses it kept. It runs on from a frame that has a
- * voiced band, and from one marked MBE_FRAME_MARK_PITCH_ABSENT,
- * through whose first half the voicing before it may have lasted; after any
- * other frame it starts afresh, whatever a codec path left in the state.
+ * voiced band, and from one marked MBE_FRAME_MARK_PITCH_ABSENT or
+ * MBE_FRAME_MARK_PREVIOUS_HELD, through whose first half the voicing before it
+ * may have lasted; after any other frame it starts afresh, whatever a codec
+ * path left in the state.
  * Values that are not what a frame stores (another rendering's noise overlap,
  * a caller's own) are dropped. */
 static void
@@ -294,7 +300,8 @@ load_pulse_train(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev
     if (!mbe_subframe_state_is_marked(prev_mp)) {
         return;
     }
-    if (!prev->any_voiced && mbe_frame_mark(prev_mp) != MBE_FRAME_MARK_PITCH_ABSENT) {
+    const enum mbe_frame_mark mark = mbe_frame_mark(prev_mp);
+    if (!prev->any_voiced && mark != MBE_FRAME_MARK_PITCH_ABSENT && mark != MBE_FRAME_MARK_PREVIOUS_HELD) {
         return;
     }
     memcpy(&bits, &stored, sizeof(bits));

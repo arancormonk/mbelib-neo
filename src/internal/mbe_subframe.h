@@ -79,7 +79,12 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no band is
  * voiced (the voiced bands of a frame so marked start in its own subframe).
  * Its magnitudes are the two frames' at its frequency, interpolated in the log
- * domain. Harmonic counts outside 1..56 give a model with no band.
+ * domain. A current frame marked MBE_FRAME_MARK_PREVIOUS_HELD (a rate-33
+ * silence frame) instead gets the previous frame's own model
+ * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
+ * decoder plays it through the silence frame's first 10 ms and crossfades to
+ * the silence model over the second. Harmonic counts outside 1..56 give a
+ * model with no band.
  *
  * @param prev_mp    Previous frame parameters.
  * @param cur_mp     Current frame parameters.
