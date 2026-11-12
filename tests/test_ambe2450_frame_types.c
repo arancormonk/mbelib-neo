@@ -19,6 +19,7 @@
  */
 
 #include <assert.h>
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #ifndef M_PI
@@ -30,7 +31,9 @@
 
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
+#include "mbe_subframe.h"
 #include "mbe_tone.h"
+#include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Bit positions of quantizer values b0..b8 in the 49-bit parameter vector. */
@@ -150,8 +153,12 @@ float_bits_equal(float a, float b) {
  * this test renders through the library or computes itself can differ by a
  * few units in the last place of the magnitudes involved. Such comparisons are
  * exact in an IEEE build (or keep their tolerance there, close_to() and
- * close_mix()) and allow 1e-5 of those magnitudes under fast-math: far below
- * what a wrong fade, a missing tail or noise in the wrong place changes.
+ * close_mix()). Under fast-math, state against a reference allows 1e-5 of
+ * the magnitudes involved; samples allow a few units in the last place of
+ * the frame's largest magnitude (K_FAST_MATH_ULPS) beyond their IEEE
+ * tolerance, and a mute's noise-only half is compared at the noise's own
+ * scale (noise_span_matches()): far below what a wrong fade, a missing tail,
+ * noise in the wrong place or the parts limited before the mix change.
  * Comparisons between two streams the library runs the same way stay exact.
  */
 #if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
@@ -160,6 +167,7 @@ float_bits_equal(float a, float b) {
 #define K_LIBRARY_FAST_MATH 0
 #endif
 #define K_FAST_MATH_TOLERANCE 1e-5
+#define K_FAST_MATH_ULPS      (8.0 * (double)FLT_EPSILON)
 
 static double
 peak_of(const float* x, int n) {
@@ -189,6 +197,33 @@ matches_reference(const float* out, const float* want, int n) {
     const double scale = peak_of(want, n);
     for (int i = 0; i < n; ++i) {
         if (!float_matches(out[i], want[i], scale)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * The pulse state a frame leaves in noiseOverlap against a reference's: the
+ * pulse count (element 0) and the tag saying which rendering wrote the state
+ * (MBE_SUBFRAME_STATE_SLOT) are discrete values stored as floats, compared
+ * bit for bit in every build; the pulse times (elements 1 to
+ * MBE_PULSE_HISTORY) and the pulse phase after them as matches_reference()
+ * compares them. The elements between are zero and compared bit for bit.
+ */
+static int
+pulse_state_matches(const float* out, const float* want) {
+    const int phase_slot = 1 + MBE_PULSE_HISTORY;
+    if (!float_bits_equal(out[0], want[0])
+        || !float_bits_equal(out[MBE_SUBFRAME_STATE_SLOT], want[MBE_SUBFRAME_STATE_SLOT])) {
+        return 0;
+    }
+    if (!matches_reference(out + 1, want + 1, MBE_PULSE_HISTORY)
+        || !matches_reference(out + phase_slot, want + phase_slot, 1)) {
+        return 0;
+    }
+    for (int i = phase_slot + 1; i < MBE_SUBFRAME_STATE_SLOT; ++i) {
+        if (!float_bits_equal(out[i], want[i])) {
             return 0;
         }
     }
@@ -384,13 +419,29 @@ second_half_is_noise(const float* out) {
     return 1;
 }
 
+/** A muted frame's samples 80-159 against the mute noise reference, where
+ * nothing is mixed in: bit for bit in an IEEE build, under fast-math within a
+ * few units in the last place of the noise's amplitude. */
+static int
+noise_span_matches(const float* out, const float* noise) {
+    const double amplitude = (double)(MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    for (int n = 80; n < 160; ++n) {
+        if (K_LIBRARY_FAST_MATH ? !(fabs((double)out[n] - (double)noise[n]) <= K_FAST_MATH_ULPS * amplitude)
+                                : !float_bits_equal(out[n], noise[n])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Whether `out` is `want` within 1e-5 of each sample's magnitude; under
- * fast-math also of the frame's (see K_LIBRARY_FAST_MATH). */
+ * fast-math also within a few units in the last place of the frame's largest
+ * magnitude (see K_LIBRARY_FAST_MATH). */
 static int
 close_to(const float* out, const float* want, int from, int to) {
-    const double scale = K_LIBRARY_FAST_MATH ? peak_of(want + from, to - from) : 0.0;
+    const double frame = K_LIBRARY_FAST_MATH ? K_FAST_MATH_ULPS * peak_of(want + from, to - from) : 0.0;
     for (int n = from; n < to; ++n) {
-        if (!(fabs((double)out[n] - (double)want[n]) <= 1e-5 * (1.0 + scale + fabs((double)want[n])))) {
+        if (!(fabs((double)out[n] - (double)want[n]) <= (1e-5 * (1.0 + fabs((double)want[n]))) + frame)) {
             return 0;
         }
     }
@@ -404,16 +455,19 @@ close_to(const float* out, const float* want, int from, int to) {
  * mix in a different order, or contract it into a fused multiply-add, as a
  * fast-math build does: they then differ by about 1e-7 of the largest part,
  * which can be far more than 1e-5 of a small result. Over these tests' parts
- * (below 30000) the tolerance stays under 0.31. Under fast-math the parts'
- * largest magnitudes over the frame count too (see K_LIBRARY_FAST_MATH): the
- * library's rendering of a part may round apart from the reference's by a
- * fraction of that, which keeps the bound under 0.61.
+ * (below 30000) the tolerance stays under 0.31. Under fast-math the library's
+ * rendering of a part may also round apart from the reference's by a few
+ * units in the last place of the part's largest magnitude over the frame
+ * (see K_LIBRARY_FAST_MATH): under 0.03 for these parts. Where a mute's noise
+ * or the order of the limit must be told apart under loud parts, the tests
+ * check those samples on their own (noise_span_matches(), limited_once_at()).
  */
 static int
 close_mix(const float* out, const float* want, const float* a, const float* b, int from, int to) {
-    const double scale = K_LIBRARY_FAST_MATH ? peak_of(a + from, to - from) + peak_of(b + from, to - from) : 0.0;
+    const double frame =
+        K_LIBRARY_FAST_MATH ? K_FAST_MATH_ULPS * (peak_of(a + from, to - from) + peak_of(b + from, to - from)) : 0.0;
     for (int n = from; n < to; ++n) {
-        const double bound = 1e-5 * (1.0 + scale + fabs((double)a[n]) + fabs((double)b[n]));
+        const double bound = (1e-5 * (1.0 + fabs((double)a[n]) + fabs((double)b[n]))) + frame;
         if (!(fabs((double)out[n] - (double)want[n]) <= bound)) {
             return 0;
         }
@@ -607,9 +661,10 @@ test_erasure_run_repeats_then_mutes(void) {
             assert(peak_abs(fade) > 5.0f);
             assert(close_to(s.out, want, 0, 160));
             assert(second_half_is_noise(s.out));
+            assert(noise_span_matches(s.out, noise));
             /* The repeated model is kept, with the pulses and phases the fade left. */
             assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
-            assert(matches_reference(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
+            assert(pulse_state_matches(s.prev_enh.noiseOverlap, faded.noiseOverlap));
             assert(matches_reference(s.prev_enh.PSIl + 1, faded.PSIl + 1, 56));
             assert(matches_reference(s.prev_enh.PHIl + 1, faded.PHIl + 1, 56));
         } else if (i == 5) {
@@ -765,11 +820,12 @@ test_error_rate_mute_boundary(void) {
             limit_sum(want, 160);
             assert(close_to(s.out, want, 0, 160));
             assert(second_half_is_noise(s.out));
+            assert(noise_span_matches(s.out, noise));
             own_model_reference(&own, &before, voice, &s);
             assert_muted_state(&s, &own, before.prev_enh.noiseSeed);
             assert(s.cur.repeatCount == 0);
             assert(float_matches(s.prev_enh.localEnergy, own.localEnergy, 0.0));
-            assert(matches_reference(s.prev_enh.noiseOverlap, own.noiseOverlap, 96));
+            assert(pulse_state_matches(s.prev_enh.noiseOverlap, own.noiseOverlap));
         }
     }
 }
@@ -872,6 +928,7 @@ test_invalid_tone_is_erasure(void) {
     limit_sum(want, 160);
     assert(close_to(s.out, want, 0, 160));
     assert(second_half_is_noise(s.out));
+    assert(noise_span_matches(s.out, noise));
     assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
     assert(history_equal(&s.prev, &history));
 }
@@ -976,6 +1033,7 @@ test_tone_repeat_and_mute_order(void) {
     limit_sum(want, 160);
     assert(close_to(s.out, want, 0, 160));
     assert(second_half_is_noise(s.out));
+    assert(noise_span_matches(s.out, noise));
     assert_muted_state(&s, &before.prev_enh, before.prev_enh.noiseSeed);
     assert(s.cur.repeatCount == 0);
     assert(s.cur.swn == before.cur.swn && s.cur.tonePhase == before.cur.tonePhase);
@@ -1539,9 +1597,7 @@ test_mute_fades_the_last_frame(void) {
         }
         assert(energy > 80.0 * 50.0 * 50.0);
         assert(residual < 1e-4 * energy);
-        for (int n = 80; n < 160; ++n) {
-            assert(fabs((double)s.out[n] - (double)noise[n]) < 1e-4);
-        }
+        assert(noise_span_matches(s.out, noise));
         (void)residual;
         (void)energy;
     }
@@ -1579,10 +1635,13 @@ test_mute_onsets(void) {
         }
         const struct stream before = s;
         const char* frame = (kind == 0) ? voice : ((kind == 1) ? silence : erasure);
+        float noise[160];
         faded_mute_reference(want, &before.prev_enh, &faded);
+        mute_noise_reference(noise);
         stream_frame(&s, frame, 0, 0);
         assert(close_to(s.out, want, 0, 160));
         assert(second_half_is_noise(s.out));
+        assert(noise_span_matches(s.out, noise));
         assert(peak_abs(want) > 5.0f);
         assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE) == (kind == 1));
         assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) == (kind >= 2));
@@ -1592,7 +1651,7 @@ test_mute_onsets(void) {
             assert(s.cur.repeatCount == 0);
         } else {
             assert_muted_state(&s, &before.prev_enh, before.prev_enh.noiseSeed);
-            assert(matches_reference(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
+            assert(pulse_state_matches(s.prev_enh.noiseOverlap, faded.noiseOverlap));
             assert(s.cur.repeatCount == ((kind == 3) ? MBE_MAX_FRAME_REPEATS : 2));
         }
         assert(s.prev.repeatCount == s.cur.repeatCount);
@@ -1647,11 +1706,14 @@ test_mute_after_silence_frame(void) {
             }
         }
         const struct stream before = s;
+        float noise[160];
         faded_mute_reference(want, &before.prev_enh, &faded);
+        mute_noise_reference(noise);
         stream_frame(&s, by_rate ? voice : erasure, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
         assert(close_to(s.out, want, 0, 160));
         assert(second_half_is_noise(s.out));
+        assert(noise_span_matches(s.out, noise));
         assert(peak_abs(s.out) * 7.0f <= (repeat_peak * 7.0f) + MBE_AMBE_MUTE_NOISE_AMPLITUDE + 1e-3f);
         assert(peak_abs(s.out) * 7.0f > 2.0f * MBE_AMBE_MUTE_NOISE_AMPLITUDE);
         /* The kept model keeps its own mark. */
@@ -1690,6 +1752,7 @@ test_mute_fades_a_held_tone(void) {
     }
     limit_sum(want, 160);
     assert(close_mix(s.out, want, tail, noise, 0, 160));
+    assert(noise_span_matches(s.out, noise));
     assert(!tones_sound() || peak_abs(tail) > 100.0f);
     mbe_parms own;
     own_model_reference(&own, &before, voice, &s);
@@ -1763,7 +1826,7 @@ assert_release(struct stream* s, const char d[49], struct stream* released) {
     assert(fabsf(s->out[0]) < 1e-6f);
     assert(span_energy(want, 0, 160) > 160.0);
     assert(model_equal(&s->prev_enh, &model));
-    assert(matches_reference(s->prev_enh.noiseOverlap, model.noiseOverlap, 96));
+    assert(pulse_state_matches(s->prev_enh.noiseOverlap, model.noiseOverlap));
     assert(s->prev_enh.Vl[0] == 0 && s->cur.Vl[0] == 0);
     assert(float_bits_equal(s->prev_enh.noiseSeed, generator_after(before.prev_enh.noiseSeed, 1)));
 
@@ -2099,6 +2162,7 @@ test_lost_frames_repeat_a_tone(void) {
     stream_frame(&s, erasure, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) && s.cur.repeatCount == MBE_MAX_FRAME_REPEATS);
     assert(close_mix(s.out, want, tail, noise, 0, 160));
+    assert(noise_span_matches(s.out, noise));
     assert_muted_state(&s, &kept, generator);
 
     /* The voice after it starts from silence, with no tail. */
@@ -2167,6 +2231,37 @@ overloads_against(const float* x, const float* other, int from, int to) {
  * limited part, somewhere: far above close_mix()'s tolerance. */
 #define K_LIMIT_TWICE_MARGIN 100.0f
 
+/*
+ * The samples of [0, 80) that tell the two orders of the limit apart: where
+ * part `a` passes the limit by more than part `b`'s magnitude, and `b`, at
+ * least `least` in magnitude, has the opposite sign. There the sum limited
+ * once is the limit itself, and `a` limited before `b` is added lies |b| inside
+ * it. The output must be the limit within a few units in the last place of
+ * it, and at least least / 2 away from the other order: a margin far above
+ * that tolerance in any build. Returns the number of such samples, or -1 if
+ * one fails.
+ */
+static int
+limited_once_at(const float* out, const float* a, const float* b, double least) {
+    const double limit = (double)K_OUTPUT_LIMIT;
+    int count = 0;
+    for (int n = 0; n < 80; ++n) {
+        const double sign = (a[n] < 0.0f) ? -1.0 : 1.0;
+        if (fabs((double)a[n]) - fabs((double)b[n]) <= limit || fabs((double)b[n]) < least
+            || ((a[n] < 0.0f) == (b[n] < 0.0f))) {
+            continue;
+        }
+        const double once = sign * limit;
+        const double twice = once + (double)b[n];
+        if (!(fabs((double)out[n] - once) <= K_FAST_MATH_ULPS * limit)
+            || !(fabs((double)out[n] - twice) >= 0.5 * least)) {
+            return -1;
+        }
+        ++count;
+    }
+    return count;
+}
+
 static int
 differs_by(const float* a, const float* b, float by) {
     for (int n = 0; n < 160; ++n) {
@@ -2216,6 +2311,7 @@ test_limit_after_tone_tail(void) {
     if (tones_sound()) {
         assert(overloads_against(speech, tail, 0, 80));
         assert(differs_by(s.out, twice, K_LIMIT_TWICE_MARGIN));
+        assert(limited_once_at(s.out, speech, tail, 1.0) > 0);
     }
 }
 
@@ -2252,6 +2348,13 @@ test_limit_tone_over_speech(void) {
     assert(overload);
     assert(close_mix(s.out, want, tone_out, speech, 0, 160));
     assert(differs_by(s.out, twice, K_LIMIT_TWICE_MARGIN));
+    float fading_speech[160], rising_tone[160];
+    for (int n = 0; n < 160; ++n) {
+        const float gain = (n < 80) ? (float)n / 80.0f : 1.0f;
+        fading_speech[n] = (1.0f - gain) * speech[n];
+        rising_tone[n] = gain * tone_out[n];
+    }
+    assert(!tones_sound() || limited_once_at(s.out, fading_speech, rising_tone, 1.0) > 0);
 }
 
 /*
@@ -2280,6 +2383,10 @@ test_limit_mute_over_speech(void) {
     limit_sum(want, 160);
     assert(overload);
     assert(close_mix(s.out, want, fade, noise, 0, 160));
+    assert(noise_span_matches(s.out, noise));
+    /* Where the fade passes the limit against the noise, the frame is the
+     * limit, not the limited fade plus the noise. */
+    assert(limited_once_at(s.out, fade, noise, 0.03) > 0);
 }
 
 /* ---- A tone is limited after its fade or mix ---- */
@@ -2378,6 +2485,7 @@ test_loud_tone_tail(void) {
         stream_frame(&s, erasure, 0, 0);
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
         assert(close_mix(s.out, want, tail, noise, 0, 160));
+        assert(noise_span_matches(s.out, noise));
         assert(!tones_sound() || differs_by(s.out, before_fix, K_LIMIT_TWICE_MARGIN));
 
         /* Voice right after the tone. */

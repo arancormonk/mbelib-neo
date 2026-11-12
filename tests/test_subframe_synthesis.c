@@ -1157,6 +1157,18 @@ same_or_close(const float* a, const float* b, int n) {
     return 1;
 }
 
+/* The pulse state in noiseOverlap: the pulse count (element 0) and the tag
+ * saying which rendering wrote the state (MBE_SUBFRAME_STATE_SLOT) are
+ * discrete values stored as floats, compared bit for bit in every build; the
+ * pulse times and the pulse phase (elements 1 to PHASE_SLOT) as
+ * same_or_close() compares them; the elements between are zero, bit for bit. */
+static int
+pulse_state_same_or_close(const float* a, const float* b) {
+    return same_bits(&a[0], &b[0], 1) && same_bits(&a[MBE_SUBFRAME_STATE_SLOT], &b[MBE_SUBFRAME_STATE_SLOT], 1)
+           && same_or_close(&a[1], &b[1], PHASE_SLOT)
+           && same_bits(&a[PHASE_SLOT + 1], &b[PHASE_SLOT + 1], MBE_SUBFRAME_STATE_SLOT - PHASE_SLOT - 1);
+}
+
 /*
  * The output-limit option of the synthesis core: a frame left unlimited is
  * the limited frame before its limit, sample for sample (limiting it gives the
@@ -1199,7 +1211,8 @@ test_output_limit_option(void) {
         mbe_clipFloatBuffer(unlimited, 160);
         assert(same_or_close(limited, unlimited, 160));
         assert(same_or_close(a.Ml, b.Ml, 57) && same_or_close(a.PSIl, b.PSIl, 57) && same_or_close(a.PHIl, b.PHIl, 57));
-        assert(same_or_close(a.noiseOverlap, b.noiseOverlap, 96) && same_or_close(a.previousUw, b.previousUw, 256));
+        assert(pulse_state_same_or_close(a.noiseOverlap, b.noiseOverlap)
+               && same_or_close(a.previousUw, b.previousUw, 256));
         assert(same_bits(&a.noiseSeed, &b.noiseSeed, 1) && same_or_close(&a.localEnergy, &b.localEnergy, 1));
         assert(memcmp(a.Vl, b.Vl, sizeof(a.Vl)) == 0 && a.amplitudeThreshold == b.amplitudeThreshold);
     }
