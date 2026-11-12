@@ -882,7 +882,7 @@ mbe_clipFloatSample(float sample) {
     return sample;
 }
 
-static void
+void
 mbe_clipFloatBuffer(float* samples, int count) {
     if (samples == NULL || count <= 0) {
         return;

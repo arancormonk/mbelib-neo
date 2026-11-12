@@ -764,7 +764,7 @@ ambe2400_update_decode_state(const char ambe_d[49], int bad, mbe_process_result*
 /* The noise D-STAR mutes to, at the level of DVSI's muted output. */
 static void
 ambe2400_mute_noise(float* aout_buf) {
-    mbe_synthesizeUniformNoisef(aout_buf, MBE_AMBE2400_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    mbe_synthesizeUniformNoisef(aout_buf, MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
 }
 
 /*

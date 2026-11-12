@@ -125,7 +125,9 @@ void mbe_resetImbeModel(mbe_parms* mp);
 /** Noise a frame muted inside the synthesis core is replaced with; chosen by the codec path. */
 enum mbe_mute_noise {
     MBE_MUTE_NOISE_COMFORT, /**< Library comfort noise: D-STAR, ProVoice and the public synthesis API. */
-    MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE and AMBE 3600x2450 paths. */
+    MBE_MUTE_NOISE_SPEC,    /**< MBE_SPEC_MUTE_NOISE_AMPLITUDE: the P25 IMBE path (the AMBE 3600x2450
+                               path passes it too, but mutes before synthesis and never reaches the
+                               core's mute: it plays MBE_AMBE_MUTE_NOISE_AMPLITUDE itself). */
 };
 
 /** How a frame's model is rendered; chosen by the codec path. */
@@ -268,6 +270,8 @@ void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int fro
 /**
  * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7
  * (AMBE 3600x2450): uniform in [-5, 5] on the synthesized-speech scale s(n).
+ * P25's IMBE path plays it; the AMBE 3600x2450 path plays DVSI's level
+ * (MBE_AMBE_MUTE_NOISE_AMPLITUDE, ambe_common.h).
  */
 #define MBE_SPEC_MUTE_NOISE_AMPLITUDE 5.0f
 
@@ -312,6 +316,18 @@ void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int fro
  * @param amplitude Peak amplitude in the library float domain.
  */
 void mbe_synthesizeUniformNoisef(float* aout_buf, float amplitude);
+
+/**
+ * @brief Limit float output samples to the library's headroom (95% of full
+ *        scale), as the synthesis core limits a frame; NaN passes through.
+ *
+ * For codec paths that add two signals the core rendered separately (a tone's
+ * tail and speech, a fading frame and mute noise): the sum is limited.
+ *
+ * @param samples Samples, limited in place.
+ * @param count   Number of samples.
+ */
+void mbe_clipFloatBuffer(float* samples, int count);
 
 /**
  * @brief Seed the comfort-noise RNG used by mbe_synthesizeComfortNoisef().

@@ -11,7 +11,11 @@
  * frame repeats (5.6), muting (5.7), erasures (4.1) and tone frames (7.3),
  * and the triplet
  * semantics they rely on: prev_mp is the last valid voice frame (prediction
- * history), prev_mp_enhanced is the last synthesized frame (repeat source).
+ * history), prev_mp_enhanced is the last synthesized frame (repeat source),
+ * and, where the spec is silent, what DVSI's decoder does: a mute or a tone
+ * silences the output, not the decoder's model, which prev_mp_enhanced keeps.
+ * Fades are checked against renderings of the same starting state (twin
+ * streams, or the synthesis helpers called directly).
  */
 
 #include <assert.h>
@@ -24,6 +28,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ambe_common.h"
+#include "mbe_adaptive.h"
 #include "mbelib-neo/mbelib.h"
 
 /* Bit positions of quantizer values b0..b8 in the 49-bit parameter vector. */
@@ -170,15 +176,25 @@ parms_equal(const mbe_parms* a, const mbe_parms* b) {
     return ints_equal && floats_equal && arrays_equal;
 }
 
-/** After a tone, the last synthesized frame is silenced: amplitudes and overlap
- * zeroed, the rest kept, and element 0 of Vl records the tone left sounding
- * (@p held: 0 for none, else bit 16 with the amplitude field and the ID). */
+/* What the last frame left, in the otherwise unused Vl[0] of the last
+ * synthesized frame: a tone sounding (with its AD and ID), and the next frame
+ * synthesized starting from silence. */
+#define W_TONE_HELD (1 << 16)
+#define W_AFRESH    (1 << 17)
+
+/* The word a played full-level tone (AD 127) of this ID leaves. */
 static int
-enhanced_silenced_from(const mbe_parms* after, const mbe_parms* before, int held) {
+tone_word(int tone_id) {
+    return W_TONE_HELD | W_AFRESH | (127 << 8) | tone_id;
+}
+
+/** After a tone, the last synthesized frame keeps its model and state: only
+ * its unvoiced overlap is cleared, and element 0 of Vl holds the word. */
+static int
+kept_through_tone(const mbe_parms* after, const mbe_parms* before, int word) {
     mbe_parms expected = *before;
-    memset(expected.Ml, 0, sizeof(expected.Ml));
     memset(expected.previousUw, 0, sizeof(expected.previousUw));
-    expected.Vl[0] = held;
+    expected.Vl[0] = word;
     return parms_equal(after, &expected);
 }
 
@@ -201,22 +217,15 @@ is_crossfade(const float* out, const float* incoming, const float* outgoing) {
     return 1;
 }
 
-/**
- * After a mute, likewise, and the unvoiced noise generator has moved one frame
- * on: DVSI's (x <- 173 x + 13849 mod 2^16) runs through muted frames, and
- * stands still only through tones.
- */
-static int
-enhanced_muted_from(const mbe_parms* after, const mbe_parms* before) {
-    mbe_parms expected = *before;
-    uint32_t state = (uint32_t)before->noiseSeed;
-    for (int i = 0; i < 160; ++i) {
+/** DVSI's unvoiced noise generator (x <- 173 x + 13849 mod 2^16, from 0 for a
+ * fresh stream) `frames` frames on from `from`. */
+static float
+generator_after(float from, int frames) {
+    uint32_t state = (from < 0.0f) ? 0u : (uint32_t)from;
+    for (int i = 0; i < frames * 160; ++i) {
         state = (173u * state + 13849u) & 0xFFFFu;
     }
-    memset(expected.Ml, 0, sizeof(expected.Ml));
-    memset(expected.previousUw, 0, sizeof(expected.previousUw));
-    expected.noiseSeed = (float)state;
-    return parms_equal(after, &expected);
+    return (float)state;
 }
 
 struct stream {
@@ -227,9 +236,14 @@ struct stream {
     float out[160];
 };
 
+/* Every frame starts the thread's comfort-noise generator from this seed, so
+ * that a muted frame's noise is mute_noise_reference(). DVSI's unvoiced noise
+ * generator, which lives in the stream's state, does not depend on it. */
+#define K_NOISE_SEED 0x5EEDu
+
 static void
 stream_init(struct stream* s) {
-    mbe_setThreadRngSeed(0x5EEDu);
+    mbe_setThreadRngSeed(K_NOISE_SEED);
     mbe_initMbeParms(&s->cur, &s->prev, &s->prev_enh);
 }
 
@@ -241,6 +255,7 @@ stream_frame(struct stream* s, const char d[49], int c0_errors, int protected_er
     s->result.c0_errors = c0_errors;
     s->result.protected_errors = protected_errors;
     s->result.total_errors = c0_errors + protected_errors;
+    mbe_setThreadRngSeed(K_NOISE_SEED);
     int rc = mbe_processAmbe2450Dataf(s->out, &s->result, d, &s->cur, &s->prev, &s->prev_enh);
     assert(rc >= 0);
     (void)rc;
@@ -276,27 +291,152 @@ rms(const float* x) {
     return sqrt(acc / 160.0);
 }
 
-/** Muted output is the 5.7 uniform noise in [-5, 5] on the 16-bit output
- * scale (float samples times 7, as mbe_floattoshort() applies). */
+/** The noise a muted frame plays: DVSI's mute level, uniform in [-1.5, 1.5]
+ * on the 16-bit output scale (float samples times 7, as mbe_floattoshort()
+ * applies), the level of D-STAR's. */
+static void
+mute_noise_reference(float noise[160]) {
+    mbe_setThreadRngSeed(K_NOISE_SEED);
+    mbe_synthesizeUniformNoisef(noise, MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+}
+
+/** Muted output that is the noise alone: bounded by the mute level, at its rms. */
 static void
 assert_mute_noise(const float* x) {
-    assert(peak_abs(x) * 7.0f <= 5.0f + 1e-4f);
+    assert(peak_abs(x) * 7.0f <= 1.5f + 1e-4f);
     double r = rms(x) * 7.0;
-    assert(r > 1.5 && r < 4.0);
+    assert(r > 0.6 && r < 1.1);
     (void)r;
+}
+
+/** The library's float output limit (95% of full scale), applied to a sum. */
+static void
+limit_sum(float* x, int n) {
+    const float limit = (32767.0f * 0.95f) / 7.0f;
+    for (int i = 0; i < n; ++i) {
+        x[i] = (x[i] > limit) ? limit : ((x[i] < -limit) ? -limit : x[i]);
+    }
+}
+
+/** A muted frame's second half is the mute noise alone: nothing of the last
+ * frame reaches past its first 80 samples (16-bit scale, float times 7). */
+static int
+second_half_is_noise(const float* out) {
+    for (int n = 80; n < 160; ++n) {
+        if (!(fabsf(out[n]) * 7.0f <= MBE_AMBE_MUTE_NOISE_AMPLITUDE + 1e-4f)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+close_to(const float* out, const float* want, int from, int to) {
+    for (int n = from; n < to; ++n) {
+        if (!(fabs((double)out[n] - (double)want[n]) <= 1e-5 * (1.0 + fabs((double)want[n])))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * The first muted frame after a heard one, rendered independently of the
+ * decoder from the last synthesized frame alone: a repeat of it toward a
+ * silent copy of itself (its amplitudes zeroed, no frame mark), which fades it
+ * out over the first subframe, as D-STAR's repeat-limit mute renders. `faded`
+ * receives the state the rendering leaves (pulse state, phases, noise
+ * generator).
+ */
+static void
+fade_reference(float out[160], const mbe_parms* last_synthesized, mbe_parms* faded) {
+    mbe_parms last = *last_synthesized;
+    *faded = *last_synthesized;
+    memset(faded->Ml, 0, sizeof(faded->Ml));
+    mbe_set_frame_mark(faded, MBE_FRAME_MARK_NONE);
+    faded->repeatCount = 0;
+    mbe_synthesizeRepeatedSpeechf(out, faded, &last, MBE_VOICED_SYNTHESIS_DVSI);
+}
+
+/** Whether this build plays tones: one built with NOTONES renders them as
+ * silence, and so do the references, which render through the library. */
+static int
+tones_sound(void) {
+    char tone[49];
+    float out[160];
+    mbe_parms phases;
+    memset(&phases, 0, sizeof(phases));
+    pack_tone(tone, 7);
+    mbe_synthesizeTonef(out, tone, &phases);
+    return peak_abs(out) > 1000.0f;
+}
+
+/** A held tone's tail as a mute or the frame after the tone adds it: the tone
+ * going on from the phases `phases` holds, times (1 - n / 80) for n < 80. */
+static void
+tail_reference(float tail[160], const char tone[49], const mbe_parms* phases) {
+    mbe_parms state = *phases;
+    mbe_synthesizeTonef(tail, tone, &state);
+    for (int n = 0; n < 160; ++n) {
+        tail[n] = (n < 80) ? (1.0f - ((float)n / 80.0f)) * tail[n] : 0.0f;
+    }
+}
+
+/** The model fields of a parameter set (pitch, bands, voicing, amplitudes). */
+static int
+model_equal(const mbe_parms* a, const mbe_parms* b) {
+    if (a->L != b->L || !float_bits_equal(a->w0, b->w0)) {
+        return 0;
+    }
+    for (int l = 1; l <= a->L; ++l) {
+        if (a->Vl[l] != b->Vl[l] || !float_bits_equal(a->Ml[l], b->Ml[l])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+overlap_cleared(const mbe_parms* mp) {
+    for (int i = 0; i < 256; ++i) {
+        if (!float_bits_equal(mp->previousUw[i], 0.0f)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * The state a muted frame leaves: the kept model (`model`), its unvoiced
+ * overlap cleared, the next frame to start from silence, the noise generator
+ * one frame on, nothing in cur_mp's word.
+ */
+static void
+assert_muted_state(const struct stream* s, const mbe_parms* model, float generator_before) {
+    assert(has_flag(s, MBE_PROCESS_FLAG_MUTE));
+    assert(model_equal(&s->prev_enh, model));
+    assert(overlap_cleared(&s->prev_enh));
+    assert(s->prev_enh.Vl[0] == W_AFRESH);
+    assert(s->cur.Vl[0] == 0);
+    assert(float_bits_equal(s->prev_enh.noiseSeed, generator_after(generator_before, 1)));
+    assert(float_bits_equal(s->cur.noiseSeed, s->prev_enh.noiseSeed));
 }
 
 /*
  * 4.1, 5.6, 5.7: erasures are frame repeats of the last synthesized frame;
  * the 4th consecutive invalid frame mutes instead of repeating. The prediction
  * history is never touched, so the next voice frame decodes as if the
- * erasures were absent.
+ * erasures were absent. As DVSI's decoder plays it, the 4th plays the last
+ * frame fading out over its first 80 samples under the mute noise and keeps
+ * that model; the 5th is the noise alone.
  */
 static void
 test_erasure_run_repeats_then_mutes(void) {
     struct stream s;
     char erasure[49];
+    float noise[160];
     pack_b(erasure, k_erasure);
+    mute_noise_reference(noise);
 
     stream_init(&s);
     stream_frame_b(&s, k_voice_loud, 0, 0);
@@ -304,6 +444,9 @@ test_erasure_run_repeats_then_mutes(void) {
 
     for (int i = 1; i <= 5; ++i) {
         const mbe_parms enh_before = s.prev_enh;
+        float fade[160];
+        mbe_parms faded;
+        fade_reference(fade, &enh_before, &faded);
         stream_frame(&s, erasure, 0, 0);
         const int muted = (i >= 4);
         assert(has_flag(&s, MBE_PROCESS_FLAG_ERASURE));
@@ -312,14 +455,33 @@ test_erasure_run_repeats_then_mutes(void) {
         assert(s.cur.repeatCount == (muted ? MBE_MAX_FRAME_REPEATS : i));
         assert(s.prev.repeatCount == s.cur.repeatCount);
         assert(history_equal(&s.prev, &history));
-        if (muted) {
+        assert(s.cur.Vl[0] == 0);
+        if (i == 4) {
+            float want[160];
+            for (int n = 0; n < 160; ++n) {
+                want[n] = fade[n] + noise[n];
+            }
+            limit_sum(want, 160);
+            assert(peak_abs(fade) > 5.0f);
+            assert(close_to(s.out, want, 0, 160));
+            assert(second_half_is_noise(s.out));
+            /* The repeated model is kept, with the pulses and phases the fade left. */
+            assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
+            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
+            assert(float_array_bits_equal(s.prev_enh.PSIl + 1, faded.PSIl + 1, 56));
+            assert(float_array_bits_equal(s.prev_enh.PHIl + 1, faded.PHIl + 1, 56));
+        } else if (i == 5) {
+            /* A mute right after a mute is the noise alone. */
+            assert(float_array_bits_equal(s.out, noise, 160));
             assert_mute_noise(s.out);
-            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
+            assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
+            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, enh_before.noiseOverlap, 96));
         } else {
             /* A repeat replays the loud voice model, not comfort noise. */
             assert(peak_abs(s.out) > 5.0f);
             assert(s.cur.L == enh_before.L);
             assert(float_bits_equal(s.cur.w0, enh_before.w0));
+            assert(s.prev_enh.Vl[0] == 0);
         }
     }
 
@@ -355,22 +517,53 @@ test_repeat_advances_error_rate(void) {
     (void)expected;
 }
 
+/**
+ * A valid frame's own model as the decoder leaves it when it synthesizes the
+ * frame: decoded against the history, enhanced and smoothed with the frame's
+ * error accounting (read from `after`, the stream once it took the frame),
+ * from the state `before` it.
+ */
+static void
+own_model_reference(mbe_parms* model, const struct stream* before, const char d[49], const struct stream* after) {
+    mbe_parms prev = before->prev;
+    mbe_parms enh = before->prev_enh;
+    float scratch[160];
+    *model = before->cur;
+    model->mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+    model->errorRate = after->cur.errorRate;
+    model->errorCountTotal = after->cur.errorCountTotal;
+    model->errorCount4 = 0;
+    model->repeatCount = 0;
+    const int kind = mbe_decodeAmbe2450Parms(d, model, &prev);
+    assert(kind == MBE_AMBE2450_FRAME_VOICE);
+    (void)kind;
+    const float rm0 = mbe_spectralAmpEnhanceWithRm0(model, MBE_HIGH_BAND_GAIN_AMBE2450);
+    enh.Vl[0] = 0;
+    mbe_synthesizeSpeechWithPreEnhRm0f(scratch, model, &enh, rm0, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+                                       MBE_AMPLITUDE_LIMIT_NONE);
+}
+
 /*
  * 5.7: mute when the error rate exceeds 0.096. With 7 errors per frame the
  * recursion crosses the threshold on frame 21. A muted valid voice frame
- * still commits its prediction history (the encoder updated its predictor).
+ * still commits its prediction history (the encoder updated its predictor),
+ * and, as DVSI's decoder goes on, becomes the kept model, as an unheard
+ * synthesis of it leaves it; the frame plays the last one fading out under
+ * the mute noise.
  */
 static void
 test_error_rate_mute_boundary(void) {
     struct stream s;
     char voice[49];
+    float noise[160];
     pack_b(voice, k_voice_loud);
+    mute_noise_reference(noise);
     stream_init(&s);
 
     for (int n = 1; n <= 21; ++n) {
         mbe_parms dec_cur = s.cur;
         mbe_parms dec_prev = s.prev;
-        const mbe_parms enh_before = s.prev_enh;
+        const struct stream before = s;
         assert(mbe_decodeAmbe2450Parms(voice, &dec_cur, &dec_prev) == 0);
 
         stream_frame(&s, voice, 1, 6);
@@ -378,15 +571,28 @@ test_error_rate_mute_boundary(void) {
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == (n == 21));
         assert(history_equal(&s.prev, &dec_cur));
         if (n == 21) {
-            assert_mute_noise(s.out);
-            assert(enhanced_muted_from(&s.prev_enh, &enh_before));
+            float fade[160], want[160];
+            mbe_parms faded, own;
+            fade_reference(fade, &before.prev_enh, &faded);
+            for (int i = 0; i < 160; ++i) {
+                want[i] = fade[i] + noise[i];
+            }
+            limit_sum(want, 160);
+            assert(close_to(s.out, want, 0, 160));
+            assert(second_half_is_noise(s.out));
+            own_model_reference(&own, &before, voice, &s);
+            assert_muted_state(&s, &own, before.prev_enh.noiseSeed);
+            assert(s.cur.repeatCount == 0);
+            assert(float_bits_equal(s.prev_enh.localEnergy, own.localEnergy));
+            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, own.noiseOverlap, 96));
         }
     }
 }
 
 /*
  * 7.3: valid tones leave the prediction history untouched (4.3). Not in the
- * spec: the last synthesized frame is silenced, as after a mute.
+ * spec: the last synthesized frame is kept, save its unvoiced overlap, and the
+ * frame after the tone starts from silence, as after a mute.
  */
 static void
 test_valid_tone_keeps_state(void) {
@@ -417,7 +623,8 @@ test_valid_tone_keeps_state(void) {
     assert(is_crossfade(s.out, expected, repeat.out));
     assert(float_array_bits_equal(s.out + 80, expected + 80, 80));
     assert(history_equal(&s.prev, &history));
-    assert(enhanced_silenced_from(&s.prev_enh, &enh_before, (1 << 16) | (127 << 8) | 7));
+    assert(kept_through_tone(&s.prev_enh, &enh_before, tone_word(7)));
+    assert(s.cur.Vl[0] == 0);
 
     /* The tone goes on at once: its second frame is the tone alone. */
     mbe_synthesizeTonef(expected, tone, &tone_state);
@@ -436,7 +643,7 @@ test_valid_tone_keeps_state(void) {
     for (int i = 80; i < 160; ++i) {
         assert(float_bits_equal(s.out[i], 0.0f));
     }
-    assert(s.prev_enh.Vl[0] == 0);
+    assert(s.prev_enh.Vl[0] == W_AFRESH);
     /* Nothing is left sounding after it. */
     stream_frame(&s, tone, 0, 0);
     for (int i = 0; i < 160; ++i) {
@@ -466,10 +673,22 @@ test_invalid_tone_is_erasure(void) {
     assert(s.cur.repeatCount == 1);
 
     s.prev.repeatCount = MBE_MAX_FRAME_REPEATS - 1;
+    const mbe_parms enh_before = s.prev_enh;
+    float fade[160], noise[160], want[160];
+    mbe_parms faded;
+    fade_reference(fade, &enh_before, &faded);
+    mute_noise_reference(noise);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
     assert(s.cur.repeatCount == MBE_MAX_FRAME_REPEATS);
-    assert_mute_noise(s.out);
+    /* The repeat it would have played fades out under the mute noise. */
+    for (int n = 0; n < 160; ++n) {
+        want[n] = fade[n] + noise[n];
+    }
+    limit_sum(want, 160);
+    assert(close_to(s.out, want, 0, 160));
+    assert(second_half_is_noise(s.out));
+    assert_muted_state(&s, &enh_before, enh_before.noiseSeed);
     assert(history_equal(&s.prev, &history));
 }
 
@@ -542,13 +761,29 @@ test_tone_repeat_and_mute_order(void) {
     assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT));
     assert(!has_flag(&s, MBE_PROCESS_FLAG_TONE));
 
+    /* A tone muted by the error rate: the voice before it fades out under the
+     * noise, the tone does not sound (its phases stand), the voice model is
+     * kept and the noise generator runs. */
     stream_init(&s);
     stream_frame_b(&s, k_voice_loud, 0, 0);
     s.prev.errorRate = 0.2f;
+    const struct stream before = s;
+    float fade[160], noise[160], want[160];
+    mbe_parms faded;
+    fade_reference(fade, &before.prev_enh, &faded);
+    mute_noise_reference(noise);
     stream_frame(&s, tone, 0, 0);
     assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
     assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
-    assert_mute_noise(s.out);
+    for (int n = 0; n < 160; ++n) {
+        want[n] = fade[n] + noise[n];
+    }
+    limit_sum(want, 160);
+    assert(close_to(s.out, want, 0, 160));
+    assert(second_half_is_noise(s.out));
+    assert_muted_state(&s, &before.prev_enh, before.prev_enh.noiseSeed);
+    assert(s.cur.repeatCount == 0);
+    assert(s.cur.swn == before.cur.swn && s.cur.tonePhase == before.cur.tonePhase);
 }
 
 /* The consecutive-invalid count is caller-owned; clamp it instead of overflowing. */
@@ -1110,9 +1345,266 @@ test_fade_in_after_tone(void) {
          * fading out as the frame fades in; after the silent tone nothing does. */
         assert(is_crossfade(s.out, quiet.out, tail));
         assert(float_array_bits_equal(s.out + 80, quiet.out + 80, 80));
-        assert(s.prev_enh.Vl[0] == 0);
+        assert(s.prev_enh.Vl[0] == (repeat_after ? W_AFRESH : 0));
+        assert(s.cur.Vl[0] == 0);
     }
     (void)steady;
+}
+
+/* ---- Mutes, as DVSI's decoder plays them ---- */
+
+/* A settled stream ending with a frame of `last`. */
+static void
+stream_settled(struct stream* s, const int last[9]) {
+    stream_init(s);
+    for (int i = 0; i < 8; ++i) {
+        stream_frame_b(s, k_voice_next, 0, 0);
+    }
+    stream_frame_b(s, last, 0, 0);
+}
+
+/* The output a first muted frame plays over the last synthesized frame
+ * `last`: its fade plus the mute noise. */
+static void
+faded_mute_reference(float want[160], const mbe_parms* last, mbe_parms* faded) {
+    float noise[160];
+    fade_reference(want, last, faded);
+    mute_noise_reference(noise);
+    for (int n = 0; n < 160; ++n) {
+        want[n] += noise[n];
+    }
+    limit_sum(want, 160);
+}
+
+/*
+ * The fade, against a twin stream that repeats the last frame instead: the
+ * last frame here is voiced in every band and leaves no unvoiced overlap, so
+ * its repeat is its harmonics held, and the first muted frame is that repeat
+ * times (1 - n / 80) over the first 80 samples, plus the noise, and the noise
+ * alone after them; at the repeat limit and at an error-rate mute.
+ */
+static void
+test_mute_fades_the_last_frame(void) {
+    char erasure[49];
+    float noise[160];
+    pack_b(erasure, k_erasure);
+    mute_noise_reference(noise);
+
+    for (int by_rate = 0; by_rate < 2; ++by_rate) {
+        struct stream s;
+        stream_settled(&s, k_voice_reach);
+        if (by_rate) {
+            s.prev.errorRate = 0.2f;
+        } else {
+            s.prev.repeatCount = MBE_MAX_FRAME_REPEATS - 1;
+        }
+        struct stream twin = s;
+        twin.prev.errorRate = 0.0f;
+        twin.prev.repeatCount = 0;
+        stream_frame(&twin, erasure, 0, 0);
+        assert(!has_flag(&twin, MBE_PROCESS_FLAG_MUTE));
+        stream_frame(&s, erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+
+        double residual = 0.0, energy = 0.0;
+        for (int n = 0; n < 160; ++n) {
+            const double gain = (n < 80) ? 1.0 - ((double)n / 80.0) : 0.0;
+            const double r = (double)s.out[n] - (double)noise[n] - (gain * (double)twin.out[n]);
+            residual += r * r;
+            energy += (n < 80) ? (double)twin.out[n] * (double)twin.out[n] : 0.0;
+        }
+        assert(energy > 80.0 * 50.0 * 50.0);
+        assert(residual < 1e-4 * energy);
+        for (int n = 80; n < 160; ++n) {
+            assert(fabs((double)s.out[n] - (double)noise[n]) < 1e-4);
+        }
+        (void)residual;
+        (void)energy;
+    }
+}
+
+/*
+ * The first muted frame plays the last synthesized frame fading out, whatever
+ * that frame was and whatever mutes: a voice frame muted by the error rate, a
+ * silence frame muted by it, an invalid frame muted by it after a repeat, and
+ * the 4th invalid frame after three repeats. A valid voice or silence frame
+ * becomes the kept model as its unheard synthesis leaves it; an invalid frame
+ * keeps the repeated model. Either way the noise generator runs one frame.
+ */
+static void
+test_mute_onsets(void) {
+    char voice[49], silence[49], erasure[49];
+    pack_b(voice, k_voice_next);
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+    pack_b(erasure, k_erasure);
+
+    for (int kind = 0; kind < 4; ++kind) {
+        struct stream s;
+        float want[160];
+        mbe_parms faded, own;
+        stream_settled(&s, k_voice_loud);
+        if (kind >= 2) {
+            stream_frame(&s, erasure, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && !has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        }
+        if (kind == 3) {
+            stream_frame(&s, erasure, 0, 0);
+            stream_frame(&s, erasure, 0, 0);
+        } else {
+            s.prev.errorRate = 0.2f;
+        }
+        const struct stream before = s;
+        const char* frame = (kind == 0) ? voice : ((kind == 1) ? silence : erasure);
+        faded_mute_reference(want, &before.prev_enh, &faded);
+        stream_frame(&s, frame, 0, 0);
+        assert(close_to(s.out, want, 0, 160));
+        assert(second_half_is_noise(s.out));
+        assert(peak_abs(want) > 5.0f);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE) == (kind == 1));
+        assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) == (kind >= 2));
+        if (kind < 2) {
+            own_model_reference(&own, &before, frame, &s);
+            assert_muted_state(&s, &own, before.prev_enh.noiseSeed);
+            assert(s.cur.repeatCount == 0);
+        } else {
+            assert_muted_state(&s, &before.prev_enh, before.prev_enh.noiseSeed);
+            assert(float_array_bits_equal(s.prev_enh.noiseOverlap, faded.noiseOverlap, 96));
+            assert(s.cur.repeatCount == ((kind == 3) ? MBE_MAX_FRAME_REPEATS : 2));
+        }
+        assert(s.prev.repeatCount == s.cur.repeatCount);
+        if (kind != 0) {
+            assert(history_equal(&s.prev, &before.prev));
+        }
+    }
+}
+
+/*
+ * A mute after a silence frame fades the silence model out over the first
+ * 80 samples, as after any frame: voice, a silence frame, three erasures
+ * repeating it, then the 4th; and voice, a silence frame, then a voice frame
+ * the error rate mutes. The faded copy carries no frame mark, so the silence
+ * frame's mark (hold the model before to mid-frame) cannot carry the model at
+ * full level into the second half: that half is the mute noise alone, and
+ * the first is the fade against the reference plus the noise, never above the
+ * repeats' peak plus the noise. The same after a V/UV row-15 frame, whose
+ * late-onset mark the fade does not depend on either; the kept model keeps
+ * its own mark.
+ */
+static void
+test_mute_after_silence_frame(void) {
+    char silence[49], erasure[49], voice[49];
+    unpack_bytes(silence, k_dvsi_silence_bytes);
+    pack_b(erasure, k_erasure);
+    pack_b(voice, k_voice_next);
+    static const int k_row15[9] = {60, 15, 20, 200, 90, 17, 11, 3, 6};
+    for (int k = 0; k < 4; ++k) {
+        const int by_rate = k & 1;
+        const int row15 = k >> 1;
+        struct stream s;
+        float want[160];
+        mbe_parms faded;
+        float repeat_peak = 0.0f;
+        stream_settled(&s, k_voice_loud);
+        if (row15) {
+            stream_frame_b(&s, k_row15, 0, 0);
+        } else {
+            stream_frame(&s, silence, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_SILENCE));
+        }
+        const float mark = s.prev_enh.PHIl[0];
+        if (by_rate) {
+            repeat_peak = peak_abs(s.out);
+            s.prev.errorRate = 0.2f;
+        } else {
+            for (int i = 0; i < 3; ++i) {
+                stream_frame(&s, erasure, 0, 0);
+                assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && !has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+                repeat_peak = peak_abs(s.out);
+            }
+        }
+        const struct stream before = s;
+        faded_mute_reference(want, &before.prev_enh, &faded);
+        stream_frame(&s, by_rate ? voice : erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        assert(close_to(s.out, want, 0, 160));
+        assert(second_half_is_noise(s.out));
+        assert(peak_abs(s.out) * 7.0f <= (repeat_peak * 7.0f) + MBE_AMBE_MUTE_NOISE_AMPLITUDE + 1e-3f);
+        assert(peak_abs(s.out) * 7.0f > 2.0f * MBE_AMBE_MUTE_NOISE_AMPLITUDE);
+        /* The kept model keeps its own mark. */
+        if (!by_rate) {
+            assert(float_bits_equal(s.prev_enh.PHIl[0], mark));
+            assert(float_bits_equal(mark, row15 ? 80.0f : k_mark_previous_held));
+        }
+    }
+}
+
+/*
+ * A mute while a tone sounds: the tone goes on from its phases and fades out
+ * over the first 80 samples, added to the mute noise, which does not fade.
+ * The tone is no longer held; the voice frame muted here becomes the kept
+ * model, and the noise generator runs one frame.
+ */
+static void
+test_mute_fades_a_held_tone(void) {
+    struct stream s;
+    char tone[49], voice[49];
+    float tail[160], noise[160];
+    pack_tone(tone, 7);
+    pack_b(voice, k_voice_next);
+    stream_settled(&s, k_voice_loud);
+    stream_frame(&s, tone, 0, 0);
+    assert(s.prev_enh.Vl[0] == tone_word(7));
+    s.prev.errorRate = 0.2f;
+    const struct stream before = s;
+    tail_reference(tail, tone, &before.cur);
+    mute_noise_reference(noise);
+    stream_frame(&s, voice, 0, 0);
+    assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) && !has_flag(&s, MBE_PROCESS_FLAG_TONE));
+    for (int n = 0; n < 160; ++n) {
+        tail[n] += noise[n];
+    }
+    limit_sum(tail, 160);
+    assert(close_to(s.out, tail, 0, 160));
+    assert(!tones_sound() || peak_abs(tail) > 100.0f);
+    mbe_parms own;
+    own_model_reference(&own, &before, voice, &s);
+    assert_muted_state(&s, &own, before.prev_enh.noiseSeed);
+}
+
+/* A mute as the very first frame plays the noise alone: nothing was played to
+ * fade. The noise generator still runs one frame, from its start. */
+static void
+test_mute_first_frame(void) {
+    char voice[49], erasure[49];
+    float noise[160];
+    pack_b(voice, k_voice_next);
+    pack_b(erasure, k_erasure);
+    mute_noise_reference(noise);
+    for (int invalid = 0; invalid < 2; ++invalid) {
+        struct stream s;
+        stream_init(&s);
+        /* AMBE state from the start, so that the error state below holds. */
+        s.prev.mutingThreshold = MBE_MUTING_THRESHOLD_AMBE;
+        if (invalid) {
+            s.prev.repeatCount = MBE_MAX_FRAME_REPEATS - 1;
+        } else {
+            s.prev.errorRate = 0.2f;
+        }
+        const mbe_parms enh_before = s.prev_enh;
+        stream_frame(&s, invalid ? erasure : voice, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        assert(float_array_bits_equal(s.out, noise, 160));
+        assert(s.prev_enh.Vl[0] == W_AFRESH && s.cur.Vl[0] == 0);
+        assert(overlap_cleared(&s.prev_enh));
+        assert(float_bits_equal(s.prev_enh.noiseSeed, generator_after(-1.0f, 1)));
+        if (invalid) {
+            assert(model_equal(&s.prev_enh, &enh_before));
+        } else {
+            /* The voice frame's own model, which also became the history. */
+            assert(s.prev_enh.L == s.prev.L && float_bits_equal(s.prev_enh.w0, s.prev.w0));
+            assert(s.prev_enh.L != enh_before.L);
+        }
+    }
 }
 
 /* The unvoiced noise generator, x <- 173 x + 13849 mod 2^16 from 0, one step
@@ -1128,8 +1620,9 @@ noise_state_after(int frames) {
 
 /*
  * DVSI's noise generator runs through every frame that is not a tone frame:
- * voice, silence, repeats and mutes each move it 160 samples on, and a tone
- * frame, the zero-amplitude one included, leaves it where it was.
+ * voice, silence, repeats and mutes each move it 160 samples on (a mute once,
+ * whatever it renders), and a tone frame, the zero-amplitude one included,
+ * leaves it where it was.
  */
 static void
 test_noise_generator_through_frame_kinds(void) {
@@ -1173,8 +1666,24 @@ test_noise_generator_through_frame_kinds(void) {
     ++frames;
     assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
     assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    /* A voice frame and a tone frame muted by the error rate: the first fades
+     * the last frame out (its own model's unheard synthesis moving the state),
+     * the second plays the noise alone. One frame each, as any mute. */
+    pack_tone(d, 7);
+    for (int i = 0; i < 2; ++i) {
+        s.prev.errorRate = 0.2f;
+        if (i == 0) {
+            stream_frame_b(&s, k_voice_loud, 0, 0);
+        } else {
+            stream_frame(&s, d, 0, 0);
+        }
+        assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        ++frames;
+        assert(float_bits_equal(s.cur.noiseSeed, noise_state_after(frames)));
+        assert(float_bits_equal(s.prev_enh.noiseSeed, s.cur.noiseSeed));
+    }
     /* The thread seed does not move it: every stream starts DVSI's generator from 0. */
-    assert(frames == 9);
+    assert(frames == 11);
 }
 
 int
@@ -1195,6 +1704,11 @@ main(void) {
     test_erasure_run_repeats_then_mutes();
     test_repeat_advances_error_rate();
     test_error_rate_mute_boundary();
+    test_mute_fades_the_last_frame();
+    test_mute_onsets();
+    test_mute_after_silence_frame();
+    test_mute_fades_a_held_tone();
+    test_mute_first_frame();
     test_noise_generator_through_frame_kinds();
     test_valid_tone_keeps_state();
     test_invalid_tone_is_erasure();
