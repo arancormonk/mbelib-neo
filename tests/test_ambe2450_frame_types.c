@@ -2217,17 +2217,19 @@ test_limit_mute_over_speech(void) {
 
 /*
  * The unlimited tone rendering is the oscillators' tone: within 1e-5 of its
- * amplitude of tone_oscillator() at every sample, for single, dual and
- * call-progress tones at several levels, from running phases; limited, it is
- * the limited renderer (mbe_synthesizeTonef()) bit for bit; and the phases it
- * leaves are the same either way. At AD 127 a single
- * tone and a DTMF tone run past the output limit unlimited.
+ * amplitude of tone_oscillator() at every sample, for single tones (IDs 32
+ * and 7), a DTMF tone (129), a KNOX tone (145) and the four call-progress
+ * tones (160-163; TIA-102.BABA-1 Table 9), at several levels, from running
+ * phases; limited, it is the limited renderer (mbe_synthesizeTonef()) bit
+ * for bit; and the phases it leaves are the same either way. At AD 127 a
+ * single tone and a DTMF tone run past the output limit unlimited.
  */
 static void
 test_unlimited_tone_rendering(void) {
-    static const int ids[4] = {32, 7, 129, 145};
+    /* Single, single, DTMF, KNOX, then call progress. */
+    static const int ids[8] = {32, 7, 129, 145, 160, 161, 162, 163};
     static const int ads[3] = {127, 100, 60};
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 8; ++i) {
         for (int a = 0; a < 3; ++a) {
             char tone[49];
             float unlimited[160], limited[160];
