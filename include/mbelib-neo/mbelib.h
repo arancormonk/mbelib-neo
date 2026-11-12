@@ -15,9 +15,10 @@
  *
  * @note The `*f` (float) PCM APIs return samples in mbelib's historical float
  *       scale (roughly int16/7), not normalized `[-1, +1]`. Use
- *       mbe_floattoshort() to convert to `int16_t` PCM, or scale by
- *       `(7.0f / 32768.0f)` for normalized floats (approximately `[-0.95, +0.95]`
- *       after soft clipping).
+ *       mbe_floattoshort() to convert to `int16_t` PCM as the IMBE `short`
+ *       entry points do (the D-STAR and AMBE 3600x2450 ones round instead; see
+ *       the 16-bit output note below), or scale by `(7.0f / 32768.0f)` for
+ *       normalized floats (approximately `[-0.95, +0.95]` after soft clipping).
  *
  * @note 16-bit output: every `short` entry point scales by 7 and limits to
  *       +-(32767 * 0.95) as mbe_floattoshort() does (NaN becomes 0). Those of
@@ -617,7 +618,11 @@ MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
  * Predicts spectral amplitudes from `prev_mp`, which must hold the last valid
  * voice frame (TIA-102.BABA-1 4.4.1 eq 26, 4.4.3 eq 43). Voice and silence
  * frames both decode into `cur_mp` and return `MBE_AMBE2450_FRAME_VOICE`, as
- * in 2.1. A caller managing its own state should copy `cur_mp` into `prev_mp`
+ * in 2.1. A silence frame decodes as DVSI's decoder plays it: w0 = 2*pi/32,
+ * every band unvoiced, on 15 bands (where TIA-102.BABA-1 4.1 gives 14) and
+ * with its amplitudes `Ml` a further 13.8 dB below the voice-frame law. Tone
+ * ID 255 returns `MBE_AMBE2450_FRAME_ERASURE`, as any unusable tone index
+ * does. A caller managing its own state should copy `cur_mp` into `prev_mp`
  * only when `mbe_classifyAmbe2450Frame()` reports `MBE_AMBE2450_FRAME_VOICE`;
  * silence, erasure, tone and repeated frames must not replace the prediction
  * history. The decode writes the eq 44-45 edge values (index 0 and above
@@ -656,17 +661,23 @@ MBE_API int mbe_decodeAmbe3600x2450SoftFrame(const mbe_soft_bit ambe_fr[4][24], 
  * @param ambe_d   Demodulated parameter bits (49).
  * @param cur_mp   In/out: current frame parameters (may be enhanced).
  * @param prev_mp  In/out: last valid voice frame (prediction history) plus per-frame error/repeat state.
- * @param prev_mp_enhanced In/out: last synthesized frame; also the frame-repeat source.
+ * @param prev_mp_enhanced In/out: last synthesized frame (through a mute or a
+ *        tone, the model the decoder kept); also the frame-repeat source.
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  *
  * Frame types follow TIA-102.BABA-1: silence frames are synthesized but do not
  * update the prediction history (`MBE_PROCESS_FLAG_SILENCE`); erasures (a tone
- * frame with an unusable index also sets `MBE_PROCESS_FLAG_TONE`) and frames
- * meeting the 5.6 repeat criteria repeat the last synthesized frame
- * (`MBE_PROCESS_FLAG_REPEAT`); the error rate above 0.096
- * or a 4th consecutive invalid frame mutes (`MBE_PROCESS_FLAG_MUTE`). The three
- * parameter sets must be distinct objects; aliased sets return
- * `MBE_STATUS_INVALID_ARGUMENT`.
+ * frame with an unusable index, ID 255 included, also sets
+ * `MBE_PROCESS_FLAG_TONE`) and frames meeting the 5.6 repeat criteria repeat
+ * the last frame played, a tone included (`MBE_PROCESS_FLAG_REPEAT`); the
+ * error rate above 0.096 or a 4th consecutive invalid frame mutes
+ * (`MBE_PROCESS_FLAG_MUTE`). As DVSI's decoder plays them, and where
+ * TIA-102.BABA-1 differs or is silent: a muted frame plays DVSI's mute noise
+ * (uniform in +-0.75 on the 16-bit scale, where 5.7 gives +-5), the first one
+ * after a heard frame with that frame fading out over its first 80 samples;
+ * the decoder's model goes on through a mute, and the first frame heard after
+ * a mute or a tone rises from silence. The three parameter sets must be
+ * distinct objects; aliased sets return `MBE_STATUS_INVALID_ARGUMENT`.
  */
 MBE_API int mbe_processAmbe2450Dataf(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);

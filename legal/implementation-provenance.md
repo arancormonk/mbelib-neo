@@ -37,7 +37,9 @@ the pitch-index-134 initial model, repeat overflow reset, 0.003 comfort gain
 for applicable codecs, and a hard limiter at 95% of full scale. These are not
 claimed as TIA requirements. The 48-bit recurrence is also documented in
 [Java Random's API](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Random.html).
-P25 mute-noise levels remain those of TIA-102.BABA §7.8 and BABA-1 §5.7.
+The P25 IMBE mute-noise level remains that of TIA-102.BABA §7.8. Since 2.6.9 the
+AMBE 3600x2450 path mutes at the level of DVSI's decoder, as D-STAR does, in
+place of BABA-1 §5.7's ([DVSI parity](../docs/dvsi-parity.md#rate-33-mutes)).
 
 The integration review retained the independently written algorithms and
 adapted includes, index types and private helper names to repository conventions.
