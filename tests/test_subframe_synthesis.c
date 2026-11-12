@@ -1140,17 +1140,23 @@ test_from_silence(void) {
 #define LIBRARY_FAST_MATH 0
 #endif
 
+/* Whether two floats agree: bit for bit, or, where `tolerant`, within
+ * `bound`. The build mode is passed in rather than tested where the bound is
+ * computed, so that the bound is computed in both modes. */
+static int
+agree(const float* a, const float* b, double bound, int tolerant) {
+    return same_bits(a, b, 1) || (tolerant && fabs((double)*a - (double)*b) <= bound);
+}
+
 static int
 same_or_close(const float* a, const float* b, int n) {
-    if (!LIBRARY_FAST_MATH) {
-        return same_bits(a, b, n);
-    }
     double peak = 0.0;
     for (int i = 0; i < n; ++i) {
         peak = fmax(peak, fabs((double)b[i]));
     }
+    const double bound = 1e-5 * (1.0 + peak);
     for (int i = 0; i < n; ++i) {
-        if (!(fabs((double)a[i] - (double)b[i]) <= 1e-5 * (1.0 + peak))) {
+        if (!agree(&a[i], &b[i], bound, LIBRARY_FAST_MATH)) {
             return 0;
         }
     }

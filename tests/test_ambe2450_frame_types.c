@@ -178,15 +178,21 @@ peak_of(const float* x, int n) {
     return m;
 }
 
+/* Whether two floats agree: bit for bit, or, where `tolerant`, within
+ * `bound`. The build mode is passed in (K_LIBRARY_FAST_MATH) rather than
+ * tested where the bound is computed, so that every bound is computed, and its
+ * inputs used, in both modes. */
+static int
+floats_agree(float out, float want, double bound, int tolerant) {
+    return float_bits_equal(out, want) || (tolerant && fabs((double)out - (double)want) <= bound);
+}
+
 /** A library float against a reference one: bit for bit in an IEEE build;
  * under fast-math within 1e-5 of `scale` and the reference's magnitude. */
 static int
 float_matches(float out, float want, double scale) {
-    if (!K_LIBRARY_FAST_MATH) {
-        return float_bits_equal(out, want);
-    }
     const double bound = K_FAST_MATH_TOLERANCE * (1.0 + scale + fabs((double)want));
-    return fabs((double)out - (double)want) <= bound;
+    return floats_agree(out, want, bound, K_LIBRARY_FAST_MATH);
 }
 
 /** Samples or state from the library against a reference this test renders:
@@ -424,10 +430,9 @@ second_half_is_noise(const float* out) {
  * few units in the last place of the noise's amplitude. */
 static int
 noise_span_matches(const float* out, const float* noise) {
-    const double amplitude = (double)(MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    const double bound = K_FAST_MATH_ULPS * (double)(MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
     for (int n = 80; n < 160; ++n) {
-        if (K_LIBRARY_FAST_MATH ? !(fabs((double)out[n] - (double)noise[n]) <= K_FAST_MATH_ULPS * amplitude)
-                                : !float_bits_equal(out[n], noise[n])) {
+        if (!floats_agree(out[n], noise[n], bound, K_LIBRARY_FAST_MATH)) {
             return 0;
         }
     }
