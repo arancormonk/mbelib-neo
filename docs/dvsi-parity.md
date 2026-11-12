@@ -784,10 +784,15 @@ error of 4.42 dB. A tone's first frame is unchanged (1208 frames: 0.38 / 0.21 / 
 Still different after a tone: the pulse train of a voiced frame does not line up with DVSI's. Over
 the 205 voiced frames the next frame correlates with DVSI's waveform at a median 0.26, on main and
 now alike, where frames in running speech reach 0.9 and more; what DVSI's pulse train does through
-a tone was not determined. And in DVSI's tone vectors every tone stands in silence or between other
-tones, so they do not show what its decoder plays after a tone that interrupts loud speech; this
-library takes the mid-frame model between the last speech model before the tone and the frame's
-own.
+a tone was not determined. DVSI's tone vectors do hold the frame after a tone with a loud model kept
+through it: 478 tone starts follow a frame whose DVSI output is above RMS 300 (`alltone` 115, `dtmf`
+131, `dtmfvbad` 230, `alert` 1, `dtmf25` 1), and of the voice frames right after a tone, 477 have
+such a loud frame as the model kept through the tone, so the level figures above measure that case
+too. But in every one of those 478 the previous tone frame lies 2 to 35 frames back: the loud frames
+are the frames between tones, where the tone signal itself is coded as voice frames. What the
+vectors do not hold is a tone inside speech: speech, a tone, then different speech. For that case
+this library takes the mid-frame model between the last speech model before the tone and the
+frame's own, as for any other.
 
 ### Rate 33 lost frames and tones
 
@@ -1257,7 +1262,7 @@ Still different:
 | Where voicing starts and ends inside a frame (P25, rate 33) | the frame's V/UV decisions hold for the whole frame | the pitch code of a frame with no voiced band (P25), V/UV row 15 (rate 33) and how far up the voicing reaches (P25) move it to mid-frame | DVSI ([Voiced onsets and offsets](#voiced-onsets-and-offsets)) |
 | Rate-33 tone frames | clause 7 gives the tone a frame carries, nothing on the frames around it | the tone crossfades with the speech over 80 samples at both ends | DVSI ([Rate 33 tone transitions](#rate-33-tone-transitions)) |
 | Rate-33 silence frames | 4.1 eq 2: L = 14; 4.3-4.4: amplitudes decoded as a voice frame's | 15 bands, amplitudes a further 13.8 dB down, the previous frame's model held to mid-frame | DVSI ([Rate 33 silence frames](#rate-33-silence-frames)) |
-| Rate-33 mute | 5.7: bypass the synthesis, output noise uniform over [-5, 5] | noise of RMS about 0.6 (0 and +-1 at 16 bits); the first muted frame fades the last frame out over 80 samples; the model goes on underneath | DVSI ([Rate 33 mutes](#rate-33-mutes)) |
+| Rate-33 mute | 5.7: bypass the synthesis, output noise uniform over [-5, 5] | noise of RMS about 0.6 (0, +-1 and a few +-2 at 16 bits); the first muted frame fades the last frame out over 80 samples; the model goes on underneath | DVSI's level, as 0 and +-1 ([Rate 33 mutes](#rate-33-mutes)) |
 | Rate-33 tone ID 255 | 7.3 and Table 9: a tone of zero amplitude, whatever AD | a lost frame, as an unusable tone index | DVSI ([Rate 33 lost frames and tones](#rate-33-lost-frames-and-tones)) |
 | Rate-33 frame repeat after a tone | 7.3 with 5.6: the previous frame's decoded model; silent on a tone before it | the tone repeats at its level until the repeat limit's mute fades it out | DVSI ([Rate 33 lost frames and tones](#rate-33-lost-frames-and-tones)) |
 | Amplitude limit (P25, rate 33) | eqs 115-116 scale a frame whose amplitudes sum past 20480 (error-free) | no scaling | DVSI ([Amplitude limit](#amplitude-limit)) |
@@ -1355,8 +1360,9 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   +-1 only ([Rate 33 mutes](#rate-33-mutes)).
 - After a rate-33 tone, the pulse train of a voiced frame does not line up with DVSI's (median
   correlation of the next frame with DVSI's waveform 0.26, against 0.9 and more in running speech),
-  and what DVSI's decoder plays after a tone that interrupts loud speech is not known: in its tone
-  vectors every tone stands in silence or between other tones ([Rate 33 frames after a mute or a
+  and what DVSI's decoder plays after a tone inside speech (speech, a tone, then different speech)
+  is not known: its tone vectors hold loud frames before a tone only between tones, where the tone
+  signal is coded as voice frames ([Rate 33 frames after a mute or a
   tone](#rate-33-frames-after-a-mute-or-a-tone)).
 - A rate-33 silence frame right after a mute or a tone rises from silence to its own model. No DVSI
   vector shows that case, and the rule is a design choice ([Rate 33 frames after a mute or a
