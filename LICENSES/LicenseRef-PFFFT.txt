@@ -47,7 +47,7 @@ SOFTWARE.
 
 
 PFFFT: https://github.com/arancormonk/pffft
-Pinned revision: 80b9c0139c91b684579115f482f90db97abffdb2
+Pinned revision: b7ed3cdb8655426a77aa26f8c0f5154205427f45
 
 src/pffft.c
 /* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
@@ -218,6 +218,11 @@ src/pffft_passes_impl.h
    This file is largerly based on the original FFTPACK implementation, modified in
    order to take advantage of SIMD instructions of modern CPUs.
 */
+
+src/pffft_pass_config.h
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
 
 src/pffft_cplx_impl.h
 /* Copyright (c) 2013  Julien Pommier ( pommier@modartt.com )
