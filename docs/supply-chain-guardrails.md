@@ -9,7 +9,7 @@ mbelib-neo keeps CI dependencies explicit so analyzer results and release artifa
 - The current zizmor policy in `.github/zizmor.yml` requires every external `uses:` action to be pinned to a full commit SHA.
 - For new or refreshed third-party actions in release, packaging, signing, attestation, or upload workflows, resolve the upstream tag to the immutable commit and pin that SHA.
 - Public GitHub source checkouts in CI must go through `tools/fetch-pinned-git.sh` with SHAs from `tools/ci-dependency-pins.env`; `tools/check_workflow_git_pins.sh` blocks floating `git clone` and `git ls-remote` usage in workflows and CI helper scripts.
-- Release and CI workflows must not execute mutable downloaded helper binaries or mutable container tags. CI fallback container images for Arch Linux, Gitleaks, and OSV-Scanner are pinned by digest in `tools/ci-dependency-pins.env`; `tools/check_workflow_download_pins.sh` enforces these image and download rules.
+- Release and CI workflows must not execute mutable downloaded helper binaries or mutable container tags. CI container images for Arch Linux, Alpine, Ubuntu 20.04 (both architectures), Gitleaks, and OSV-Scanner are pinned by digest in `tools/ci-dependency-pins.env`, as are the release and SHA-256 of the CMake installer the Ubuntu 20.04 jobs download; `tools/check_workflow_download_pins.sh` enforces these image and download rules.
 - Release packaging workflows must generate package SBOMs and attest both the release packages and their SBOMs before publish jobs upload assets. Release publish jobs keep the checksum manifest and manifest attestation as an additional integrity layer.
 - Workflow changes that add secrets, write permissions, artifact publication, release upload, or external actions need human review.
 
@@ -28,7 +28,7 @@ If packaging itself was skipped or failed, use the explicit `rebuild_packages`
 dispatch option from reviewed `main`. It requires all original signed-tag
 checks to have succeeded and builds the exact tag commit. A check added to the
 release gate later (the AVX2 dispatch job from 2.6.1, the Alpine musl job
-from 2.6.6) is required only for
+from 2.6.6, the GCC 9 jobs from 2.6.10) is required only for
 tags of that version and newer, so earlier releases stay recoverable
 (`tools/ci_verify_release_recovery.py`). Rebuild provenance
 names the reviewed main workflow; signed SBOMs bind the separate release-source

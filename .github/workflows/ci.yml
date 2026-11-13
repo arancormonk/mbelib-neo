@@ -355,6 +355,112 @@ jobs:
             ctest --test-dir /work/build --output-on-failure
           '
 
+  # dsd-neo's AppImage builds this library in Ubuntu 20.04 with its GCC 9 (old
+  # glibc, so the AppImage runs on old hosts), Release and portable. At -O3, GCC
+  # 9's -Wmaybe-uninitialized cannot follow a value set on every path through
+  # inlined helpers that a current GCC proves: 2.6.9's AMBE+2 decoder passed
+  # every other job here and failed that -Werror build. Build and test the same
+  # configuration in the same image, on both AppImage architectures.
+  consumer-release-gcc9:
+    needs: [changes, format-check, clang-tidy, cppcheck, lizard, scan-build, semgrep]
+    if: >-
+      !cancelled() &&
+      (needs.format-check.result == 'success' || needs.format-check.result == 'skipped') &&
+      (needs.clang-tidy.result == 'success' || needs.clang-tidy.result == 'skipped') &&
+      (needs.cppcheck.result == 'success' || needs.cppcheck.result == 'skipped') &&
+      (needs.lizard.result == 'success' || needs.lizard.result == 'skipped') &&
+      (needs.scan-build.result == 'success' || needs.scan-build.result == 'skipped') &&
+      (needs.semgrep.result == 'success' || needs.semgrep.result == 'skipped')
+    name: linux • Release • ctest (GCC 9, Ubuntu 20.04, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    concurrency:
+      group: ${{ matrix.ci_group }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            image_var: UBUNTU_2004_AMD64_IMAGE
+            cmake_sha_var: CMAKE_LINUX_X86_64_SHA256
+            ci_group: ci-worker-03
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image_var: UBUNTU_2004_ARM64_IMAGE
+            cmake_sha_var: CMAKE_LINUX_AARCH64_SHA256
+            ci_group: ci-worker-05
+    env:
+      CI_RUN_CHECK: ${{ needs.changes.result != 'success' || needs.changes.outputs.native_needed != 'false' }}
+    steps:
+      # Expand every matrix entry so required checks retain their exact names.
+      - name: No relevant changes
+        if: env.CI_RUN_CHECK != 'true'
+        run: echo "No relevant changes for this check."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.CI_RUN_CHECK == 'true'
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        if: env.CI_RUN_CHECK == 'true'
+        # Dependabot and fork PRs get no Docker Hub secrets. The login is then skipped
+        # and the pull goes out anonymously.
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub secrets are not set for this run; pulling anonymously."
+          fi
+      - name: Login to Docker Hub (optional)
+        # The Ubuntu image below is pulled with `docker` inside a step, so it
+        # needs a login of its own.
+        if: env.CI_RUN_CHECK == 'true' && steps.dockerhub.outputs.available == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        continue-on-error: true
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Build and test (Release, portable, GCC 9)
+        if: env.CI_RUN_CHECK == 'true'
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGE_VAR: ${{ matrix.image_var }}
+          CMAKE_SHA_VAR: ${{ matrix.cmake_sha_var }}
+        run: |
+          set -euo pipefail
+          source tools/ci-dependency-pins.env
+          image=${!IMAGE_VAR}
+          cmake_sha=${!CMAKE_SHA_VAR}
+          docker run --rm -v "$PWD:/src:ro" -e ARCH -e CMAKE_LINUX_VERSION -e CMAKE_SHA="$cmake_sha" "$image" bash -euc '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends build-essential ca-certificates git ninja-build \
+              python3 wget > /dev/null
+            # Ubuntu 20.04 ships CMake 3.16; install the release the AppImage build uses.
+            installer=/tmp/cmake-installer.sh
+            wget -q -O "$installer" \
+              "https://github.com/Kitware/CMake/releases/download/v${CMAKE_LINUX_VERSION}/cmake-${CMAKE_LINUX_VERSION}-linux-${ARCH}.sh"
+            echo "${CMAKE_SHA}  ${installer}" | sha256sum -c -
+            sh "$installer" --skip-license --prefix=/usr/local > /dev/null
+            gcc --version | head -n 1
+            # The job exists for this compiler; fail if the image stops providing it.
+            gcc -dumpversion | grep -Ex "9(\..*)?"
+            cp -a /src /work
+            cmake -S /work -B /work/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+              -DMBELIB_ENABLE_NATIVE=OFF -DMBELIB_BUILD_TESTS=ON
+            grep -Fx "MBELIB_WARNINGS_AS_ERRORS:BOOL=ON" /work/build/CMakeCache.txt
+            cmake --build /work/build --parallel
+            ctest --test-dir /work/build --output-on-failure --parallel "$(nproc)"
+          '
+
   # The same suite built by a current Clang, the macOS toolchain's compiler
   # family, which treats fast-math more aggressively than GCC or Ubuntu's Clang:
   # it folds bit tests on floats it computed or took as arguments (an
@@ -1609,7 +1715,7 @@ jobs:
 
   package-release:
     name: package release (${{ matrix.os }})
-    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, consumer-release-musl, lto-link-v4, dispatch-debug]
+    needs: [validate-release-tag, build-test, clang-release-linux, cross-arm32, sanitize-linux, install-and-consume, install-and-consume-win, optimized-v3-ctest, optimized-v3-ctest-clang, consumer-release-gcc, consumer-release-musl, consumer-release-gcc9, lto-link-v4, dispatch-debug]
     # The PR-only classifier is skipped on tags. Explicit result checks avoid
     # success() propagating that skip through otherwise successful native jobs.
     if: >-
@@ -1619,6 +1725,7 @@ jobs:
       needs.install-and-consume.result == 'success' && needs.install-and-consume-win.result == 'success' &&
       needs.optimized-v3-ctest.result == 'success' && needs.optimized-v3-ctest-clang.result == 'success' &&
       needs.consumer-release-gcc.result == 'success' && needs.consumer-release-musl.result == 'success' &&
+      needs.consumer-release-gcc9.result == 'success' &&
       needs.lto-link-v4.result == 'success' && needs.dispatch-debug.result == 'success' &&
       (startsWith(github.ref, 'refs/tags/v') ||
        (github.event_name == 'workflow_dispatch' && inputs.rebuild_packages))

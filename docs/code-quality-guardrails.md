@@ -66,9 +66,9 @@ groups enforce the budget across workflows and overlapping PR/main runs.
 | --- | --- |
 | `ci-worker-01` | Linux Debug, cppcheck, Clang Release, Linux release package |
 | `ci-worker-02` | Linux Release, optimized GCC tests, Linux install/consumer |
-| `ci-worker-03` | Linux NOTONES, consumer-defaults GCC tests, warnings build |
+| `ci-worker-03` | Linux NOTONES, consumer-defaults GCC tests, GCC 9 x86_64 tests, warnings build |
 | `ci-worker-04` | macOS Debug, macOS install/consumer, macOS release package |
-| `ci-worker-05` | macOS Release |
+| `ci-worker-05` | macOS Release, GCC 9 aarch64 tests |
 | `ci-worker-06` | macOS NOTONES |
 | `ci-worker-07` | Windows Debug, Windows install/consumer, Windows release package |
 | `ci-worker-08` | Windows Release, ARM32 default-FPU tests |
