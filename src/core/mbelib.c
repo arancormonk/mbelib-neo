@@ -882,7 +882,7 @@ mbe_clipFloatSample(float sample) {
     return sample;
 }
 
-static void
+void
 mbe_clipFloatBuffer(float* samples, int count) {
     if (samples == NULL || count <= 0) {
         return;
@@ -918,9 +918,17 @@ mbe_toneAmplitude(double level_db) {
 }
 
 /* A tone whose gain moves linearly from from_gain to gain over the first
- * `ramp` samples (none for 0), clipped after the gain is applied. */
+ * `ramp` samples (none for 0), each sample limited after the gain is applied,
+ * unless the caller fades or mixes the tone and limits the result. The sample
+ * loop is the same in both modes: it limits every sample as it computes it
+ * (the limiter's classification keeps the loop scalar, so fast-math cannot
+ * vectorize it with other sine code) and keeps the unlimited sample beside
+ * it, and only after the loop is the unlimited frame chosen. So the limited
+ * rendering is computed exactly as before, and limiting the unlimited one
+ * gives it bit for bit. */
 static void
-mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp) {
+mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp,
+                    enum mbe_output_limit output) {
     if (out == NULL) {
         return;
     }
@@ -935,6 +943,7 @@ mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_ga
     uint32_t phase2 = mp->tonePhase;
     const uint32_t step1 = frequency_increment(f1);
     const uint32_t step2 = dual ? frequency_increment(f2) : 0;
+    float unlimited[160];
     for (int n = 0; n < 160; ++n) {
         const float g = (n < ramp) ? from_gain + ((gain - from_gain) * ((float)n / (float)ramp)) : gain;
         phase1 += step1;
@@ -944,14 +953,18 @@ mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_ga
             value += g * phase_sine(phase2);
         }
         out[n] = mbe_clipFloatSample(value);
+        unlimited[n] = value;
+    }
+    if (output == MBE_OUTPUT_UNLIMITED) {
+        memcpy(out, unlimited, sizeof(unlimited));
     }
     memcpy(&mp->swn, &phase1, sizeof(phase1));
     mp->tonePhase = phase2;
 }
 
 static void
-mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain) {
-    mbe_renderToneRampf(out, mp, f1, f2, gain, gain, 0);
+mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain, enum mbe_output_limit output) {
+    mbe_renderToneRampf(out, mp, f1, f2, gain, gain, 0, output);
 }
 #endif
 
@@ -1018,16 +1031,18 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
         return;
     }
 
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)));
+    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)),
+                    MBE_OUTPUT_LIMITED);
 #endif
 }
 
 void
-mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad) {
+mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad, enum mbe_output_limit output) {
 #ifdef DISABLE_AMBE_TONES
     (void)mp;
     (void)id;
     (void)ad;
+    (void)output;
     mbe_synthesizeSilencef(aout_buf);
 #else
     float freq1, freq2;
@@ -1035,7 +1050,7 @@ mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)));
+    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)), output);
 #endif
 }
 
@@ -1077,7 +1092,7 @@ mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)));
+    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), MBE_OUTPUT_LIMITED);
 #endif
 }
 
@@ -1098,7 +1113,8 @@ mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int from_vol
         return;
     }
     mbe_renderToneRampf(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(from_volume)),
-                        mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), (ramp > 0 && ramp <= 160) ? ramp : 0);
+                        mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), (ramp > 0 && ramp <= 160) ? ramp : 0,
+                        MBE_OUTPUT_LIMITED);
 #endif
 }
 
@@ -1226,6 +1242,7 @@ mbe_frame_mark(const mbe_parms* mp) {
     switch (bits) {
         case UINT32_C(0x3F800000): return MBE_FRAME_MARK_PITCH_CARRIES; /* 1.0f */
         case UINT32_C(0x40000000): return MBE_FRAME_MARK_PITCH_ABSENT;  /* 2.0f */
+        case UINT32_C(0x40400000): return MBE_FRAME_MARK_PREVIOUS_HELD; /* 3.0f */
         case UINT32_C(0x42A00000): return MBE_FRAME_MARK_LATE_ONSET;    /* 80.0f */
         default: return MBE_FRAME_MARK_NONE;
     }
@@ -1395,9 +1412,9 @@ enum mbe_speech_smoothing {
  * the next audible frame continues from where they stand. */
 static void
 mbe_render_muted_frame(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_mute_noise mute_noise,
-                       enum mbe_voiced_synthesis voiced) {
+                       enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start) {
     if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
-        mbe_advance_subframes(cur_mp, prev_mp);
+        mbe_advance_subframes(cur_mp, prev_mp, start == MBE_SYNTHESIS_FROM_SILENCE);
     }
     if (mute_noise == MBE_MUTE_NOISE_SPEC) {
         mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
@@ -1445,10 +1462,19 @@ mbe_render_spec_frame(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, in
     }
 }
 
+/* The way a frame's rendering starts (mbe_synthesis_start) and what replaces
+ * it if the core mutes it. */
+struct mbe_speech_options {
+    enum mbe_mute_noise mute_noise;
+    enum mbe_voiced_synthesis voiced;
+    enum mbe_amplitude_limit limit;
+    enum mbe_synthesis_start start;
+    enum mbe_output_limit output;
+};
+
 static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
-                         float pre_enh_rm0, enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
-                         enum mbe_amplitude_limit limit) {
+                         float pre_enh_rm0, const struct mbe_speech_options* options) {
 
     /* One frame length for the phase arithmetic, the window Ws and the
      * voiced kernels, which process exactly MBE_VOICED_FRAME samples. */
@@ -1466,7 +1492,7 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* TIA-102.BABA equations 111-116: advance smoothing state before the
      * mute decision so a muted frame retains its parameter progression. */
     if (smoothing == MBE_SMOOTHING_PRE_ENH_RM0) {
-        mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, pre_enh_rm0, limit);
+        mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, pre_enh_rm0, options->limit);
     } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
     }
@@ -1474,44 +1500,66 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     /* The shared core checks repeat count and the IMBE error-rate threshold.
      * AMBE codec paths apply their own additional muting rules. */
     if (mbe_should_mute_speech(cur_mp)) {
-        mbe_render_muted_frame(aout_buf, cur_mp, prev_mp, mute_noise, voiced);
+        mbe_render_muted_frame(aout_buf, cur_mp, prev_mp, options->mute_noise, options->voiced, options->start);
         return;
     }
 
     memset(aout_buf, 0, N * sizeof(float));
-    if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
+    if (options->voiced == MBE_VOICED_SYNTHESIS_DVSI) {
         /* The codec paths render the frame in DVSI's subframes. */
-        mbe_synthesize_subframes(aout_buf, cur_mp, prev_mp, mbe_get_fft_plan(), MBE_RENDER_VOICED_GAIN_DVSI);
+        mbe_synthesize_subframes(aout_buf, cur_mp, prev_mp, mbe_get_fft_plan(), MBE_RENDER_VOICED_GAIN_DVSI,
+                                 options->start == MBE_SYNTHESIS_FROM_SILENCE);
     } else {
         mbe_render_spec_frame(aout_buf, cur_mp, prev_mp, N);
     }
 
-    /* Convert s(n) to output scale, then limit overloads to 95% headroom. */
+    /* Convert s(n) to output scale, then limit overloads to 95% headroom,
+     * unless the caller mixes another signal in and limits the sum. */
     for (int i = 0; i < N; i++) {
         aout_buf[i] *= MBE_SPEECH_OUTPUT_GAIN;
     }
-    mbe_clipFloatBuffer(aout_buf, N);
+    if (options->output == MBE_OUTPUT_LIMITED) {
+        mbe_clipFloatBuffer(aout_buf, N);
+    }
+}
+
+void
+mbe_synthesizeSpeechWithPreEnhRm0Startf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                        enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                                        enum mbe_amplitude_limit limit, enum mbe_synthesis_start start,
+                                        enum mbe_output_limit output) {
+    const struct mbe_speech_options options = {mute_noise, voiced, limit, start, output};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, &options);
 }
 
 void
 mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
                                    enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
                                    enum mbe_amplitude_limit limit) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, mute_noise, voiced, limit);
+    mbe_synthesizeSpeechWithPreEnhRm0Startf(aout_buf, cur_mp, prev_mp, rm0, mute_noise, voiced, limit,
+                                            MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
+}
+
+void
+mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                                   enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start,
+                                   enum mbe_output_limit output) {
+    /* Repeat paths, which never mute inside synthesis. */
+    const struct mbe_speech_options options = {MBE_MUTE_NOISE_SPEC, voiced, MBE_AMPLITUDE_LIMIT_SPEC, start, output};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, &options);
 }
 
 void
 mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
                               enum mbe_voiced_synthesis voiced) {
-    /* Repeat paths, which never mute inside synthesis. */
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, MBE_MUTE_NOISE_SPEC, voiced,
-                             MBE_AMPLITUDE_LIMIT_SPEC);
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp, voiced, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
 }
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, MBE_MUTE_NOISE_COMFORT,
-                             MBE_VOICED_SYNTHESIS_SPEC, MBE_AMPLITUDE_LIMIT_SPEC);
+    const struct mbe_speech_options options = {MBE_MUTE_NOISE_COMFORT, MBE_VOICED_SYNTHESIS_SPEC,
+                                               MBE_AMPLITUDE_LIMIT_SPEC, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, &options);
 }
 
 /**

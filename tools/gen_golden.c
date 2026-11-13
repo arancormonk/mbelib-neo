@@ -73,8 +73,8 @@ main(int argc, char** argv) {
     // Error-free voice-only AMBE sequences (see tests/golden_sequences.h)
     struct golden_hashes ambe2450;
     struct golden_hashes ambe2400;
-    if (golden_hash_ambe_voice_sequence(mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, &ambe2450) != 0
-        || golden_hash_ambe_voice_sequence(mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, &ambe2400) != 0) {
+    if (golden_hash_ambe_voice_sequence(&golden_ambe2450_codec, GOLDEN_AMBE2450_SEED, &ambe2450) != 0
+        || golden_hash_ambe_voice_sequence(&golden_ambe2400_codec, GOLDEN_AMBE2400_SEED, &ambe2400) != 0) {
         fprintf(stderr, "AMBE golden sequence decode failed\n");
         return 1;
     }

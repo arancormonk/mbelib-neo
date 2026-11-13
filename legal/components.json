@@ -2,7 +2,7 @@
   "SPDX-License-Identifier": "GPL-2.0-or-later",
   "schema_version": 1,
   "review_date": "2026-10-17",
-  "release": "2.6.8",
+  "release": "2.6.9",
   "aggregate_license_concluded": "NOASSERTION",
   "components": [
     {
@@ -116,9 +116,9 @@
         "tools/ci-dependency-pins.env",
         "docs/dependencies.md"
       ],
-      "review_date": "2026-11-08",
+      "review_date": "2026-11-13",
       "notice_sha256": {
-        "LICENSES/LicenseRef-PFFFT.txt": "1115db791cae3ee51402b2d19cb664a89b846e59e9237df6f4ba0674ef39622b"
+        "LICENSES/LicenseRef-PFFFT.txt": "c93a161018e2db933f1a659f9153620c4705e3acca16a4464cf5e447dc58467d"
       }
     },
     {

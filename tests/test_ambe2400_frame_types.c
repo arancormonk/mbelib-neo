@@ -27,12 +27,20 @@
 #include <string.h>
 
 #include "ambe3600x2400_internal.h"
+#include "ambe_common.h"
 #include "mbe_adaptive.h"
+#include "mbe_pcm_convert.h"
 #include "mbe_tone.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
 #define NVOICE 6
+
+/* int16 output of one frame, as the short entry points round it. */
+static void
+to_int16(const float* pcm, short* out) {
+    mbe_floattoshort_nearest(pcm, out);
+}
 
 static void
 put_b0(char d[49], int b0) {
@@ -602,7 +610,7 @@ test_all_ones_frame(void) {
                 assert_same_pcm(out, want + (size_t)160 * 4u, 160, "all-ones frame vs error repeat");
             }
             if (i >= 4) {
-                mbe_floattoshort(out, pcm);
+                to_int16(out, pcm);
                 for (int n = 0; n < 160; ++n) {
                     assert(abs(pcm[n]) <= 1);
                 }
@@ -646,7 +654,8 @@ test_tone_muted_by_error_rate(void) {
     for (int i = 0; i < 160; ++i) {
         peak = (out[i] > peak) ? out[i] : ((-out[i] > peak) ? -out[i] : peak);
     }
-    assert(peak <= 1.5f / 7.0f); /* mute noise (float is int16 / 7); a tone at volume 212 peaks above 100 */
+    /* Mute noise (float is int16 / 7); a tone at volume 212 peaks above 100. */
+    assert(peak <= MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
     /* Soft decisions do not mute on the error rate, so the tone plays. */
     mbe_soft_bit soft[4][24];
     char fr[4][24], d[49];
@@ -971,12 +980,6 @@ test_tone_transitions_after_mute(void) {
         assert_close_sample(out[n], gain * ref[n], "soft voice after a muted hard tone", n);
     }
     puts("tones: a muted last frame leaves no speech under a tone and no tail under voice");
-}
-
-/* int16 output of one frame. */
-static void
-to_int16(const float* pcm, short* out) {
-    mbe_floattoshort(pcm, out);
 }
 
 /*

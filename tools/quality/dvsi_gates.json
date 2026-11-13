@@ -3056,5 +3056,420 @@
         "value": 0
       }
     ]
+  },
+  "ambe2450-frames-development": {
+    "description": "Rate-33 frame handling as DVSI's decoder plays it (silence frames 13.8 dB lower on 15 bands, mutes that fade the last frame out under DVSI's noise level, the frame after a mute or a tone starting afresh, tone 255 and lost frames around tones), development vectors: no mode's decode of the speech vectors changes and every encoder's bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "ambe2450-frames-validation": {
+    "description": "Rate-33 frame handling as DVSI's decoder plays it (silence frames 13.8 dB lower on 15 bands, mutes that fade the last frame out under DVSI's noise level, the frame after a mute or a tone starting afresh, tone 255 and lost frames around tones), validation vectors: no mode's decode of the speech vectors changes and every encoder's bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "ambe2450-frames-final": {
+    "description": "Rate-33 frame handling as DVSI's decoder plays it (silence frames 13.8 dB lower on 15 bands, mutes that fade the last frame out under DVSI's noise level, the frame after a mute or a tone starting afresh, tone 255 and lost frames around tones), final vectors: no mode's decode of the speech vectors changes and every encoder's bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "ambe2450-frames-tones": {
+    "description": "Rate-33 frame handling on the tone vectors: no D-STAR tone vector changes in tone level, frequency, twist, detector agreement or wrong tones, and no rate-33 tone vector agrees less often with DVSI's decoder's tone output, plays a wrong tone more often, or moves its tone frequency or twist further from DVSI's, or its level by more than 0.05 dB.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.freq_rel_error",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase"
+      }
+    ]
+  },
+  "ambe2450-frames-channel": {
+    "description": "Rate-33 frame handling under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's no less often at any error rate, hard or soft, and on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) our hard-decision output is no further from DVSI's by more than 0.01 dB.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "pcm-rounding-development": {
+    "description": "D-STAR and rate-33 16-bit output rounded to nearest, as DVSI's decoders round it, development vectors: P25's decode is unchanged; on no D-STAR or rate-33 vector does our decode come further from DVSI's decoder in log-spectral distance by more than 0.01 dB or correlate with DVSI's waveform sample against sample less by more than 0.001, no vector's level moves by more than 0.05 dB, and every encoder's bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "pcm-rounding-validation": {
+    "description": "D-STAR and rate-33 16-bit output rounded to nearest, as DVSI's decoders round it, validation vectors: P25's decode is unchanged; on no D-STAR or rate-33 vector does our decode come further from DVSI's decoder in log-spectral distance by more than 0.01 dB or correlate with DVSI's waveform sample against sample less by more than 0.001, no vector's level moves by more than 0.05 dB, and every encoder's bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "pcm-rounding-final": {
+    "description": "D-STAR and rate-33 16-bit output rounded to nearest, as DVSI's decoders round it, final vectors: P25's decode is unchanged; on no D-STAR or rate-33 vector does our decode come further from DVSI's decoder in log-spectral distance by more than 0.01 dB or correlate with DVSI's waveform sample against sample less by more than 0.001, no vector's level moves by more than 0.05 dB, and every encoder's bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "pcm-rounding-tones": {
+    "description": "D-STAR and rate-33 16-bit output rounded to nearest, as DVSI's decoders round it, on the tone vectors: no D-STAR or rate-33 tone vector agrees less often with DVSI's decoder's tone output, plays a wrong tone more often, or moves its tone frequency or twist further from DVSI's, or its level by more than 0.05 dB.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase"
+      }
+    ]
+  },
+  "pcm-rounding-channel": {
+    "description": "D-STAR and rate-33 16-bit output rounded to nearest, as DVSI's decoders round it, under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's no less often at any error rate, hard or soft, and on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) our hard-decision output is no further from DVSI's by more than 0.01 dB.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
   }
 }

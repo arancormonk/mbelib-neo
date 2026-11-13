@@ -95,9 +95,11 @@ int mbe_eccAmbe3600DataCounted_common(char fr[4][24], char* out49);
 int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
 
 /** AMBE+2 silence-frame fundamental 2*pi/32, TIA-102.BABA-1 4.1 eq 1 (radians/sample). */
-#define MBE_AMBE_SILENCE_W0 ((float)0.19634954084936207)
-/** AMBE+2 silence-frame harmonic count, TIA-102.BABA-1 4.1 eq 2. */
-#define MBE_AMBE_SILENCE_L  14
+#define MBE_AMBE_SILENCE_W0           ((float)0.19634954084936207)
+/** AMBE+2 silence-frame harmonic count, TIA-102.BABA-1 4.1 eq 2. D-STAR's b0 124
+ *  decodes with it; rate 33 plays its silence frames on 15 bands, as DVSI's
+ *  decoder does (MBE_AMBE2450_SILENCE_L in ambe3600x2450.c). */
+#define MBE_AMBE_SILENCE_L            14
 
 /*
  * Initial AMBE model. TIA-102.BABA-1 fixes only the initial prediction state:
@@ -106,8 +108,20 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
  * fundamental is unspecified; the silence fundamental keeps every initial
  * harmonic below Nyquist (15 * 2*pi/32 < pi).
  */
-#define MBE_AMBE_INIT_W0    MBE_AMBE_SILENCE_W0
-#define MBE_AMBE_INIT_L     15
+#define MBE_AMBE_INIT_W0              MBE_AMBE_SILENCE_W0
+#define MBE_AMBE_INIT_L               15
+
+/*
+ * Amplitude (int16 scale) of the uniform noise the D-STAR and rate-33 paths
+ * mute to, the level of DVSI's muted output in both modes. The int16 output of
+ * both paths rounds to nearest (mbe_floattoshort_nearest()), so the noise is 0
+ * on two thirds of the samples and +-1 on the rest, as DVSI's muted D-STAR
+ * output is (dam_e10_hd: 67% 0, 16.5% each +-1); DVSI's muted rate-33 frames
+ * of dam_e10_hd have a median rms of 0.59. The float noise stays under one 16-bit
+ * step: a caller of the float entry points who truncates hears silence. P25's
+ * IMBE path keeps TIA-102.BABA 7.8's MBE_SPEC_MUTE_NOISE_AMPLITUDE.
+ */
+#define MBE_AMBE_MUTE_NOISE_AMPLITUDE 0.75f
 
 /**
  * @brief Set the initial AMBE model: w0, L, K = 0, gamma = 0, unit unvoiced amplitudes.

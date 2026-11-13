@@ -249,6 +249,11 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     if (!mbe_harmonic_count_is_valid(prev_mp->L) || !mbe_harmonic_count_is_valid(cur_mp->L)) {
         return;
     }
+    if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {
+        /* The previous frame's model stands at mid-frame unchanged. */
+        mbe_subframe_own_model(prev_mp, model);
+        return;
+    }
     const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
     const int longer = (prev_mp->L < cur_mp->L) ? cur_mp->L : prev_mp->L;
     model->L = shorter;
@@ -278,9 +283,10 @@ struct pulse_train {
 
 /* The train a stream carries into a frame: the pulse phase reached at the last
  * frame's end and the pulses it kept. It runs on from a frame that has a
- * voiced band, and from one marked MBE_FRAME_MARK_PITCH_ABSENT,
- * through whose first half the voicing before it may have lasted; after any
- * other frame it starts afresh, whatever a codec path left in the state.
+ * voiced band, and from one marked MBE_FRAME_MARK_PITCH_ABSENT or
+ * MBE_FRAME_MARK_PREVIOUS_HELD, through whose first half the voicing before it
+ * may have lasted; after any other frame it starts afresh, whatever a codec
+ * path left in the state.
  * Values that are not what a frame stores (another rendering's noise overlap,
  * a caller's own) are dropped. */
 static void
@@ -294,7 +300,8 @@ load_pulse_train(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev
     if (!mbe_subframe_state_is_marked(prev_mp)) {
         return;
     }
-    if (!prev->any_voiced && mbe_frame_mark(prev_mp) != MBE_FRAME_MARK_PITCH_ABSENT) {
+    const enum mbe_frame_mark mark = mbe_frame_mark(prev_mp);
+    if (!prev->any_voiced && mark != MBE_FRAME_MARK_PITCH_ABSENT && mark != MBE_FRAME_MARK_PREVIOUS_HELD) {
         return;
     }
     memcpy(&bits, &stored, sizeof(bits));
@@ -535,21 +542,67 @@ starts_late(const mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     return mbe_voicing_onset_delay(cur_mp) != 0 && !model_has_voiced_band(prev_mp);
 }
 
+/* A state with no overlap of this rendering's: what a frame that starts from
+ * silence overlaps. */
+static const mbe_parms no_overlap = {0};
+
+/* A model that plays nothing and has no voiced band. */
+static void
+silence_model(struct mbe_subframe_model* model) {
+    model->any_voiced = 0;
+    for (int l = 1; l <= model->L; l++) {
+        model->voiced[l] = BAND_NONE;
+        model->magnitude[l] = 0.0f;
+    }
+}
+
+/* A frame's three models (the last frame's own, mid-frame, this frame's own)
+ * and the pulse train it starts from, for rendering and advancing alike.
+ * Starting from silence, the last frame's own model plays nothing and counts
+ * as having no voiced band, and the train it carried is dropped: a new one
+ * starts at the frame's start, at phase 0. The mid-frame model is the
+ * ordinary one, except for a frame marked MBE_FRAME_MARK_PREVIOUS_HELD. That
+ * hold continues what was heard: a silence frame plays on the model the
+ * listener heard last through its first 10 ms. A model that was not heard
+ * (the one a decoder kept through a mute or a tone) is not held, so such a
+ * frame from silence takes its own model at mid-frame: it rises from silence
+ * to it over the first subframe and plays it over the second. DVSI's vectors
+ * hold no silence frame right after a mute or a tone; this is the reading that
+ * plays no speech from before them. Returns 0 when a harmonic count is not
+ * 1..56. */
+static int
+prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence, struct mbe_subframe_model models[3],
+              struct pulse_train* train) {
+    if (!mbe_harmonic_count_is_valid(cur_mp->L) || !mbe_harmonic_count_is_valid(prev_mp->L)) {
+        return 0;
+    }
+    mbe_subframe_own_model(prev_mp, &models[0]);
+    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp), &models[1]);
+    mbe_subframe_own_model(cur_mp, &models[2]);
+    if (from_silence) {
+        silence_model(&models[0]);
+        if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {
+            models[1] = models[2];
+        }
+        train->phase = 0.0;
+        train->count = 0;
+    } else {
+        load_pulse_train(prev_mp, &models[0], train);
+    }
+    return 1;
+}
+
 void
 mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
-                         float voiced_gain) {
+                         float voiced_gain, int from_silence) {
     struct mbe_subframe_model models[3]; /* the last frame's own, mid-frame, this frame's own */
     struct rendered_model renders[3];
     struct mbe_unvoiced_subframe noise[2];
     struct pulse_train train;
 
-    if (!mbe_harmonic_count_is_valid(cur_mp->L) || !mbe_harmonic_count_is_valid(prev_mp->L)) {
+    if (!prepare_frame(cur_mp, prev_mp, from_silence, models, &train)) {
         return;
     }
-    mbe_subframe_own_model(prev_mp, &models[0]);
-    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp), &models[1]);
-    mbe_subframe_own_model(cur_mp, &models[2]);
-    load_pulse_train(prev_mp, &models[0], &train);
     for (int i = 0; i < 3; i++) {
         prepare_render(&models[i], voiced_gain, &renders[i]);
     }
@@ -562,7 +615,8 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
     unvoiced_subframe(&models[2], &noise[1]);
     /* Reads prev_mp's overlap and noise state before cur_mp's are written. */
     if (plan != NULL) {
-        mbe_synthesizeUnvoicedSubframes(aout_buf, cur_mp, prev_mp, plan, &noise[0], &noise[1]);
+        mbe_synthesizeUnvoicedSubframes(aout_buf, cur_mp, from_silence ? &no_overlap : prev_mp, plan, &noise[0],
+                                        &noise[1]);
     } else {
         mbe_dvsi_noise_skip_frame(cur_mp);
     }
@@ -570,17 +624,13 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
 }
 
 void
-mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence) {
     struct mbe_subframe_model models[3];
     struct pulse_train train;
 
-    if (!mbe_harmonic_count_is_valid(cur_mp->L) || !mbe_harmonic_count_is_valid(prev_mp->L)) {
+    if (!prepare_frame(cur_mp, prev_mp, from_silence, models, &train)) {
         return;
     }
-    mbe_subframe_own_model(prev_mp, &models[0]);
-    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp), &models[1]);
-    mbe_subframe_own_model(cur_mp, &models[2]);
-    load_pulse_train(prev_mp, &models[0], &train);
     advance_interval(&train, 0.0f, &models[0], &models[1]);
     advance_interval(&train, (float)SUBFRAME, &models[1], &models[2]);
     mbe_dvsi_noise_skip_frame(cur_mp);

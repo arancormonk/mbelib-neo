@@ -373,11 +373,14 @@ put_params(FILE* f, size_t frame, int imbe, int ambe2450, const char* data, cons
 }
 
 /* One row of DVSI soft values (hex digit 0..15 per frame cell, 8..15 decide 1)
- * through a public soft Frame API. Reliability is the distance from the
- * decision threshold 7.5, scaled to 16..240. Returns the API's status. */
+ * through a public soft Frame API: its float variant into audio, or with pcm
+ * given, its int16 variant into pcm. Reliability is the distance from the
+ * decision threshold 7.5, scaled to 16..240. *api names the float variant.
+ * Returns the API's status. */
 static int
-process_soft_row(const char* codec, const char* line, size_t n, size_t frame, float* audio, mbe_process_result* result,
-                 char* data, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced, const char** api) {
+process_soft_row(const char* codec, const char* line, size_t n, size_t frame, float* audio, short* pcm,
+                 mbe_process_result* result, char* data, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced,
+                 const char** api) {
     const int imbe7200 = !strcmp(codec, "imbe7200"), imbe7100 = !strcmp(codec, "imbe7100");
     const size_t width = imbe7200 ? 184 : (imbe7100 ? 168 : 96);
     if (n != width) {
@@ -398,31 +401,36 @@ process_soft_row(const char* codec, const char* line, size_t n, size_t frame, fl
         soft[i].bit = (uint8_t)(v >= 8);
         soft[i].reliability = (uint8_t)((2 * r + 1) * 16);
     }
+    const mbe_soft_bit(*rows24)[24] = (const mbe_soft_bit(*)[24])soft;
     if (imbe7200) {
+        const mbe_soft_bit(*rows23)[23] = (const mbe_soft_bit(*)[23])soft;
         *api = "mbe_processImbe7200x4400SoftFramef";
-        return mbe_processImbe7200x4400SoftFramef(audio, result, (const mbe_soft_bit(*)[23])soft, data, cur, prev,
-                                                  enhanced);
+        return pcm ? mbe_processImbe7200x4400SoftFrame(pcm, result, rows23, data, cur, prev, enhanced)
+                   : mbe_processImbe7200x4400SoftFramef(audio, result, rows23, data, cur, prev, enhanced);
     }
     if (imbe7100) {
         *api = "mbe_processImbe7100x4400SoftFramef";
-        return mbe_processImbe7100x4400SoftFramef(audio, result, (const mbe_soft_bit(*)[24])soft, data, cur, prev,
-                                                  enhanced);
+        return pcm ? mbe_processImbe7100x4400SoftFrame(pcm, result, rows24, data, cur, prev, enhanced)
+                   : mbe_processImbe7100x4400SoftFramef(audio, result, rows24, data, cur, prev, enhanced);
     }
     if (!strcmp(codec, "ambe2450")) {
         *api = "mbe_processAmbe3600x2450SoftFramef";
-        return mbe_processAmbe3600x2450SoftFramef(audio, result, (const mbe_soft_bit(*)[24])soft, data, cur, prev,
-                                                  enhanced);
+        return pcm ? mbe_processAmbe3600x2450SoftFrame(pcm, result, rows24, data, cur, prev, enhanced)
+                   : mbe_processAmbe3600x2450SoftFramef(audio, result, rows24, data, cur, prev, enhanced);
     }
     *api = "mbe_processAmbe3600x2400SoftFramef";
-    return mbe_processAmbe3600x2400SoftFramef(audio, result, (const mbe_soft_bit(*)[24])soft, data, cur, prev,
-                                              enhanced);
+    return pcm ? mbe_processAmbe3600x2400SoftFrame(pcm, result, rows24, data, cur, prev, enhanced)
+               : mbe_processAmbe3600x2400SoftFramef(audio, result, rows24, data, cur, prev, enhanced);
 }
 
 /* One row of literal binary digits: 88/49 parameter bits through a Data API
- * or a rectangular protected frame through a Frame API. Returns the status. */
+ * or a rectangular protected frame through a Frame API, the float variant into
+ * audio or, with pcm given, the int16 variant into pcm. *api names the float
+ * variant. Returns the status. */
 static int
-process_hard_row(const char* codec, const char* line, size_t n, size_t frame, float* audio, mbe_process_result* result,
-                 char* data, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced, const char** api) {
+process_hard_row(const char* codec, const char* line, size_t n, size_t frame, float* audio, short* pcm,
+                 mbe_process_result* result, char* data, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced,
+                 const char** api) {
     const int imbe7200 = !strcmp(codec, "imbe7200"), imbe7100 = !strcmp(codec, "imbe7100");
     const int ambe2450 = !strcmp(codec, "ambe2450"), ambe2400 = !strcmp(codec, "ambe2400");
     /* Width identifies parameter bits versus a rectangular protected frame.
@@ -450,110 +458,223 @@ process_hard_row(const char* codec, const char* line, size_t n, size_t frame, fl
     if (n <= 88) {
         memcpy(data, bits, n);
     }
+    const char (*rows24)[24] = (const char (*)[24])bits;
     if (imbe7200 && n == 88) {
         *api = "mbe_processImbe4400Dataf";
-        return mbe_processImbe4400Dataf(audio, result, bits, cur, prev, enhanced);
+        return pcm ? mbe_processImbe4400Data(pcm, result, bits, cur, prev, enhanced)
+                   : mbe_processImbe4400Dataf(audio, result, bits, cur, prev, enhanced);
     } else if (imbe7200 && n == 184) {
+        const char (*rows23)[23] = (const char (*)[23])bits;
         *api = "mbe_processImbe7200x4400Framef";
-        return mbe_processImbe7200x4400Framef(audio, result, (const char (*)[23])bits, data, cur, prev, enhanced);
+        return pcm ? mbe_processImbe7200x4400Frame(pcm, result, rows23, data, cur, prev, enhanced)
+                   : mbe_processImbe7200x4400Framef(audio, result, rows23, data, cur, prev, enhanced);
     } else if (imbe7100 && n == 168) {
         *api = "mbe_processImbe7100x4400Framef";
-        return mbe_processImbe7100x4400Framef(audio, result, (const char (*)[24])bits, data, cur, prev, enhanced);
+        return pcm ? mbe_processImbe7100x4400Frame(pcm, result, rows24, data, cur, prev, enhanced)
+                   : mbe_processImbe7100x4400Framef(audio, result, rows24, data, cur, prev, enhanced);
     } else if (ambe2450 && n == 96) {
         *api = "mbe_processAmbe3600x2450Framef";
-        return mbe_processAmbe3600x2450Framef(audio, result, (const char (*)[24])bits, data, cur, prev, enhanced);
+        return pcm ? mbe_processAmbe3600x2450Frame(pcm, result, rows24, data, cur, prev, enhanced)
+                   : mbe_processAmbe3600x2450Framef(audio, result, rows24, data, cur, prev, enhanced);
     } else if (ambe2400 && n == 96) {
         *api = "mbe_processAmbe3600x2400Framef";
-        return mbe_processAmbe3600x2400Framef(audio, result, (const char (*)[24])bits, data, cur, prev, enhanced);
+        return pcm ? mbe_processAmbe3600x2400Frame(pcm, result, rows24, data, cur, prev, enhanced)
+                   : mbe_processAmbe3600x2400Framef(audio, result, rows24, data, cur, prev, enhanced);
     } else if (ambe2450 && n == 49) {
         *api = "mbe_processAmbe2450Dataf";
-        return mbe_processAmbe2450Dataf(audio, result, bits, cur, prev, enhanced);
+        return pcm ? mbe_processAmbe2450Data(pcm, result, bits, cur, prev, enhanced)
+                   : mbe_processAmbe2450Dataf(audio, result, bits, cur, prev, enhanced);
     } else {
         *api = "mbe_processAmbe2400Dataf";
-        return mbe_processAmbe2400Dataf(audio, result, bits, cur, prev, enhanced);
+        return pcm ? mbe_processAmbe2400Data(pcm, result, bits, cur, prev, enhanced)
+                   : mbe_processAmbe2400Dataf(audio, result, bits, cur, prev, enhanced);
     }
 }
 
-static Signal
-decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, FILE* params, int soft) {
-    FILE* f = open_file(path, "rb");
-    Signal s = {0};
+/* One decode stream: predictor and enhanced synthesis histories kept separate
+ * for the entire stream. */
+typedef struct {
     mbe_parms cur, prev, enhanced;
-    /* Keep predictor and enhanced synthesis histories separate for the entire
-     * stream, and seed once so repeated evaluations produce the same PCM. */
-    mbe_initMbeParms(&cur, &prev, &enhanced);
+} Stream;
+
+/* What the float pass saw of one frame; the int16 pass must see the same. */
+typedef struct {
+    unsigned flags;
+    int status, c0, protected_errors, c4, total;
+    char data[88];
+} FrameRecord;
+
+/* Seed once per pass so repeated evaluations produce the same PCM. */
+static void
+stream_init(Stream* stream, uint32_t seed) {
+    mbe_initMbeParms(&stream->cur, &stream->prev, &stream->enhanced);
     mbe_setThreadRngSeed(seed);
+}
+
+/* The next row without its line ending; 0 at the end of the file. */
+static int
+read_row(FILE* f, char* line, size_t size, size_t* n) {
+    int ch = fgetc(f);
+    if (ch == EOF) {
+        return 0;
+    }
+    *n = 0;
+    do {
+        if (*n == size) {
+            fail("frame line is too long");
+        }
+        line[(*n)++] = (char)ch;
+    } while (ch != '\n' && (ch = fgetc(f)) != EOF);
+    while (*n && (line[*n - 1] == '\r' || line[*n - 1] == '\n')) {
+        --*n;
+    }
+    return 1;
+}
+
+/* One row through the codec: float output into audio, or int16 into pcm. */
+static FrameRecord
+process_row(const char* codec, const char* line, size_t n, size_t frame, int soft, float* audio, short* pcm,
+            Stream* stream, mbe_process_result* result, const char** api) {
+    FrameRecord record;
+    memset(&record, 0, sizeof(record));
+    mbe_initProcessResult(result);
+    /* Parameter bits of this frame: the row itself, or what the Frame API extracts. */
+    record.status = soft ? process_soft_row(codec, line, n, frame, audio, pcm, result, record.data, &stream->cur,
+                                            &stream->prev, &stream->enhanced, api)
+                         : process_hard_row(codec, line, n, frame, audio, pcm, result, record.data, &stream->cur,
+                                            &stream->prev, &stream->enhanced, api);
+    if (record.status < 0) {
+        fprintf(stderr, "frame %zu: process status %d\n", frame, record.status);
+        exit(3);
+    }
+    record.flags = result->flags;
+    record.c0 = result->c0_errors;
+    record.protected_errors = result->protected_errors;
+    record.c4 = result->c4_errors;
+    record.total = result->total_errors;
+    return record;
+}
+
+static void
+count_frame(DecodeStats* stats, const mbe_process_result* result) {
+    stats->tone += (result->flags & MBE_PROCESS_FLAG_TONE) != 0;
+    stats->erasure += (result->flags & MBE_PROCESS_FLAG_ERASURE) != 0;
+    stats->repeat += (result->flags & MBE_PROCESS_FLAG_REPEAT) != 0;
+    stats->mute += (result->flags & MBE_PROCESS_FLAG_MUTE) != 0;
+    stats->silence += (result->flags & MBE_PROCESS_FLAG_SILENCE) != 0;
+    stats->c0 += (size_t)result->c0_errors;
+    stats->protected_errors += (size_t)result->protected_errors;
+    stats->c4 += (size_t)result->c4_errors;
+    /* total_errors already includes C4; retain the breakdown for reporting
+     * without adding those errors a second time. */
+    stats->total += (size_t)result->total_errors;
+}
+
+/* Inspect object bits, not isfinite(): Release may assume finite math.
+ * These are post-library-limiter, pre-int16 observations. */
+static void
+inspect_float(DecodeStats* stats, const float* audio, size_t frame) {
+    for (size_t i = 0; i < 160; ++i) {
+        uint32_t bits_value;
+        memcpy(&bits_value, &audio[i], sizeof(bits_value));
+        if ((bits_value & UINT32_C(0x7f800000)) == UINT32_C(0x7f800000)) {
+            ++stats->nonfinite;
+            continue;
+        }
+        double magnitude = fabs((double)audio[i]);
+        stats->peak = fmax(stats->peak, magnitude);
+        stats->clips += magnitude >= (double)((32767.0f * 0.95f) / 7.0f);
+    }
+    if (stats->nonfinite) {
+        fprintf(stderr, "frame %zu: nonfinite float PCM (%zu samples)\n", frame, stats->nonfinite);
+        exit(3);
+    }
+}
+
+/* The float pass: statistics, float diagnostics and the --params dump. Returns
+ * each frame's record, *count of them. */
+static FrameRecord*
+decode_float(FILE* f, const char* codec, uint32_t seed, DecodeStats* stats, FILE* params, int soft, size_t* count) {
+    Stream stream;
+    stream_init(&stream, seed);
     const int imbe = !strcmp(codec, "imbe7200") || !strcmp(codec, "imbe7100");
     const int ambe2450 = !strcmp(codec, "ambe2450");
+    FrameRecord* records = NULL;
+    size_t capacity = 0;
     char line[187];
+    size_t n;
     size_t frame = 0;
-    int ch;
-    while ((ch = fgetc(f)) != EOF) {
-        size_t n = 0;
-        do {
-            if (n == sizeof(line)) {
-                fail("frame line is too long");
-            }
-            line[n++] = (char)ch;
-        } while (ch != '\n' && (ch = fgetc(f)) != EOF);
-        while (n && (line[n - 1] == '\r' || line[n - 1] == '\n')) {
-            --n;
-        }
+    while (read_row(f, line, sizeof(line), &n)) {
         float audio[160];
-        short pcm[160];
         mbe_process_result result;
-        mbe_initProcessResult(&result);
-        int status;
         const char* api;
-        /* Parameter bits of this frame: the row itself, or what the Frame API extracts. */
-        char data[88] = {0};
-        mbe_parms cur_before, prev_before;
-        if (params) {
-            cur_before = cur;
-            prev_before = prev;
+        Stream before = stream;
+        if (frame == capacity) {
+            capacity = capacity ? capacity * 2 : 1024;
+            if (capacity > SIZE_MAX / sizeof(FrameRecord)) {
+                fail("frame file too large");
+            }
+            FrameRecord* grown = realloc(records, capacity * sizeof(FrameRecord));
+            if (!grown) {
+                fail("out of memory");
+            }
+            records = grown;
         }
-        status = soft ? process_soft_row(codec, line, n, frame, audio, &result, data, &cur, &prev, &enhanced, &api)
-                      : process_hard_row(codec, line, n, frame, audio, &result, data, &cur, &prev, &enhanced, &api);
-        if (status < 0) {
-            fprintf(stderr, "frame %zu: process status %d\n", frame, status);
-            exit(3);
-        }
+        records[frame] = process_row(codec, line, n, frame, soft, audio, NULL, &stream, &result, &api);
         if (stats->input_api && strcmp(stats->input_api, api) != 0) {
             fail("frame file must use one public input API");
         }
         stats->input_api = api;
         if (params) {
-            put_params(params, frame, imbe, ambe2450, data, &cur_before, &prev_before, &prev, &enhanced, &result);
+            put_params(params, frame, imbe, ambe2450, records[frame].data, &before.cur, &before.prev, &stream.prev,
+                       &stream.enhanced, &result);
         }
-        stats->tone += (result.flags & MBE_PROCESS_FLAG_TONE) != 0;
-        stats->erasure += (result.flags & MBE_PROCESS_FLAG_ERASURE) != 0;
-        stats->repeat += (result.flags & MBE_PROCESS_FLAG_REPEAT) != 0;
-        stats->mute += (result.flags & MBE_PROCESS_FLAG_MUTE) != 0;
-        stats->silence += (result.flags & MBE_PROCESS_FLAG_SILENCE) != 0;
-        stats->c0 += (size_t)result.c0_errors;
-        stats->protected_errors += (size_t)result.protected_errors;
-        stats->c4 += (size_t)result.c4_errors;
-        /* total_errors already includes C4; retain the breakdown for reporting
-         * without adding those errors a second time. */
-        stats->total += (size_t)result.total_errors;
-        /* Inspect object bits, not isfinite(): Release may assume finite math.
-         * These are post-library-limiter, pre-int16 observations. */
-        for (size_t i = 0; i < 160; ++i) {
-            uint32_t bits_value;
-            memcpy(&bits_value, &audio[i], sizeof(bits_value));
-            if ((bits_value & UINT32_C(0x7f800000)) == UINT32_C(0x7f800000)) {
-                ++stats->nonfinite;
-                continue;
-            }
-            double magnitude = fabs((double)audio[i]);
-            stats->peak = fmax(stats->peak, magnitude);
-            stats->clips += magnitude >= (double)((32767.0f * 0.95f) / 7.0f);
+        count_frame(stats, &result);
+        inspect_float(stats, audio, frame);
+        ++frame;
+    }
+    if (ferror(f)) {
+        fail("frame file read failed");
+    }
+    if (!frame) {
+        fail("frame file is empty");
+    }
+    *count = frame;
+    return records;
+}
+
+/*
+ * The decoded 16-bit PCM is what the codec's own int16 entry point returns
+ * (the AMBE paths round to nearest, the IMBE paths truncate), from a second,
+ * separately initialized and seeded stream fed the same rows. It must see
+ * every frame as the float pass did (status, flags, error counts, parameter
+ * bits), or the evaluation stops.
+ */
+static Signal
+decode_pcm(FILE* f, const char* codec, uint32_t seed, int soft, const FrameRecord* records, size_t count) {
+    Stream stream;
+    stream_init(&stream, seed);
+    Signal s = {0};
+    char line[187];
+    size_t n;
+    size_t frame = 0;
+    while (read_row(f, line, sizeof(line), &n)) {
+        short pcm[160];
+        mbe_process_result result;
+        const char* api;
+        if (frame >= count) {
+            fail("frame file changed between the float and the int16 pass");
         }
-        if (stats->nonfinite) {
-            fprintf(stderr, "frame %zu: nonfinite float PCM (%zu samples)\n", frame, stats->nonfinite);
+        const FrameRecord record = process_row(codec, line, n, frame, soft, NULL, pcm, &stream, &result, &api);
+        const FrameRecord* want = &records[frame];
+        if (record.status != want->status || record.flags != want->flags || record.c0 != want->c0
+            || record.protected_errors != want->protected_errors || record.c4 != want->c4 || record.total != want->total
+            || memcmp(record.data, want->data, sizeof(record.data)) != 0) {
+            fprintf(stderr,
+                    "frame %zu: the int16 entry point disagrees with the float one (flags 0x%x/0x%x, errors %d/%d)\n",
+                    frame, record.flags, want->flags, record.total, want->total);
             exit(3);
         }
-        mbe_floattoshort(audio, pcm);
         for (size_t i = 0; i < 160; ++i) {
             append(&s, pcm[i]);
         }
@@ -562,10 +683,23 @@ decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, F
     if (ferror(f)) {
         fail("frame file read failed");
     }
-    fclose(f);
-    if (!frame) {
-        fail("frame file is empty");
+    if (frame != count) {
+        fail("frame file changed between the float and the int16 pass");
     }
+    return s;
+}
+
+static Signal
+decode(const char* codec, const char* path, uint32_t seed, DecodeStats* stats, FILE* params, int soft) {
+    FILE* f = open_file(path, "rb");
+    size_t count;
+    FrameRecord* records = decode_float(f, codec, seed, stats, params, soft, &count);
+    if (fseek(f, 0L, SEEK_SET) != 0) {
+        fail("frame file cannot be read a second time");
+    }
+    Signal s = decode_pcm(f, codec, seed, soft, records, count);
+    fclose(f);
+    free(records);
     return s;
 }
 

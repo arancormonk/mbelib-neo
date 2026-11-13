@@ -19,11 +19,16 @@ The CTest suite includes:
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit
 - the codec paths' unvoiced synthesis: DVSI's noise generator (its period, its first samples, a cold start and a skipped frame), a subframe against the equations it implements, the window's squares summing to one, a level step inside a frame, the public `mbe_synthesizeSpeechf()` keeping the specification's rendering, a state handed from one rendering to the other, invalid arguments and models, and two streams replaying alike (`test_unvoiced_subframes`)
-- the codec paths' voiced synthesis in subframes: a steady model adding up to its harmonics, an onset starting the pulse train, a late onset, a pitch step keeping the train, the mid-frame model against an independent evaluation, linear crossfades into and out of silence, a muted frame moving the train on, stored pulse state that is not a frame's own being dropped, invalid models (harmonic counts, pitches and magnitudes of any value) leaving the neighbouring state alone, and the frame marks the decoders set: every P25 and D-STAR pitch code of an unvoiced frame, P25 voicing that stays under 505 Hz, and the previous voicing lasting to mid-frame through the P25 data path (`test_subframe_synthesis`)
-- AMBE 3600x2450 frame-type handling per TIA-102.BABA-1: frame classification, silence history freeze, repeats, erasures, tones (including unverified tone frames), muting, and recovery after mutes and tones (`test_ambe2450_frame_types`)
+- the codec paths' voiced synthesis in subframes: a steady model adding up to its harmonics, an onset starting the pulse train, a late onset, a pitch step keeping the train, the mid-frame model against an independent evaluation, linear crossfades into and out of silence, a muted frame moving the train on, stored pulse state that is not a frame's own being dropped, invalid models (harmonic counts, pitches and magnitudes of any value) leaving the neighbouring state alone, and the frame marks the decoders set: every P25 and D-STAR pitch code of an unvoiced frame, P25 voicing that stays under 505 Hz, the previous voicing lasting to mid-frame through the P25 data path, and the previous model held to mid-frame by a rate-33 silence frame; a frame that starts from silence: the independent rendering of the waveform test through such frames, a steady voiced pair rising as n / 80 of the ordinary rendering from an empty train, stale pulses, phases and overlap neither sounding nor moving the new train, a silence frame rising to its own model, and advancing leaving the state rendering leaves (`test_subframe_synthesis`)
+- AMBE 3600x2450 frame-type handling per TIA-102.BABA-1 and as DVSI's decoder plays it: frame classification, silence history freeze, silence frames on 15 bands at their level with the previous model held to mid-frame, repeats, erasures (tone ID 255 among them, on the hard, soft and parameter-bit paths, and the all-ones frame of DVSI's DTX vectors, a tone frame with the unusable index 180), tones (including unverified tone frames), muting (the mute noise level, the last frame fading out against an independent rendering, the model kept and the noise generator's single frame through every kind of mute), the frame after a mute or a tone rendered from silence from the kept model (plus a tone's tail), and lost frames repeating a tone bit for bit until the repeat limit fades it out (`test_ambe2450_frame_types`)
 - D-STAR voicing: every b1 value at four pitches, each voiced band reaching 250 Hz into the band below (`test_ambe2400_frame_types`)
 - D-STAR frame classes outside plain voice: b0 125, tone frames without a tone and b0 127 frames repeating like error repeats through the hard, soft and parameter-bit APIs and sharing the repeat limit, the null frame and b0 120..124 as voice (b0 124 with the AMBE+2 silence model, all 16 b1 values playing alike on every API and committed to the prediction history), zero-volume tones, C0 words with four errors (every pattern of weight 4 and none lighter, hard and soft) playing as lost frames whose decode the next frame predicts from, through a lost frame or a tone after them, corrections repeating no frame and tones with corrections playing, lost frames after a single tone (the tail fading out, then silence) and after a dual tone (the tone going on until the repeat limit), tones muted with the error level, the repeat-limit mute (fade-out, DVSI-level noise, prediction kept), the voice after it starting from the prediction history (that frame alone changing; a held or initial history fading in from silence; a b0 124 or still-muted frame after it) and the error-level mute and its noise level, and the all-ones DV frame as a lost frame for runs of 1, 3 and 20, the 80-sample crossfades into and out of a tone against a stream with a lost frame in its place, and a tone's volume step ramping over 80 samples before the clip while a new index starts at once (`test_ambe2400_frame_types`)
-- float-to-int16 conversion parity checks
+- float-to-int16 conversion parity checks, and the D-STAR and rate-33 paths' round-to-nearest conversion
+  in every compiled variant against `roundf()` (exact halves and the floats beside them, the limit,
+  infinities, NaN, subnormals and a sweep over float bit patterns, in every lane and at unaligned
+  addresses), with `mbe_floattoshort()` still truncating (`test_pcm_rounding`); the AMBE `short` entry
+  points rounding their float twins' output, the IMBE ones truncating, and both AMBE paths' muted
+  16-bit noise (`test_frame_paths`)
 - golden PCM hash regression checks, by kernel ISA: `test_golden_pcm` runs the CPU probe's choice,
   `test_golden_pcm_sse2` and `test_golden_pcm_avx2` force either copy of a run-time AVX2 dispatch build
   and skip (exit 77) where the build or CPU cannot run it; `MBELIB_TEST_REQUIRE_AVX2=ON` makes the AVX2
@@ -705,6 +710,16 @@ Output WAVs preserve pre-normalization PCM. Invalid input, aliases (including
 hard links and normalized not-yet-created output paths), or fewer than 256
 aligned samples fail with exit 2 **before output creation**. A negative codec
 status or nonfinite float PCM exits 3 with the frame index.
+
+The 16-bit PCM written and measured comes from the codec's own public `short`
+entry points, run over the same rows from a second, separately initialized and
+seeded state after the float pass, so it is what a caller of those entry points
+gets (the D-STAR and AMBE 3600x2450 ones round to nearest, the IMBE ones
+truncate; [DVSI parity](dvsi-parity.md#16-bit-output)). The float pass keeps
+supplying the statistics, the float diagnostics below and the `--params` dump.
+The two passes must agree on every frame's status, flags, error counts and
+parameter bits, or the tool exits 3. Up to 2.6.8 the tool converted the float
+output with `mbe_floattoshort()`.
 
 Schema-2 metrics preserve the original supported formulas:
 

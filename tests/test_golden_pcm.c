@@ -42,6 +42,10 @@
  * regenerated on Ubuntu 24.04 for scalar, SSE2 and AVX2; int16 hashes held.
  * The scale-free spectral weights (#158) moved every AMBE float hash and
  * AMBE+2's int16 hashes by rounding.
+ * The int16 hashes cover what the codecs' own int16 entry points return, which
+ * round to nearest (mbe_floattoshort() truncates); with that, two AMBE+2
+ * samples that lie within 3e-4 of a half fall on different sides of it in the
+ * scalar and SIMD builds, so its scalar int16 hash differs from the SIMD one.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -59,14 +63,14 @@ golden_ambe_expected(int isa) {
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
         e.ambe2450_f32 = 0x4B7BDA7Eu;
-        e.ambe2450_s16 = 0x3FD92FB3u;
+        e.ambe2450_s16 = 0x4B54C3BAu;
         e.ambe2400_f32 = 0x53DFF28Du;
-        e.ambe2400_s16 = 0x2B52545Fu;
+        e.ambe2400_s16 = 0x2CD52929u;
     } else {
         e.ambe2450_f32 = 0x5DCFBFEFu;
-        e.ambe2450_s16 = 0x3FD92FB3u;
+        e.ambe2450_s16 = 0x23D934B0u;
         e.ambe2400_f32 = 0x11429B9Cu;
-        e.ambe2400_s16 = 0x2B52545Fu;
+        e.ambe2400_s16 = 0x2CD52929u;
     }
     return e;
 }
@@ -85,13 +89,13 @@ float_bits_equal(float a, float b) {
  * @return 0 on success, 1 on failure.
  */
 static int
-check_ambe_sequence(const char* name, golden_ambe_process_fn process, uint32_t seed, uint32_t exp_f32,
+check_ambe_sequence(const char* name, const struct golden_ambe_codec* codec, uint32_t seed, uint32_t exp_f32,
                     uint32_t exp_s16) {
     struct golden_hashes first;
     struct golden_hashes second;
 
-    if (golden_hash_ambe_voice_sequence(process, seed, &first) != 0
-        || golden_hash_ambe_voice_sequence(process, seed, &second) != 0) {
+    if (golden_hash_ambe_voice_sequence(codec, seed, &first) != 0
+        || golden_hash_ambe_voice_sequence(codec, seed, &second) != 0) {
         fprintf(stderr, "%s: sequence decode failed\n", name);
         return 1;
     }
@@ -155,9 +159,9 @@ main(int argc, char** argv) {
     const int isa = mbe_cpu_isa();
     printf("kernel ISA %d (dispatch %s)\n", isa, mbe_cpu_dispatch_enabled() ? "on" : "off");
     const struct golden_ambe_expect ambe = golden_ambe_expected(isa);
-    if (check_ambe_sequence("ambe2450", mbe_processAmbe2450Dataf, GOLDEN_AMBE2450_SEED, ambe.ambe2450_f32,
+    if (check_ambe_sequence("ambe2450", &golden_ambe2450_codec, GOLDEN_AMBE2450_SEED, ambe.ambe2450_f32,
                             ambe.ambe2450_s16)
-        || check_ambe_sequence("ambe2400", mbe_processAmbe2400Dataf, GOLDEN_AMBE2400_SEED, ambe.ambe2400_f32,
+        || check_ambe_sequence("ambe2400", &golden_ambe2400_codec, GOLDEN_AMBE2400_SEED, ambe.ambe2400_f32,
                                ambe.ambe2400_s16)) {
         return 1;
     }

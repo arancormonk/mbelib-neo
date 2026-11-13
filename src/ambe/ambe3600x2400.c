@@ -24,6 +24,7 @@
 #include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_pcm_convert.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
@@ -764,7 +765,7 @@ ambe2400_update_decode_state(const char ambe_d[49], int bad, mbe_process_result*
 /* The noise D-STAR mutes to, at the level of DVSI's muted output. */
 static void
 ambe2400_mute_noise(float* aout_buf) {
-    mbe_synthesizeUniformNoisef(aout_buf, MBE_AMBE2400_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    mbe_synthesizeUniformNoisef(aout_buf, MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
 }
 
 /*
@@ -1204,7 +1205,7 @@ mbe_processAmbe2400Data(short* aout_buf, mbe_process_result* result, const char 
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }
 
@@ -1259,7 +1260,7 @@ mbe_processAmbe3600x2400SoftFrame(short* aout_buf, mbe_process_result* result, c
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }
 
@@ -1280,6 +1281,6 @@ mbe_processAmbe3600x2400Frame(short* aout_buf, mbe_process_result* result, const
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }

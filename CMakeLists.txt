@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.6.8 LANGUAGES C)
+project(mbelib-neo VERSION 2.6.9 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -1453,6 +1453,8 @@ if(MBELIB_BUILD_TESTS)
             test_subframe_synthesis
             test_adaptive_equations
             test_ambe2400_frame_types
+            test_ambe2450_frame_types
+            test_pcm_rounding
     )
         add_executable(${_mbelib_private_test} tests/${_mbelib_private_test}.c)
         target_link_libraries(${_mbelib_private_test} PRIVATE mbe-static)
@@ -1462,6 +1464,15 @@ if(MBELIB_BUILD_TESTS)
                 "${PROJECT_SOURCE_DIR}/include"
                 "${PROJECT_SOURCE_DIR}/src/internal"
         )
+        # A library built with fast-math may round an expression otherwise
+        # than a test's reference does; tests that compare the two exactly in
+        # an IEEE build allow for it then.
+        if(MBELIB_ENABLE_FAST_MATH)
+            target_compile_definitions(
+                ${_mbelib_private_test}
+                PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
+            )
+        endif()
         if(_SAN_CFLAGS)
             target_compile_options(
                 ${_mbelib_private_test}
@@ -1562,27 +1573,6 @@ if(MBELIB_BUILD_TESTS)
         )
     endif()
     add_test(NAME test_floattoshort_parity COMMAND test_floattoshort_parity)
-
-    add_executable(test_ambe2450_frame_types tests/test_ambe2450_frame_types.c)
-    target_link_libraries(
-        test_ambe2450_frame_types
-        PRIVATE ${MBELIB_EXEC_LINK_TGT}
-    )
-    target_include_directories(
-        test_ambe2450_frame_types
-        PRIVATE "${PROJECT_SOURCE_DIR}/include"
-    )
-    if(_SAN_CFLAGS)
-        target_compile_options(test_ambe2450_frame_types PRIVATE ${_SAN_CFLAGS})
-    endif()
-    if(_SAN_LDFLAGS)
-        target_link_options(
-            test_ambe2450_frame_types
-            BEFORE
-            PRIVATE ${_SAN_LDFLAGS}
-        )
-    endif()
-    add_test(NAME test_ambe2450_frame_types COMMAND test_ambe2450_frame_types)
 
     add_executable(test_tones tests/test_tones.c)
     target_link_libraries(test_tones PRIVATE ${MBELIB_EXEC_LINK_TGT})
@@ -2103,6 +2093,7 @@ if(MBELIB_BUILD_TESTS)
         test_quality_dvsi
         test_input_validation
         test_floattoshort_parity
+        test_pcm_rounding
         test_ambe2450_frame_types
         test_ambe2400_frame_types
         test_tones

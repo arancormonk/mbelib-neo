@@ -1369,10 +1369,10 @@ test_onset_mark_cleared(void) {
     assert(mbe_voicing_onset_delay(&cur) == 0);
 }
 
-/* Rate 33 through its public data path: a voiced onset (b1 15) muted by the
- * error rate keeps the last synthesized model, so the pulse train starts at
- * the first audible voiced frame, from that frame alone, whatever the voiced
- * history before the unvoiced gap. */
+/* Rate 33 through its public data path: after a voiced onset (b1 15) muted by
+ * the error rate, the first audible voiced frame starts from silence, so its
+ * pulse train starts at its own start, from that frame alone, whatever the
+ * voiced history before the unvoiced gap. */
 static void
 test_ambe2450_muted_onset(void) {
     for (int history = 0; history < 2; ++history) {
@@ -1505,8 +1505,9 @@ main(void) {
         }
     }
 
-    // AMBE 2450 silence frames (TIA-102.BABA-1 4.1 eqs 1-3): both b0 124 and
-    // 125 use w0 = 2*pi/32, L = 14, all bands unvoiced.
+    // AMBE 2450 silence frames: both b0 124 and 125 use w0 = 2*pi/32 and all
+    // bands unvoiced (TIA-102.BABA-1 4.1 eqs 1-3) on 15 bands, as DVSI's
+    // decoder plays them (4.1 eq 2 gives 14).
     {
         char ambe_d[49];
         mbe_parms cur = {0}, prev = {0};
@@ -1519,7 +1520,7 @@ main(void) {
             set_ambe2450_b0(ambe_d, b0);
             assert(mbe_classifyAmbe2450Frame(ambe_d) == MBE_AMBE2450_FRAME_SILENCE);
             assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
-            assert(cur.L == 14);
+            assert(cur.L == 15);
             assert(approx_equal(cur.w0, w0_silence, 1e-6f));
             assert((float)cur.L * cur.w0 < (float)M_PI);
             for (int l = 1; l <= cur.L; ++l) {
