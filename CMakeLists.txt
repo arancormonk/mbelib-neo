@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.6.9 LANGUAGES C)
+project(mbelib-neo VERSION 2.6.10 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -1799,8 +1799,8 @@ if(MBELIB_BUILD_TESTS)
                     PROPERTIES SKIP_RETURN_CODE 77
                 )
                 # The A/B runner locks its run directory with fcntl, so it is POSIX-only, and
-                # uses assignment expressions, so it needs Python 3.8.
-                if(NOT WIN32 AND Python3_VERSION VERSION_GREATER_EQUAL 3.8)
+                # checks paths with Path.is_relative_to(), so it needs Python 3.9.
+                if(NOT WIN32 AND Python3_VERSION VERSION_GREATER_EQUAL 3.9)
                     add_test(
                         NAME test_quality_ab_finalize
                         COMMAND
@@ -1821,12 +1821,16 @@ if(MBELIB_BUILD_TESTS)
                 ${Python3_EXECUTABLE}
                 ${PROJECT_SOURCE_DIR}/tests/test_ci_scheduling.py
         )
-        add_test(
-            NAME test_legal_release
-            COMMAND
-                ${Python3_EXECUTABLE}
-                ${PROJECT_SOURCE_DIR}/tests/test_legal_release.py
-        )
+        # The release SBOM hashes with usedforsecurity=False and the reference
+        # provenance checks paths with Path.is_relative_to(): both need Python 3.9.
+        if(Python3_VERSION VERSION_GREATER_EQUAL 3.9)
+            add_test(
+                NAME test_legal_release
+                COMMAND
+                    ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tests/test_legal_release.py
+            )
+        endif()
         add_test(
             NAME test_release_assets
             COMMAND
