@@ -629,7 +629,7 @@ static int
 mbe_decodeAmbe2450ParmsInternal(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
     int b0, b2, L = 0;
-    float f0, Cik[5][18], Tl[57] = {0}, Ri[9];
+    float f0 = 0.0f, Cik[5][18], Tl[57] = {0}, Ri[9];
     int silence = 0;
     int Ji[5];
     float deltaGamma;

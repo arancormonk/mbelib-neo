@@ -33,6 +33,7 @@ TAG_CHECKS = {
 LATER_TAG_CHECKS = {
     (2, 6, 1): {"linux • Debug • SIMD (SSE2 baseline + AVX2 dispatch)"},
     (2, 6, 6): {"linux • Release • ctest (consumer defaults, Alpine musl)"},
+    (2, 6, 10): {f"linux • Release • ctest (GCC 9, Ubuntu 20.04, {arch})" for arch in ("x86_64", "aarch64")},
 }
 
 

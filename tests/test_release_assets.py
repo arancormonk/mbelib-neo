@@ -126,6 +126,26 @@ class Recovery(unittest.TestCase):
         recovery.validate_run(run, jobs, "v2.6.5", self.commit, rebuild=True)
         recovery.validate_run(run, jobs, "v2.6.5", self.commit, aur_only=True)
 
+
+    def test_recovery_requires_the_gcc9_checks_from_the_release_that_has_them(self):
+        gcc9 = {f"linux • Release • ctest (GCC 9, Ubuntu 20.04, {arch})" for arch in ("x86_64", "aarch64")}
+        self.assertTrue(gcc9.isdisjoint(recovery.tag_checks("2.6.9")))
+        self.assertLessEqual(gcc9, recovery.tag_checks("2.6.10"))
+        self.assertLessEqual(gcc9, recovery.tag_checks("3.0.0"))
+        run = {**self.run, "head_branch": "v2.6.10"}
+        jobs = [{"name": name, "conclusion": "success"} for name in recovery.tag_checks("2.6.10")]
+        for name in sorted(gcc9):
+            for options in ({"rebuild": True}, {"aur_only": True}):
+                with self.subTest(name=name, options=options):
+                    recovery.validate_run(run, jobs, "v2.6.10", self.commit, **options)
+                    without = [j for j in jobs if j["name"] != name]
+                    with self.assertRaisesRegex(ValueError, "lacks successful"):
+                        recovery.validate_run(run, without, "v2.6.10", self.commit, **options)
+        # 2.6.9's tag run had no GCC 9 job and stays recoverable without it.
+        run = {**self.run, "head_branch": "v2.6.9"}
+        jobs = [{"name": name, "conclusion": "success"} for name in recovery.tag_checks("2.6.9")]
+        recovery.validate_run(run, jobs, "v2.6.9", self.commit, rebuild=True)
+        recovery.validate_run(run, jobs, "v2.6.9", self.commit, aur_only=True)
     def test_rebuild_identity_requires_reviewed_main_workflow(self):
         run = {"event": "workflow_dispatch", "head_branch": "main", "path": recovery.WORKFLOW, "head_sha": "b" * 40}
         with patch.object(recovery, "gh_json", side_effect=[run, {"status": "ahead"}]):

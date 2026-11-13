@@ -29,7 +29,7 @@ mutable_release_downloads=$(
 report_violation "Mutable GitHub release download URL detected:" "$mutable_release_downloads"
 
 floating_ci_images=$(
-  rg -n '(archlinux:base-devel|alpine:[0-9]|ghcr[.]io/(gitleaks/gitleaks|google/osv-scanner):)' \
+  rg -n '(archlinux:base-devel|alpine:[0-9]|ubuntu:[0-9]|ghcr[.]io/(gitleaks/gitleaks|google/osv-scanner):)' \
     .github/workflows tools \
     --glob '!tools/check_workflow_download_pins.sh' |
     grep -v '@sha256:' ||
@@ -44,6 +44,8 @@ source tools/ci-dependency-pins.env
 for var in \
   ARCHLINUX_BASE_DEVEL_IMAGE \
   ALPINE_IMAGE \
+  UBUNTU_2004_AMD64_IMAGE \
+  UBUNTU_2004_ARM64_IMAGE \
   GITLEAKS_IMAGE \
   OSV_SCANNER_IMAGE; do
   value=${!var:-}
@@ -52,5 +54,17 @@ for var in \
     failed=1
   fi
 done
+
+for var in CMAKE_LINUX_X86_64_SHA256 CMAKE_LINUX_AARCH64_SHA256; do
+  value=${!var:-}
+  if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${var} must be a SHA-256 (64 hex chars); got '${value}'." >&2
+    failed=1
+  fi
+done
+if [[ ! "${CMAKE_LINUX_VERSION:-}" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+  echo "CMAKE_LINUX_VERSION must be an exact release (x.y.z); got '${CMAKE_LINUX_VERSION:-}'." >&2
+  failed=1
+fi
 
 exit "$failed"
