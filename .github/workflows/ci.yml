@@ -439,7 +439,9 @@ jobs:
           source tools/ci-dependency-pins.env
           image=${!IMAGE_VAR}
           cmake_sha=${!CMAKE_SHA_VAR}
-          docker run --rm -v "$PWD:/src:ro" -e ARCH -e CMAKE_LINUX_VERSION -e CMAKE_SHA="$cmake_sha" "$image" bash -euc '
+          # The pins are sourced, not exported: pass their values to the container.
+          docker run --rm -v "$PWD:/src:ro" -e ARCH -e CMAKE_LINUX_VERSION="$CMAKE_LINUX_VERSION" \
+            -e CMAKE_SHA="$cmake_sha" "$image" bash -euc '
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
             apt-get install -y -qq --no-install-recommends build-essential ca-certificates git ninja-build \
