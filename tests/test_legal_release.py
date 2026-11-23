@@ -49,13 +49,13 @@ class Evidence(unittest.TestCase):
                                         "a" * 40, lambda n: (ROOT / n).read_bytes())
             indexed = {p["SPDXID"]: p for p in doc["packages"]}
             self.assertEqual(indexed["SPDXRef-Component-etsi-data"]["licenseConcluded"], "NOASSERTION")
-            self.assertEqual(indexed["SPDXRef-Component-pffft"]["licenseDeclared"], "LicenseRef-PFFFT")
+            self.assertEqual(indexed["SPDXRef-Component-pffft-neo"]["licenseDeclared"], "GPL-2.0-or-later AND LicenseRef-PFFFT")
             self.assertEqual("SPDXRef-Component-op25-tooling" in indexed, kind == "source")
             self.assertNotIn("SPDXRef-Component-dvsi-reference", indexed)
             extracted = {e["licenseId"]: e["extractedText"] for e in doc["hasExtractedLicensingInfos"]}
             self.assertIn("Copyright", extracted["LicenseRef-PFFFT"])
             self.assertIn("unresolved", extracted["LicenseRef-ETSI-EN-300-395-2-data"])
-            relation = next(r for r in doc["relationships"] if r["relatedSpdxElement"] == "SPDXRef-Component-pffft")
+            relation = next(r for r in doc["relationships"] if r["relatedSpdxElement"] == "SPDXRef-Component-pffft-neo")
             self.assertEqual(relation["relationshipType"], "STATIC_LINK" if kind == "binary" else "CONTAINS")
 
     def test_binary_notices_and_unexpected_data(self):
@@ -63,7 +63,7 @@ class Evidence(unittest.TestCase):
         files = {"share/doc/mbelib-neo/" + n: (ROOT / n).read_bytes()
                  for c in data["components"] if "binary" in c["distribution"] for n in c["notices"]}
         retained = (ROOT / "LICENSES/LicenseRef-PFFFT.txt").read_bytes()
-        files["share/doc/mbelib-neo/pffft/PFFFT-NOTICES.txt"] = retained[retained.index(b"PFFFT: https://"):]
+        files["share/doc/mbelib-neo/pffft-neo/third_party/pffft/LicenseRef-PFFFT.txt"] = retained
         release_sbom.validate_package(files, "binary")
         # Git and installation tools may use CRLF on Windows; notice text is retained.
         release_sbom.validate_package(
@@ -71,12 +71,14 @@ class Evidence(unittest.TestCase):
         for n in ("LICENSES/ISC.txt", "LICENSES/LicenseRef-PFFFT.txt", "LICENSES/LicenseRef-ETSI-EN-300-395-2-data.txt"):
             changed = dict(files)
             changed.pop("share/doc/mbelib-neo/" + n)
+            if n.endswith("LicenseRef-PFFFT.txt"):
+                changed.pop("share/doc/mbelib-neo/pffft-neo/third_party/pffft/LicenseRef-PFFFT.txt")
             with self.assertRaisesRegex(ValueError, "notice"):
                 release_sbom.validate_package(changed, "binary")
         with self.assertRaisesRegex(ValueError, "Unexpected"):
             release_sbom.validate_package({**files, "share/audio.wav": b"private"}, "binary")
-        files["share/doc/mbelib-neo/pffft/PFFFT-NOTICES.txt"] = b"incomplete"
-        with self.assertRaisesRegex(ValueError, "PFFFT notices"):
+        files["share/doc/mbelib-neo/pffft-neo/third_party/pffft/LicenseRef-PFFFT.txt"] = b"incomplete"
+        with self.assertRaisesRegex(ValueError, "pffft-neo notices"):
             release_sbom.validate_package(files, "binary")
 
     def test_versioned_release_notes(self):

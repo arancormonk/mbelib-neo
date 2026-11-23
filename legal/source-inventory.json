@@ -78,7 +78,7 @@
   ],
   "generated": [
     "SOURCE-IDENTITY.json",
-    "third_party/pffft-${PFFFT_SHA}.tar.gz"
+    "third_party/pffft-neo-${PFFFT_SHA}.tar.gz"
   ],
   "required": [
     "CMakeLists.txt",

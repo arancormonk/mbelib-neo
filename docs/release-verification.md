@@ -108,7 +108,7 @@ install/consume, SBOM, attestation, and release validation jobs.
 A release requires three platform binary archives and one
 `mbelib-neo-<version>-source.tar.gz`, each with a matching `.spdx.json`.
 `SHA256SUMS.txt` covers all eight files. The Linux packaging job builds source
-from the validated tag's tracked tree, includes the original pinned PFFFT
+from the validated tag's tracked tree, includes the original pinned pffft-neo
 archive, and verifies extraction, build, tests, installation and static/shared
 consumers in a network-disabled namespace. Source ordering, ownership, modes
 and timestamps are normalized; `SOURCE-IDENTITY.json` records content hashes.

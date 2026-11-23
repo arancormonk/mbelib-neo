@@ -19,7 +19,7 @@ questions recorded in [the dated patent review](legal/patents.md).
 ## License
 
 The project's contributions are GPL-2.0-or-later; original ISC mbelib notices
-and PFFFT's exact license texts are retained. The source-only OP25 quality patch
+and pffft-neo's GPL and inherited PFFFT notices are retained. The source-only OP25 quality patch
 is GPL-3.0-or-later. TETRA codebook data retains its ETSI attribution, while
 redistribution permission and GPL compatibility remain unresolved. No blanket
 license conclusion is asserted for the combined distribution.
@@ -27,7 +27,7 @@ license conclusion is asserted for the combined distribution.
 Read the [component inventory](legal/component-table.md) and
 [licensing status and retained-component exception](legal/status.md). Starting
 with 2.6.0, releases include a **complete corresponding-source archive** with
-the pinned PFFFT source, build inputs, tests and notices alongside the binaries.
+the pinned FFT source, build inputs, tests and notices alongside the binaries.
 See [offline source builds](docs/source-build.md) and
 [release verification](docs/release-verification.md).
 
@@ -48,19 +48,19 @@ Requirements
 - C compiler with C99 support.
 - CMake ≥ 3.20.
 - On non‑Windows platforms, links against `-lm` automatically.
-- The first configure downloads a fixed PFFFT fork revision and verifies its SHA-256. No submodule or C++ compiler is needed.
+- The first configure downloads a pinned [pffft-neo](https://github.com/arancormonk/pffft-neo) revision and verifies its SHA-256. No submodule or C++ compiler is needed.
 
-Release source bundles automatically use their hash-verified PFFFT archive.
+Release source bundles automatically use their hash-verified FFT archive.
 For a fresh offline build from a Git checkout, supply an extracted copy of the pinned
-fork (see [dependency updates](docs/dependencies.md)):
+pffft-neo revision (see [dependency updates](docs/dependencies.md)):
 
 ```sh
-cmake --preset dev-debug -DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=/absolute/path/to/pffft
+cmake --preset dev-debug -DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=/absolute/path/to/pffft-neo
 ```
 
 An already populated build directory can be reconfigured offline with
-`-DFETCHCONTENT_FULLY_DISCONNECTED=ON`. PFFFT is compiled into both libraries;
-consumers need no separate PFFFT library.
+`-DFETCHCONTENT_FULLY_DISCONNECTED=ON`. pffft-neo is compiled into both libraries;
+consumers need no separate FFT library.
 
 Using CMake presets (recommended)
 
@@ -455,7 +455,7 @@ Project documentation and policies:
 - Public headers: `include/mbelib-neo/`
 - Sources: `src/core/`, `src/ecc/`, `src/ambe/`, `src/imbe/`, `src/tetra/`
 - Internal headers: `src/internal/`
-- External libraries: pinned PFFFT fork populated by `cmake/Pffft.cmake` (retained texts: `LicenseRef-PFFFT`)
+- External libraries: [pffft-neo](https://github.com/arancormonk/pffft-neo), pinned by `cmake/Pffft.cmake` (`GPL-2.0-or-later AND LicenseRef-PFFFT`)
 - Tests: `tests/` • Examples: `examples/` • Benchmarks: `bench/`
 - Developer tooling and CI parity scripts: `tools/`
 

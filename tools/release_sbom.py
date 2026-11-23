@@ -83,12 +83,12 @@ def validate_package(files, kind, root=ROOT):
         if set(staging["required"]) - files.keys():
             raise ValueError("Required source notice or build input is absent")
         pins = read_pins(text=files["tools/ci-dependency-pins.env"].decode())
-        dependency = f"third_party/pffft-{pins['PFFFT_SHA']}.tar.gz"
+        dependency = f"third_party/pffft-neo-{pins['PFFFT_SHA']}.tar.gz"
         if set(name for name in files if name.startswith("third_party/")) != {dependency}:
             raise ValueError("Unexpected bundled dependency")
         if hashlib.sha256(files[dependency]).hexdigest() != pins["PFFFT_ARCHIVE_SHA256"]:
             raise ValueError("PFFFT archive hash mismatch")
-        if identity["pffft"] != pins:
+        if identity["pffft-neo"] != pins:
             raise ValueError("Source identity dependency mismatch")
         return inventory, pins, identity, files.__getitem__
     # Installed notices are validated by contents, independent of lib/lib64 layout.
@@ -99,11 +99,9 @@ def validate_package(files, kind, root=ROOT):
                 if not any(content.replace(b"\r\n", b"\n") == expected for content in files.values()):
                     raise ValueError(f"Binary package lacks retained notice {notice}")
     retained = (root / "LICENSES/LicenseRef-PFFFT.txt").read_bytes().replace(b"\r\n", b"\n")
-    marker = b"PFFFT: https://github.com/arancormonk/pffft\n"
-    expected_notices = retained[retained.index(marker):]
-    if not any(name.endswith("/pffft/PFFFT-NOTICES.txt") and content.replace(b"\r\n", b"\n") == expected_notices
+    if not any(name.endswith("/pffft-neo/third_party/pffft/LicenseRef-PFFFT.txt") and content.replace(b"\r\n", b"\n") == retained
                for name, content in files.items()):
-        raise ValueError("Missing compiled PFFFT notices")
+        raise ValueError("Missing pffft-neo notices")
     forbidden = {".wav", ".pcm", ".raw", ".mp3", ".pdf", ".zip"}
     if any(PurePosixPath(n).suffix.lower() in forbidden or ".git" in PurePosixPath(n).parts
            or not n.startswith(("bin/", "lib/", "lib64/", "include/", "share/")) for n in files):
@@ -161,17 +159,16 @@ def add_components(document, inventory, pins, kind, commit, read):
                    "licenseDeclared": c["license_declared"], "licenseConcluded": c["license_concluded"],
                    "copyrightText": "NOASSERTION", "licenseComments": c["assessment"],
                    "sourceInfo": "; ".join(c["sources"])}
-        if c["id"] == "pffft":
+        if c["id"] == "pffft-neo":
             package.update(versionInfo=pins["PFFFT_SHA"],
-                           downloadLocation=f"https://codeload.github.com/arancormonk/pffft/tar.gz/{pins['PFFFT_SHA']}",
+                           downloadLocation=f"https://codeload.github.com/arancormonk/pffft-neo/tar.gz/{pins['PFFFT_SHA']}",
                            checksums=[{"algorithm": "SHA256", "checksumValue": pins["PFFFT_ARCHIVE_SHA256"]}])
         document["packages"].append(package)
-        relation = "STATIC_LINK" if c["id"] == "pffft" and kind == "binary" else "CONTAINS"
+        relation = "STATIC_LINK" if c["id"] == "pffft-neo" and kind == "binary" else "CONTAINS"
         document["relationships"].append({"spdxElementId": AGGREGATE, "relationshipType": relation,
                                           "relatedSpdxElement": package_id})
-        license_id = c["license_declared"]
-        if license_id.startswith("LicenseRef-"):
-            notice = next(n for n in c["notices"] if license_id in n)
+        for license_id in re.findall(r"LicenseRef-[A-Za-z0-9.-]+", c["license_declared"]):
+            notice = next(n for n in c["notices"] if PurePosixPath(n).stem == license_id)
             document["hasExtractedLicensingInfos"].append({"licenseId": license_id, "name": c["name"],
                                                           "extractedText": read(notice).decode("utf-8")})
     if kind == "source":

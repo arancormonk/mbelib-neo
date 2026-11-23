@@ -11,7 +11,7 @@ or a finding that historical releases were cleared.
 An independent Codex implementation agent received no inherited conversation
 or prior implementation source. Its separate workspace contained the
 TIA-102.BABA and BABA-1 specifications, public/private interface declarations,
-project portability macros, pinned PFFFT, and mathematical/state contracts
+project portability macros, pinned pffft-neo, and mathematical/state contracts
 prepared by the reviewer. The material hashes, authorship record and
 equation-derived fixtures are retained locally. No prior vocoder implementation
 was supplied. The integrating agent reviewed the new implementations separately.

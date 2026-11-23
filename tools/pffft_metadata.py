@@ -8,8 +8,8 @@ from pathlib import Path
 import re
 
 PINS = Path(__file__).resolve().with_name("ci-dependency-pins.env")
-REPO = "https://github.com/arancormonk/pffft"
-PACKAGE_ID = "SPDXRef-Package-mbelib-pffft"
+REPO = "https://github.com/arancormonk/pffft-neo"
+PACKAGE_ID = "SPDXRef-Package-mbelib-pffft-neo"
 
 
 def read_pins(path=PINS, *, text=None):
@@ -26,13 +26,13 @@ def read_pins(path=PINS, *, text=None):
 
 def add_spdx(document, pins):
     from legal_inventory import load
-    component = next(c for c in load()["components"] if c["id"] == "pffft")
+    component = next(c for c in load()["components"] if c["id"] == "pffft-neo")
     sha = pins["PFFFT_SHA"]
     packages = document.setdefault("packages", [])
     if any(package.get("SPDXID") == PACKAGE_ID for package in packages):
         raise ValueError("SBOM already contains the pinned PFFFT package")
     packages.append({
-        "name": "pffft", "SPDXID": PACKAGE_ID, "versionInfo": sha,
+        "name": "pffft-neo", "SPDXID": PACKAGE_ID, "versionInfo": sha,
         "downloadLocation": f"{REPO}/archive/{sha}.tar.gz",
         "homepage": REPO, "filesAnalyzed": False,
         "licenseConcluded": component["license_concluded"], "licenseDeclared": component["license_declared"],
@@ -40,15 +40,15 @@ def add_spdx(document, pins):
         "sourceInfo": f"Compiled into mbelib-neo from {REPO} at commit {sha}",
         "checksums": [{"algorithm": "SHA256", "checksumValue": pins["PFFFT_ARCHIVE_SHA256"]}],
         "externalRefs": [{"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
-                          "referenceLocator": f"pkg:github/arancormonk/pffft@{sha}"}],
+                          "referenceLocator": f"pkg:github/arancormonk/pffft-neo@{sha}"}],
     })
     document.setdefault("relationships", []).append({
         "spdxElementId": document["SPDXID"], "relationshipType": "DESCRIBES",
         "relatedSpdxElement": PACKAGE_ID,
     })
     document.setdefault("hasExtractedLicensingInfos", []).append({
-        "licenseId": component["license_declared"], "name": "PFFFT retained notices",
-        "extractedText": (PINS.parent.parent / component["notices"][0]).read_text(encoding="utf-8"),
+        "licenseId": "LicenseRef-PFFFT", "name": "Inherited PFFFT and FFTPACK notices",
+        "extractedText": (PINS.parent.parent / "LICENSES/LicenseRef-PFFFT.txt").read_text(encoding="utf-8"),
     })
     return document
 
@@ -62,7 +62,7 @@ def main():
     pins = read_pins()
     if args.osv:
         document = {"results": [{"packages": [{"package": {
-            "name": "github.com/arancormonk/pffft", "commit": pins["PFFFT_SHA"],
+            "name": "github.com/arancormonk/pffft-neo", "commit": pins["PFFFT_SHA"],
         }}]}]}
         output = args.osv
     else:

@@ -42,7 +42,7 @@ GitHub assets. It requires reviewed `main` and cannot be combined with rebuildin
 
 ## Pinned CI Source Checkouts
 
-`tools/ci-dependency-pins.env` is the checked-in source of truth for the compiled PFFFT dependency and CI
+`tools/ci-dependency-pins.env` is the checked-in source of truth for the compiled pffft-neo dependency and CI
 GitHub source dependencies such as `include-what-you-use`, plus CI fallback
 container image digests.
 
@@ -73,7 +73,7 @@ an accepted residual risk for the AUR publish jobs.
 
 ## Vendored Code
 
-PFFFT sources are fetched by `cmake/Pffft.cmake` from the immutable revision
+pffft-neo sources are fetched by `cmake/Pffft.cmake` from the immutable revision
 and archive checksum in `tools/ci-dependency-pins.env`. An explicit local source
 override supports offline builds. The resolved source directory is excluded
 from project-owned analyzer findings. Fixes belong in the fork, with tests.
@@ -84,7 +84,7 @@ from project-owned analyzer findings. Fixes belong in the fork, with tests.
 
 ## Vulnerability Scanning
 
-- `tools/osv_scan.sh` runs OSV-Scanner source scanning for lockfiles, manifests, and explicit PFFFT commit metadata generated from the pin.
+- `tools/osv_scan.sh` runs OSV-Scanner source scanning for lockfiles, manifests, and explicit pffft-neo commit metadata generated from the pin.
 - PR CI runs OSV when dependency inputs change; scheduled guardrails run a full repository scan.
 - If OSV reports a vulnerability that is not exploitable in mbelib-neo, add the narrowest possible `osv-scanner.toml` ignore with a reason and expiry date.
 
@@ -94,7 +94,7 @@ Starting with 2.6.0, Linux packaging produces one corresponding-source archive
 in addition to the three platform packages. Source and binary SBOMs derive
 component declarations and conclusions from `legal/components.json`; custom
 identifiers carry their retained text. The source inventory rejects unexpected
-tracked inputs and never includes untracked local data. PFFFT's original archive
+tracked inputs and never includes untracked local data. pffft-neo's original archive
 must match the tag's SHA-256 pin. The offline build gate uses a network namespace
 with no network access and an empty build directory.
 

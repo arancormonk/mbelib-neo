@@ -6,25 +6,23 @@ mbelib-neo keeps runtime dependencies small and reviewable.
 ## Compiled Dependencies
 
 The project compiles `pffft.c` and `pffft_common.c` from
-<https://github.com/arancormonk/pffft> into both mbelib libraries. The fork's
-separate FFTPACK reference implementation is not needed. `cmake/Pffft.cmake`
+<https://github.com/arancormonk/pffft-neo> directly into both mbelib libraries. `cmake/Pffft.cmake`
 populates a commit archive with CMake FetchContent, SHA-256 verification and
-TLS verification, without configuring the dependency's C++ project.
+TLS verification.
 `PFFFT_SHA` and `PFFFT_ARCHIVE_SHA256` in `tools/ci-dependency-pins.env` are the
 source of truth. Builds never follow a branch or tag.
 
 Normal clones need no submodule commands. A first configure from a Git clone
 needs HTTPS access to codeload.github.com. Release source bundles instead use
 the included original archive in `third_party/`, verified against the same hash. For offline packaging, provide an extracted archive or
-checkout with `-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=/absolute/path/to/pffft`.
+checkout with `-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=/absolute/path/to/pffft-neo`.
 This explicit override bypasses download/hash checking; the packager verifies
 its provenance and must use the compatible fork. It needs no Git metadata.
 For an already populated build, `-DFETCHCONTENT_FULLY_DISCONNECTED=ON` avoids
 network access. Disable it before changing the pin so CMake can fetch the update.
 
-The fork retains upstream license headers. Installation includes LICENSE.txt
-and the compiled-source notices under the project's documentation `pffft/`
-directory. No public PFFFT headers or external link requirements are installed.
+Installation includes pffft-neo's README, GPL license and the inherited
+PFFFT and FFTPACK notices under the project's documentation `pffft-neo/` directory. No public PFFFT headers or external link requirements are installed.
 
 ### Manual update and rollback
 
@@ -32,8 +30,8 @@ directory. No public PFFFT headers or external link requirements are installed.
 2. Run `python3 tools/update_pffft.py FULL_40_CHARACTER_COMMIT_SHA`. It downloads
    the commit archive, checks the production layout, computes SHA-256 and
    replaces both pins together. Review the fork diff and both pin changes.
-   Refresh `LICENSES/LicenseRef-PFFFT.txt` from the dependency's LICENSE.txt
-   and CMake-generated PFFFT-NOTICES.txt, preserving their full text. Update
+   Copy the dependency's `third_party/pffft/LicenseRef-PFFFT.txt` to
+   `LICENSES/LicenseRef-PFFFT.txt` and check its GPL license against `LICENSE`. Update
    its notice hash and review record in `legal/components.json`; regenerate
    the component table with `python3 tools/legal_inventory.py --write-table`.
 3. Configure with downloads enabled and no local override. Run Debug scalar
@@ -46,7 +44,7 @@ directory. No public PFFFT headers or external link requirements are installed.
 ClusterFuzzLite checks out the same SHA with `tools/fetch-pinned-git.sh` during
 image preparation. `tools/pffft_metadata.py` generates OSV's explicit commit
 input from the pin. `tools/release_sbom.py` uses `legal/components.json` to
-record embedded PFFFT with its revision, archive checksum and exact retained
+record embedded pffft-neo with its revision, archive checksum and exact retained
 `LicenseRef-PFFFT` text before upload and attestation. Source-only OP25 tooling
 and unresolved ETSI license conclusions are recorded separately. Pin and integration edits,
 including deletions, trigger PR fuzzing and dependency scanning.
@@ -125,7 +123,7 @@ Dependency updates should:
 
 ### AUR packaging
 
-PFFFT remains embedded in mbelib. Neither `mbelib-neo` nor its consumer
+pffft-neo remains embedded in mbelib. Neither `mbelib-neo` nor its consumer
 `dsd-neo` needs a separate PFFFT `depends` or `makedepends` entry. The mbelib
 release and `-git` AUR workflows run `tools/update_aur_pffft.py` to append the
 pinned archive to `source`, its checksum to `sha256sums`, and the local source
@@ -144,7 +142,30 @@ makepkg --printsrcinfo > .SRCINFO
 Review and publish the AUR change with the corresponding mbelib update. The
 helper preserves the original source checksum and package dependencies.
 
-### PFFFT migration measurements
+### pffft-neo integration
+
+Speech analysis and synthesis use ordered, single-precision real FFTs with
+256 points. Encoder autocorrelation uses 512 points. The plans reuse aligned
+buffers and scratch across frames. SIMD builds use pffft-neo's default pass
+schedule and CPU/size-based AVX2 selection. The depth-first and in-place
+complex passes apply to complex FFTs only.
+
+At the move from `b7ed3cd` to pffft-neo `0a3abd8`, GCC Release with
+native tuning, fast-math and LTO produced identical encoder bits and decoded
+PCM on all 237 available DVSI development, validation, final and tone vectors
+(41,035,200 decoded samples across the three codecs). On a Ryzen 9 5950X,
+pffft-neo's benchmark driver linked against each mbelib static archive measured
+the following median nanoseconds per ordered real FFT (13 alternating samples
+per build, pinned to one core):
+
+| Points | Lanes | Direction | Previous | pffft-neo |
+| ---: | ---: | --- | ---: | ---: |
+| 256 | 4 | Forward | 116.58 | 102.01 |
+| 256 | 4 | Backward | 130.86 | 108.51 |
+| 512 | 8 | Forward | 167.35 | 150.53 |
+| 512 | 8 | Backward | 164.95 | 152.23 |
+
+### Historical PFFFT migration measurements
 
 The Debug scalar baseline at mbelib commit `c2d0b801238cd6b23e0d533e1dd8453362c61e88`
 was compared with the pinned fork across all 237 locally available DVSI vectors
