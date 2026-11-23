@@ -73,6 +73,12 @@ struct mbe_analysis_state {
     int noise_frames;                                                   /* frames analysed, saturating */
 };
 
+/** The analysis window's spectrum, eq (29): bins 0..128 of the 256-point DFT. */
+struct mbe_analysis_spectrum {
+    float re[MBE_ANALYSIS_BINS];
+    float im[MBE_ANALYSIS_BINS];
+};
+
 /** One frame's analysis. Arrays are indexed by harmonic number (1-based). */
 struct mbe_analysis_result {
     float f0;                                           /* refined fundamental, cycles per sample */
@@ -86,6 +92,7 @@ struct mbe_analysis_result {
     float noise_energy[MBE_ANALYSIS_HARMONICS + 1];     /* estimated noise over the same bins */
     float noise_fit_error[MBE_ANALYSIS_HARMONICS + 1];  /* fit_error that white noise would give, expected */
     float energy_factor;                                /* M(xi) of eq (42) */
+    struct mbe_analysis_spectrum spectrum;              /* the spectrum the harmonic measures were taken from */
 };
 
 void mbe_analysis_init_tables(struct mbe_analysis_tables* tables);
@@ -98,6 +105,17 @@ void mbe_analysis_push(struct mbe_analysis_state* state, const float input[MBE_A
  * or a negative MBE_STATUS_* value. */
 int mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis_state* state, mbe_fft_plan* fft,
                        mbe_acf_plan* acf, struct mbe_analysis_result* result);
+
+/*
+ * The harmonic measures of an analysed frame taken again at fundamental f0
+ * (cycles per sample) from the same spectrum: f0, harmonics, the magnitudes of
+ * all three estimators, the fit errors and energies, and the background noise
+ * over the new bands. pitch_error and energy_factor stay those of the tracked
+ * pitch. state is only read, so this leaves the analysis state as it was; the
+ * encoders use it to code a frame with no voiced band on a fixed grid.
+ */
+void mbe_analysis_measure_at(const struct mbe_analysis_tables* tables, const struct mbe_analysis_state* state, float f0,
+                             struct mbe_analysis_result* result);
 
 /* Voicing threshold Theta(k, 0.1309) of eq (37) for 1-based column k, with
  * hysteresis from the previously transmitted column voicing. */

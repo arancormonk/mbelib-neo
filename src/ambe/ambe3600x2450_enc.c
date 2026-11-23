@@ -168,15 +168,37 @@ mbe_ambe2450_quantize_amplitudes(int b0, int b1, const float a[57], const mbe_pa
     mbe_ambe2450_pack(q.b, ambe_d);
 }
 
+/*
+ * A frame sent with no voiced band (V/UV row 16) carries one fixed pitch code,
+ * b0 119 (56 harmonics), instead of the tracked pitch, with every amplitude the
+ * unvoiced estimate of eq 44 on that code's harmonic grid. Clause 4.1 codes
+ * every voice frame's own fundamental; the tracked pitch of noise is
+ * arbitrary, so the grid such a frame was coded on was too. b0 119 is the code
+ * DVSI's encoder sends most on row-16 frames (docs/dvsi-parity.md, "Encoder
+ * pitch code of unvoiced frames").
+ */
+#define AMBE2450_ENC_UNVOICED_VUV 16
+#define AMBE2450_ENC_UNVOICED_B0  (MBE_AMBE2450_PITCH_CODES - 1)
+
+static int
+ambe2450_enc_unvoiced_grid(const struct mbe_encoder_frontend* fe, struct mbe_analysis_result* res, float m[57]) {
+    const int b0 = AMBE2450_ENC_UNVOICED_B0;
+    mbe_analysis_measure_at(&fe->tables, &fe->analysis, mbe_ambe2450_f0(b0), res);
+    for (int l = 1; l <= mbe_ambe2450_harmonic_count(b0); l++) {
+        m[l] = AMBE2450_ENC_MAG_SCALE * res->noise_magnitude[l];
+    }
+    return b0;
+}
+
 /* Quantize and pack a voice frame; cur_mp is the decoder's model of it. */
 static int
-ambe2450_enc_voice(mbe_ambe2450_encoder* enc, const struct mbe_analysis_result* res, char ambe_d[49], mbe_parms* cur_mp,
+ambe2450_enc_voice(mbe_ambe2450_encoder* enc, struct mbe_analysis_result* res, char ambe_d[49], mbe_parms* cur_mp,
                    const mbe_parms* prev_mp) {
     unsigned char bands[MBE_ANALYSIS_BANDS];
     float m[57] = {0};
     float a[57] = {0};
 
-    const int b0 = mbe_ambe2450_pitch_code(res->f0);
+    int b0 = mbe_ambe2450_pitch_code(res->f0);
     const int L = mbe_ambe2450_harmonic_count(b0);
     mbe_analysis_band_voicing(res, L, enc->bands_prev, bands);
     for (int l = 1; l <= L; l++) {
@@ -184,6 +206,9 @@ ambe2450_enc_voice(mbe_ambe2450_encoder* enc, const struct mbe_analysis_result* 
         m[l] = AMBE2450_ENC_MAG_SCALE * (voiced ? res->voiced_magnitude[l] : res->noise_magnitude[l]);
     }
     const int b1 = mbe_ambe2450_quantize_vuv(b0, m, bands);
+    if (b1 == AMBE2450_ENC_UNVOICED_VUV) {
+        b0 = ambe2450_enc_unvoiced_grid(&enc->fe, res, m);
+    }
     ambe2450_enc_log_amplitudes(b0, b1, m, a);
     mbe_ambe2450_quantize_amplitudes(b0, b1, a, prev_mp, ambe_d);
 

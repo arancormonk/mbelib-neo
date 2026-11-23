@@ -419,14 +419,9 @@ track_pitch(const struct mbe_analysis_state* s, const float* error) {
 
 /* ---- Spectrum and harmonic fitting, eqs (24)-(29) ---- */
 
-struct spectrum {
-    float re[ANALYSIS_BINS + 1];
-    float im[ANALYSIS_BINS + 1];
-};
-
 static int
 analysis_spectrum(const struct mbe_analysis_tables* t, const struct mbe_analysis_state* s, mbe_fft_plan* fft,
-                  struct spectrum* out) {
+                  struct mbe_analysis_spectrum* out) {
     float in[ANALYSIS_FFT] = {0};
     float packed[ANALYSIS_FFT];
     /* eq (29): s(n) w_R(n) for n = -110..110 placed with n = 0 at index 0. */
@@ -471,7 +466,7 @@ struct band_fit {
 
 /* Least-squares fit of one harmonic over bins [lo, hi). */
 static void
-fit_band(const struct mbe_analysis_tables* t, const struct spectrum* sp, float centre, int lo, int hi,
+fit_band(const struct mbe_analysis_tables* t, const struct mbe_analysis_spectrum* sp, float centre, int lo, int hi,
          struct band_fit* fit) {
     float c_re = 0.0f;
     float c_im = 0.0f;
@@ -509,7 +504,7 @@ band_edges(float f0_bins, int l, int* lo, int* hi) {
 
 /* eq (24): fit error over bins first .. upper for one candidate pitch. */
 static float
-refinement_error(const struct mbe_analysis_tables* t, const struct spectrum* sp, float pitch, int first) {
+refinement_error(const struct mbe_analysis_tables* t, const struct mbe_analysis_spectrum* sp, float pitch, int first) {
     const float f0_bins = (float)ANALYSIS_FFT / pitch;
     const int top_harmonic = (int)((0.9254f * pitch * 0.5f) - 0.5f);
     const int upper = (int)((float)top_harmonic * f0_bins);
@@ -547,7 +542,7 @@ refinement_error(const struct mbe_analysis_tables* t, const struct spectrum* sp,
 #define OCTAVE_ODD_RATIO 0.1f
 
 static float
-line_energy(const struct spectrum* sp, float centre) {
+line_energy(const struct mbe_analysis_spectrum* sp, float centre) {
     int m = (int)lrintf(centre);
     if (m < 1 || m > ANALYSIS_BINS) {
         return 0.0f;
@@ -556,7 +551,7 @@ line_energy(const struct spectrum* sp, float centre) {
 }
 
 static int
-is_octave_low(const struct spectrum* sp, float pitch) {
+is_octave_low(const struct mbe_analysis_spectrum* sp, float pitch) {
     const float f0_bins = (float)ANALYSIS_FFT / pitch;
     float odd = 0.0f;
     float even = 0.0f;
@@ -575,7 +570,7 @@ is_octave_low(const struct spectrum* sp, float pitch) {
  * When that region holds almost no energy (a low tone, a muffled input) the
  * score would only rank rounding noise, so start from the first bin. */
 static int
-refinement_first_bin(const struct spectrum* sp) {
+refinement_first_bin(const struct mbe_analysis_spectrum* sp) {
     float total = 0.0f;
     float high = 0.0f;
     for (int m = 1; m <= ANALYSIS_BINS; ++m) {
@@ -587,7 +582,7 @@ refinement_first_bin(const struct spectrum* sp) {
 }
 
 static float
-refine_pitch(const struct mbe_analysis_tables* t, const struct spectrum* sp, float initial) {
+refine_pitch(const struct mbe_analysis_tables* t, const struct mbe_analysis_spectrum* sp, float initial) {
     const int first = refinement_first_bin(sp);
     float best_pitch = initial;
     float best_error = 0.0f;
@@ -619,7 +614,8 @@ band_weight(float distance, float half_width) {
 }
 
 static float
-harmonic_magnitude(const struct mbe_analysis_tables* t, const struct spectrum* sp, float centre, float f0_bins) {
+harmonic_magnitude(const struct mbe_analysis_tables* t, const struct mbe_analysis_spectrum* sp, float centre,
+                   float f0_bins) {
     const float half = 0.5f * f0_bins;
     int lo = (int)floorf(centre - half - 0.5f);
     int hi = (int)ceilf(centre + half + 0.5f);
@@ -658,7 +654,8 @@ noise_fit_error(const struct mbe_analysis_tables* t, const struct band_fit* fit)
 }
 
 static void
-harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp, struct mbe_analysis_result* r) {
+harmonic_measures(const struct mbe_analysis_tables* t, const struct mbe_analysis_spectrum* sp,
+                  struct mbe_analysis_result* r) {
     const float f0_bins = r->f0 * (float)ANALYSIS_FFT;
     float last = 0.0f;
     r->harmonics = 0;
@@ -693,7 +690,8 @@ harmonic_measures(const struct mbe_analysis_tables* t, const struct spectrum* sp
 
 /* eqs (38)-(42), with energies on the 16-bit input scale. */
 static float
-energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp) {
+energy_factor(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s,
+              const struct mbe_analysis_spectrum* sp) {
     const float norm = 1.0f / (t->w_r_sum * t->w_r_sum);
     float lf = 0.0f;
     float hf = 0.0f;
@@ -832,7 +830,7 @@ noise_take(struct mbe_analysis_state* s) {
  * noise that stopped under a vowel) the estimate is forgotten, so a stale one
  * suppresses at most that long. */
 static void
-noise_track(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct spectrum* sp,
+noise_track(const struct mbe_analysis_tables* t, struct mbe_analysis_state* s, const struct mbe_analysis_spectrum* sp,
             int aperiodic) {
     float total = 0.0f;
     for (int m = 0; m < MBE_ANALYSIS_BINS; ++m) {
@@ -921,7 +919,7 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     int initial = track_pitch(state, work.error);
     float initial_pitch = pitch_of(initial);
 
-    struct spectrum sp;
+    struct mbe_analysis_spectrum sp;
     int status = analysis_spectrum(tables, state, fft, &sp);
     if (status < 0) {
         return status;
@@ -941,6 +939,7 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     memset(result, 0, sizeof(*result));
     result->f0 = 1.0f / pitch;
     result->pitch_error = tracked_error;
+    result->spectrum = sp;
     harmonic_measures(tables, &sp, result);
     noise_track(tables, state, &sp, band_error > VOICING_ERROR_MAX);
     noise_bands(state, result);
@@ -952,6 +951,26 @@ mbe_analysis_frame(const struct mbe_analysis_tables* tables, struct mbe_analysis
     state->error_prev[0] = tracked_error;
     state->trusted = tracked_error <= PERIODIC_ERROR_MAX;
     return 0;
+}
+
+void
+mbe_analysis_measure_at(const struct mbe_analysis_tables* tables, const struct mbe_analysis_state* state, float f0,
+                        struct mbe_analysis_result* result) {
+    if (tables == NULL || state == NULL || result == NULL || !(f0 > 0.0f)) {
+        return;
+    }
+    /* Every per-harmonic measure as a fresh analysis leaves it before its
+     * measures are taken (mbe_analysis_frame() starts from zero). */
+    memset(result->magnitude, 0, sizeof(result->magnitude));
+    memset(result->voiced_magnitude, 0, sizeof(result->voiced_magnitude));
+    memset(result->noise_magnitude, 0, sizeof(result->noise_magnitude));
+    memset(result->fit_error, 0, sizeof(result->fit_error));
+    memset(result->fit_energy, 0, sizeof(result->fit_energy));
+    memset(result->noise_energy, 0, sizeof(result->noise_energy));
+    memset(result->noise_fit_error, 0, sizeof(result->noise_fit_error));
+    result->f0 = f0;
+    harmonic_measures(tables, &result->spectrum, result);
+    noise_bands(state, result);
 }
 
 /* Theta of eq (37) for 1-based band k at fundamental w0 (radians per sample)
