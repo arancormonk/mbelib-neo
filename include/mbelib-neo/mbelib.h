@@ -454,10 +454,12 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * else the older tone if it fills the oldest half, as DVSI's encoder sends
  * them. KNOX tones, which D-STAR cannot carry, are coded as voice. A voice
  * frame with no voiced band (b1 0) is sent at b0 123 (56 harmonics) rather
- * than at the tracked pitch, its amplitudes measured on that grid: DVSI's
- * decoder and this library's read that code as "the voicing of the frame
- * before lasts through this frame's first 10 ms", where b0 64..119 would say
- * it ends at the frame's start. The six spectral vector indices (b3..b8) are
+ * than at the tracked pitch, its amplitudes measured on that grid. This
+ * library's decoder reads that code as "the voicing of the frame before, if
+ * it reaches 505 Hz, lasts through this frame's first 10 ms", where b0 64..119
+ * would say it ends at the frame's start; DVSI's decoder is inferred to read
+ * it so from other codes outside that range (b0 123 itself has not been
+ * played on DVSI hardware). The six spectral vector indices (b3..b8) are
  * chosen together: each starts as the codebook row nearest its own target, and
  * two passes then refine them against the error of the amplitudes the decoder
  * will reconstruct, weighted toward the strong harmonics. The bits are
@@ -962,9 +964,11 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * synchronization bit of 6.5: 0 in the first frame after allocation or reset,
  * then alternating. Every frame is a voice frame. A frame with no voiced
  * band is sent at b0 127 (37 harmonics) rather than at the tracked pitch, its
- * amplitudes measured on that grid: DVSI's decoder and this library's read
- * that code as "the voicing of the frame before lasts through this frame's
- * first 10 ms", where b0 128..183 would say it ends at the frame's start.
+ * amplitudes measured on that grid. This library's decoder reads that code as
+ * "the voicing of the frame before, if it reaches 505 Hz, lasts through this
+ * frame's first 10 ms", where b0 128..183 would say it ends at the frame's
+ * start; DVSI's decoder is inferred to read it so from other codes outside
+ * that range (b0 127 itself has not been played on DVSI hardware).
  *
  * The state contract is the D-STAR encoder's: initialize with
  * mbe_imbe4400EncoderAlloc() and mbe_initMbeParms(), and after every frame

@@ -1327,10 +1327,10 @@ and this library's, read it as side information ([Voiced onsets and
 offsets](#voiced-onsets-and-offsets)): D-STAR b0 64..119 and P25 b0 128..183 end the voicing of the
 frame before where the frame starts (and D-STAR's 64..71, 88..103 and 112..119 carry their pitch
 into a voiced frame after them), any other code lets that voicing last through the frame's first
-10 ms. The encoders sent the tracked pitch on such frames, which on noise is arbitrary, so what a
-DVSI decoder read there was arbitrary too, and so was the frame's harmonic grid (9 to 56 bands for
-the same noise). On 17 clean development and validation vectors, the share of frames with no voiced
-band at DVSI's default code, inside DVSI's range and elsewhere:
+10 ms if it reaches 505 Hz. The encoders sent the tracked pitch on such frames, which on noise is
+arbitrary, so what a DVSI decoder read there was arbitrary too, and so was the frame's harmonic grid
+(9 to 56 bands for the same noise). On 17 clean development and validation vectors, the share of
+frames with no voiced band at DVSI's default code, inside DVSI's range and elsewhere:
 
 | Codec | Default code | Range | DVSI's encoder | This library's encoder (2.6.11) |
 |---|---|---|---|---|
@@ -1351,19 +1351,19 @@ against the decoder's history as before:
 | Rate 33 | V/UV row 16 | b0 119 | 56 | eq 44 (unvoiced) |
 | P25 | every bit of b1 0 | b0 127 | 37 | eq 44 (unvoiced) |
 
-TIA-102.BABA-1 clause 4.1 codes every voice frame's own fundamental, the Annex A entry closest to the
-estimate, and TIA-102.BABA 6.1 (eq 45) every frame's own pitch; neither treats a frame with no
+TIA-102.BABA-1 clause 4.1 codes every voice frame's own fundamental, the Annex A entry closest to
+the estimate, and TIA-102.BABA 6.1 (eq 45) every frame's own pitch; neither treats a frame with no
 voiced band differently. DVSI's encoders do: in D-STAR and P25 they never send the tracked pitch on
 such a frame (table above), and in rate 33 they send b0 119 on 20.7% of their row-16 frames, more
 than any other code. The encoders now depart from the text as DVSI's do, with codes of their own
-([Departures from the specification](#departures-from-the-specification)). D-STAR b0 123 and P25
-b0 127 lie outside DVSI's unvoiced ranges, so a DVSI decoder reads no carried pitch or energy
-pattern into the frame, and every such frame says "the voicing before lasts through the first
-10 ms", which is also what the codes outside the range sent before (53% and 79% of these frames)
-said. That reading of D-STAR b0 120 to 123 and P25 b0 127 rests on this library's decoder and on
-the DVstick 30 measurement of [#157](https://github.com/arancormonk/mbelib-neo/issues/157) for other
-codes outside the ranges; these codes have not been played on DVSI hardware. Rate 33's b0 119 is
-DVSI's most frequent code there, and the published AMBE-3000R measurements of the
+([Departures from the specification](#departures-from-the-specification)). D-STAR b0 123 and P25 b0
+127 lie outside DVSI's unvoiced ranges, so a DVSI decoder reads no carried pitch or energy pattern
+into the frame, and every such frame says "the voicing before lasts through the first 10 ms" (if it
+reaches 505 Hz), which is also what the codes outside the range sent before (53% and 79% of these
+frames) said. That reading of D-STAR b0 120 to 123 and P25 b0 127 rests on this library's decoder
+and on the DVstick 30 measurement of [#157](https://github.com/arancormonk/mbelib-neo/issues/157)
+for other codes outside the ranges; these codes have not been played on DVSI hardware. Rate 33's b0
+119 is DVSI's most frequent code there, and the published AMBE-3000R measurements of the
 [mbevocoder](https://github.com/srcejon/mbevocoder) project (`docs/encoder-quality.md`, the item
 "Unvoiced frames on a fine grid") report that the AMBE-3000R codes fully unvoiced rate-33 frames on
 at least 50 harmonics.
@@ -1641,8 +1641,9 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   halves; the law is not determined. This library's encoders send neither those codes nor the
   default ones on such a frame, but one fixed code outside the ranges ([Encoder pitch code of
   unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)), so they do not use this channel: every
-  frame with no voiced band tells a DVSI decoder that the voicing before lasts through its first
-  10 ms, where DVSI's encoders end it at the frame's start on about a third of them.
+  frame with no voiced band tells a DVSI decoder, as far as the codes measured show, that the
+  voicing before lasts through its first 10 ms if it reaches 505 Hz, where DVSI's encoders end it at
+  the frame's start on about a third of them.
 - P25 tones. P25 has no tone frames, and DVSI's encoder sends a tone it detects as voice frames
   at a pitch whose harmonics carry it, with one frame of that pitch and no amplitude after it.
   DVSI's decoder brings such a tone in at its full level over the first 80 samples of its first
