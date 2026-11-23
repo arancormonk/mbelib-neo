@@ -10,7 +10,10 @@
  * Quantizes the speech model of mbe_speech_analysis.c as TIA-102.BABA-1
  * clause 4 describes (clause numbers below refer to that addendum):
  *
- *  - b0: the Annex A fundamental nearest the analysed one (4.1).
+ *  - b0: the code nearest the analysed fundamental in log2 on the calibrated
+ *    pitch law the decoder plays (mbe_ambe2450_pitch_code(); 4.1 tabulates
+ *    Annex A instead, docs/dvsi-parity.md "Rate 33: pitch"), except that a
+ *    frame with V/UV vector 16 (no voiced band) goes out at b0 119.
  *  - b1: the V/UV vector among the first 17 of Annex B nearest the band
  *    decisions of TIA-102.BABA 5.2, weighted by the squared spectral
  *    amplitudes (4.2, eq 4).
@@ -18,7 +21,12 @@
  *    (TIA-102.BABA 5.3, eqs 43 and 44), taken to the log domain with the
  *    transmitted voicing (eq 8), then the gain, prediction residual, PRBA and
  *    higher-order coefficients of 4.3 against the decoder's previous frame
- *    (ambe_encoder.c).
+ *    (ambe_encoder.c). 4.3.1 and 4.3.2 take each of the six vectors (b3..b8)
+ *    nearest its own target; the encoder starts there and then refines the
+ *    six together against the amplitude-weighted error of the residual the
+ *    decoder reconstructs (ambe_enc_search.c), a departure from the text made
+ *    for a measured gain (docs/dvsi-parity.md, "Joint choice of the AMBE
+ *    spectral vectors").
  *  - DTMF, KNOX, call-progress and single tones are sent as tone frames (7.2).
  *
  * A frame whose gain falls below the first step is flattened toward the level
@@ -49,9 +57,10 @@
  * Level: AMBE2450_ENC_MAG_SCALE scales the analysis amplitudes so the decoded
  * level matches DVSI's encoding of the same input, both decoded by this
  * library: the median, over DVSI's rate-33 development vectors, of the level
- * that puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR).
+ * that puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR),
+ * re-derived (from 1.08) with the joint choice of the spectral vectors.
  */
-#define AMBE2450_ENC_MAG_SCALE 1.08f
+#define AMBE2450_ENC_MAG_SCALE 1.06f
 
 struct mbe_ambe2450_encoder {
     struct mbe_encoder_frontend fe;
@@ -74,6 +83,11 @@ static const struct ambe_enc_tables ambe2450_enc_tables = {
     .rho = 0.65f,
     .fit_floor_gain = 1, /* as D-STAR: see mbe_encoder_fit_floor() */
 };
+
+const struct ambe_enc_tables*
+mbe_ambe2450_enc_tables(void) {
+    return &ambe2450_enc_tables;
+}
 
 void
 mbe_ambe2450EncoderReset(mbe_ambe2450_encoder* enc) {
@@ -168,15 +182,37 @@ mbe_ambe2450_quantize_amplitudes(int b0, int b1, const float a[57], const mbe_pa
     mbe_ambe2450_pack(q.b, ambe_d);
 }
 
+/*
+ * A frame sent with no voiced band (V/UV row 16) carries one fixed pitch code,
+ * b0 119 (56 harmonics), instead of the tracked pitch, with every amplitude the
+ * unvoiced estimate of eq 44 on that code's harmonic grid. Clause 4.1 codes
+ * every voice frame's own fundamental; the tracked pitch of noise is
+ * arbitrary, so the grid such a frame was coded on was too. b0 119 is the code
+ * DVSI's encoder sends most on row-16 frames (docs/dvsi-parity.md, "Encoder
+ * pitch code of unvoiced frames").
+ */
+#define AMBE2450_ENC_UNVOICED_VUV 16
+#define AMBE2450_ENC_UNVOICED_B0  (MBE_AMBE2450_PITCH_CODES - 1)
+
+static int
+ambe2450_enc_unvoiced_grid(const struct mbe_encoder_frontend* fe, struct mbe_analysis_result* res, float m[57]) {
+    const int b0 = AMBE2450_ENC_UNVOICED_B0;
+    mbe_analysis_measure_at(&fe->tables, &fe->analysis, mbe_ambe2450_f0(b0), res);
+    for (int l = 1; l <= mbe_ambe2450_harmonic_count(b0); l++) {
+        m[l] = AMBE2450_ENC_MAG_SCALE * res->noise_magnitude[l];
+    }
+    return b0;
+}
+
 /* Quantize and pack a voice frame; cur_mp is the decoder's model of it. */
 static int
-ambe2450_enc_voice(mbe_ambe2450_encoder* enc, const struct mbe_analysis_result* res, char ambe_d[49], mbe_parms* cur_mp,
+ambe2450_enc_voice(mbe_ambe2450_encoder* enc, struct mbe_analysis_result* res, char ambe_d[49], mbe_parms* cur_mp,
                    const mbe_parms* prev_mp) {
     unsigned char bands[MBE_ANALYSIS_BANDS];
     float m[57] = {0};
     float a[57] = {0};
 
-    const int b0 = mbe_ambe2450_pitch_code(res->f0);
+    int b0 = mbe_ambe2450_pitch_code(res->f0);
     const int L = mbe_ambe2450_harmonic_count(b0);
     mbe_analysis_band_voicing(res, L, enc->bands_prev, bands);
     for (int l = 1; l <= L; l++) {
@@ -184,6 +220,9 @@ ambe2450_enc_voice(mbe_ambe2450_encoder* enc, const struct mbe_analysis_result* 
         m[l] = AMBE2450_ENC_MAG_SCALE * (voiced ? res->voiced_magnitude[l] : res->noise_magnitude[l]);
     }
     const int b1 = mbe_ambe2450_quantize_vuv(b0, m, bands);
+    if (b1 == AMBE2450_ENC_UNVOICED_VUV) {
+        b0 = ambe2450_enc_unvoiced_grid(&enc->fe, res, m);
+    }
     ambe2450_enc_log_amplitudes(b0, b1, m, a);
     mbe_ambe2450_quantize_amplitudes(b0, b1, a, prev_mp, ambe_d);
 

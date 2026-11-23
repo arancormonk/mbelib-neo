@@ -11,7 +11,8 @@
  * D-STAR (AMBE 3600x2400) and AMBE+2 (3600x2450) quantize spectral amplitudes
  * the same way (TIA-102.BABA-1 4.3): a gain step against half the previous
  * gain, a prediction residual against the previous frame's log2 amplitudes,
- * four block DCTs, the PRBA vector and the higher-order coefficients. Only the
+ * four block DCTs, the PRBA vector and the higher-order coefficients, whose six
+ * vectors are then refined together (ambe_enc_search.c). Only the
  * tables, their sizes and the prediction coefficient differ, so each codec
  * passes a struct ambe_enc_tables. Both also share the 72-bit frame's FEC.
  */
@@ -65,8 +66,37 @@ void ambe_enc_quantize_gain(struct ambe_enc_frame* q, const struct ambe_enc_tabl
 /* Prediction residual Tl against the decoder's previous log2 amplitudes. */
 void ambe_enc_prediction(struct ambe_enc_frame* q, const struct ambe_enc_tables* t, const mbe_parms* prev_mp);
 
-/* b3..b8: block DCTs, the PRBA vector and the higher-order coefficients. */
+/*
+ * b3..b8: block DCTs, the PRBA vector and the higher-order coefficients, each
+ * vector the row nearest its own target (TIA-102.BABA-1 4.3.1, 4.3.2;
+ * ambe_enc_quantize_nearest()), then the six refined together
+ * (ambe_enc_refine()).
+ */
 void ambe_enc_quantize_residual(struct ambe_enc_frame* q, const struct ambe_enc_tables* t);
+
+/* The nearest-row search alone: Ji, Cik, Gm and b3..b8. */
+void ambe_enc_quantize_nearest(struct ambe_enc_frame* q, const struct ambe_enc_tables* t);
+
+/*
+ * Refine b3..b8 (from ambe_enc_quantize_nearest()) together, lowering the
+ * error of the decoder's mean-removed residual against Tl's, weighted per
+ * harmonic by min(10, max(0.1, 2^((a_l - mean_a) / 2))): two passes over b3..b8,
+ * each index the receivable row that lowers the error most with the others
+ * held (ambe_enc_search.c). Needs cache, L, Ji, Tl, a, mean_a and b.
+ */
+void ambe_enc_refine(struct ambe_enc_frame* q, const struct ambe_enc_tables* t);
+
+/*
+ * The decoder's residual is linear in 23 coefficients: G2..G8 of the PRBA
+ * vectors (0..6), then C(i,3..6) of block i's higher-order vector
+ * (7 + 4 (i - 1) + k - 3; those above min(Ji, 6) are 0). Exposed for the tests:
+ * ambe_enc_coefficients() reads them from the codebooks for b3..b8, and
+ * ambe_enc_model_residual() is the residual less its mean over l = 1..L that
+ * the refinement models.
+ */
+#define AMBE_ENC_COEFFS 23
+void ambe_enc_coefficients(const struct ambe_enc_tables* t, const int b[9], const int Ji[5], float x[AMBE_ENC_COEFFS]);
+void ambe_enc_model_residual(const int Ji[5], int L, const float x[AMBE_ENC_COEFFS], float residual[57]);
 
 /* Nearest codebook row; private kernel shared with the numerical tests.
  * width > 0, rows > 0, step > 0, and 0 <= used <= width. */
@@ -92,8 +122,10 @@ int ambe_enc_fec(const char ambe_d[49], char ambe_fr[4][24]);
  * decoder's domain (its log2Ml, eq 8 less 0.5 log2 L) against prev_mp, and
  * all 49 bits packed.
  */
-/* D-STAR's quantizer tables (ambe3600x2400_enc.c), exposed for the tests. */
+/* D-STAR's and AMBE+2's quantizer tables (ambe3600x2400_enc.c,
+ * ambe3600x2450_enc.c), exposed for the tests. */
 const struct ambe_enc_tables* mbe_ambe2400_enc_tables(void);
+const struct ambe_enc_tables* mbe_ambe2450_enc_tables(void);
 
 int mbe_ambe2450_quantize_vuv(int b0, const float m[57], const unsigned char bands[12]);
 void mbe_ambe2450_quantize_amplitudes(int b0, int b1, const float a[57], const mbe_parms* prev_mp, char ambe_d[49]);

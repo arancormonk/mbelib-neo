@@ -46,6 +46,8 @@
  * round to nearest (mbe_floattoshort() truncates); with that, two AMBE+2
  * samples that lie within 3e-4 of a half fall on different sides of it in the
  * scalar and SIMD builds, so its scalar int16 hash differs from the SIMD one.
+ * The band grid of rate-33 V/UV rows 18-31 (w0 = 2.81 / L), on 9 of the
+ * AMBE+2 sequence's 24 frames, moved its float and int16 hashes.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -62,13 +64,13 @@ golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x4B7BDA7Eu;
-        e.ambe2450_s16 = 0x4B54C3BAu;
+        e.ambe2450_f32 = 0x161D1D9Cu;
+        e.ambe2450_s16 = 0xDD434854u;
         e.ambe2400_f32 = 0x53DFF28Du;
         e.ambe2400_s16 = 0x2CD52929u;
     } else {
-        e.ambe2450_f32 = 0x5DCFBFEFu;
-        e.ambe2450_s16 = 0x23D934B0u;
+        e.ambe2450_f32 = 0x0133C54Cu;
+        e.ambe2450_s16 = 0x33940F69u;
         e.ambe2400_f32 = 0x11429B9Cu;
         e.ambe2400_s16 = 0x2CD52929u;
     }

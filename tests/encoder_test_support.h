@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "mbe_adaptive.h"
 #include "mbelib-neo/mbelib.h"
 
 #ifndef M_PI
@@ -81,6 +82,14 @@ enc_float_finite(const float* x) {
     return (bits & 0x7FFFFFFFu) <= 0x7F000000u;
 }
 
+/* The same for a double: at most 2^1023 in magnitude, NaN failing. */
+static inline int
+enc_double_finite(const double* x) {
+    uint64_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & UINT64_C(0x7FFFFFFFFFFFFFFF)) <= UINT64_C(0x7FE0000000000000);
+}
+
 /* w0, gamma, and log2Ml and Ml over the model's harmonics are finite. */
 static inline int
 enc_model_finite(const mbe_parms* mp) {
@@ -89,6 +98,17 @@ enc_model_finite(const mbe_parms* mp) {
         ok = enc_float_finite(&mp->log2Ml[l]) && enc_float_finite(&mp->Ml[l]);
     }
     return ok;
+}
+
+/* Whether the decoder's model of a voice frame has no voiced harmonic. */
+static inline int
+enc_no_voiced_band(const mbe_parms* mp) {
+    for (int l = 1; l <= mp->L && l <= 56; l++) {
+        if (mp->Vl[l]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* Decoded fundamental in Hz. */
@@ -246,15 +266,17 @@ enc_run_fixture(const struct enc_codec* c, void* enc, struct enc_fixture* fx, in
     return 0;
 }
 
-/* The encoder's cur_mp is the decoder's model of the emitted bits; prev_mp is
- * never touched; tone frames leave cur_mp a copy of prev_mp. */
+/* The encoder's cur_mp is the decoder's model of the emitted bits, its frame
+ * mark (PHIl[0], compared by bit pattern) included; prev_mp is never touched;
+ * tone frames leave cur_mp a copy of prev_mp. The input's noise and silence
+ * give frames with no voiced band, whose mark depends on their pitch code. */
 static inline int
 enc_test_state_parity(const struct enc_codec* c, void* enc) {
     enum { FRAMES = 600 };
 
     static short pcm[FRAMES * 160];
     mbe_parms ec, ep, eh, dc, dp, dh;
-    int mismatches = 0;
+    int mismatches = 0, mark_mismatches = 0, unvoiced = 0, marked = 0;
     enc_speech_like(pcm, FRAMES * 160);
     c->reset(enc);
     mbe_initMbeParms(&ec, &ep, &eh);
@@ -279,12 +301,63 @@ enc_test_state_parity(const struct enc_codec* c, void* enc) {
             bad |= dc.Vl[l] != ec.Vl[l] || !enc_float_bits_equal(dc.log2Ml[l], ec.log2Ml[l])
                    || !enc_float_bits_equal(dc.Ml[l], ec.Ml[l]);
         }
-        mismatches += bad;
+        const int mark_bad = !enc_float_bits_equal(dc.PHIl[0], ec.PHIl[0]);
+        mark_mismatches += mark_bad;
+        mismatches += bad | mark_bad;
+        unvoiced += enc_no_voiced_band(&dc);
+        marked += mbe_frame_mark(&dc) != MBE_FRAME_MARK_NONE;
         mbe_moveMbeParms(&dc, &dp);
         mbe_moveMbeParms(&ec, &ep);
     }
-    printf("%s encoder/decoder state parity over %d frames: %d mismatching frames\n", c->name, FRAMES, mismatches);
-    return mismatches != 0;
+    printf("%s encoder/decoder state parity over %d frames: %d mismatching frames (%d in the frame mark); %d frames "
+           "with no voiced band, %d marked\n",
+           c->name, FRAMES, mismatches, mark_mismatches, unvoiced, marked);
+    return mismatches != 0 || unvoiced == 0;
+}
+
+/* A cur_mp handed in with a stale frame mark comes back with the mark the
+ * decoder gives the emitted bits, as the decoder replaces it too. The stale
+ * mark is MBE_FRAME_MARK_PREVIOUS_HELD, which only a rate-33 silence frame
+ * carries and no encoder sends; the input alternates noise and a vowel. */
+static inline int
+enc_test_stale_mark(const struct enc_codec* c, void* enc) {
+    enum { FRAMES = 120, SEGMENT = 10 };
+
+    struct enc_fixture vowel = {.kind = ENC_VOWEL, .f0 = 150.0, .level = 0.05};
+    struct enc_fixture noise = {.kind = ENC_NOISE, .level = 0.02};
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    int wrong = 0, voice = 0, unvoiced = 0;
+    enc_rng = 0x57a1eu;
+    c->reset(enc);
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    for (int f = 0; f < FRAMES; f++) {
+        float pcm[160];
+        char bits[88];
+        enc_fixture_frame(((f / SEGMENT) % 2 == 0) ? &noise : &vowel, f, pcm);
+        mbe_set_frame_mark(&ec, MBE_FRAME_MARK_PREVIOUS_HELD);
+        mbe_set_frame_mark(&dc, MBE_FRAME_MARK_PREVIOUS_HELD);
+        const int r = c->encode(enc, pcm, bits, &ec, &ep);
+        if (r < 0) {
+            return 1;
+        }
+        const int kind = (r == c->tone_kind) ? 1 : c->decode(bits, &dc, &dp);
+        if (kind < 0) {
+            return 1;
+        }
+        if (kind == 0) { /* a voice frame */
+            voice++;
+            unvoiced += enc_no_voiced_band(&dc);
+            wrong +=
+                !enc_float_bits_equal(dc.PHIl[0], ec.PHIl[0]) || mbe_frame_mark(&ec) == MBE_FRAME_MARK_PREVIOUS_HELD;
+            mbe_moveMbeParms(&dc, &dp);
+        }
+        mbe_moveMbeParms(&ec, &ep);
+    }
+    printf(
+        "%s stale frame mark: %d of %d voice frames (%d with no voiced band) kept a mark the decoder does not give\n",
+        c->name, wrong, voice, unvoiced);
+    return wrong != 0 || unvoiced == 0 || voice == unvoiced;
 }
 
 /* A rejected frame leaves the stream exactly as if it had never been offered. */
@@ -1074,10 +1147,367 @@ enc_test_tone_edges(const struct enc_codec* c, void* enc, int digit9) {
     return 0;
 }
 
+/* What an encoder sends on a voice frame with no voiced band: one pitch code
+ * and the harmonic count that code gives. */
+struct enc_unvoiced_code {
+    int (*b0_of)(const char* bits); /* the pitch code of a voice frame */
+    int b0;
+    int L;
+};
+
+/* A voice frame with no voiced band at another pitch code or harmonic count;
+ * prints and returns 1 if so. */
+static inline int
+enc_unvoiced_frame_wrong(const struct enc_codec* c, const struct enc_unvoiced_code* u, const char* bits,
+                         const mbe_parms* cur, const char* what, int frame) {
+    if (!enc_no_voiced_band(cur) || (u->b0_of(bits) == u->b0 && cur->L == u->L)) {
+        return 0;
+    }
+    printf("%s %s: frame %d has no voiced band at b0 %d, L %d (want b0 %d, L %d)\n", c->name, what, frame,
+           u->b0_of(bits), cur->L, u->b0, u->L);
+    return 1;
+}
+
+/* Decoded level of noise (white of RMS `level`, or low-passed) over frames 30..119 against the input's over the
+ * same frames, in dB; *unvoiced counts those frames sent with no voiced band. Returns 1e9 on a failure. */
+static inline double
+enc_unvoiced_noise_offset_db(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u,
+                             enum enc_fixture_kind kind, double level, int* unvoiced) {
+    enum { FRAMES = 120, SETTLE = 30 };
+
+    struct enc_fixture fx = {.kind = kind, .level = level};
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    double in_sum = 0.0, out_sum = 0.0;
+    int wrong = 0;
+    *unvoiced = 0;
+    c->reset(enc);
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    for (int f = 0; f < FRAMES; f++) {
+        float pcm[160], out[160];
+        char bits[88];
+        enc_fixture_frame(&fx, f, pcm);
+        if (c->encode(enc, pcm, bits, &ec, &ep) != 0 || c->process(out, NULL, bits, &dc, &dp, &dh) < 0) {
+            return 1e9;
+        }
+        wrong += enc_unvoiced_frame_wrong(c, u, bits, &ec, "noise", f);
+        *unvoiced += (f >= SETTLE) && enc_no_voiced_band(&ec);
+        mbe_moveMbeParms(&ec, &ep);
+        for (int i = 0; f >= SETTLE && i < 160; i++) {
+            double x = 7.0 * (double)out[i] / 32768.0; /* float output is int16 / 7 */
+            in_sum += (double)pcm[i] * (double)pcm[i];
+            out_sum += x * x;
+        }
+    }
+    return wrong ? 1e9 : 10.0 * log10((out_sum + 1e-30) / (in_sum + 1e-30));
+}
+
+/*
+ * Noise is sent as frames with no voiced band, each at the codec's fixed pitch
+ * code and harmonic count, and its decoded level follows the input level. On
+ * these four inputs (white noise at -20, -40 and -60 dBFS, low-passed noise)
+ * the encoders before the fixed code decoded -2.1 to -0.2 dB from the input
+ * level (D-STAR; the loudest white noise lowest), -1.1 to +0.3 dB (AMBE+2)
+ * and -1.2 to -0.1 dB (IMBE); with it -2.2 to -0.4, -1.3 to 0.0 and -0.9 to
+ * 0.0 dB. The tolerance: within 3 dB of the input level, and within 2.5 dB of
+ * each other.
+ */
+static inline int
+enc_test_unvoiced_noise(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u) {
+    const struct {
+        enum enc_fixture_kind kind;
+        double level;
+    } cases[] = {{ENC_NOISE, 0.1}, {ENC_NOISE, 0.01}, {ENC_NOISE, 0.001}, {ENC_COLORED_NOISE, 0.03}};
+
+    double lo = 1e9, hi = -1e9;
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        int unvoiced;
+        enc_rng = 0x5eedu + (uint32_t)k;
+        double offset = enc_unvoiced_noise_offset_db(c, enc, u, cases[k].kind, cases[k].level, &unvoiced);
+        printf("%s unvoiced noise case %zu: %d/90 frames with no voiced band, decoded %+.2f dB from the input\n",
+               c->name, k, unvoiced, offset);
+        /* A NaN offset (a NaN sample) fails as well as a large one. */
+        if (!enc_double_finite(&offset) || offset > 1e8 || unvoiced < 80 || fabs(offset) > 3.0) {
+            return 1;
+        }
+        lo = fmin(lo, offset);
+        hi = fmax(hi, offset);
+    }
+    if (hi - lo > 2.5) {
+        printf("%s unvoiced noise: decoded levels spread over %.2f dB\n", c->name, hi - lo);
+        return 1;
+    }
+    printf("%s: noise sent with no voiced band at b0 %d (L %d), at the input level\n", c->name, u->b0, u->L);
+    return 0;
+}
+
+/*
+ * Over voiced segments (a 150 Hz vowel) alternating with noise, no frame with
+ * no voiced band carries any pitch code but the fixed one, and the frames in
+ * the middle of each vowel are voiced at its pitch, as before.
+ */
+static inline int
+enc_test_unvoiced_alternating(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u) {
+    enum { FRAMES = 240, SEGMENT = 12 };
+
+    struct enc_fixture vowel = {.kind = ENC_VOWEL, .f0 = 150.0, .level = 0.05};
+    struct enc_fixture noise = {.kind = ENC_NOISE, .level = 0.02};
+    mbe_parms cur, prev, enhanced;
+    int wrong = 0, unvoiced = 0, steady = 0, on_pitch = 0;
+    enc_rng = 0xa17eu;
+    c->reset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < FRAMES; f++) {
+        float pcm[160];
+        char bits[88];
+        const int voiced_segment = (f / SEGMENT) % 2 == 0;
+        enc_fixture_frame(voiced_segment ? &vowel : &noise, f, pcm);
+        if (c->encode(enc, pcm, bits, &cur, &prev) != 0) {
+            return 1;
+        }
+        wrong += enc_unvoiced_frame_wrong(c, u, bits, &cur, "alternating input", f);
+        unvoiced += enc_no_voiced_band(&cur);
+        if (voiced_segment && f % SEGMENT >= 4) {
+            steady++;
+            on_pitch += !enc_no_voiced_band(&cur) && fabs((enc_f0_hz(&cur) / 150.0) - 1.0) <= 0.03;
+        }
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    printf("%s alternating vowel and noise: %d frames with no voiced band, %d/%d steady vowel frames voiced on pitch\n",
+           c->name, unvoiced, on_pitch, steady);
+    return wrong != 0 || unvoiced < FRAMES / 3 || on_pitch != steady;
+}
+
+/*
+ * The loud frame of the rollback test below, encoded in a control context
+ * that replays the same frames before it with a valid history, goes out with
+ * no voiced band at the fixed code: the rejected call runs the fixed-code
+ * path, not the voiced one.
+ */
+static inline int
+enc_unvoiced_rollback_control(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u, int frames,
+                              float pcm[][160], const float louder[160]) {
+    mbe_parms cur, prev, enhanced;
+    char bits[88];
+    c->reset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < frames; f++) {
+        if (c->encode(enc, pcm[f], bits, &cur, &prev) != 0) {
+            return 1;
+        }
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    if (c->encode(enc, louder, bits, &cur, &prev) != 0 || !enc_no_voiced_band(&cur) || u->b0_of(bits) != u->b0
+        || cur.L != u->L) {
+        printf("%s unvoiced rollback: the louder frame is not sent at the fixed code with a valid history\n", c->name);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * A frame that takes the fixed code but fails (a prediction history from which
+ * the model would overflow) is rejected with cur_mp untouched, its frame mark
+ * included, and leaves the analysis state as it was: the stream goes on
+ * exactly as if it had never been offered. The rejected frame is louder than
+ * the one retried, so analysis it left behind would change the stream; the
+ * control context shows that it takes the fixed code itself.
+ */
+static inline int
+enc_test_unvoiced_rollback(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u) {
+    enum { FRAMES = 16, AT = 10 };
+
+    float pcm[FRAMES][160];
+    float louder[160];
+    char reference[FRAMES][88];
+    char observed[FRAMES][88];
+    struct enc_fixture fx = {.kind = ENC_NOISE, .level = 0.03};
+    enc_rng = 0xfa11u;
+    for (int f = 0; f < FRAMES; f++) {
+        enc_fixture_frame(&fx, f, pcm[f]);
+    }
+    for (int i = 0; i < 160; i++) {
+        louder[i] = 3.0f * pcm[AT][i];
+    }
+    if (enc_unvoiced_rollback_control(c, enc, u, AT, pcm, louder) != 0) {
+        return 1;
+    }
+    for (int pass = 0; pass < 2; pass++) {
+        mbe_parms cur, prev, enhanced;
+        c->reset(enc);
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        for (int f = 0; f < FRAMES; f++) {
+            if (pass == 1 && f == AT) {
+                mbe_parms bad = prev;
+                char unused[88];
+                for (int l = 0; l <= 56; l++) {
+                    bad.log2Ml[l] = (2 * l <= bad.L) ? 1000.0f : -1000.0f;
+                }
+                /* A mark the frame would replace if it were accepted. */
+                mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PREVIOUS_HELD);
+                const mbe_parms before = cur;
+                if (c->encode(enc, louder, unused, &cur, &bad) != MBE_STATUS_INVALID_ARGUMENT
+                    || !enc_parms_identical(&cur, &before)) {
+                    printf("%s unvoiced rollback: the failing frame was not rejected cleanly\n", c->name);
+                    return 1;
+                }
+            }
+            char* bits = (pass == 0) ? reference[f] : observed[f];
+            if (c->encode(enc, pcm[f], bits, &cur, &prev) != 0) {
+                return 1;
+            }
+            /* The frame rejected in the second pass takes the fixed code in the first. */
+            if (pass == 0 && f == AT && (!enc_no_voiced_band(&cur) || u->b0_of(bits) != u->b0)) {
+                printf("%s unvoiced rollback: frame %d is not sent at the fixed code\n", c->name, f);
+                return 1;
+            }
+            mbe_moveMbeParms(&cur, &prev);
+        }
+    }
+    for (int f = 0; f < FRAMES; f++) {
+        if (memcmp(reference[f], observed[f], (size_t)c->bits) != 0) {
+            printf("%s unvoiced rollback: frame %d changed\n", c->name, f);
+            return 1;
+        }
+    }
+    printf("%s: a failing frame at the fixed code leaves the stream untouched\n", c->name);
+    return 0;
+}
+
+/* Noise band-passed to [lo_hz, hi_hz] (a 129-tap windowed-sinc filter,
+ * Blackman window, stopband about 58 dB down) at RMS `level`. */
+static inline void
+enc_band_noise(float* out, int n, double lo_hz, double hi_hz, double level) {
+    enum { TAPS = 129, HALF = TAPS / 2 };
+
+    double h[TAPS];
+    double history[TAPS] = {0.0};
+    const double f1 = lo_hz / 8000.0, f2 = hi_hz / 8000.0;
+    for (int k = 0; k < TAPS; k++) {
+        const double t = (double)(k - HALF);
+        const double window =
+            0.42 - (0.5 * cos(2.0 * M_PI * k / (TAPS - 1))) + (0.08 * cos(4.0 * M_PI * k / (TAPS - 1)));
+        const double band =
+            (k == HALF) ? 2.0 * (f2 - f1) : (sin(2.0 * M_PI * f2 * t) - sin(2.0 * M_PI * f1 * t)) / (M_PI * t);
+        h[k] = band * window;
+    }
+    double sum = 0.0;
+    for (int i = -TAPS; i < n; i++) {
+        memmove(history + 1, history, (TAPS - 1) * sizeof(history[0]));
+        history[0] = enc_gauss();
+        double v = 0.0;
+        for (int k = 0; k < TAPS; k++) {
+            v += h[k] * history[k];
+        }
+        if (i >= 0) {
+            out[i] = (float)v;
+            sum += v * v;
+        }
+    }
+    const double gain = level / sqrt(sum / n);
+    for (int i = 0; i < n; i++) {
+        out[i] = (float)(gain * out[i]);
+    }
+}
+
+/* Over the settled frames sent with no voiced band at the fixed code, the
+ * smallest and the mean of mean(log2Ml) over the harmonics l * w0 well inside
+ * [lo_hz, hi_hz] less that over those well outside, in dB. Returns the number
+ * of such frames, or -1 on a failure. */
+static inline int
+enc_band_margins(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u, double lo_hz, double hi_hz,
+                 double* least_db, double* mean_db) {
+    enum { FRAMES = 60, SETTLE = 10, INSIDE_HZ = 200, OUTSIDE_HZ = 500 };
+
+    static float pcm[FRAMES * 160];
+    mbe_parms cur, prev, enhanced;
+    int counted = 0;
+    double total = 0.0;
+    *least_db = 1e9;
+    *mean_db = 0.0;
+    enc_band_noise(pcm, FRAMES * 160, lo_hz, hi_hz, 0.05);
+    c->reset(enc);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < FRAMES; f++) {
+        char bits[88];
+        if (c->encode(enc, pcm + ((size_t)f * 160), bits, &cur, &prev) != 0) {
+            return -1;
+        }
+        if (f >= SETTLE && enc_no_voiced_band(&cur) && u->b0_of(bits) == u->b0 && cur.L == u->L) {
+            double in_sum = 0.0, out_sum = 0.0;
+            int in_n = 0, out_n = 0;
+            for (int l = 1; l <= cur.L && l <= 56; l++) {
+                const double hz = l * enc_f0_hz(&cur);
+                const double value = (double)cur.log2Ml[l];
+                if (!enc_double_finite(&value)) {
+                    return -1;
+                }
+                if (hz >= lo_hz + INSIDE_HZ && hz <= hi_hz - INSIDE_HZ) {
+                    in_sum += value;
+                    in_n++;
+                } else if (hz <= lo_hz - OUTSIDE_HZ || hz >= hi_hz + OUTSIDE_HZ) {
+                    out_sum += value;
+                    out_n++;
+                }
+            }
+            if (in_n == 0 || out_n == 0) {
+                return -1;
+            }
+            const double margin = 20.0 * log10(2.0) * ((in_sum / in_n) - (out_sum / out_n));
+            if (!enc_double_finite(&margin)) {
+                return -1; /* fmin() would pass over a NaN margin */
+            }
+            *least_db = fmin(*least_db, margin);
+            total += margin;
+            counted++;
+        }
+        mbe_moveMbeParms(&cur, &prev);
+    }
+    if (counted > 0) {
+        *mean_db = total / counted;
+    }
+    return counted;
+}
+
+/*
+ * The amplitudes of a frame sent at the fixed code are measured on that
+ * code's harmonic grid: for noise band-passed to 1-2 kHz and to 2.4-3.2 kHz,
+ * the decoded log2 amplitudes of the harmonics whose frequency l * w0 lies
+ * 200 Hz or more inside the band stand above those 500 Hz or more outside it,
+ * on every frame sent at the fixed code (about a quarter of the 1-2 kHz
+ * frames are voiced). Measured, the smallest margin of any frame: 54.8 and
+ * 56.3 dB (D-STAR, the two bands), 54.1 and 58.3 (AMBE+2), 42.6 and 53.3
+ * (IMBE). With the amplitudes taken on the tracked pitch's grid instead, it
+ * was 2.4 and -32.5, -5.7 and -38.2, 2.4 and -8.7 dB. The test asks for 20 dB.
+ */
+static inline int
+enc_test_unvoiced_band(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u) {
+    static const double bands[2][2] = {{1000.0, 2000.0}, {2400.0, 3200.0}};
+    const double MIN_MARGIN_DB = 20.0;
+    int fails = 0;
+    for (int b = 0; b < 2; b++) {
+        double least = 0.0, mean = 0.0;
+        enc_rng = 0xba4du + (uint32_t)b;
+        const int frames = enc_band_margins(c, enc, u, bands[b][0], bands[b][1], &least, &mean);
+        printf("%s band-limited noise %.0f-%.0f Hz: %d/50 frames at the fixed code, in-band harmonics above the "
+               "others by %.1f dB at least, %.1f dB on average\n",
+               c->name, bands[b][0], bands[b][1], frames, least, mean);
+        fails += frames < 30 || !enc_double_finite(&least) || least < MIN_MARGIN_DB;
+    }
+    return fails != 0;
+}
+
+static inline int
+enc_test_unvoiced_code(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u) {
+    return enc_test_unvoiced_noise(c, enc, u) + enc_test_unvoiced_alternating(c, enc, u)
+           + enc_test_unvoiced_rollback(c, enc, u) + enc_test_unvoiced_band(c, enc, u);
+}
+
 static inline int
 enc_run_common(const struct enc_codec* c, void* enc) {
     int fails = 0;
     fails += enc_test_state_parity(c, enc);
+    fails += enc_test_stale_mark(c, enc);
     fails += enc_test_invalid_samples(c, enc);
     fails += enc_test_prediction_boundaries(c, enc);
     fails += enc_test_short_float(c, enc);

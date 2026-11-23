@@ -13,6 +13,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef M_PI
@@ -429,6 +430,147 @@ test_noise_recovery(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     }
 }
 
+/* Finite, judged by the bit pattern read from memory, which fast-math keeps. */
+static int
+finite_float(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & 0x7FFFFFFFu) <= 0x7F000000u;
+}
+
+#define MEASURE_TONES 5
+
+/* Five tones on harmonics 3, 9, 12, 21 and 36 of a grid, at unequal amplitudes
+ * (16-bit scale). */
+static const int measure_tone[MEASURE_TONES] = {3, 9, 12, 21, 36};
+static const double measure_amp[MEASURE_TONES] = {2000.0, 6000.0, 1500.0, 3000.0, 2500.0};
+
+/* One estimator's levels against the tones: the largest error of a tone's
+ * level from 20 log10(amplitude) + offset dB, the smallest drop from a tone to
+ * the harmonics beside it, and the smallest drop from the weakest tone to every
+ * other harmonic. 0 if the harmonics end before the last tone's neighbour or a
+ * magnitude is negative or not finite. */
+static int
+measure_margins(const float* m, int harmonics, double offset, double* error, double* side, double* rest) {
+    double level[MBE_ANALYSIS_HARMONICS + 1];
+    if (harmonics <= measure_tone[MEASURE_TONES - 1] || harmonics > MBE_ANALYSIS_HARMONICS) {
+        return 0;
+    }
+    for (int l = 1; l <= harmonics; l++) {
+        if (!finite_float(&m[l]) || !(m[l] >= 0.0f)) {
+            return 0;
+        }
+        level[l] = 20.0 * log10(fmax((double)m[l], 1e-6));
+    }
+    double weakest = 1e9;
+    *error = 0.0;
+    *side = 1e9;
+    for (int c = 0; c < MEASURE_TONES; c++) {
+        const int l = measure_tone[c];
+        *error = fmax(*error, fabs(level[l] - (20.0 * log10(measure_amp[c]) + offset)));
+        *side = fmin(*side, fmin(level[l] - level[l - 1], level[l] - level[l + 1]));
+        weakest = fmin(weakest, level[l]);
+    }
+    *rest = 1e9;
+    for (int l = 1; l <= harmonics; l++) {
+        int near_tone = 0;
+        for (int c = 0; c < MEASURE_TONES; c++) {
+            near_tone |= abs(l - measure_tone[c]) <= 1;
+        }
+        if (!near_tone) {
+            *rest = fmin(*rest, weakest - level[l]);
+        }
+    }
+    return 1;
+}
+
+/*
+ * mbe_analysis_measure_at() reads every harmonic from its own bins. The five
+ * tones lie on the IMBE encoder's fixed grid (b0 127, f0 = 2 / 166.5, eq 46),
+ * the last near the top of the 37 harmonics that encoder codes, and repeat at
+ * three times its fundamental, which the analysis tracks (287 Hz against 96.1
+ * Hz). Measured again on the fixed grid, the result holds every harmonic whose
+ * centre lies below Nyquist (41), and the harmonic that holds each tone carries
+ * its level: the magnitude within 1 dB of half the tone's amplitude, and eq
+ * (44)'s estimate within 1 dB of the tones' ratios to the loudest; the
+ * harmonics beside a tone lie at least 10 dB below it, and every other harmonic
+ * at least 25 dB below the weakest tone (measured: errors at most 0.14 dB, at
+ * least 15.7 dB beside, 38 dB elsewhere). A grid shifted by one harmonic either
+ * way, or a tone's harmonic exchanged with the one above, fails all three;
+ * harmonics 1 and 2 exchanged fail the last.
+ */
+static void
+test_measure_at(mbe_fft_plan* fft, mbe_acf_plan* acf) {
+    const double grid = 2.0 / 166.5; /* cycles per sample */
+    const float grid_f0 = (float)grid;
+    double phase[MEASURE_TONES] = {0.3, 1.1, 2.0, 0.6, 1.7};
+    double worst_error = 0.0, worst_side = 1e9, worst_rest = 1e9;
+    struct mbe_analysis_state state;
+    mbe_analysis_reset(&state);
+    for (int f = 0; f < 20; f++) {
+        float in[MBE_ANALYSIS_FRAME];
+        for (int i = 0; i < MBE_ANALYSIS_FRAME; i++) {
+            double v = 0.0;
+            for (int c = 0; c < MEASURE_TONES; c++) {
+                phase[c] += 2.0 * M_PI * measure_tone[c] * grid;
+                v += measure_amp[c] * sin(phase[c]);
+            }
+            in[i] = (float)v;
+        }
+        struct mbe_analysis_result r;
+        mbe_analysis_push(&state, in);
+        const int status = mbe_analysis_frame(&tables, &state, fft, acf, &r);
+        assert(status == 0);
+        (void)status;
+        if (f < 4) {
+            continue; /* the tracker settles */
+        }
+        const double tracked = r.f0 / grid;
+        assert(fabs(tracked - 1.0) > 0.1); /* the analysis tracked another grid */
+        (void)tracked;
+        mbe_analysis_measure_at(&tables, &state, grid_f0, &r);
+        uint32_t f0_bits, grid_bits;
+        memcpy(&f0_bits, &r.f0, sizeof(f0_bits));
+        memcpy(&grid_bits, &grid_f0, sizeof(grid_bits));
+        assert(f0_bits == grid_bits);
+        int below_nyquist = 0; /* the grid's harmonics whose centre lies below 4 kHz */
+        while (below_nyquist < MBE_ANALYSIS_HARMONICS && (below_nyquist + 1) * grid < 0.5) {
+            below_nyquist++;
+        }
+        assert(r.harmonics == below_nyquist);
+        (void)below_nyquist;
+        (void)f0_bits;
+        (void)grid_bits;
+
+        double error, side, rest;
+        const int magnitude_ok = measure_margins(r.magnitude, r.harmonics, -20.0 * log10(2.0), &error, &side, &rest);
+        assert(magnitude_ok);
+        assert(error <= 1.0);
+        assert(side >= 10.0);
+        assert(rest >= 25.0);
+        (void)magnitude_ok;
+        worst_error = fmax(worst_error, error);
+        worst_side = fmin(worst_side, side);
+        worst_rest = fmin(worst_rest, rest);
+
+        /* eq (44) on its own scale: relative to the loudest tone (harmonic 9). */
+        const int loudest = measure_tone[1];
+        assert(finite_float(&r.noise_magnitude[loudest]) && r.noise_magnitude[loudest] > 0.0f);
+        const double offset = (20.0 * log10((double)r.noise_magnitude[loudest])) - (20.0 * log10(measure_amp[1]));
+        const int noise_ok = measure_margins(r.noise_magnitude, r.harmonics, offset, &error, &side, &rest);
+        assert(noise_ok);
+        assert(error <= 1.0);
+        assert(side >= 10.0);
+        assert(rest >= 25.0);
+        (void)noise_ok;
+        worst_error = fmax(worst_error, error);
+        worst_side = fmin(worst_side, side);
+        worst_rest = fmin(worst_rest, rest);
+    }
+    printf("measure_at: tone levels within %.2f dB, %.1f dB above their neighbours, %.1f dB above the rest\n",
+           worst_error, worst_side, worst_rest);
+}
+
 /* eq (37) at omega0 0.1309 with the hysteresis, the frequency taper and the
  * periodicity gate. */
 static void
@@ -571,6 +713,7 @@ main(void) {
     test_noise_estimate(fft, acf);
     test_loud_low_voice(fft, acf);
     test_noise_recovery(fft, acf);
+    test_measure_at(fft, acf);
     test_thresholds();
     test_reset_and_commit();
     mbe_acf_plan_free(acf);

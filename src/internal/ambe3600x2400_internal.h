@@ -189,6 +189,13 @@ void mbe_ambe2400_reconstruct_ri(const float Gm[9], float Ri[9]);
 void mbe_ambe2400_reconstruct_cik(const float Ri[9], const int codes[4], const int Ji[5], float Cik[5][18]);
 void mbe_ambe2400_inverse_dct_tl(float Cik[5][18], const int Ji[5], float Tl[57]);
 
+/* Mark a voice frame's model, its voicing Vl[1..L] already set, with what
+ * its pitch code b0 tells the synthesizer when no band is voiced
+ * (MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PITCH_CARRIES or none),
+ * replacing any mark it held. mbe_decodeAmbe2400Parms() and the encoder's
+ * decoder-equivalent model both take their mark from it. */
+void mbe_ambe2400_mark_unvoiced_pitch(mbe_parms* cur_mp, int b0);
+
 /* Preserve the decoder's full update loop, including its previous-spectrum
  * fix-ups and Ml scaling. The encoder passes a private copy of prev_mp. */
 void mbe_ambe2400_update_spectral_amplitudes(mbe_parms* cur_mp, mbe_parms* prev_mp, const float Tl[57], float unvc);

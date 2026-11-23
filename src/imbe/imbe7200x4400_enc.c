@@ -11,8 +11,10 @@
  * 6 describes (equation numbers below refer to it), against the tables
  * mbe_decodeImbe4400Parms() dequantizes with:
  *
- *  - b0 from the refined fundamental (eq 45); L and K as the decoder derives
- *    them from b0 (eqs 46-48), which equal the analysis' (eqs 31, 34).
+ *  - b0 from the refined fundamental (eq 45), except that a frame with no
+ *    voiced band goes out at b0 127 (below); L and K as the decoder derives
+ *    them from b0 (eqs 46-48), which equal the analysis' (eqs 31, 34) at the
+ *    refined fundamental.
  *  - b1 from the band V/UV decisions of 5.2 (eq 49).
  *  - Spectral amplitudes by the estimator of each band's decision (5.3, eqs 43
  *    and 44), then the prediction residual (eqs 52-55), six block DCTs and
@@ -258,6 +260,34 @@ mbe_imbe4400_quantize_amplitudes(int b0, const unsigned char bands[12], const fl
     imbe_enc_pack(&q, sync, imbe_d);
 }
 
+/*
+ * A frame sent with no voiced band (every bit of b1 0) carries one fixed pitch
+ * code, b0 127 (37 harmonics), instead of the tracked pitch, with every
+ * amplitude the unvoiced estimate of eq 44 on that code's harmonic grid. Eq 45
+ * codes every frame's own pitch, but this library's decoder reads the pitch
+ * code of such a frame: b0 128..183 end the voicing of the frame before where
+ * the frame starts, any other code lets that voicing last through the frame's
+ * first 10 ms if it reaches 505 Hz; DVSI's decoder is inferred to read b0 127
+ * so from its decodes of DVSI's vectors at b0 25, the one code outside that
+ * range its encoder sends on such frames (no P25 measurement on hardware
+ * exists). The tracked pitch of noise is arbitrary, so it said either at
+ * random; b0 127, the last code below that range, always says the latter
+ * (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
+ */
+#define IMBE_ENC_UNVOICED_B0 127
+
+static void
+imbe_enc_unvoiced_grid(const struct mbe_encoder_frontend* fe, struct imbe_enc_frame* q,
+                       const unsigned char bands[MBE_ANALYSIS_BANDS], struct mbe_analysis_result* res) {
+    for (int k = 1; k <= q->K; k++) {
+        if (bands[k - 1]) {
+            return;
+        }
+    }
+    imbe_enc_set_pitch(q, IMBE_ENC_UNVOICED_B0);
+    mbe_analysis_measure_at(&fe->tables, &fe->analysis, 2.0f / ((float)q->b[0] + 39.5f), res); /* eq 46 */
+}
+
 static int
 imbe_encode(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88], mbe_parms* cur_mp,
             const mbe_parms* prev_mp) {
@@ -272,6 +302,7 @@ imbe_encode(mbe_imbe4400_encoder* enc, const float* samples, char imbe_d[88], mb
     memset(&q, 0, sizeof(q));
     imbe_enc_set_pitch(&q, imbe_enc_pitch(res.f0));
     mbe_analysis_band_voicing(&res, q.L, enc->bands_prev, bands);
+    imbe_enc_unvoiced_grid(&enc->fe, &q, bands, &res);
     float mean = 0.0f;
     for (int l = 1; l <= q.L; l++) {
         int voiced = bands[mbe_analysis_band_of(l) - 1];

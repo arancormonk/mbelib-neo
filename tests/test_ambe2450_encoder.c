@@ -601,6 +601,11 @@ main(void) {
     fails += test_tone_bad_history(enc);
     fails += enc_test_call_progress(&ambe2450_codec, enc, 160);
     fails += enc_test_tone_edges(&ambe2450_codec, enc, 137);
+    {
+        /* A frame with no voiced band (V/UV row 16) is sent at b0 119, 56 harmonics. */
+        const struct enc_unvoiced_code unvoiced = {frame_b0, 119, 56};
+        fails += enc_test_unvoiced_code(&ambe2450_codec, enc, &unvoiced);
+    }
     mbe_ambe2450EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

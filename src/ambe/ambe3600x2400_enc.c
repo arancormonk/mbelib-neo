@@ -34,6 +34,9 @@
  *    the D-STAR AMBE bit layout (interleave, scrambler and Golay parity
  *    cross-checked against the MMDVM tables). Reconstruction matches DVSI's
  *    AMBE-3000 D-STAR test vectors; on-air interoperability is not verified.
+ *  - The six spectral vectors (b3..b8) start as the rows nearest their own
+ *    targets and are then refined together against the amplitude-weighted
+ *    error of the residual the decoder reconstructs (ambe_enc_search.c).
  *  - The prediction state (log2Ml, gamma) is advanced with the
  *    QUANTIZED values, mirroring the decoder state so the encoder and
  *    decoder never drift apart.
@@ -70,9 +73,12 @@
  * about 1 dB. The scale is the median, over the development vectors, of the
  * level that puts our encoding at DVSI's encoding of the same input, both
  * decoded by this library; the validation vectors then sit within about
- * 1 dB of DVSI's.
+ * 1 dB of DVSI's. It was re-derived so (from 1.02) with the joint choice of the
+ * spectral vectors (ambe_enc_search.c), which fits the peaks better and so
+ * raised the decoded level (docs/dvsi-parity.md, "Joint choice of the AMBE
+ * spectral vectors").
  */
-#define AMBE2400_ENC_MAG_SCALE 1.02f
+#define AMBE2400_ENC_MAG_SCALE 1.075f
 
 /* Caller-owned encoder state: one context per stream. The analysis tables
  * are computed once at allocation and kept across resets. */
@@ -217,6 +223,35 @@ ambe2400_enc_voicing(struct ambe_enc_frame* q, const struct mbe_analysis_state* 
     }
 }
 
+/*
+ * A frame sent with no voiced band (b1 0) carries one fixed pitch code, b0 123
+ * (56 harmonics), instead of the tracked pitch, and its magnitudes are measured
+ * on that code's harmonic grid. This library's decoder reads the pitch code
+ * of such a frame: b0 64..119 end the voicing of the frame before where the
+ * frame starts (some carry their pitch into the next voiced frame), any other
+ * code lets that voicing last through the frame's first 10 ms if it reaches
+ * 505 Hz; DVSI's decoder is inferred to read b0 123 so from other codes outside
+ * that range (a ThumbDV plays b0 120..123 at b1 0 as low-pitch voice, #106, but
+ * whether b0 123 lets the voicing of the frame before last through its first
+ * 10 ms has not been measured on hardware). The tracked pitch of noise is
+ * arbitrary, so it said either at random; b0 123 always says
+ * the latter, and the finest grid D-STAR sends codes the noise best
+ * (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
+ */
+#define AMBE2400_ENC_UNVOICED_B0 MBE_AMBE2400_MAX_VOICE_B0
+
+static void
+ambe2400_enc_unvoiced_grid(const struct mbe_encoder_frontend* fe, struct ambe_enc_frame* q,
+                           struct mbe_analysis_result* res) {
+    if (q->b[1] != 0) {
+        return;
+    }
+    q->b[0] = AMBE2400_ENC_UNVOICED_B0;
+    q->f0q = mbe_ambe2400_f0(q->b[0]);
+    q->L = mbe_ambe2400_harmonic_count(q->f0q);
+    mbe_analysis_measure_at(&fe->tables, &fe->analysis, q->f0q, res);
+}
+
 static void
 ambe2400_enc_magnitudes(struct ambe_enc_frame* q, const struct mbe_analysis_result* res) {
     for (int l = 1; l <= q->L; l++) {
@@ -312,8 +347,8 @@ ambe2400_enc_fill_parms(const struct ambe_enc_frame* q, mbe_parms* cur_mp) {
 /* Quantize an analysed voice frame, reconstruct its predictor state, and pack
  * 49 bits. */
 static int
-ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const struct mbe_analysis_result* res, char ambe_d[49],
-                      mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+ambe2400_encode_voice(mbe_ambe2400_encoder* enc, struct mbe_analysis_result* res, char ambe_d[49], mbe_parms* cur_mp,
+                      const mbe_parms* prev_mp) {
     struct ambe_enc_frame q = {0};
     unsigned char columns[MBE_ANALYSIS_COLUMNS];
     /* Predict from the history the decoder predicts from; the caller's
@@ -323,6 +358,7 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const struct mbe_analysis_resul
     q.cache = mbe_ambe2400_get_dct_cache();
     ambe2400_enc_quantize_pitch(&q, res->f0);
     ambe2400_enc_voicing(&q, &enc->fe.analysis, res, columns);
+    ambe2400_enc_unvoiced_grid(&enc->fe, &q, res);
     ambe2400_enc_magnitudes(&q, res);
     ambe_enc_quantize_gain(&q, &ambe2400_enc_tables, &prediction_prev);
     ambe_enc_prediction(&q, &ambe2400_enc_tables, &prediction_prev);
@@ -331,6 +367,8 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, const struct mbe_analysis_resul
     mbe_ambe2400_inverse_dct_tl(q.Cik_q, q.Ji, q.Tl_q);
     ambe2400_enc_pack(&q, ambe_d);
     ambe2400_enc_fill_parms(&q, cur_mp);
+    /* The decoder's frame mark for these bits, replacing the caller's. */
+    mbe_ambe2400_mark_unvoiced_pitch(cur_mp, q.b[0]);
     mbe_ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
     cur_mp->Vl[0] &= ~MBE_AMBE2400_HISTORY_BITS;
     if (!mbe_encoder_model_valid(cur_mp)) {

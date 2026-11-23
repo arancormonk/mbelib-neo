@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 cmake_minimum_required(VERSION 3.20)
 
-project(mbelib-neo VERSION 2.6.11 LANGUAGES C)
+project(mbelib-neo VERSION 2.6.12 LANGUAGES C)
 if(POLICY CMP0083)
     cmake_policy(SET CMP0083 NEW)
 endif()
@@ -296,6 +296,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2450_enc.c
     src/ambe/ambe_common.c
     src/ambe/ambe_encoder.c
+    src/ambe/ambe_enc_search.c
     src/ecc/ecc_soft.c
     src/ecc/ecc_soft_search.c
     src/ecc/ecc_soft_search_avx2.c
@@ -1312,9 +1313,15 @@ if(MBELIB_BUILD_TESTS)
             PRIVATE $<$<CONFIG:Debug>:MBELIB_TEST_FENV_OVERFLOW=1>
         )
     endif()
-    # The AMBE+2 and IMBE encoder tests drive private quantizer steps and the
-    # Hamming encoder, which the shared library does not export.
-    foreach(_enc_test test_ambe2450_encoder test_imbe7200_encoder)
+    # The AMBE+2 and IMBE encoder tests and the AMBE vector search test drive
+    # private quantizer steps and the Hamming encoder, which the shared library
+    # does not export.
+    foreach(
+        _enc_test
+        test_ambe2450_encoder
+        test_imbe7200_encoder
+        test_ambe_vector_search
+    )
         add_executable(${_enc_test} tests/${_enc_test}.c)
         target_link_libraries(${_enc_test} PRIVATE mbe-static)
         if(NOTONES)
@@ -2086,6 +2093,7 @@ if(MBELIB_BUILD_TESTS)
         test_ambe2400_encoder
         test_ambe2450_encoder
         test_imbe7200_encoder
+        test_ambe_vector_search
         test_speech_analysis
         test_simd_numerics
         test_noise_determinism

@@ -34,7 +34,9 @@
  * all unvoiced like 16. DVSI's decoders render that column (and parts of rows
  * 1, 3, 13 and 15) partly voiced, a state this table cannot express; voiced is
  * the nearer of the two binary values for each (docs/dvsi-parity.md, "Rate 33:
- * V/UV vectors"). The encoder searches rows 0-16 only (clause 4.2).
+ * V/UV vectors"). Rows 18-31 decode on a band grid of their own pitch
+ * (MBE_AMBE2450_GRID_SPAN in ambe3600x2450.c). The encoder searches rows 0-16
+ * only (clause 4.2).
  */
 static const int AmbeVuv[32][8] = {
     {1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 0}, {1, 1, 1, 1, 1, 1, 1, 1},

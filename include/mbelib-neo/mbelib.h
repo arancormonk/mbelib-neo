@@ -452,14 +452,32 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * 45%; where one changes directly to another, the frame whose span holds both
  * carries the newer tone if it is a DTMF tone filling the span's newest half,
  * else the older tone if it fills the oldest half, as DVSI's encoder sends
- * them. KNOX tones, which D-STAR cannot carry, are coded as voice.
+ * them. KNOX tones, which D-STAR cannot carry, are coded as voice. A voice
+ * frame with no voiced band (b1 0) is sent at b0 123 (56 harmonics) rather
+ * than at the tracked pitch, its amplitudes measured on that grid. This
+ * library's decoder reads that code as "the voicing of the frame before, if
+ * it reaches 505 Hz, lasts through this frame's first 10 ms", where b0 64..119
+ * would say it ends at the frame's start; DVSI's decoder is inferred to read
+ * it so from other codes outside that range. A ThumbDV plays b0 120..123 at
+ * b1 0 as low-pitch voice (#106), but whether b0 123 lets the voicing of the
+ * frame before last through its first 10 ms has not been measured on
+ * hardware. The six spectral vector indices (b3..b8) are
+ * chosen together: each starts as the codebook row nearest its own target, and
+ * two passes then refine them against the error of the amplitudes the decoder
+ * will reconstruct, weighted toward the strong harmonics. The bits are
+ * ordinary D-STAR bits; any decoder plays them.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
  * frames. prev_mp is read-only. To restart a stream, call
  * mbe_ambe2400EncoderReset() and mbe_initMbeParms().
- * State equivalence holds with both the mbe_processAmbe2400* path and a bare
- * mbe_decodeAmbe2400Parms() chain. A tone frame leaves the decoder's
+ * For a voice frame, cur_mp equals the cur_mp of a bare
+ * mbe_decodeAmbe2400Parms() chain on the emitted bits, and the prev_mp that
+ * the mbe_processAmbe2400* path leaves (that path keeps the prediction model
+ * in prev_mp and enhances its cur_mp in place), in w0, L, gamma, the frame
+ * mark (PHIl[0]), and Vl, log2Ml and Ml over harmonics 1..L. K is not among
+ * them: the encoder writes the number of voiced harmonics there, and the
+ * decoder leaves K as the caller has it. A tone frame leaves the decoder's
  * prediction history unchanged, so cur_mp is then a copy of prev_mp.
  *
  * The analysis is centred one sample before the frame: parameters lag audio
@@ -618,7 +636,11 @@ MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
  * frames both decode into `cur_mp` and return `MBE_AMBE2450_FRAME_VOICE`, as
  * in 2.1. A silence frame decodes as DVSI's decoder plays it: w0 = 2*pi/32,
  * every band unvoiced, on 15 bands (where TIA-102.BABA-1 4.1 gives 14) and
- * with its amplitudes `Ml` a further 13.8 dB below the voice-frame law. Tone
+ * with its amplitudes `Ml` a further 13.8 dB below the voice-frame law. A
+ * voice frame of V/UV row (b1) 18 to 31, every band unvoiced, decodes as DVSI's
+ * decoder plays it, on a band grid: `w0 = 2.81 / L` radians per sample with
+ * the L of its pitch code b0 (the coded pitch itself is not returned), and the
+ * unvoiced amplitudes scaled by `0.2046 / sqrt(w0)` of that `w0`. Tone
  * ID 255 returns `MBE_AMBE2450_FRAME_ERASURE`, as any unusable tone index
  * does. A caller managing its own state should copy `cur_mp` into `prev_mp`
  * only when `mbe_classifyAmbe2450Frame()` reports `MBE_AMBE2450_FRAME_VOICE`;
@@ -767,12 +789,20 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  * carries the newer tone if it is a DTMF or KNOX tone filling the span's
  * newest half, else the older tone if it fills the oldest half. Like DVSI's
  * encoder it never sends silence or erasure frames: quiet input is coded as
- * low-level voice.
+ * low-level voice. A voice frame with no voiced band (V/UV vector 16) is sent
+ * at b0 119 (56 harmonics) rather than at the tracked pitch, its amplitudes
+ * measured on that grid, where clause 4.1 codes every voice frame's own
+ * fundamental. Clauses 4.3.1 and 4.3.2 choose each of the six spectral vectors
+ * (b3..b8) as the row nearest its own target; the encoder starts there and
+ * then refines the six together, in two passes, against the error of the
+ * amplitudes the decoder will reconstruct, weighted toward the strong
+ * harmonics. The bits remain valid for any decoder.
  *
- * The state contract is the D-STAR encoder's: initialize with
+ * The calling sequence is the D-STAR encoder's: initialize with
  * mbe_ambe2450EncoderAlloc() and mbe_initMbeParms(), and after every frame
- * call mbe_moveMbeParms(cur_mp, prev_mp). For a voice frame cur_mp is what
- * mbe_decodeAmbe2450Parms() decodes from ambe_d given prev_mp. A tone frame
+ * call mbe_moveMbeParms(cur_mp, prev_mp). For a voice frame cur_mp is, in
+ * every field (K included), what mbe_decodeAmbe2450Parms() leaves in it
+ * decoding ambe_d given prev_mp. A tone frame
  * leaves the decoder's prediction history unchanged (TIA-102.BABA-1 4.3), so
  * cur_mp is then a copy of prev_mp: a snapshot of the history, not a model of
  * the tone. To hear what was sent, run the emitted bits through
@@ -940,12 +970,21 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * frame quieter than the lowest gain level can play is flattened toward that
  * level rather than played louder. imbe_d[87] is the
  * synchronization bit of 6.5: 0 in the first frame after allocation or reset,
- * then alternating. Every frame is a voice frame.
+ * then alternating. Every frame is a voice frame. A frame with no voiced
+ * band is sent at b0 127 (37 harmonics) rather than at the tracked pitch, its
+ * amplitudes measured on that grid. This library's decoder reads that code as
+ * "the voicing of the frame before, if it reaches 505 Hz, lasts through this
+ * frame's first 10 ms", where b0 128..183 would say it ends at the frame's
+ * start; DVSI's decoder is inferred to read it so from its decodes of DVSI's
+ * vectors at b0 25, the one code outside that range its encoder sends on such
+ * frames. No P25 measurement on hardware exists, and b0 127 is not among the
+ * codes measured.
  *
- * The state contract is the D-STAR encoder's: initialize with
+ * The calling sequence is the D-STAR encoder's: initialize with
  * mbe_imbe4400EncoderAlloc() and mbe_initMbeParms(), and after every frame
- * call mbe_moveMbeParms(cur_mp, prev_mp); cur_mp is what
- * mbe_decodeImbe4400Parms() decodes from imbe_d given prev_mp. To restart a
+ * call mbe_moveMbeParms(cur_mp, prev_mp); cur_mp is, in every field (K
+ * included), what mbe_decodeImbe4400Parms() leaves in it decoding imbe_d
+ * given prev_mp. To restart a
  * stream, call mbe_imbe4400EncoderReset() and mbe_initMbeParms().
  *
  * The timing is the D-STAR encoder's: parameters lag audio by about 10 ms,
