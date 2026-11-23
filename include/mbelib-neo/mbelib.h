@@ -452,7 +452,12 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * 45%; where one changes directly to another, the frame whose span holds both
  * carries the newer tone if it is a DTMF tone filling the span's newest half,
  * else the older tone if it fills the oldest half, as DVSI's encoder sends
- * them. KNOX tones, which D-STAR cannot carry, are coded as voice.
+ * them. KNOX tones, which D-STAR cannot carry, are coded as voice. A voice
+ * frame with no voiced band (b1 0) is sent at b0 123 (56 harmonics) rather
+ * than at the tracked pitch, its amplitudes measured on that grid: DVSI's
+ * decoder and this library's read that code as "the voicing of the frame
+ * before lasts through this frame's first 10 ms", where b0 64..119 would say
+ * it ends at the frame's start.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
@@ -767,7 +772,10 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  * carries the newer tone if it is a DTMF or KNOX tone filling the span's
  * newest half, else the older tone if it fills the oldest half. Like DVSI's
  * encoder it never sends silence or erasure frames: quiet input is coded as
- * low-level voice.
+ * low-level voice. A voice frame with no voiced band (V/UV vector 16) is sent
+ * at b0 119 (56 harmonics) rather than at the tracked pitch, its amplitudes
+ * measured on that grid, where clause 4.1 codes every voice frame's own
+ * fundamental.
  *
  * The state contract is the D-STAR encoder's: initialize with
  * mbe_ambe2450EncoderAlloc() and mbe_initMbeParms(), and after every frame
@@ -940,7 +948,11 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * frame quieter than the lowest gain level can play is flattened toward that
  * level rather than played louder. imbe_d[87] is the
  * synchronization bit of 6.5: 0 in the first frame after allocation or reset,
- * then alternating. Every frame is a voice frame.
+ * then alternating. Every frame is a voice frame. A frame with no voiced
+ * band is sent at b0 127 (37 harmonics) rather than at the tracked pitch, its
+ * amplitudes measured on that grid: DVSI's decoder and this library's read
+ * that code as "the voicing of the frame before lasts through this frame's
+ * first 10 ms", where b0 128..183 would say it ends at the frame's start.
  *
  * The state contract is the D-STAR encoder's: initialize with
  * mbe_imbe4400EncoderAlloc() and mbe_initMbeParms(), and after every frame
