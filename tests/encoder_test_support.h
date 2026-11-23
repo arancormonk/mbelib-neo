@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "mbe_adaptive.h"
 #include "mbelib-neo/mbelib.h"
 
 #ifndef M_PI
@@ -89,6 +90,17 @@ enc_model_finite(const mbe_parms* mp) {
         ok = enc_float_finite(&mp->log2Ml[l]) && enc_float_finite(&mp->Ml[l]);
     }
     return ok;
+}
+
+/* Whether the decoder's model of a voice frame has no voiced harmonic. */
+static inline int
+enc_no_voiced_band(const mbe_parms* mp) {
+    for (int l = 1; l <= mp->L && l <= 56; l++) {
+        if (mp->Vl[l]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* Decoded fundamental in Hz. */
@@ -246,15 +258,17 @@ enc_run_fixture(const struct enc_codec* c, void* enc, struct enc_fixture* fx, in
     return 0;
 }
 
-/* The encoder's cur_mp is the decoder's model of the emitted bits; prev_mp is
- * never touched; tone frames leave cur_mp a copy of prev_mp. */
+/* The encoder's cur_mp is the decoder's model of the emitted bits, its frame
+ * mark (PHIl[0], compared by bit pattern) included; prev_mp is never touched;
+ * tone frames leave cur_mp a copy of prev_mp. The input's noise and silence
+ * give frames with no voiced band, whose mark depends on their pitch code. */
 static inline int
 enc_test_state_parity(const struct enc_codec* c, void* enc) {
     enum { FRAMES = 600 };
 
     static short pcm[FRAMES * 160];
     mbe_parms ec, ep, eh, dc, dp, dh;
-    int mismatches = 0;
+    int mismatches = 0, mark_mismatches = 0, unvoiced = 0, marked = 0;
     enc_speech_like(pcm, FRAMES * 160);
     c->reset(enc);
     mbe_initMbeParms(&ec, &ep, &eh);
@@ -279,12 +293,63 @@ enc_test_state_parity(const struct enc_codec* c, void* enc) {
             bad |= dc.Vl[l] != ec.Vl[l] || !enc_float_bits_equal(dc.log2Ml[l], ec.log2Ml[l])
                    || !enc_float_bits_equal(dc.Ml[l], ec.Ml[l]);
         }
-        mismatches += bad;
+        const int mark_bad = !enc_float_bits_equal(dc.PHIl[0], ec.PHIl[0]);
+        mark_mismatches += mark_bad;
+        mismatches += bad | mark_bad;
+        unvoiced += enc_no_voiced_band(&dc);
+        marked += mbe_frame_mark(&dc) != MBE_FRAME_MARK_NONE;
         mbe_moveMbeParms(&dc, &dp);
         mbe_moveMbeParms(&ec, &ep);
     }
-    printf("%s encoder/decoder state parity over %d frames: %d mismatching frames\n", c->name, FRAMES, mismatches);
-    return mismatches != 0;
+    printf("%s encoder/decoder state parity over %d frames: %d mismatching frames (%d in the frame mark); %d frames "
+           "with no voiced band, %d marked\n",
+           c->name, FRAMES, mismatches, mark_mismatches, unvoiced, marked);
+    return mismatches != 0 || unvoiced == 0;
+}
+
+/* A cur_mp handed in with a stale frame mark comes back with the mark the
+ * decoder gives the emitted bits, as the decoder replaces it too. The stale
+ * mark is MBE_FRAME_MARK_PREVIOUS_HELD, which only a rate-33 silence frame
+ * carries and no encoder sends; the input alternates noise and a vowel. */
+static inline int
+enc_test_stale_mark(const struct enc_codec* c, void* enc) {
+    enum { FRAMES = 120, SEGMENT = 10 };
+
+    struct enc_fixture vowel = {.kind = ENC_VOWEL, .f0 = 150.0, .level = 0.05};
+    struct enc_fixture noise = {.kind = ENC_NOISE, .level = 0.02};
+    mbe_parms ec, ep, eh, dc, dp, dh;
+    int wrong = 0, voice = 0, unvoiced = 0;
+    enc_rng = 0x57a1eu;
+    c->reset(enc);
+    mbe_initMbeParms(&ec, &ep, &eh);
+    mbe_initMbeParms(&dc, &dp, &dh);
+    for (int f = 0; f < FRAMES; f++) {
+        float pcm[160];
+        char bits[88];
+        enc_fixture_frame(((f / SEGMENT) % 2 == 0) ? &noise : &vowel, f, pcm);
+        mbe_set_frame_mark(&ec, MBE_FRAME_MARK_PREVIOUS_HELD);
+        mbe_set_frame_mark(&dc, MBE_FRAME_MARK_PREVIOUS_HELD);
+        const int r = c->encode(enc, pcm, bits, &ec, &ep);
+        if (r < 0) {
+            return 1;
+        }
+        const int kind = (r == c->tone_kind) ? 1 : c->decode(bits, &dc, &dp);
+        if (kind < 0) {
+            return 1;
+        }
+        if (kind == 0) { /* a voice frame */
+            voice++;
+            unvoiced += enc_no_voiced_band(&dc);
+            wrong +=
+                !enc_float_bits_equal(dc.PHIl[0], ec.PHIl[0]) || mbe_frame_mark(&ec) == MBE_FRAME_MARK_PREVIOUS_HELD;
+            mbe_moveMbeParms(&dc, &dp);
+        }
+        mbe_moveMbeParms(&ec, &ep);
+    }
+    printf(
+        "%s stale frame mark: %d of %d voice frames (%d with no voiced band) kept a mark the decoder does not give\n",
+        c->name, wrong, voice, unvoiced);
+    return wrong != 0 || unvoiced == 0 || voice == unvoiced;
 }
 
 /* A rejected frame leaves the stream exactly as if it had never been offered. */
@@ -1082,17 +1147,6 @@ struct enc_unvoiced_code {
     int L;
 };
 
-/* Whether the decoder's model of a voice frame has no voiced harmonic. */
-static inline int
-enc_no_voiced_band(const mbe_parms* mp) {
-    for (int l = 1; l <= mp->L && l <= 56; l++) {
-        if (mp->Vl[l]) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /* A voice frame with no voiced band at another pitch code or harmonic count;
  * prints and returns 1 if so. */
 static inline int
@@ -1217,10 +1271,10 @@ enc_test_unvoiced_alternating(const struct enc_codec* c, void* enc, const struct
 
 /*
  * A frame that takes the fixed code but fails (a prediction history from which
- * the model would overflow) is rejected with cur_mp untouched, and leaves the
- * analysis state as it was: the stream goes on exactly as if it had never been
- * offered. The rejected frame is louder than the one retried, so analysis it
- * left behind would change the stream.
+ * the model would overflow) is rejected with cur_mp untouched, its frame mark
+ * included, and leaves the analysis state as it was: the stream goes on
+ * exactly as if it had never been offered. The rejected frame is louder than
+ * the one retried, so analysis it left behind would change the stream.
  */
 static inline int
 enc_test_unvoiced_rollback(const struct enc_codec* c, void* enc, const struct enc_unvoiced_code* u) {
@@ -1241,7 +1295,6 @@ enc_test_unvoiced_rollback(const struct enc_codec* c, void* enc, const struct en
         for (int f = 0; f < FRAMES; f++) {
             if (pass == 1 && f == AT) {
                 mbe_parms bad = prev;
-                const mbe_parms before = cur;
                 float louder[160];
                 char unused[88];
                 for (int i = 0; i < 160; i++) {
@@ -1250,6 +1303,9 @@ enc_test_unvoiced_rollback(const struct enc_codec* c, void* enc, const struct en
                 for (int l = 0; l <= 56; l++) {
                     bad.log2Ml[l] = (2 * l <= bad.L) ? 1000.0f : -1000.0f;
                 }
+                /* A mark the frame would replace if it were accepted. */
+                mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PREVIOUS_HELD);
+                const mbe_parms before = cur;
                 if (c->encode(enc, louder, unused, &cur, &bad) != MBE_STATUS_INVALID_ARGUMENT
                     || !enc_parms_identical(&cur, &before)) {
                     printf("%s unvoiced rollback: the failing frame was not rejected cleanly\n", c->name);
@@ -1288,6 +1344,7 @@ static inline int
 enc_run_common(const struct enc_codec* c, void* enc) {
     int fails = 0;
     fails += enc_test_state_parity(c, enc);
+    fails += enc_test_stale_mark(c, enc);
     fails += enc_test_invalid_samples(c, enc);
     fails += enc_test_prediction_boundaries(c, enc);
     fails += enc_test_short_float(c, enc);

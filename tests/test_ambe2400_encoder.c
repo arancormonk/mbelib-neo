@@ -262,6 +262,7 @@ main(int argc, char** argv) {
 #include "ambe3600x2400_internal.h"
 #include "ambe_encoder.h"
 #include "encoder_test_support.h"
+#include "mbe_adaptive.h"
 #include "mbe_ecc.h"
 #include "mbe_encoder.h"
 #include "mbe_tone.h"
@@ -525,7 +526,8 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     int bad_frames = 0, voice = 0, first_bad = -1;
     float worst = 0;
     int worst_frame = -1, worst_l = -1;
-    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0;
+    int L_mism = 0, Vl_mism = 0, gamma_mism = 0, w0_mism = 0, log2_mism = 0, Ml_mism = 0, mark_mism = 0;
+    int unvoiced = 0, marked = 0;
     for (int f = 0; f < FRAMES; f++) {
         char d[49];
         unsigned char saved_prev[sizeof(e_prev)];
@@ -582,6 +584,14 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
                 frame_bad = 1;
             }
         }
+        /* The frame mark (PHIl[0]), by bit pattern: b0 123, the fixed code of
+         * a frame with no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT. */
+        if (!float_bits_equal(d_cur.PHIl[0], e_cur.PHIl[0])) {
+            mark_mism++;
+            frame_bad = 1;
+        }
+        unvoiced += enc_no_voiced_band(&d_cur);
+        marked += mbe_frame_mark(&d_cur) != MBE_FRAME_MARK_NONE;
         if (frame_bad) {
             bad_frames++;
             if (first_bad < 0) {
@@ -597,7 +607,9 @@ test_state_parity(mbe_ambe2400_encoder* enc) {
     printf("  bitwise w0 mismatches: %d\n", w0_mism);
     printf("  bitwise log2Ml mismatches: %d, bitwise Ml mismatches: %d\n", log2_mism, Ml_mism);
     printf("  worst |log2Ml| diff: %g (frame %d, l=%d)\n", worst, worst_frame, worst_l);
-    return bad_frames ? 1 : 0;
+    printf("  frame mark mismatches: %d; frames with no voiced band: %d, marked frames: %d\n", mark_mism, unvoiced,
+           marked);
+    return (bad_frames || unvoiced == 0) ? 1 : 0;
 }
 
 static int
@@ -1890,6 +1902,7 @@ main(void) {
     fails += test_frame_single_bit_errors();
     fails += test_dv_bytes();
     fails += test_state_parity(enc);
+    fails += enc_test_stale_mark(&dstar_codec, enc);
     fails += test_prediction_boundaries(enc);
     fails += test_pitch_law();
     /* 400 Hz, the shortest analysed period, is b0 3; b0 0..2 reach 402..418 Hz. */
