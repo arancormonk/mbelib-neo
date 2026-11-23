@@ -471,12 +471,14 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
  * frames. prev_mp is read-only. To restart a stream, call
  * mbe_ambe2400EncoderReset() and mbe_initMbeParms().
- * State equivalence holds with both the mbe_processAmbe2400* path and a bare
- * mbe_decodeAmbe2400Parms() chain in the fields that decoder sets: w0, L, Vl,
- * gamma, log2Ml, Ml and the frame mark (PHIl[0]). K is not among them: the
- * encoder writes the number of voiced harmonics there, and the decoder leaves
- * K as the caller has it. A tone frame leaves the decoder's prediction
- * history unchanged, so cur_mp is then a copy of prev_mp.
+ * For a voice frame, cur_mp equals the cur_mp of a bare
+ * mbe_decodeAmbe2400Parms() chain on the emitted bits, and the prev_mp that
+ * the mbe_processAmbe2400* path leaves (that path keeps the prediction model
+ * in prev_mp and enhances its cur_mp in place), in w0, L, gamma, the frame
+ * mark (PHIl[0]), and Vl, log2Ml and Ml over harmonics 1..L. K is not among
+ * them: the encoder writes the number of voiced harmonics there, and the
+ * decoder leaves K as the caller has it. A tone frame leaves the decoder's
+ * prediction history unchanged, so cur_mp is then a copy of prev_mp.
  *
  * The analysis is centred one sample before the frame: parameters lag audio
  * by about 10 ms. The pitch analysis spans the whole frame, while the spectral
@@ -796,10 +798,11 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  * amplitudes the decoder will reconstruct, weighted toward the strong
  * harmonics. The bits remain valid for any decoder.
  *
- * The state contract is the D-STAR encoder's: initialize with
+ * The calling sequence is the D-STAR encoder's: initialize with
  * mbe_ambe2450EncoderAlloc() and mbe_initMbeParms(), and after every frame
- * call mbe_moveMbeParms(cur_mp, prev_mp). For a voice frame cur_mp is what
- * mbe_decodeAmbe2450Parms() decodes from ambe_d given prev_mp. A tone frame
+ * call mbe_moveMbeParms(cur_mp, prev_mp). For a voice frame cur_mp is, in
+ * every field (K included), what mbe_decodeAmbe2450Parms() leaves in it
+ * decoding ambe_d given prev_mp. A tone frame
  * leaves the decoder's prediction history unchanged (TIA-102.BABA-1 4.3), so
  * cur_mp is then a copy of prev_mp: a snapshot of the history, not a model of
  * the tone. To hear what was sent, run the emitted bits through
@@ -977,10 +980,11 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * frames. No P25 measurement on hardware exists, and b0 127 is not among the
  * codes measured.
  *
- * The state contract is the D-STAR encoder's: initialize with
+ * The calling sequence is the D-STAR encoder's: initialize with
  * mbe_imbe4400EncoderAlloc() and mbe_initMbeParms(), and after every frame
- * call mbe_moveMbeParms(cur_mp, prev_mp); cur_mp is what
- * mbe_decodeImbe4400Parms() decodes from imbe_d given prev_mp. To restart a
+ * call mbe_moveMbeParms(cur_mp, prev_mp); cur_mp is, in every field (K
+ * included), what mbe_decodeImbe4400Parms() leaves in it decoding imbe_d
+ * given prev_mp. To restart a
  * stream, call mbe_imbe4400EncoderReset() and mbe_initMbeParms().
  *
  * The timing is the D-STAR encoder's: parameters lag audio by about 10 ms,
