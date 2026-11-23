@@ -1435,13 +1435,14 @@ at the lowest pitch code (65 Hz, the fixed code's pitch) next to unvoiced ones (
 rate-33 frames more).
 
 The gate sets `unvoiced-code-development`, `-validation`, `-tones` and `-channel` were declared
-before scoring and pass: no decode of DVSI's bits changes in any mode (speech, tone and channel
-vectors), no tone vector's encoder tone agreement falls or tone frames appear where DVSI sends voice
-(both unchanged on every vector), and the encoders' LSD from DVSI's encoding and from the input does
-not rise by more than 0.01 dB nor the level gap by more than 0.1 dB (largest mean rise: D-STAR's
-level gap, +0.058 dB on validation; on single vectors up to +0.17 dB, `noisy`). The final partition
-was not scored for this change alone ([November 2026: encoders and rate-33 rows 18 to
-31](#november-2026-encoders-and-rate-33-rows-18-to-31)).
+before scoring and pass: no decode of DVSI's bits changes in any mode, the speech vectors' by their
+samples' hashes and the tone and channel-error vectors' by theirs since a second scoring ([Scoring
+history](#scoring-history)), no tone vector's encoder tone agreement falls or tone frames appear
+where DVSI sends voice (both unchanged on every vector), and the encoders' LSD from DVSI's encoding
+and from the input does not rise by more than 0.01 dB nor the level gap by more than 0.1 dB (largest
+mean rise: D-STAR's level gap, +0.058 dB on validation; on single vectors up to +0.17 dB, `noisy`).
+The final partition was not scored for this change alone ([November 2026: encoders and rate-33 rows
+18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)).
 
 Not done: choosing per frame between "ends at the frame's start" and "lasts to mid-frame" (the
 codes inside DVSI's ranges), sending DVSI's default codes, and sending rate-33 rows 17 to 31.
@@ -1551,15 +1552,17 @@ that of the bins 20 dB and more below it, 62% of the bins measured, rises by 0.0
 every weight 1 neither moves. The rise is largest on `dam_10ov` and `lvl` (D-STAR, +0.13 and +0.12
 dB); on the validation vectors the change is +0.006 and -0.001 dB.
 
-The gate sets `joint-search-development`, `-validation`, `-tones` and `-channel` were declared before
-scoring. `-validation`, `-tones` and `-channel` pass: no decode of DVSI's bits changes in any mode,
-the IMBE encoder's bits are unchanged on every vector, the encoders' tone results are unchanged on
-every tone vector, and the D-STAR and rate-33 encodings' log-spectral distance from DVSI's encoding
-and from the input, envelope correlation with the input and level gap to DVSI's encoding all stay
-within their limits. `-development` fails on one check: the log-spectral distance from the input
-rises by 0.0105 (D-STAR) and 0.0123 dB (rate 33) against a limit of 0.01, for the reason above; its
-other checks pass. The final partition was not scored for this change alone ([November 2026: encoders
-and rate-33 rows 18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)).
+The gate sets `joint-search-development`, `-validation`, `-tones` and `-channel` were declared
+before scoring. `-validation`, `-tones` and `-channel` pass: no decode of DVSI's bits changes in any
+mode (by the samples' hashes, those of the tone and channel-error vectors since a second scoring,
+[Scoring history](#scoring-history)), the IMBE encoder's bits are unchanged on every vector, the
+encoders' tone results are unchanged on every tone vector, and the D-STAR and rate-33 encodings'
+log-spectral distance from DVSI's encoding and from the input, envelope correlation with the input
+and level gap to DVSI's encoding all stay within their limits. `-development` fails on one check:
+the log-spectral distance from the input rises by 0.0105 (D-STAR) and 0.0123 dB (rate 33) against a
+limit of 0.01, for the reason above; its other checks pass. The final partition was not scored for
+this change alone ([November 2026: encoders and rate-33 rows 18 to
+31](#november-2026-encoders-and-rate-33-rows-18-to-31)).
 
 **Cost.** The refinement adds 3.6 to 3.9 µs a frame in `dev-release` on the machine measured
 (`bench_encode`, medians: D-STAR 19.8 to 23.6 µs, rate 33 20.9 to 24.8 µs).
@@ -2136,11 +2139,11 @@ tone vectors and no other stream: every check came out as before. The D-STAR che
 detector agreement to no change on any vector in the five metrics its description names, and
 pass. The final partition was not held out for these changes.
 
-The three changes of 2.6.12 were each scored once against the commit before them, on the
-development, validation, tone and channel partitions (the band-grid change a second time, below);
-`joint-search-development` failed and was kept as declared. The final partition was then scored
-once for the three together, against a gate set declared before it ([November 2026: encoders and
-rate-33 rows 18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)), and passed.
+The three changes of 2.6.12 were each scored against the commit before them, on the development,
+validation, tone and channel partitions, and each a second time with the decode counts below;
+`joint-search-development` failed both times and was kept as declared. The final partition was then
+scored once for the three together, against a gate set declared before it ([November 2026: encoders
+and rate-33 rows 18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)), and passed.
 
 `r33-row-grid-tones` and `r33-row-grid-channel` state that the D-STAR and P25 decodes of DVSI's bits
 are unchanged, but checked it through `speech.pcm_changed_vectors`, a count over the speech vectors
@@ -2153,3 +2156,14 @@ development, validation, tone and channel partitions, with the same builds and p
 development and validation results are the same to the last digit, every check passes as before,
 and none of the D-STAR and P25 decodes of the 52 tone and 8 channel-error vectors changes (the
 grid changes the rate-33 decodes of 9 tone vectors and of all 8 channel-error vectors).
+
+`unvoiced-code-tones`, `unvoiced-code-channel`, `joint-search-tones` and `joint-search-channel`
+state that every decode of DVSI's bits is unchanged, but checked it through tone, mute and distance
+metrics, which a changed decode can leave as they were: on the band-grid change's runs both tone
+sets pass, with nine rate-33 tone decodes changed. After their first scoring the four sets were
+given the same counts, at most 0 in all three modes, and both changes were scored again on the
+development, validation, tone and channel partitions, with the same builds and protocol: the
+development and validation results are the same to the last digit (`joint-search-development`
+failing as before, by 0.0105 and 0.0123 dB against 0.01), every other check passes as before, and
+for either change none of the decodes of the 52 tone and 8 channel-error vectors changes in any
+mode.
