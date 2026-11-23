@@ -438,12 +438,12 @@ finite_float(const float* x) {
     return (bits & 0x7FFFFFFFu) <= 0x7F000000u;
 }
 
-#define MEASURE_TONES 4
+#define MEASURE_TONES 5
 
-/* Four tones on harmonics 3, 9, 12 and 21 of a grid, at unequal amplitudes
+/* Five tones on harmonics 3, 9, 12, 21 and 36 of a grid, at unequal amplitudes
  * (16-bit scale). */
-static const int measure_tone[MEASURE_TONES] = {3, 9, 12, 21};
-static const double measure_amp[MEASURE_TONES] = {2000.0, 6000.0, 1500.0, 3000.0};
+static const int measure_tone[MEASURE_TONES] = {3, 9, 12, 21, 36};
+static const double measure_amp[MEASURE_TONES] = {2000.0, 6000.0, 1500.0, 3000.0, 2500.0};
 
 /* One estimator's levels against the tones: the largest error of a tone's
  * level from 20 log10(amplitude) + offset dB, the smallest drop from a tone to
@@ -485,23 +485,25 @@ measure_margins(const float* m, int harmonics, double offset, double* error, dou
 }
 
 /*
- * mbe_analysis_measure_at() reads every harmonic from its own bins. The four
- * tones lie on the IMBE encoder's fixed grid (b0 127, f0 = 2 / 166.5, eq 46)
- * and repeat at three times its fundamental, which the analysis tracks (287 Hz
- * against 96.1 Hz). Measured again on the fixed grid, the harmonic that holds
- * each tone carries its level: the magnitude within 1 dB of half the tone's
- * amplitude, and eq (44)'s estimate within 1 dB of the tones' ratios to the
- * loudest; the harmonics beside a tone lie at least 10 dB below it, and every
- * other harmonic at least 25 dB below the weakest tone (measured: errors at
- * most 0.14 dB, at least 15.7 dB beside, 38 dB elsewhere). A grid shifted by
- * one harmonic either way, or a tone's harmonic exchanged with the one above,
- * fails all three; harmonics 1 and 2 exchanged fail the last.
+ * mbe_analysis_measure_at() reads every harmonic from its own bins. The five
+ * tones lie on the IMBE encoder's fixed grid (b0 127, f0 = 2 / 166.5, eq 46),
+ * the last near the top of the 37 harmonics that encoder codes, and repeat at
+ * three times its fundamental, which the analysis tracks (287 Hz against 96.1
+ * Hz). Measured again on the fixed grid, the result holds every harmonic whose
+ * centre lies below Nyquist (41), and the harmonic that holds each tone carries
+ * its level: the magnitude within 1 dB of half the tone's amplitude, and eq
+ * (44)'s estimate within 1 dB of the tones' ratios to the loudest; the
+ * harmonics beside a tone lie at least 10 dB below it, and every other harmonic
+ * at least 25 dB below the weakest tone (measured: errors at most 0.14 dB, at
+ * least 15.7 dB beside, 38 dB elsewhere). A grid shifted by one harmonic either
+ * way, or a tone's harmonic exchanged with the one above, fails all three;
+ * harmonics 1 and 2 exchanged fail the last.
  */
 static void
 test_measure_at(mbe_fft_plan* fft, mbe_acf_plan* acf) {
     const double grid = 2.0 / 166.5; /* cycles per sample */
     const float grid_f0 = (float)grid;
-    double phase[MEASURE_TONES] = {0.3, 1.1, 2.0, 0.6};
+    double phase[MEASURE_TONES] = {0.3, 1.1, 2.0, 0.6, 1.7};
     double worst_error = 0.0, worst_side = 1e9, worst_rest = 1e9;
     struct mbe_analysis_state state;
     mbe_analysis_reset(&state);
@@ -531,7 +533,12 @@ test_measure_at(mbe_fft_plan* fft, mbe_acf_plan* acf) {
         memcpy(&f0_bits, &r.f0, sizeof(f0_bits));
         memcpy(&grid_bits, &grid_f0, sizeof(grid_bits));
         assert(f0_bits == grid_bits);
-        assert(r.harmonics > measure_tone[MEASURE_TONES - 1]);
+        int below_nyquist = 0; /* the grid's harmonics whose centre lies below 4 kHz */
+        while (below_nyquist < MBE_ANALYSIS_HARMONICS && (below_nyquist + 1) * grid < 0.5) {
+            below_nyquist++;
+        }
+        assert(r.harmonics == below_nyquist);
+        (void)below_nyquist;
         (void)f0_bits;
         (void)grid_bits;
 
