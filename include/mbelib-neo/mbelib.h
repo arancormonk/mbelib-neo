@@ -627,7 +627,11 @@ MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
  * frames both decode into `cur_mp` and return `MBE_AMBE2450_FRAME_VOICE`, as
  * in 2.1. A silence frame decodes as DVSI's decoder plays it: w0 = 2*pi/32,
  * every band unvoiced, on 15 bands (where TIA-102.BABA-1 4.1 gives 14) and
- * with its amplitudes `Ml` a further 13.8 dB below the voice-frame law. Tone
+ * with its amplitudes `Ml` a further 13.8 dB below the voice-frame law. A
+ * voice frame of V/UV row (b1) 18 to 31, every band unvoiced, decodes as DVSI's
+ * decoder plays it, on a band grid: `w0 = 2.81 / L` radians per sample with
+ * the L of its pitch code b0 (the coded pitch itself is not returned), and the
+ * unvoiced amplitudes scaled by `0.2046 / sqrt(w0)` of that `w0`. Tone
  * ID 255 returns `MBE_AMBE2450_FRAME_ERASURE`, as any unusable tone index
  * does. A caller managing its own state should copy `cur_mp` into `prev_mp`
  * only when `mbe_classifyAmbe2450Frame()` reports `MBE_AMBE2450_FRAME_VOICE`;

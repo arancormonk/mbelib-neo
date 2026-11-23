@@ -595,6 +595,20 @@ ambe2450_set_silence_model(mbe_parms* cur_mp, int* L, float* f0, int* silence) {
     }
 }
 
+/*
+ * V/UV rows 18-31 (Annex B: every band unvoiced, as row 16). DVSI's decoder
+ * plays them on a band grid whose L bands always span 3.58 kHz, w0 = 2.81 / L
+ * radians per sample, the pitch code setting only L (the published AMBE-3000R
+ * measurement, mbevocoder's docs/decoder-quality.md "Unvoiced rows 18-31: the
+ * band grid", which DVSI's vectors bear out: docs/dvsi-parity.md "Rate 33:
+ * V/UV vectors"). The grid's w0 is the model's pitch like any other: the
+ * unvoiced factor 0.2046 / sqrt(w0) is taken from it, and it enters the
+ * history; the prediction (4.4) depends on L alone. Row 17 keeps the coded
+ * pitch. The encoder never sends these rows (4.2).
+ */
+#define MBE_AMBE2450_GRID_FIRST_ROW 18
+#define MBE_AMBE2450_GRID_SPAN      2.81f
+
 static int
 ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* L, float* f0, int* silence) {
     const int kind = ambe2450_classify_frame(ambe_d);
@@ -611,6 +625,10 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
         cur_mp->w0 = *f0 * (float)2 * M_PI;
         *L = mbe_ambe2450_harmonic_count(*b0);
         cur_mp->L = *L;
+        if (ambe2450_field(ambe_d, 1) >= MBE_AMBE2450_GRID_FIRST_ROW) {
+            cur_mp->w0 = MBE_AMBE2450_GRID_SPAN / (float)*L;
+            *f0 = cur_mp->w0 / (2.0f * (float)M_PI);
+        }
     }
     return kind;
 }
