@@ -44,6 +44,15 @@ uniform(float lo, float hi) {
     return lo + ((hi - lo) * ((float)(rnd() & 0xFFFFu) / 65536.0f));
 }
 
+/* Finite: at most 2^1023 in magnitude, a NaN failing, judged on the bit
+ * pattern read from memory so that no build's float semantics can pass it. */
+static int
+finite_double(const double* x) {
+    uint64_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & UINT64_C(0x7FFFFFFFFFFFFFFF)) <= UINT64_C(0x7FE0000000000000);
+}
+
 static void
 block_lengths(const struct codec* c, int L, int Ji[5]) {
     Ji[0] = 0;
@@ -120,7 +129,8 @@ weight(const struct ambe_enc_frame* q, int l) {
     return fmin(10.0, fmax(0.1, w));
 }
 
-/* E = sum_l w_l (That_l - mean(That) - (T_l - mean(T)))^2 for the rows b. */
+/* E = sum_l w_l (That_l - mean(That) - (T_l - mean(T)))^2 for the rows b;
+ * 1 if the rows do not decode or E is not finite. */
 static int
 weighted_error(const struct codec* c, const struct ambe_enc_frame* q, const int b[9], double* error) {
     double r[57];
@@ -137,7 +147,7 @@ weighted_error(const struct codec* c, const struct ambe_enc_frame* q, const int 
         const double e = r[l] - ((double)q->Tl[l] - mean_t);
         *error += weight(q, l) * e * e;
     }
-    return 0;
+    return !finite_double(error);
 }
 
 /* The decoder receives every row but D-STAR's odd b8; a block of at most two
@@ -198,7 +208,13 @@ test_model_is_decoder(const struct codec* c) {
                 return 1;
             }
             for (int l = 1; l <= L; l++) {
-                worst = fmax(worst, fabs((double)model[l] - r[l]));
+                /* fmax() would pass over a NaN difference. */
+                const double difference = fabs((double)model[l] - r[l]);
+                if (!finite_double(&difference)) {
+                    printf("%s model: L %d, harmonic %d is not finite\n", c->name, L, l);
+                    return 1;
+                }
+                worst = fmax(worst, difference);
             }
         }
     }
@@ -259,7 +275,7 @@ test_never_rises(const struct codec* c) {
         ambe_enc_refine(&q, c->t);
         double e_open, e_refined;
         if (weighted_error(c, &open, open.b, &e_open) != 0 || weighted_error(c, &q, q.b, &e_refined) != 0) {
-            printf("%s: frame %d did not decode\n", c->name, f);
+            printf("%s: frame %d did not decode to a finite error\n", c->name, f);
             return 1;
         }
         if (e_refined > e_open + (1e-4 * e_open) + 1e-6) {

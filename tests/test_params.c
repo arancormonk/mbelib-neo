@@ -1274,12 +1274,16 @@ test_ambe2450_unvoiced_row_grid(void) {
         const double coded_w0 = 2.0 * M_PI * pow(2.0, -4.322605 - (0.0220427 * b0));
         int b[9] = {b0, 16, 20, 100, 30, 10, 5, 5, 3};
         mbe_parms row16, prev16;
-        assert(ambe2450_decode_fresh(b, &row16, &prev16) == MBE_AMBE2450_FRAME_VOICE);
+        const int row16_type = ambe2450_decode_fresh(b, &row16, &prev16);
+        assert(row16_type == MBE_AMBE2450_FRAME_VOICE);
+        (void)row16_type;
         assert(row16.L == mbe_ambe2450_harmonic_count(b0));
         for (int b1 = 0; b1 < 32; ++b1) {
             mbe_parms cur, prev;
             b[1] = b1;
-            assert(ambe2450_decode_fresh(b, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
+            const int type = ambe2450_decode_fresh(b, &cur, &prev);
+            assert(type == MBE_AMBE2450_FRAME_VOICE);
+            (void)type;
             assert(cur.L == row16.L);
             for (int l = 1; l <= cur.L; ++l) {
                 assert(float_bits_equal(cur.log2Ml[l], row16.log2Ml[l]));
@@ -1311,10 +1315,14 @@ test_ambe2450_grid_prediction(void) {
             const int first[9] = {40, (pass == 0) ? b1 : 16, 25, 150, 70, 12, 9, 4, 1};
             mbe_parms prev;
             char ambe_d[49];
-            assert(ambe2450_decode_fresh(first, &after[pass], &prev) == MBE_AMBE2450_FRAME_VOICE);
+            const int first_type = ambe2450_decode_fresh(first, &after[pass], &prev);
+            assert(first_type == MBE_AMBE2450_FRAME_VOICE);
+            (void)first_type;
             mbe_moveMbeParms(&after[pass], &prev);
             mbe_ambe2450_pack(next, ambe_d);
-            assert(mbe_decodeAmbe2450Parms(ambe_d, &after[pass], &prev) == MBE_AMBE2450_FRAME_VOICE);
+            const int next_type = mbe_decodeAmbe2450Parms(ambe_d, &after[pass], &prev);
+            assert(next_type == MBE_AMBE2450_FRAME_VOICE);
+            (void)next_type;
         }
         assert(after[0].L == after[1].L);
         assert(float_bits_equal(after[0].w0, after[1].w0));
