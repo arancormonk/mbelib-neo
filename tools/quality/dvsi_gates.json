@@ -4225,5 +4225,105 @@
         "min_coverage": 0.1
       }
     ]
+  },
+  "encoder-quality-final": {
+    "description": "The three changes of this change set together (the encoders' fixed pitch code for frames with no voiced band, the AMBE encoders' joint choice of their six spectral vectors with recalibrated magnitude scales, and rate-33 V/UV rows 18 to 31 on the published band grid), main against the change set, final vectors. Built from the development and validation gate sets of the three changes (unvoiced-code-*, joint-search-*, r33-row-grid-*) with the same metrics and rules: where two changes bound the same metric their limits are added, and 'unchanged' is kept only where it holds for the change set as a whole. So: the D-STAR and P25 decodes of DVSI's bits are unchanged; for each encoder the log-spectral distance of its decoded encoding from DVSI's encoding and from the input rises by no more than 0.02 dB (D-STAR, rate 33: 0.01 from each encoder change) or 0.01 dB (P25: the first change only) and its level gap to DVSI's encoding grows by no more than 0.2 dB (D-STAR, rate 33) or 0.1 dB (P25); the D-STAR and rate-33 encodings' envelope correlation with the input falls by no more than 0.002 (the second change only); the encoders' bits change, so no bit-identity check is kept; and rate 33's decode, which the third change moves, takes that change's checks: its log-spectral distance from DVSI's decode falls (mean, 95% interval below 0), its sample-for-sample waveform correlation and envelope correlation with DVSI's decode fall by no more than 0.0005, its level against DVSI's moves by at most 0.05 dB (mean and every vector), and its log-spectral distance from the input rises by no more than 0.005 dB.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.2
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.1
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease"
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.05
+      },
+      {
+        "mode": "r33",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005
+      }
+    ]
   }
 }
