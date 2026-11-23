@@ -1245,6 +1245,88 @@ test_ambe2450_vuv_rendering(void) {
     }
 }
 
+/* Decode rate-33 quantizer values b0..b8 from a fresh state; returns the frame type. */
+static int
+ambe2450_decode_fresh(const int b[9], mbe_parms* cur, mbe_parms* prev) {
+    char ambe_d[49];
+    mbe_parms enhanced;
+    mbe_initMbeParms(cur, prev, &enhanced);
+    mbe_ambe2450_pack(b, ambe_d);
+    return mbe_decodeAmbe2450Parms(ambe_d, cur, prev);
+}
+
+static int
+relative_close(double a, double b, double tol) {
+    return fabs(a - b) <= tol * fabs(b);
+}
+
+/* V/UV rows 18-31 play, as on DVSI's decoder, on a band grid whose L bands
+ * span 3.58 kHz: w0 = 2.81 / L, L from the pitch code, every band unvoiced,
+ * the unvoiced factor 0.2046 / sqrt(w0) taken from that w0. Against the same
+ * bits at row 16 (all unvoiced at the coded pitch) the prediction gives the
+ * same log2Ml, and Ml differs by the two unvoiced factors alone. Rows 0-17
+ * keep the pitch law. */
+static void
+test_ambe2450_unvoiced_row_grid(void) {
+    static const int b0s[] = {0, 17, 40, 60, 100, 119};
+    for (size_t i = 0; i < sizeof(b0s) / sizeof(b0s[0]); ++i) {
+        const int b0 = b0s[i];
+        const double coded_w0 = 2.0 * M_PI * pow(2.0, -4.322605 - (0.0220427 * b0));
+        int b[9] = {b0, 16, 20, 100, 30, 10, 5, 5, 3};
+        mbe_parms row16, prev16;
+        assert(ambe2450_decode_fresh(b, &row16, &prev16) == MBE_AMBE2450_FRAME_VOICE);
+        assert(row16.L == mbe_ambe2450_harmonic_count(b0));
+        for (int b1 = 0; b1 < 32; ++b1) {
+            mbe_parms cur, prev;
+            b[1] = b1;
+            assert(ambe2450_decode_fresh(b, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
+            assert(cur.L == row16.L);
+            for (int l = 1; l <= cur.L; ++l) {
+                assert(float_bits_equal(cur.log2Ml[l], row16.log2Ml[l]));
+            }
+            if (b1 < 18) {
+                /* The pitch law, bit for bit as row 16 decodes it. */
+                assert(float_bits_equal(cur.w0, row16.w0));
+                assert(relative_close((double)cur.w0, coded_w0, 2e-6));
+                continue;
+            }
+            assert(relative_close((double)cur.w0, 2.81 / (double)cur.L, 1e-6));
+            const double factor = sqrt((double)row16.w0 / (double)cur.w0);
+            for (int l = 1; l <= cur.L; ++l) {
+                assert(cur.Vl[l] == 0);
+                assert(relative_close((double)cur.Ml[l], (double)row16.Ml[l] * factor, 1e-5));
+            }
+        }
+    }
+}
+
+/* The frame after a row-18-31 frame predicts from the same history as after
+ * the same bits at row 16: the grid changes w0, not L or log2Ml. */
+static void
+test_ambe2450_grid_prediction(void) {
+    static const int next[9] = {60, 3, 18, 200, 90, 17, 11, 3, 6};
+    for (int b1 = 18; b1 < 32; ++b1) {
+        mbe_parms after[2]; /* after the grid row, after row 16 */
+        for (int pass = 0; pass < 2; ++pass) {
+            const int first[9] = {40, (pass == 0) ? b1 : 16, 25, 150, 70, 12, 9, 4, 1};
+            mbe_parms prev;
+            char ambe_d[49];
+            assert(ambe2450_decode_fresh(first, &after[pass], &prev) == MBE_AMBE2450_FRAME_VOICE);
+            mbe_moveMbeParms(&after[pass], &prev);
+            mbe_ambe2450_pack(next, ambe_d);
+            assert(mbe_decodeAmbe2450Parms(ambe_d, &after[pass], &prev) == MBE_AMBE2450_FRAME_VOICE);
+        }
+        assert(after[0].L == after[1].L);
+        assert(float_bits_equal(after[0].w0, after[1].w0));
+        assert(float_bits_equal(after[0].gamma, after[1].gamma));
+        for (int l = 1; l <= after[0].L; ++l) {
+            assert(float_bits_equal(after[0].log2Ml[l], after[1].log2Ml[l]));
+            assert(float_bits_equal(after[0].Ml[l], after[1].Ml[l]));
+            assert(after[0].Vl[l] == after[1].Vl[l]);
+        }
+    }
+}
+
 /* Eq 116 scales an error-free frame whose amplitudes sum past 20480 down to
  * it; the IMBE and rate-33 paths, as DVSI's decoders, leave it unscaled. */
 static void
@@ -1424,6 +1506,8 @@ main(void) {
     test_low_band_phase_rendering();
     test_render_voicing_gains();
     test_ambe2450_vuv_rendering();
+    test_ambe2450_unvoiced_row_grid();
+    test_ambe2450_grid_prediction();
     test_amplitude_limit();
     test_dvsi_muted_onset();
     test_ambe2450_muted_onset();
