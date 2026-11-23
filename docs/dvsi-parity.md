@@ -1358,6 +1358,120 @@ was not scored for this change.
 Not done: choosing per frame between "ends at the frame's start" and "lasts to mid-frame" (the
 codes inside DVSI's ranges), sending DVSI's default codes, and sending rate-33 rows 17 to 31.
 
+### Joint choice of the AMBE spectral vectors
+
+After the gain, the D-STAR and rate-33 encoders code the frame's prediction residual `T_l` (l = 1..L)
+with six vectors: b3 and b4 (the PRBA vector, 512 and 128 rows) and b5 to b8 (one higher-order
+vector per block). TIA-102.BABA-1 4.3.1 and 4.3.2 take each as the row of its table "closest (i.e.
+has the minimum mean-squared error)" to its own target in the transform domain, and the encoders did
+exactly that, each index on its own, every coefficient weighted alike; D-STAR, which has no public
+specification, used the same search. Two things are lost that way: an error in a transform
+coefficient lands on the harmonics unevenly (the blocks differ in length, and the decoder removes the
+mean of the reconstructed residual), and an error on a spectral peak counts no more than the same
+error in a valley, although the peaks are what is heard.
+
+**The rule.** The nearest-row search stays as it was; the six indices are then refined together
+against the error the decoder will produce (`src/ambe/ambe_enc_search.c`):
+
+- E = sum over l of w_l (That_l - mean(That) - (T_l - mean(T)))², where That is the decoder's
+  residual for the chosen rows (the decoder uses it less its mean; the gain carries the mean), and
+  w_l = min(10, max(0.1, 2^((a_l - mean(a)) / 2))) with a_l the target log2 amplitudes: the square
+  root of the harmonic's target amplitude relative to the frame's geometric mean, bounded.
+- Two passes visit b3, b4, b5, b6, b7 and b8 in turn. At each visit, the other five held, the index
+  becomes the row with the smallest E among those the decoder can receive (D-STAR's b8: every second
+  row); the current row stays unless another is strictly better, and of equally good rows the lower
+  index wins. A block of at most two harmonics has no higher-order vector and keeps index 0. E never
+  rises.
+- The decoder's residual is linear in 23 numbers (G2..G8 of the PRBA vector and C(i,3..6) of each
+  block), so E is a quadratic in them, built from each block's weighted moments of its cosines, and
+  one visit scores a row by a quadratic in at most four numbers. A row is scored by its difference
+  from the current one, so a row equal to it there scores exactly 0 whatever the build's float
+  evaluation order.
+
+Gain, pitch, voicing, tone frames and the IMBE encoder are unchanged; packing, `cur_mp` and the
+prediction history use the refined indices. The bits are ordinary D-STAR and rate-33 bits: the
+refinement only chooses among rows every decoder receives, so they remain valid for any decoder.
+
+**DVSI.** DVSI's re-quantizations of a decoded model pick the PRBA vectors this library's nearest-row
+quantizer picks on 84 to 91% of frames ([Rate 33: field assignment of
+u3](#rate-33-field-assignment-of-u3)), so DVSI's encoder appears to follow the specification here.
+This change departs from both, for the gain measured below ([Departures from the
+specification](#departures-from-the-specification)).
+
+**The weighting.** A sweep of the exponent in w_l, measured on a prototype before [Encoder pitch code
+of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames) (narrow-band PESQ, ITU-T P.862, against
+the input speech, mean paired change on the 25 development and validation vectors, D-STAR / rate 33):
+exponent 1/4 +0.020 / +0.026, 1/2 +0.031 / +0.041, 1 +0.013 / +0.027. With every weight 1 (the
+decoder's unweighted error) the joint search does worse than the nearest rows: -0.010 / -0.014 then,
+and on this change's base -0.010 ± 0.006 / -0.009 ± 0.004, with ESTOI lower on 20 and 22 of the 25
+vectors. The weighting, not the joint search, makes the gain. Only the exponent 1/2 is used.
+
+**Level.** Fitting the peaks better raises the decoded level against DVSI's encoding of the same
+input, by 0.12 to 0.16 dB (D-STAR) and 0.13 to 0.17 dB (rate 33) on average over a partition. `AMBE2400_ENC_MAG_SCALE` and
+`AMBE2450_ENC_MAG_SCALE` were therefore re-derived by their procedure, the median over the
+development vectors of the level that puts our decoded encoding at DVSI's: D-STAR 1.02 to 1.075,
+rate 33 1.08 to 1.06. D-STAR's encoding sat about 0.5 dB below DVSI's before this change (a median
+-0.45 dB on the development vectors before the previous change, -0.49 dB after it); the scale now
+takes that out as well. Level of our decoded encoding against DVSI's, median (mean) over each
+partition's vectors, in dB:
+
+| Codec | Partition | Before | Joint search | Recalibrated |
+|---|---|---|---|---|
+| D-STAR | development | -0.49 (-0.46) | -0.38 (-0.34) | -0.01 (+0.06) |
+| D-STAR | validation | -0.46 (-0.46) | -0.27 (-0.29) | +0.16 (+0.14) |
+| Rate 33 | development | -0.01 (+0.04) | +0.20 (+0.21) | -0.02 (+0.04) |
+| Rate 33 | validation | -0.09 (-0.03) | +0.13 (+0.10) | -0.01 (-0.07) |
+
+Neighbouring D-STAR scales put the development median at -0.04 dB (1.07) and +0.04 dB (1.08); 1.075
+puts it nearest 0.
+
+**Results.** Against the commit before this change, both encodings decoded by this library's 2.6.11
+decoder (this change touches no decoder); the second set is the 70 recordings of [Encoder pitch code
+of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames) (mean paired change ± standard error,
+vectors improved):
+
+| Codec | PESQ, 25 vectors | ESTOI, 25 vectors | PESQ, 70 recordings | ESTOI, 70 recordings |
+|---|---|---|---|---|
+| D-STAR | +0.040 ± 0.007 (23/25) | +0.0099 ± 0.0008 (24/25) | +0.038 ± 0.008 (51/70) | +0.0114 ± 0.0010 (67/70) |
+| Rate 33 | +0.040 ± 0.005 (24/25) | +0.0142 ± 0.0010 (25/25) | +0.040 ± 0.009 (51/70) | +0.0149 ± 0.0009 (69/70) |
+
+Before recalibration the search alone gave D-STAR +0.039 / +0.041 and rate 33 +0.042 / +0.045 PESQ
+(25 vectors / 70 recordings), and the same ESTOI.
+
+On the scoreboard (joint lags, against the commit before it; both runs' encodings decoded by the
+same build), partition means:
+
+| Codec | Partition | LSD vs DVSI's encoding (dB) | LSD vs input (dB) | Level gap to DVSI's encoding (dB) | Envelope corr. vs input | Envelope corr. vs DVSI's encoding |
+|---|---|---|---|---|---|---|
+| D-STAR | development | 5.529 → 5.503 | 5.423 → 5.434 | 0.484 → 0.184 | 0.920 → 0.923 | 0.919 → 0.921 |
+| D-STAR | validation | 4.309 → 4.295 | 4.613 → 4.619 | 0.455 → 0.141 | 0.930 → 0.933 | 0.936 → 0.938 |
+| Rate 33 | development | 5.577 → 5.527 | 5.262 → 5.274 | 0.190 → 0.188 | 0.930 → 0.935 | 0.921 → 0.925 |
+| Rate 33 | validation | 4.266 → 4.226 | 4.661 → 4.660 | 0.130 → 0.123 | 0.930 → 0.933 | 0.934 → 0.937 |
+
+The decoded encoding comes closer to DVSI's encoding (log-spectral distance down on every partition
+and on 47 of the 50 encodings) and its envelope follows the input more closely (on 48 of the 50; the
+other two lose at most 0.0022). Its log-spectral distance from the input rises slightly on the
+development vectors, by 0.011 dB (D-STAR) and 0.012 dB (rate 33):
+the search alone does that (0.009 and 0.014; the recalibration adds 0.001 and takes 0.001 off). The
+weighting trades error on weak harmonics for error on strong ones, and log-spectral distance counts
+every spectrum bin's dB alike. Split by the bin's level in the input frame, the RMS error of the
+bins within 10 dB of the frame's strongest falls by 0.09 dB (D-STAR) and 0.10 dB (rate 33), while
+that of the bins 20 dB and more below it, 62% of the bins measured, rises by 0.04 to 0.06 dB; with
+every weight 1 neither moves. The rise is largest on `dam_10ov` and `lvl` (D-STAR, +0.13 and +0.12
+dB); on the validation vectors the change is +0.006 and -0.001 dB.
+
+The gate sets `joint-search-development`, `-validation`, `-tones` and `-channel` were declared before
+scoring. `-validation`, `-tones` and `-channel` pass: no decode of DVSI's bits changes in any mode,
+the IMBE encoder's bits are unchanged on every vector, the encoders' tone results are unchanged on
+every tone vector, and the D-STAR and rate-33 encodings' log-spectral distance from DVSI's encoding
+and from the input, envelope correlation with the input and level gap to DVSI's encoding all stay
+within their limits. `-development` fails on one check: the log-spectral distance from the input
+rises by 0.0105 (D-STAR) and 0.0123 dB (rate 33) against a limit of 0.01, for the reason above; its
+other checks pass. The final partition was not scored for this change.
+
+**Cost.** The refinement adds 3.6 to 3.9 µs a frame in `dev-release` on the machine measured
+(`bench_encode`, medians: D-STAR 19.8 to 23.6 µs, rate 33 20.9 to 24.8 µs).
+
 ## Departures from the specification
 
 | Item | Specification text | DVSI's AMBE-3000 | This library |
@@ -1378,6 +1492,7 @@ codes inside DVSI's ranges), sending DVSI's default codes, and sending rate-33 r
 | Amplitude limit (P25, rate 33) | eqs 115-116 scale a frame whose amplitudes sum past 20480 (error-free) | no scaling | DVSI ([Amplitude limit](#amplitude-limit)) |
 | Rate-33 V/UV vectors | Annex B rows and eq 5's columns; rows 17-31 all unvoiced | each voiced column reaches 250 Hz into an unvoiced one below; row 17 voices its lowest column | DVSI ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
 | Encoder pitch code of a frame with no voiced band | TIA-102.BABA-1 4.1 and TIA-102.BABA 6.1 (eq 45): the code of the frame's own estimated fundamental, for every voice frame | D-STAR and P25: never the tracked pitch (a default code or one of 56 codes kept for such frames); rate 33: b0 119 on 20.7% of its row-16 frames | one fixed code per codec: D-STAR b0 123, rate 33 b0 119, P25 b0 127, amplitudes measured on its grid ([Encoder pitch code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)) |
+| Encoder spectral vectors (D-STAR, rate 33) | TIA-102.BABA-1 4.3.1 and 4.3.2: each of b3..b8 the row closest to its own target (minimum mean-squared error) | appears to follow the text (its re-quantizations pick this library's nearest PRBA rows on 84-91% of frames) | the nearest rows, then the six refined together to lower the amplitude-weighted error of the residual the decoder reconstructs ([Joint choice of the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors)) |
 | Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | at pitches below about 90 Hz a 500 Hz column holding little more than the learned background noise is unvoiced ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
 
 The P25 attenuation is not adopted: no rule tried (eq 112-116 as printed, and instantaneous,

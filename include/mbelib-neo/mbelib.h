@@ -457,7 +457,11 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * than at the tracked pitch, its amplitudes measured on that grid: DVSI's
  * decoder and this library's read that code as "the voicing of the frame
  * before lasts through this frame's first 10 ms", where b0 64..119 would say
- * it ends at the frame's start.
+ * it ends at the frame's start. The six spectral vector indices (b3..b8) are
+ * chosen together: each starts as the codebook row nearest its own target, and
+ * two passes then refine them against the error of the amplitudes the decoder
+ * will reconstruct, weighted toward the strong harmonics. The bits are
+ * ordinary D-STAR bits; any decoder plays them.
  *
  * Initialize with mbe_ambe2400EncoderAlloc() and mbe_initMbeParms(), then
  * advance prediction state with mbe_moveMbeParms(cur_mp, prev_mp) between
@@ -775,7 +779,11 @@ MBE_API void mbe_ambe2450EncoderFree(mbe_ambe2450_encoder* enc);
  * low-level voice. A voice frame with no voiced band (V/UV vector 16) is sent
  * at b0 119 (56 harmonics) rather than at the tracked pitch, its amplitudes
  * measured on that grid, where clause 4.1 codes every voice frame's own
- * fundamental.
+ * fundamental. Clauses 4.3.1 and 4.3.2 choose each of the six spectral vectors
+ * (b3..b8) as the row nearest its own target; the encoder starts there and
+ * then refines the six together, in two passes, against the error of the
+ * amplitudes the decoder will reconstruct, weighted toward the strong
+ * harmonics. The bits remain valid for any decoder.
  *
  * The state contract is the D-STAR encoder's: initialize with
  * mbe_ambe2450EncoderAlloc() and mbe_initMbeParms(), and after every frame
