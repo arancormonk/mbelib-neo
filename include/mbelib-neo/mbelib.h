@@ -472,8 +472,11 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * frames. prev_mp is read-only. To restart a stream, call
  * mbe_ambe2400EncoderReset() and mbe_initMbeParms().
  * State equivalence holds with both the mbe_processAmbe2400* path and a bare
- * mbe_decodeAmbe2400Parms() chain. A tone frame leaves the decoder's
- * prediction history unchanged, so cur_mp is then a copy of prev_mp.
+ * mbe_decodeAmbe2400Parms() chain in the fields that decoder sets: w0, L, Vl,
+ * gamma, log2Ml, Ml and the frame mark (PHIl[0]). K is not among them: the
+ * encoder writes the number of voiced harmonics there, and the decoder leaves
+ * K as the caller has it. A tone frame leaves the decoder's prediction
+ * history unchanged, so cur_mp is then a copy of prev_mp.
  *
  * The analysis is centred one sample before the frame: parameters lag audio
  * by about 10 ms. The pitch analysis spans the whole frame, while the spectral
