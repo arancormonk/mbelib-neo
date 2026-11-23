@@ -247,32 +247,55 @@ struct ambe_enc_row_form {
 };
 
 /*
- * The receivable row (every step-th of rows) that lowers E most, from its
- * first `used` elements. The current row is kept unless another is strictly
- * better, and the first of equally good rows wins; scored by its difference
- * from the current row, a row equal to it there scores exactly 0. Inline at
- * the call sites so the fixed codebook shapes specialize the loops.
+ * E(y) - E(c) for row y against the current row c, from their first `used`
+ * elements. Scored by its difference from the current row, a row equal to it
+ * there scores exactly 0.
+ */
+static inline float
+ambe_enc_row_delta(const float* y, const float* c, int used, const struct ambe_enc_row_form* form) {
+    float d[AMBE_ENC_MAX_DIM];
+    for (int a = 0; a < used; a++) {
+        d[a] = y[a] - c[a];
+    }
+    float delta = 0.0f;
+    for (int a = 0; a < used; a++) {
+        float s = form->lin[a];
+        for (int b = 0; b < used; b++) {
+            s += form->A[a][b] * d[b];
+        }
+        delta += d[a] * s;
+    }
+    return delta;
+}
+
+/*
+ * The receivable row (every step-th of rows) that lowers E most. The current
+ * row is kept unless another is strictly better, and the first of equally
+ * good rows wins. Each row is reached through the table's row type, so no
+ * pointer leaves the row it points into. Inline at the call sites so the fixed
+ * codebook shapes specialize the loops.
  */
 static inline int
-ambe_enc_best_row(const float* table, int width, int rows, int step, int used, int current,
-                  const struct ambe_enc_row_form* form) {
-    const float* c = table + ((size_t)current * (size_t)width);
+ambe_enc_best_row3(const float (*table)[3], int rows, int current, const struct ambe_enc_row_form* form) {
+    int best = current;
+    float best_delta = 0.0f;
+    for (int r = 0; r < rows; r++) {
+        const float delta = ambe_enc_row_delta(table[r], table[current], 3, form);
+        if (delta < best_delta) {
+            best_delta = delta;
+            best = r;
+        }
+    }
+    return best;
+}
+
+static inline int
+ambe_enc_best_row4(const float (*table)[4], int rows, int step, int used, int current,
+                   const struct ambe_enc_row_form* form) {
     int best = current;
     float best_delta = 0.0f;
     for (int r = 0; r < rows; r += step) {
-        const float* y = table + ((size_t)r * (size_t)width);
-        float d[AMBE_ENC_MAX_DIM];
-        for (int a = 0; a < used; a++) {
-            d[a] = y[a] - c[a];
-        }
-        float delta = 0.0f;
-        for (int a = 0; a < used; a++) {
-            float s = form->lin[a];
-            for (int b = 0; b < used; b++) {
-                s += form->A[a][b] * d[b];
-            }
-            delta += d[a] * s;
-        }
+        const float delta = ambe_enc_row_delta(table[r], table[current], used, form);
         if (delta < best_delta) {
             best_delta = delta;
             best = r;
@@ -314,13 +337,13 @@ ambe_enc_visit(struct ambe_enc_frame* q, const struct ambe_enc_tables* t, const 
         first = 0;
         used = 3;
         ambe_enc_visit_setup(e, x, first, used, &form);
-        q->b[3] = ambe_enc_best_row(&t->prba24[0][0], 3, 512, 1, 3, q->b[3], &form);
+        q->b[3] = ambe_enc_best_row3(t->prba24, 512, q->b[3], &form);
         row = t->prba24[q->b[3]];
     } else if (index == 4) {
         first = 3;
         used = 4;
         ambe_enc_visit_setup(e, x, first, used, &form);
-        q->b[4] = ambe_enc_best_row(&t->prba58[0][0], 4, 128, 1, 4, q->b[4], &form);
+        q->b[4] = ambe_enc_best_row4(t->prba58, 128, 1, 4, q->b[4], &form);
         row = t->prba58[q->b[4]];
     } else {
         const int blk = index - 4;
@@ -330,8 +353,8 @@ ambe_enc_visit(struct ambe_enc_frame* q, const struct ambe_enc_tables* t, const 
         }
         first = ambe_enc_hoc_coefficient(blk, 3);
         ambe_enc_visit_setup(e, x, first, used, &form);
-        q->b[index] = ambe_enc_best_row(&t->hoc[blk - 1][0][0], 4, t->hoc_rows[blk - 1], t->hoc_step[blk - 1], used,
-                                        q->b[index], &form);
+        q->b[index] =
+            ambe_enc_best_row4(t->hoc[blk - 1], t->hoc_rows[blk - 1], t->hoc_step[blk - 1], used, q->b[index], &form);
         row = t->hoc[blk - 1][q->b[index]];
     }
     for (int a = 0; a < used; a++) {
