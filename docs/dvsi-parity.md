@@ -1616,10 +1616,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   31, 0.61 on rows 28 and 29, 0.75 on row 20 and 0.50 on rows 24 and 25.
   - **Where they act.** Each row replaces a fixed set of 500 Hz columns in one 10 ms subframe (rows
     24 and 25 in both, below) and leaves the other bands as row 16 plays them (coherence with ours
-    0.93-0.97); in the affected ones DVSI's signal has a coherence of 0.4-0.5 with ours and lies 1.5
-    to 8 dB below it within the subframe. Rows 18 to 23 act on the frame's own (second) subframe,
-    rows 26 to 31 on the mid-frame (first) one, and the two halves mirror each other; each partly
-    affected band is the 250 Hz reach into the column below, as in the voicing rule:
+    0.93-0.97); in the affected ones of rows 18 to 23 and 26 to 31 (24 and 25 below) DVSI's signal
+    has a coherence of 0.4-0.5 with ours and lies 1.5 to 8 dB below it within the subframe. Rows 18
+    to 23 act on the frame's own (second) subframe, rows 26 to 31 on the mid-frame (first) one, and
+    the two halves mirror each other; each partly affected band is the 250 Hz reach into the column
+    below, as in the voicing rule:
 
     | Columns | Own subframe | Mid-frame subframe |
     |---|---|---|
