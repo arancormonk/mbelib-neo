@@ -3574,6 +3574,16 @@
           "p25",
           "r33"
         ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
         "metric": "tone.detector_agreement",
         "rule": "abs_delta_max",
         "value": 0.0,
@@ -3645,6 +3655,16 @@
     "description": "A voice frame with no voiced band coded at one fixed pitch code per codec, under channel errors (dam at 1.1-10.6% bit errors): every decode of DVSI's bits is unchanged, so in every mode the mute decisions agree with DVSI's exactly as before at every error rate, hard and soft, and the output on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) is as far from DVSI's as before.",
     "partition": "channel",
     "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
       {
         "mode": [
           "dstar",
@@ -3819,6 +3839,16 @@
           "p25",
           "r33"
         ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
         "metric": "tone.detector_agreement",
         "rule": "abs_delta_max",
         "value": 0.0,
@@ -3908,6 +3938,16 @@
     "description": "The D-STAR and AMBE+2 (rate-33) encoders refine their six spectral vector indices (b3..b8) together after the nearest-row search, two passes minimising the decoder's mean-removed residual error weighted by the square root of each harmonic's amplitude relative to the frame's geometric mean (bounded 0.1..10), and their magnitude scales are recalibrated, under channel errors (dam at 1.1-10.6% bit errors): every decode of DVSI's bits is unchanged, so in every mode the mute decisions agree with DVSI's exactly as before at every error rate, hard and soft, and the output on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) is as far from DVSI's as before.",
     "partition": "channel",
     "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
       {
         "mode": [
           "dstar",
