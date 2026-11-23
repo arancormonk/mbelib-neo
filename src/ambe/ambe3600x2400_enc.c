@@ -73,9 +73,12 @@
  * about 1 dB. The scale is the median, over the development vectors, of the
  * level that puts our encoding at DVSI's encoding of the same input, both
  * decoded by this library; the validation vectors then sit within about
- * 1 dB of DVSI's.
+ * 1 dB of DVSI's. It was re-derived so (from 1.02) with the joint choice of the
+ * spectral vectors (ambe_enc_search.c), which fits the peaks better and so
+ * raised the decoded level (docs/dvsi-parity.md, "Joint choice of the AMBE
+ * spectral vectors").
  */
-#define AMBE2400_ENC_MAG_SCALE 1.02f
+#define AMBE2400_ENC_MAG_SCALE 1.075f
 
 /* Caller-owned encoder state: one context per stream. The analysis tables
  * are computed once at allocation and kept across resets. */

@@ -54,9 +54,10 @@
  * Level: AMBE2450_ENC_MAG_SCALE scales the analysis amplitudes so the decoded
  * level matches DVSI's encoding of the same input, both decoded by this
  * library: the median, over DVSI's rate-33 development vectors, of the level
- * that puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR).
+ * that puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR),
+ * re-derived (from 1.08) with the joint choice of the spectral vectors.
  */
-#define AMBE2450_ENC_MAG_SCALE 1.08f
+#define AMBE2450_ENC_MAG_SCALE 1.06f
 
 struct mbe_ambe2450_encoder {
     struct mbe_encoder_frontend fe;
