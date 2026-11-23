@@ -112,7 +112,8 @@ decoder_residual(const struct codec* c, int L, const int b[9], double r[57]) {
     return 0;
 }
 
-/* The refinement's weight of harmonic l, from the brief's definition. */
+/* The refinement's weight of harmonic l, as src/ambe/ambe_enc_search.c defines it
+ * (its file comment and ambe_enc_weight()). */
 static double
 weight(const struct ambe_enc_frame* q, int l) {
     double w = pow(2.0, 0.5 * ((double)q->a[l] - (double)q->mean_a));
