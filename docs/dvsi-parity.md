@@ -1671,10 +1671,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   band ([Synthesis in subframes](#synthesis-in-subframes)).
 - Encoder: pauses keep their level, where DVSI's encoders suppress background noise
   ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)). In the
-  quietest quarter of each speech vector's frames, our rate-33 encoding decodes a median 9.2 dB
-  above DVSI's encoding of the same input (0.2 to 13.6 dB per vector, `dam40` and `dam80` aside,
-  whose input lies 40 and 80 dB down); the loudest quarter sits within 2.0 dB on every vector but
-  `dam10` (+4.2).
+  quietest quarter of each speech vector's frames, our rate-33 encoding decoded, as measured for
+  2.6.8, a median 9.2 dB above DVSI's encoding of the same input (0.2 to 13.6 dB per vector, `dam40`
+  and `dam80` aside, whose input lies 40 and 80 dB down), and the loudest quarter sat within 2.0 dB
+  on every vector but `dam10` (+4.2). The encoder changes of 2.6.12 move the level of the quietest
+  quarter by a few tenths of a dB.
 - DVSI hard-clips at full scale; this library clips at 0.95 of full scale. Clipping at full
   scale moved no metric, so it is not adopted.
 - A frame at the largest D-STAR gain and b3 (b2 63, b3 511; `9E B0 6F EE F8 7B 9F FE 74`) held
