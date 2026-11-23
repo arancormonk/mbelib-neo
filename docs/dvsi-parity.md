@@ -1373,8 +1373,8 @@ against the input speech ([Method](#method)), mean paired change from the encode
 development and validation vectors (and on the second set of 70 recordings where given; decoded by
 this library's 2.6.11):
 
-- D-STAR: b0 34 (DVSI's default, 14 bands) -0.025; 63 (28 bands) +0.037; 111 (47, inside DVSI's
-  range, no carried pitch) +0.011; 119 (55, inside the range, pitch carried) -0.238; 122 (55)
+- D-STAR: b0 34 (DVSI's default, 14 bands) -0.025; 63 (22 bands) +0.037; 111 (47, inside DVSI's
+  range, no carried pitch) +0.011; 119 (53, inside the range, pitch carried) -0.238; 122 (55)
   +0.073 / +0.090; 123 (56) +0.074.
 - P25: b0 25 (DVSI's default, 14 bands) -0.079 / -0.085; 60 (23) +0.004 / +0.001; 100 (32) +0.038
   / +0.044; 127 (37) +0.058 / +0.050; 150 (inside the range) -0.025; 184 (51) +0.031 / +0.034; 207
