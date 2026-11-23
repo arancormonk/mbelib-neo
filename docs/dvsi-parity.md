@@ -2131,9 +2131,9 @@ pass. The final partition was not held out for these changes.
 
 The three changes of 2.6.12 were each scored once against the commit before them, on the
 development, validation, tone and channel partitions (the band-grid change a second time, below);
-`joint-search-development` failed and was kept as declared. The final partition was then scored once for the three together, against a gate
-set declared before it ([November 2026: encoders and rate-33 rows 18 to
-31](#november-2026-encoders-and-rate-33-rows-18-to-31)), and passed.
+`joint-search-development` failed and was kept as declared. The final partition was then scored
+once for the three together, against a gate set declared before it ([November 2026: encoders and
+rate-33 rows 18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)), and passed.
 
 `r33-row-grid-tones` and `r33-row-grid-channel` state that the D-STAR and P25 decodes of DVSI's bits
 are unchanged, but checked it through `speech.pcm_changed_vectors`, a count over the speech vectors
