@@ -52,14 +52,23 @@ appear here.
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
-  Neither is part of this repository's tooling. A change is given as the mean paired change over
-  the vectors ± its standard error, with the number of vectors it improves. Two sets are used: the
-  25 development and validation vectors' input speech, and a second set of 70 recordings from the
-  Open Speech Repository, CMU ARCTIC and LibriSpeech test-clean, resampled to 8 kHz, which DVSI's
-  vectors do not contain. An encoder change is scored with both encodings decoded by one decoder,
-  named in its section. [Rate 33: V/UV vectors](#rate-33-vuv-vectors), a decoder change, scores its
-  decode of DVSI's bits on the 25 vectors, with ESTOI at the scoreboard's alignment of the
-  baseline's decode with the input instead of the search above.
+  Neither is part of this repository's tooling. A change is given as the mean paired change over the
+  vectors ± its standard error, with the number of vectors it improves. Two sets are used: the 25
+  development and validation vectors' input speech, and a second set of 70 recordings from the Open
+  Speech Repository, CMU ARCTIC and LibriSpeech test-clean, resampled to 8 kHz, which DVSI's vectors
+  do not contain. The 25 vectors come from 12 recordings (eight are versions of `dam`, five of one
+  other recording, and two pairs; [DVSI scoreboard](testing.md#dvsi-scoreboard)), and the vectors of
+  one recording do not vary independently, so their standard error is clustered by recording: for
+  per-vector changes d_i with mean m over n vectors in G recordings, sqrt(G / (G - 1) * sum over
+  recordings of (sum over the recording's vectors of (d_i - m))²) / n. Each of the 70 recordings is
+  its own cluster, so there it is the plain standard error over the recordings; 30 of them (the CMU
+  ARCTIC ones) are by two speakers and the 20 LibriSpeech ones by four, so it is an error over
+  recordings, not speakers. Where a section says a ± is over the vectors, the per-vector scores were
+  not kept and it is the plain standard error over the 25 vectors. An encoder change is scored with
+  both encodings decoded by one decoder, named in its section. [Rate 33: V/UV
+  vectors](#rate-33-vuv-vectors), a decoder change, scores its decode of DVSI's bits on the 25
+  vectors, with ESTOI at the scoreboard's alignment of the baseline's decode with the input instead
+  of the search above.
 - **Hardware.** Where a contributor measured a real AMBE-3000 (a DVMEGA DVstick 30 or a ThumbDV)
   on constructed frames, those measurements decide between rules DVSI's vectors leave open; each
   section names the issue that carries the data. The rate-33 frame-handling sections also cite a third
@@ -611,7 +620,8 @@ value stands.
 The same document's other statement, that row 17 plays as row 16, does not hold on DVSI's vectors:
 played all unvoiced, row-17 frames lose 0.064 of waveform correlation with DVSI's decode and gain
 0.35 dB of log-spectral distance from it, and PESQ against the input falls by 0.0022 ± 0.0011 (worse
-on 17 of the 25 vectors). Row 17 keeps its lowest column voiced.
+on 17 of the 25 vectors; this ± is over the vectors, [Method](#method)). Row 17 keeps its lowest
+column voiced.
 
 On the scoreboard (joint lags, against the commit before the change), rate 33 decoding DVSI's bits,
 mean paired change with its 95% interval:
@@ -621,9 +631,9 @@ mean paired change with its 95% interval:
 | development | -0.0081 [-0.0130, -0.0053] | +0.00001 | +0.00004 | -0.0001 | -0.0014 [-0.0024, -0.0006] |
 | validation | -0.0079 [-0.0101, -0.0043] | +0.00001 | +0.00002 | -0.0001 | -0.0021 [-0.0030, -0.0007] |
 
-PESQ against the input ([Method](#method)) rises by 0.0035 ± 0.0015 (better on 19 of the 25
+PESQ against the input ([Method](#method)) rises by 0.0035 ± 0.0016 (better on 19 of the 25
 vectors) and ESTOI by 0.0002 ± 0.0001 (17 of 25); DVSI's own decode of the same bits scores 0.0217 ±
-0.0052 above this library's before the change. Under channel errors (`dam` at 1.1 to 10.6%) the
+0.0046 above this library's before the change. Under channel errors (`dam` at 1.1 to 10.6%) the
 mute decisions do not change and the output on the frames neither DVSI nor this library mutes comes
 0.003 dB (hard decisions) and 0.005 dB (soft) closer to DVSI's. The decodes of nine tone vectors change,
 but no tone metric moves. The gate sets `r33-row-grid-development`,
@@ -1389,9 +1399,9 @@ encodings decoded by this library's 2.6.11 decoder (this change touches no decod
 
 | Codec | PESQ, 25 vectors | ESTOI, 25 vectors | PESQ, 70 recordings | ESTOI, 70 recordings |
 |---|---|---|---|---|
-| D-STAR | +0.074 ± 0.008 (24/25) | +0.0036 ± 0.0006 | +0.093 ± 0.011 (62/70) | +0.0064 ± 0.0012 |
-| Rate 33 | +0.046 ± 0.006 (23/25) | +0.0030 ± 0.0006 | +0.055 ± 0.007 (59/70) | +0.0067 ± 0.0012 |
-| P25 | +0.058 ± 0.009 (23/25) | +0.0039 ± 0.0014 | +0.050 ± 0.009 (53/70) | +0.0037 ± 0.0011 |
+| D-STAR | +0.074 ± 0.008 (24/25) | +0.0036 ± 0.0005 | +0.093 ± 0.011 (62/70) | +0.0064 ± 0.0012 |
+| Rate 33 | +0.046 ± 0.006 (23/25) | +0.0030 ± 0.0007 | +0.055 ± 0.007 (59/70) | +0.0067 ± 0.0012 |
+| P25 | +0.058 ± 0.010 (23/25) | +0.0039 ± 0.0020 | +0.050 ± 0.009 (53/70) | +0.0037 ± 0.0011 |
 
 On the scoreboard (joint lags, against the commit before it; both runs' encodings decoded by this
 change's decoder, which it does not touch). LSD is log-spectral distance; partition means:
@@ -1473,13 +1483,14 @@ u3](#rate-33-field-assignment-of-u3)), so DVSI's encoder appears to follow the s
 This change departs from both, for the gain measured below ([Departures from the
 specification](#departures-from-the-specification)).
 
-**The weighting.** A sweep of the exponent in w_l, measured on a prototype before [Encoder pitch code
-of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames) (PESQ against the input speech,
-[Method](#method), mean paired change on the 25 development and validation vectors, D-STAR / rate 33):
-exponent 1/4 +0.020 / +0.026, 1/2 +0.031 / +0.041, 1 +0.013 / +0.027. With every weight 1 (the
-decoder's unweighted error) the joint search does worse than the nearest rows: -0.010 / -0.014 then,
-and on this change's base -0.010 ± 0.006 / -0.009 ± 0.004, with ESTOI lower on 20 and 22 of the 25
-vectors. The weighting, not the joint search, makes the gain. Only the exponent 1/2 is used.
+**The weighting.** A sweep of the exponent in w_l, measured on a prototype before [Encoder pitch
+code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames) (PESQ against the input speech,
+[Method](#method), mean paired change on the 25 development and validation vectors, D-STAR / rate
+33): exponent 1/4 +0.020 / +0.026, 1/2 +0.031 / +0.041, 1 +0.013 / +0.027. With every weight 1 (the
+decoder's unweighted error) the joint search does worse than the nearest rows: PESQ -0.010 / -0.014
+then, and on this change's base -0.010 ± 0.007 / -0.009 ± 0.004 (1.5 and 2.0 standard errors below
+no change), while ESTOI falls clearly, by 0.0011 ± 0.0001 / 0.0021 ± 0.0003, lower on 20 and 22 of
+the 25 vectors. The weighting, not the joint search, makes the gain. Only the exponent 1/2 is used.
 
 **Level.** Fitting the peaks better raises the decoded level against DVSI's encoding of the same
 input, by 0.12 to 0.16 dB (D-STAR) and 0.13 to 0.17 dB (rate 33) on average over a partition. `AMBE2400_ENC_MAG_SCALE` and
@@ -1505,8 +1516,8 @@ encodings decoded by this library's 2.6.11 decoder (this change touches no decod
 
 | Codec | PESQ, 25 vectors | ESTOI, 25 vectors | PESQ, 70 recordings | ESTOI, 70 recordings |
 |---|---|---|---|---|
-| D-STAR | +0.040 ± 0.007 (23/25) | +0.0099 ± 0.0008 (24/25) | +0.038 ± 0.008 (51/70) | +0.0114 ± 0.0010 (67/70) |
-| Rate 33 | +0.040 ± 0.005 (24/25) | +0.0142 ± 0.0010 (25/25) | +0.040 ± 0.009 (51/70) | +0.0149 ± 0.0009 (69/70) |
+| D-STAR | +0.040 ± 0.010 (23/25) | +0.0099 ± 0.0015 (24/25) | +0.038 ± 0.008 (51/70) | +0.0114 ± 0.0010 (67/70) |
+| Rate 33 | +0.040 ± 0.008 (24/25) | +0.0142 ± 0.0020 (25/25) | +0.040 ± 0.009 (51/70) | +0.0149 ± 0.0009 (69/70) |
 
 Before recalibration the search alone gave D-STAR +0.039 / +0.041 and rate 33 +0.042 / +0.045 PESQ
 (25 vectors / 70 recordings), and the same ESTOI.
@@ -1586,8 +1597,8 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)); DVSI's decoder plays more than that. DVSI's
   encoder sends rows 17 to 31 on 12.2% of the voice frames of the speech vectors (row 16 on 37.3%).
   Putting DVSI's samples in place of ours on the frames of rows 17 to 31 would raise PESQ against
-  the input by 0.019 ± 0.004 on the 25 development and validation vectors, nearly all of the
-  0.021 ± 0.005 by which DVSI's decode of the rate-33 bits scored above ours before the grid; the
+  the input by 0.019 ± 0.003 on the 25 development and validation vectors, nearly all of the
+  0.021 ± 0.004 by which DVSI's decode of the rate-33 bits scored above ours before the grid; the
   grid takes about 0.003 of it. On plain voice frames (before the grid) our frames correlate with DVSI's
   0.98 on row 16, 0.93 on row 17, 0.89 on rows 18, 19 and 21 to 23, 0.87 on rows 26, 27, 30 and
   31, 0.61 on rows 28 and 29, 0.75 on row 20 and 0.50 on rows 24 and 25.
@@ -1615,17 +1626,18 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
     (normalized autocorrelation at the period 0.08-0.44, as for our noise in the same bands,
     0.09-0.48), and it is not DVSI's noise generator restarted from 0 at the subframe (correlation
     0.09 or less at offsets -3 to 3 samples).
-  - **Rules tried and not adopted.** Scaling the unvoiced bands of those columns in that subframe
-    (rows 20, 24, 25 and 28 aside) brings our waveform closer to DVSI's (correlation +0.02 and
-    log-spectral distance up to 0.24 dB lower on the frames concerned, 0.39 with the grid; on the scoreboard -0.005 to
-    -0.007 dB alone and -0.013 to -0.015 dB with the grid) but not closer to the input: by 0.5, PESQ
-    -0.0013 ± 0.0014 and ESTOI -0.0003 ± 0.0001 (3 of 25 vectors better), log-spectral distance from
-    the input +0.004 dB; by 0.3, PESQ -0.0023 ± 0.0016; with the grid, the grid's PESQ gain falls
-    from 0.0027 to 0.0007. Voicing those columns in that subframe instead is worse on every waveform
-    measure: correlation with DVSI's -0.03 to -0.16 on these rows and -0.11 on rows 0 to 15 (the
-    pulse trains it starts move later pulses), the scoreboard's log-spectral distance from DVSI's
-    decode +0.07 to +0.09 dB and its waveform correlation -0.08 to -0.12; ESTOI falls by 0.0003 ±
-    0.0001 (8 of 25 better), while PESQ rises by 0.005 ± 0.004, within its error.
+  - **Rules tried and not adopted** (each ± here is over the vectors, [Method](#method)). Scaling
+    the unvoiced bands of those columns in that subframe (rows 20, 24, 25 and 28 aside) brings our
+    waveform closer to DVSI's (correlation +0.02 and log-spectral distance up to 0.24 dB lower on
+    the frames concerned, 0.39 with the grid; on the scoreboard -0.005 to -0.007 dB alone and -0.013
+    to -0.015 dB with the grid) but not closer to the input: by 0.5, PESQ -0.0013 ± 0.0014 and ESTOI
+    -0.0003 ± 0.0001 (3 of 25 vectors better), log-spectral distance from the input +0.004 dB; by
+    0.3, PESQ -0.0023 ± 0.0016; with the grid, the grid's PESQ gain falls from 0.0027 to 0.0007.
+    Voicing those columns in that subframe instead is worse on every waveform measure: correlation
+    with DVSI's -0.03 to -0.16 on these rows and -0.11 on rows 0 to 15 (the pulse trains it starts
+    move later pulses), the scoreboard's log-spectral distance from DVSI's decode +0.07 to +0.09 dB
+    and its waveform correlation -0.08 to -0.12; ESTOI falls by 0.0003 ± 0.0001 (8 of 25 better),
+    while PESQ rises by 0.005 ± 0.004, within its error.
   - **The impulsive rows.** Row 20 plays a quiet second half (1.8 to 18 dB below ours by
     20-sample block) and then a burst about 108 samples plus one coded pitch period into the frame
     (43% of frames within 4 samples of it, against 7% by chance). Row 28 plays a quiet first half
@@ -2058,15 +2070,18 @@ improved; main's encoding scores PESQ 2.98, 3.03 and 3.13 on the 25 vectors and 
 
 | Codec | PESQ, 25 vectors | ESTOI, 25 vectors | PESQ, 70 recordings | ESTOI, 70 recordings |
 |---|---|---|---|---|
-| D-STAR | +0.114 ± 0.008 (25/25) | +0.0135 ± 0.0010 (25/25) | +0.131 ± 0.010 (66/70) | +0.0178 ± 0.0011 (68/70) |
-| Rate 33 | +0.086 ± 0.008 (24/25) | +0.0172 ± 0.0012 (25/25) | +0.095 ± 0.009 (64/70) | +0.0216 ± 0.0010 (70/70) |
-| P25 | +0.058 ± 0.009 (23/25) | +0.0039 ± 0.0014 (17/25) | +0.050 ± 0.009 (53/70) | +0.0037 ± 0.0011 (40/70) |
+| D-STAR | +0.114 ± 0.009 (25/25) | +0.0135 ± 0.0018 (25/25) | +0.131 ± 0.010 (66/70) | +0.0178 ± 0.0011 (68/70) |
+| Rate 33 | +0.086 ± 0.011 (24/25) | +0.0172 ± 0.0026 (25/25) | +0.095 ± 0.009 (64/70) | +0.0216 ± 0.0010 (70/70) |
+| P25 | +0.058 ± 0.010 (23/25) | +0.0039 ± 0.0020 (17/25) | +0.050 ± 0.009 (53/70) | +0.0037 ± 0.0011 (40/70) |
 
-Each is the sum of the encoder changes' own figures. Decoded by this branch's own decoder, the rate-33
-figures are the same (+0.086 ± 0.008 and +0.0172 ± 0.0012 on the 25 vectors, +0.095 ± 0.009 and
-+0.0216 ± 0.0010 on the 70 recordings): its decode of our encodings differs from the 2.6.11
-decoder's by at most one 16-bit step, on 0.1% of the samples. The rate-33 decode of DVSI's bits gains
-0.0035 ± 0.0015 PESQ against the input ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)).
+Each is the sum of the encoder changes' own figures. Decoded by this branch's own decoder, the
+rate-33 figures are the same (+0.086 ± 0.011 and +0.0172 ± 0.0026 on the 25 vectors, +0.095 ± 0.009
+and +0.0216 ± 0.0010 on the 70 recordings). On our encodings this branch's decoder gives exactly the
+samples of main's decoder built the same way, in every codec (our encoders never send rate-33 rows
+18 to 31); the 2.6.11 build used for the scores, built with fast-math and link-time optimization,
+differs from such a plain Release build by one 16-bit step on 0.07 to 0.08% of the samples. The
+rate-33 decode of DVSI's bits gains 0.0035 ± 0.0016 PESQ against the input ([Rate 33: V/UV
+vectors](#rate-33-vuv-vectors)).
 
 **The final partition.** The gate set `encoder-quality-final` was declared before the final scoring
 and built from the three changes' own gate sets: their metrics and rules, their limits added where
