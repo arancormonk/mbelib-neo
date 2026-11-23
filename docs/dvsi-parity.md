@@ -1459,9 +1459,13 @@ against the error the decoder will produce (`src/ambe/ambe_enc_search.c`):
   from the current one, so a row equal to it there scores exactly 0 whatever the build's float
   evaluation order.
 
-Gain, pitch, voicing, tone frames and the IMBE encoder are unchanged; packing, `cur_mp` and the
-prediction history use the refined indices. The bits are ordinary D-STAR and rate-33 bits: the
-refinement only chooses among rows every decoder receives, so they remain valid for any decoder.
+The refinement leaves the gain index b2, the pitch, the voicing and tone frames as they were, and
+the IMBE encoder is unchanged; packing, `cur_mp` and the prediction history use the refined indices.
+The recalibrated magnitude scales (Level, below) do move the gain: against the commit before, b2
+differs on 42.0% of the D-STAR frames and 15.0% of the rate-33 frames of the 25 development and
+validation vectors (9 to 53% and 4 to 20% per vector), and with the refinement alone on none. The
+bits are ordinary D-STAR and rate-33 bits: the refinement only chooses among rows every decoder
+receives, so they remain valid for any decoder.
 
 **DVSI.** DVSI's re-quantizations of a decoded model pick the PRBA vectors this library's nearest-row
 quantizer picks on 84 to 91% of frames ([Rate 33: field assignment of
