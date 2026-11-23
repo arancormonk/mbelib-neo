@@ -1370,10 +1370,14 @@ than any other code. The encoders now depart from the text as DVSI's do, with co
 127 lie outside DVSI's unvoiced ranges, so a DVSI decoder reads no carried pitch or energy pattern
 into the frame, and every such frame says "the voicing before lasts through the first 10 ms" (if it
 reaches 505 Hz), which is also what the codes outside the range sent before (53% and 79% of these
-frames) said. That reading of D-STAR b0 120 to 123 and P25 b0 127 rests on this library's decoder
-and on the DVstick 30 measurement of [#157](https://github.com/arancormonk/mbelib-neo/issues/157)
-for other codes outside the ranges; these codes have not been played on DVSI hardware. Rate 33's b0
-119 is DVSI's most frequent code there, and the published AMBE-3000R measurements of the
+frames) said. That reading of D-STAR b0 120 to 123 rests on this library's decoder and on the
+DVstick 30 measurement of [#157](https://github.com/arancormonk/mbelib-neo/issues/157) for other
+codes outside the range, and that of P25 b0 127 on DVSI's decodes of its default code b0 25 ([Voiced
+onsets and offsets](#voiced-onsets-and-offsets)); no P25 code has been measured on hardware. A
+ThumbDV plays D-STAR b0 120 to 123 at b1 0 as low-pitch voice ([D-STAR b0 124](#d-star-b0-124),
+"Checked on the hardware"), but in streams that start with them: whether b0 123 lets the voicing of
+the frame before last through its first 10 ms has not been measured on hardware. Rate 33's b0 119 is
+DVSI's most frequent code there, and the published AMBE-3000R measurements of the
 [mbevocoder](https://github.com/srcejon/mbevocoder) project (`docs/encoder-quality.md`, the item
 "Unvoiced frames on a fine grid") report that the AMBE-3000R codes fully unvoiced rate-33 frames on
 at least 50 harmonics.

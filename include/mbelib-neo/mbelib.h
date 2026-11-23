@@ -458,8 +458,10 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * library's decoder reads that code as "the voicing of the frame before, if
  * it reaches 505 Hz, lasts through this frame's first 10 ms", where b0 64..119
  * would say it ends at the frame's start; DVSI's decoder is inferred to read
- * it so from other codes outside that range (b0 123 itself has not been
- * played on DVSI hardware). The six spectral vector indices (b3..b8) are
+ * it so from other codes outside that range. A ThumbDV plays b0 120..123 at
+ * b1 0 as low-pitch voice (#106), but whether b0 123 lets the voicing of the
+ * frame before last through its first 10 ms has not been measured on
+ * hardware. The six spectral vector indices (b3..b8) are
  * chosen together: each starts as the codebook row nearest its own target, and
  * two passes then refine them against the error of the amplitudes the decoder
  * will reconstruct, weighted toward the strong harmonics. The bits are
@@ -967,8 +969,10 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * amplitudes measured on that grid. This library's decoder reads that code as
  * "the voicing of the frame before, if it reaches 505 Hz, lasts through this
  * frame's first 10 ms", where b0 128..183 would say it ends at the frame's
- * start; DVSI's decoder is inferred to read it so from other codes outside
- * that range (b0 127 itself has not been played on DVSI hardware).
+ * start; DVSI's decoder is inferred to read it so from its decodes of DVSI's
+ * vectors at b0 25, the one code outside that range its encoder sends on such
+ * frames. No P25 measurement on hardware exists, and b0 127 is not among the
+ * codes measured.
  *
  * The state contract is the D-STAR encoder's: initialize with
  * mbe_imbe4400EncoderAlloc() and mbe_initMbeParms(), and after every frame

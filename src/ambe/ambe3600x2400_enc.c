@@ -231,8 +231,10 @@ ambe2400_enc_voicing(struct ambe_enc_frame* q, const struct mbe_analysis_state* 
  * frame starts (some carry their pitch into the next voiced frame), any other
  * code lets that voicing last through the frame's first 10 ms if it reaches
  * 505 Hz; DVSI's decoder is inferred to read b0 123 so from other codes outside
- * that range (b0 123 itself has not been played on DVSI hardware). The tracked
- * pitch of noise is arbitrary, so it said either at random; b0 123 always says
+ * that range (a ThumbDV plays b0 120..123 at b1 0 as low-pitch voice, #106, but
+ * whether b0 123 lets the voicing of the frame before last through its first
+ * 10 ms has not been measured on hardware). The tracked pitch of noise is
+ * arbitrary, so it said either at random; b0 123 always says
  * the latter, and the finest grid D-STAR sends codes the noise best
  * (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
  */
