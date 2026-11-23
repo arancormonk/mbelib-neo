@@ -18,7 +18,12 @@
  *    (TIA-102.BABA 5.3, eqs 43 and 44), taken to the log domain with the
  *    transmitted voicing (eq 8), then the gain, prediction residual, PRBA and
  *    higher-order coefficients of 4.3 against the decoder's previous frame
- *    (ambe_encoder.c).
+ *    (ambe_encoder.c). 4.3.1 and 4.3.2 take each of the six vectors (b3..b8)
+ *    nearest its own target; the encoder starts there and then refines the
+ *    six together against the amplitude-weighted error of the residual the
+ *    decoder reconstructs (ambe_enc_search.c), a departure from the text made
+ *    for a measured gain (docs/dvsi-parity.md, "Joint choice of the AMBE
+ *    spectral vectors").
  *  - DTMF, KNOX, call-progress and single tones are sent as tone frames (7.2).
  *
  * A frame whose gain falls below the first step is flattened toward the level
@@ -74,6 +79,11 @@ static const struct ambe_enc_tables ambe2450_enc_tables = {
     .rho = 0.65f,
     .fit_floor_gain = 1, /* as D-STAR: see mbe_encoder_fit_floor() */
 };
+
+const struct ambe_enc_tables*
+mbe_ambe2450_enc_tables(void) {
+    return &ambe2450_enc_tables;
+}
 
 void
 mbe_ambe2450EncoderReset(mbe_ambe2450_encoder* enc) {

@@ -28,6 +28,8 @@ the library.
   every encoder.
 - `src/ambe/ambe_encoder.c`: spectral amplitude quantization and frame FEC
   shared by the two AMBE encoders.
+- `src/ambe/ambe_enc_search.c`: the AMBE encoders' joint, amplitude-weighted
+  refinement of their six spectral vector indices.
 - `src/ambe/ambe3600x2400_enc.c`: D-STAR voicing, pitch law, bit layout and
   tone frames.
 - `src/ambe/ambe3600x2450_enc.c`: AMBE+2 2450 quantization (TIA-102.BABA-1

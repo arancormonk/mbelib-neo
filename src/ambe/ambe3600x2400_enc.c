@@ -34,6 +34,9 @@
  *    the D-STAR AMBE bit layout (interleave, scrambler and Golay parity
  *    cross-checked against the MMDVM tables). Reconstruction matches DVSI's
  *    AMBE-3000 D-STAR test vectors; on-air interoperability is not verified.
+ *  - The six spectral vectors (b3..b8) start as the rows nearest their own
+ *    targets and are then refined together against the amplitude-weighted
+ *    error of the residual the decoder reconstructs (ambe_enc_search.c).
  *  - The prediction state (log2Ml, gamma) is advanced with the
  *    QUANTIZED values, mirroring the decoder state so the encoder and
  *    decoder never drift apart.

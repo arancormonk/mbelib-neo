@@ -296,6 +296,7 @@ set(MBELIB_FIRST_PARTY_SOURCES
     src/ambe/ambe3600x2450_enc.c
     src/ambe/ambe_common.c
     src/ambe/ambe_encoder.c
+    src/ambe/ambe_enc_search.c
     src/ecc/ecc_soft.c
     src/ecc/ecc_soft_search.c
     src/ecc/ecc_soft_search_avx2.c

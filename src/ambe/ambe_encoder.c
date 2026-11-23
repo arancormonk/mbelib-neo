@@ -216,7 +216,7 @@ ambe_enc_nearest(const float* table, int width, int rows, int step, const float*
 }
 
 void
-ambe_enc_quantize_residual(struct ambe_enc_frame* q, const struct ambe_enc_tables* t) {
+ambe_enc_quantize_nearest(struct ambe_enc_frame* q, const struct ambe_enc_tables* t) {
     ambe_enc_block_dct(q, t);
     ambe_enc_prba_dct(q);
     /* 4.3.1: b3 from Gm[2..4], b4 from Gm[5..8]. */
@@ -230,6 +230,12 @@ ambe_enc_quantize_residual(struct ambe_enc_frame* q, const struct ambe_enc_table
                                                            &q->Cik[blk + 1][3], used)
                                    : 0;
     }
+}
+
+void
+ambe_enc_quantize_residual(struct ambe_enc_frame* q, const struct ambe_enc_tables* t) {
+    ambe_enc_quantize_nearest(q, t);
+    ambe_enc_refine(q, t);
 }
 
 static void
