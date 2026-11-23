@@ -363,6 +363,8 @@ ambe2400_encode_voice(mbe_ambe2400_encoder* enc, struct mbe_analysis_result* res
     mbe_ambe2400_inverse_dct_tl(q.Cik_q, q.Ji, q.Tl_q);
     ambe2400_enc_pack(&q, ambe_d);
     ambe2400_enc_fill_parms(&q, cur_mp);
+    /* The decoder's frame mark for these bits, replacing the caller's. */
+    mbe_ambe2400_mark_unvoiced_pitch(cur_mp, q.b[0]);
     mbe_ambe2400_update_spectral_amplitudes(cur_mp, &prediction_prev, q.Tl_q, 0.2046f / sqrtf(cur_mp->w0));
     cur_mp->Vl[0] &= ~MBE_AMBE2400_HISTORY_BITS;
     if (!mbe_encoder_model_valid(cur_mp)) {

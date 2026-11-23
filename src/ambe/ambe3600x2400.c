@@ -238,9 +238,11 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
  *    b1 alone is set to 0 plays exactly as its voiced neighbour would through
  *    sample 80, at b0 20 and at the pitch code of the frame it was made from,
  *    and departs from the frame's first sample at b0 100 (#157).
+ * Any mark cur_mp held is replaced. The D-STAR encoder marks the model it
+ * returns with this too, so that model is the decoder's (ambe3600x2400_internal.h).
  */
-static void
-ambe2400_mark_unvoiced_pitch(mbe_parms* cur_mp, int b0) {
+void
+mbe_ambe2400_mark_unvoiced_pitch(mbe_parms* cur_mp, int b0) {
     static const unsigned char carries[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0};
     enum mbe_frame_mark mark = MBE_FRAME_MARK_NONE;
     int voiced = 0;
@@ -569,7 +571,7 @@ mbe_decodeAmbe2400Parms(const char* ambe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     float unvc = (float)0.2046 / sqrtf(cur_mp->w0);
 
     ambe2400_decode_vuv(ambe_d, cur_mp, b0, L, f0);
-    ambe2400_mark_unvoiced_pitch(cur_mp, b0);
+    mbe_ambe2400_mark_unvoiced_pitch(cur_mp, b0);
     ambe2400_decode_gain(ambe_d, cur_mp);
     ambe2400_decode_ri(ambe_d, Ri);
     ambe2400_decode_cik(ambe_d, L, Ri, Cik, Ji);
