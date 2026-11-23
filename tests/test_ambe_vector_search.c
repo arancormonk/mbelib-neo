@@ -272,10 +272,15 @@ test_never_rises(const struct codec* c) {
         struct ambe_enc_frame q;
         random_frame(c, &q);
         const struct ambe_enc_frame open = q;
+        /* Each set of rows is checked before anything reads the codebooks at it:
+         * the nearest rows before the refinement, the refined ones before the
+         * decoder's reconstruction. */
+        if (!indices_receivable(c, &open)) {
+            printf("%s: frame %d: the nearest-row search gave an index the decoder cannot receive\n", c->name, f);
+            return 1;
+        }
         ambe_enc_refine(&q, c->t);
-        /* Before the decoder's reconstruction reads the codebooks at them. */
-        if (!indices_receivable(c, &open) || !indices_receivable(c, &q) || q.b[0] != open.b[0] || q.b[1] != open.b[1]
-            || q.b[2] != open.b[2]) {
+        if (!indices_receivable(c, &q) || q.b[0] != open.b[0] || q.b[1] != open.b[1] || q.b[2] != open.b[2]) {
             printf("%s: frame %d sent an index the decoder cannot receive, or changed b0..b2\n", c->name, f);
             return 1;
         }
