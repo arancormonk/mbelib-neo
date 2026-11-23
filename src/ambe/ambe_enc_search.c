@@ -37,7 +37,6 @@
  */
 
 #include <math.h>
-#include <stddef.h>
 #include <string.h>
 
 #include "ambe3600x2400_internal.h"
@@ -75,9 +74,10 @@ ambe_enc_prba_map(const struct ambe_dct_cache* cache, const int Ji[5], int L, st
     const float inv_sqrt2 = 0.70710678118654752f;
     for (int m = 0; m < AMBE_ENC_G; m++) {
         float mean = 0.0f;
-        for (int blk = 1; blk <= 4; blk++) {
-            const float upper = cache->ri_cos[m + 2][(2 * blk) - 1];
-            const float lower = cache->ri_cos[m + 2][2 * blk];
+        /* R_{2i-1} and R_{2i} of block i sit at upper_i and upper_i + 1. */
+        for (int blk = 1, upper_i = 1; blk <= 4; blk++, upper_i += 2) {
+            const float upper = cache->ri_cos[m + 2][upper_i];
+            const float lower = cache->ri_cos[m + 2][upper_i + 1];
             map->first[blk][m] = upper + lower;
             map->second[blk][m] = (upper - lower) * inv_sqrt2;
             mean += (float)Ji[blk] * map->first[blk][m];
@@ -152,7 +152,7 @@ ambe_enc_block_moments(const struct ambe_dct_cache* cache, int ji, const float* 
     memset(M, 0, (AMBE_ENC_BLOCK_BASE + 1) * sizeof(M[0]));
     memset(v, 0, (AMBE_ENC_BLOCK_BASE + 1) * sizeof(v[0]));
     for (int j = 1; j <= ji; j++) {
-        float f[AMBE_ENC_BLOCK_BASE + 1];
+        float f[AMBE_ENC_BLOCK_BASE + 1] = {0.0f};
         for (int k = 1; k <= n; k++) {
             f[k] = ambe_enc_cosine(cache, ji, j, k);
         }
@@ -179,7 +179,7 @@ ambe_enc_add_block(struct ambe_enc_quadratic* e, const struct ambe_enc_prba_map*
     const float* first = map->first[blk];
     const float* second = map->second[blk];
     /* Q[a][m]: cosine a's moment against the PRBA part, per G_m. */
-    float Q[AMBE_ENC_BLOCK_BASE + 1][AMBE_ENC_G];
+    float Q[AMBE_ENC_BLOCK_BASE + 1][AMBE_ENC_G] = {{0.0f}};
     for (int a = 1; a <= n; a++) {
         for (int m = 0; m < AMBE_ENC_G; m++) {
             Q[a][m] = (M[a][1] * first[m]) + ((n >= 2) ? M[a][2] * second[m] : 0.0f);
@@ -212,7 +212,8 @@ ambe_enc_weight(float a, float mean_a) {
 
 static void
 ambe_enc_build_quadratic(const struct ambe_enc_frame* q, struct ambe_enc_quadratic* e) {
-    float w[57], t[57];
+    float w[57] = {0.0f};
+    float t[57] = {0.0f};
     float mean_t = 0.0f;
     for (int l = 1; l <= q->L; l++) {
         mean_t += q->Tl[l];
