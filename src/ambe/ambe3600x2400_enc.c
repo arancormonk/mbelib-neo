@@ -226,13 +226,15 @@ ambe2400_enc_voicing(struct ambe_enc_frame* q, const struct mbe_analysis_state* 
 /*
  * A frame sent with no voiced band (b1 0) carries one fixed pitch code, b0 123
  * (56 harmonics), instead of the tracked pitch, and its magnitudes are measured
- * on that code's harmonic grid. DVSI's decoder, and this library's, read the
- * pitch code of such a frame: b0 64..119 end the voicing of the frame before
- * where the frame starts (and some carry their pitch into the next voiced
- * frame), any other code lets that voicing last through the frame's first
- * 10 ms. The tracked pitch of noise is arbitrary, so it said either at random;
- * b0 123 always says the latter, and the finest grid D-STAR sends codes the
- * noise best (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
+ * on that code's harmonic grid. This library's decoder reads the pitch code
+ * of such a frame: b0 64..119 end the voicing of the frame before where the
+ * frame starts (some carry their pitch into the next voiced frame), any other
+ * code lets that voicing last through the frame's first 10 ms if it reaches
+ * 505 Hz; DVSI's decoder is inferred to read b0 123 so from other codes outside
+ * that range (b0 123 itself has not been played on DVSI hardware). The tracked
+ * pitch of noise is arbitrary, so it said either at random; b0 123 always says
+ * the latter, and the finest grid D-STAR sends codes the noise best
+ * (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
  */
 #define AMBE2400_ENC_UNVOICED_B0 MBE_AMBE2400_MAX_VOICE_B0
 

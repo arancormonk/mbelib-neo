@@ -262,12 +262,14 @@ mbe_imbe4400_quantize_amplitudes(int b0, const unsigned char bands[12], const fl
  * A frame sent with no voiced band (every bit of b1 0) carries one fixed pitch
  * code, b0 127 (37 harmonics), instead of the tracked pitch, with every
  * amplitude the unvoiced estimate of eq 44 on that code's harmonic grid. Eq 45
- * codes every frame's own pitch, but DVSI's decoder, and this library's, read
- * the pitch code of such a frame: b0 128..183 end the voicing of the frame
- * before where the frame starts, any other code lets that voicing last through
- * the frame's first 10 ms. The tracked pitch of noise is arbitrary, so it said
- * either at random; b0 127, the last code below that range, always says the
- * latter (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
+ * codes every frame's own pitch, but this library's decoder reads the pitch
+ * code of such a frame: b0 128..183 end the voicing of the frame before where
+ * the frame starts, any other code lets that voicing last through the frame's
+ * first 10 ms if it reaches 505 Hz; DVSI's decoder is inferred to read b0 127
+ * so from other codes outside that range (b0 127 itself has not been played on
+ * DVSI hardware). The tracked pitch of noise is arbitrary, so it said either at
+ * random; b0 127, the last code below that range, always says the latter
+ * (docs/dvsi-parity.md, "Encoder pitch code of unvoiced frames").
  */
 #define IMBE_ENC_UNVOICED_B0 127
 
