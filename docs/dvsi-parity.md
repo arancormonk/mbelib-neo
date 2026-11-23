@@ -1439,9 +1439,10 @@ rate-33 frames more).
 The gate sets `unvoiced-code-development`, `-validation`, `-tones` and `-channel` were declared
 before scoring and pass: no decode of DVSI's bits changes in any mode, the speech vectors' by their
 samples' hashes and the tone and channel-error vectors' by theirs since a second scoring ([Scoring
-history](#scoring-history)), no tone vector's encoder tone agreement falls or tone frames appear
-where DVSI sends voice (both unchanged on every vector), and the encoders' LSD from DVSI's encoding
-and from the input does not rise by more than 0.01 dB nor the level gap by more than 0.1 dB (largest
+history](#scoring-history)), on no tone vector does the encoder's tone agreement fall or its rate of
+tone frames where DVSI sends voice rise (both unchanged on every vector; that rate is not zero, at
+most 2.6%, `dtmfvbad`, in D-STAR and rate 33 alike), and the encoders' LSD from DVSI's encoding and
+from the input does not rise by more than 0.01 dB nor the level gap by more than 0.1 dB (largest
 mean rise: D-STAR's level gap, +0.058 dB on validation; on single vectors up to +0.17 dB, `noisy`).
 The final partition was not scored for this change alone ([November 2026: encoders and rate-33 rows
 18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)).
