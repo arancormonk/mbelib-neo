@@ -308,6 +308,11 @@ main(void) {
     fails += test_sync_bit(enc);
     fails += test_requantize();
     fails += enc_run_common(&imbe_codec, enc);
+    {
+        /* A frame with no voiced band is sent at b0 127, 37 harmonics. */
+        const struct enc_unvoiced_code unvoiced = {frame_b0, 127, 37};
+        fails += enc_test_unvoiced_code(&imbe_codec, enc, &unvoiced);
+    }
     mbe_imbe4400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;

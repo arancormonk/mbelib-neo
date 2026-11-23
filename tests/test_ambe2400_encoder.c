@@ -1912,6 +1912,11 @@ main(void) {
     fails += test_tone_bad_history(enc);
     fails += enc_test_call_progress(&dstar_codec, enc, 144);
     fails += enc_test_tone_edges(&dstar_codec, enc, 138);
+    {
+        /* A frame with no voiced band is sent at b0 123, 56 harmonics. */
+        const struct enc_unvoiced_code unvoiced = {b0_of, 123, 56};
+        fails += enc_test_unvoiced_code(&dstar_codec, enc, &unvoiced);
+    }
     mbe_ambe2400EncoderFree(enc);
     printf("%s\n", fails ? "SOME TESTS FAILED" : "ALL OK");
     return fails ? 1 : 0;
