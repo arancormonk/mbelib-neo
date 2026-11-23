@@ -278,6 +278,93 @@ def check_tone_aggregation(board):
     assert board.pcm_changes({"vectors": [before]}, {"vectors": [before]}) == {"dstar": 0}
 
 
+def check_decode_changes(board):
+    # Our decodes of DVSI's tone and channel bits are hashed and counted per mode in their own groups, as
+    # the speech PCM is in speech.pcm_changed_vectors.
+    def tone_result(mode, name, digest):
+        return {"mode": mode, "name": name, "partition": "tones", "pcm_sha256": digest,
+                "tone": {"level_abs_error_db": 0.2, "detector_agreement": 1.0}, "lags": {}}
+
+    def channel_result(mode, name, digest):
+        return {"mode": mode, "name": name, "partition": "channel", "kind": name.rsplit("_", 1)[1],
+                "pcm_sha256": digest, "channel": {"mute_agreement": 1.0}, "lags": {"clean_vs_dvsi": 0},
+                "frames": {"loud": [True] * 4, "dvsi_muted": [False] * 4, "muted": [False] * 4,
+                           "lsd": [1.0] * 4}}
+
+    speech = vector("dam", "development", 7.0, 0.88)
+    speech["ours"]["pcm_fnv1a"] = "0x00000001"
+    base = {"vectors": [speech, tone_result("dstar", "dtmf", "a" * 64), tone_result("dstar", "alltone", "b" * 64),
+                        tone_result("p25", "dtmf", "c" * 64), channel_result("dstar", "dam_e1_hd", "d" * 64),
+                        channel_result("dstar", "dam_e1_sd", "e" * 64), channel_result("p25", "dam_e1_hd", "f" * 64)]}
+
+    def changed(**digests):
+        run = json.loads(json.dumps(base))
+        for result in run["vectors"]:
+            key = f"{result['mode']}_{result['name']}"
+            if key in digests:
+                result["pcm_sha256"] = digests[key]
+        return run
+
+    def counted(run, baseline=base):
+        summary = board.aggregate(run["vectors"])
+        board.add_pcm_changes(summary, run, baseline)
+        board.add_decode_changes(summary, run, baseline)
+        return {group: {key: value for key, value in entry["mean"].items() if key.endswith("pcm_changed_vectors")}
+                for group, entry in summary.items()}
+
+    same = counted(base)
+    assert same["dstar/tones"] == {"tone.pcm_changed_vectors": 0, "speech.pcm_changed_vectors": 0}, same
+    assert same["dstar/channel"] == {"channel.pcm_changed_vectors": 0, "speech.pcm_changed_vectors": 0}, same
+    assert same["p25/tones"] == {"tone.pcm_changed_vectors": 0}, same
+    assert same["p25/channel"] == {"channel.pcm_changed_vectors": 0}, same
+    # A changed tone decode is counted in its mode's tones group only, and the speech count stays 0.
+    tones = counted(changed(dstar_alltone="0" * 64))
+    assert tones["dstar/tones"] == {"tone.pcm_changed_vectors": 1, "speech.pcm_changed_vectors": 0}, tones
+    assert tones["dstar/channel"]["channel.pcm_changed_vectors"] == 0, tones
+    assert tones["p25/tones"]["tone.pcm_changed_vectors"] == 0, tones
+    # So is a changed channel decode, in its channel group.
+    channel = counted(changed(dstar_dam_e1_hd="0" * 64))
+    assert channel["dstar/channel"] == {"channel.pcm_changed_vectors": 1, "speech.pcm_changed_vectors": 0}, channel
+    assert channel["dstar/tones"]["tone.pcm_changed_vectors"] == 0, channel
+    channel = counted(changed(p25_dam_e1_hd="0" * 64))
+    assert channel["p25/channel"] == {"channel.pcm_changed_vectors": 1}, channel
+    assert channel["p25/tones"]["tone.pcm_changed_vectors"] == 0, channel
+    assert channel["dstar/channel"]["channel.pcm_changed_vectors"] == 0, channel
+    # A hash missing on either side, or a vector missing from the run, counts as changed: a baseline
+    # scored by a tool that recorded no hashes cannot pass.
+    assert board.decode_changes(changed(dstar_dtmf=None), base, "tones") == {"dstar": 1, "p25": 0}
+    assert board.decode_changes(base, changed(dstar_dam_e1_sd=None), "channel") == {"dstar": 1, "p25": 0}
+    unhashed = json.loads(json.dumps(base))
+    for result in unhashed["vectors"]:
+        result.pop("pcm_sha256", None)
+    assert board.decode_changes(unhashed, unhashed, "tones") == {"dstar": 2, "p25": 1}
+    assert board.decode_changes(unhashed, unhashed, "channel") == {"dstar": 2, "p25": 1}
+    partial = {"vectors": [v for v in base["vectors"] if v["name"] != "alltone"]}
+    assert board.decode_changes(partial, base, "tones") == {"dstar": 1, "p25": 0}
+    # The speech count reads speech vectors alone, whatever the tone and channel hashes do.
+    assert board.pcm_changes(changed(dstar_dtmf="0" * 64, p25_dam_e1_hd="0" * 64), base) == {"dstar": 0}
+    # The hashes stay out of the averaged and paired metrics.
+    for result in base["vectors"][1:]:
+        assert not any("sha256" in key for key in board.flatten(result)), result
+    comparison = board.compare(changed(dstar_alltone="0" * 64), base)
+    assert not any("sha256" in key or "pcm_changed" in key for group in comparison.values() for key in group)
+
+    # The row-grid gate sets hold the D-STAR and P25 tone and channel decodes to these counts.
+    declared = json.loads((Path(__file__).resolve().parents[1] / "tools/quality/dvsi_gates.json").read_text())
+    for name, partition, metric, key in (("r33-row-grid-tones", "tones", "tone.pcm_changed_vectors", "p25_dtmf"),
+                                         ("r33-row-grid-channel", "channel", "channel.pcm_changed_vectors",
+                                          "dstar_dam_e1_sd")):
+        gate = declared[name]
+        gate = dict(gate, checks=[check for check in gate["checks"] if check["metric"] == metric])
+        assert [check["mode"] for check in gate["checks"]] == [["dstar", "p25"]], (name, gate["checks"])
+        for run, expected in ((base, True), (changed(**{key: "0" * 64}), False)):
+            summary = board.aggregate(run["vectors"])
+            board.add_decode_changes(summary, run, base)
+            passed, lines = board.check_gates(gate, summary, {})
+            assert passed == expected, (name, lines)
+        assert any(line.startswith(f"FAIL {key.split('_')[0]}/{partition} {metric}") for line in lines), lines
+
+
 def check_review_regressions(board):
     # Pooled pitch medians come from the frames, not from averaging per-vector medians.
     def pitch_result(name, pairs):
@@ -714,6 +801,9 @@ def check_scoring_commands(board):
         assert len(decodes) == 1 and "--soft" in decodes[0], fake.commands
         aligned = [c for c in fake.commands if "--json" in c]
         assert len(aligned) == 1 and aligned[0][aligned[0].index("--lag-samples") + 1] == "-8", aligned
+        # Its decode of DVSI's bits is hashed by its samples, for channel.pcm_changed_vectors.
+        assert result["pcm_sha256"] == board.pcm_sha256(work / "r33_dam_e10_sd_ours.wav"), result
+        assert len(result["pcm_sha256"]) == 64, result
 
         # A tone vector records its lag and the encoder-tone frame shift it chose, and a later run
         # measures at the baseline's.
@@ -723,6 +813,9 @@ def check_scoring_commands(board):
         result = board.score_tone_vector(tools, vectors, "r33", "dtmf", work, True)
         assert result["lags"]["encoder_tone_shift"] == 0 and "vs_dvsi" in result["lags"], result["lags"]
         assert result["tone"]["encoder_agreement"] == 1.0 and "shift" not in result["tone"], result["tone"]
+        # So is a tone vector's (tone.pcm_changed_vectors), outside the tone metrics that are reduced.
+        assert result["pcm_sha256"] == board.pcm_sha256(work / "r33_dtmf_ours.wav"), result
+        assert not any("sha256" in key for key in result["tone"]), result["tone"]
         fake.commands.clear()
         result = board.score_tone_vector(tools, vectors, "r33", "dtmf", work, True, decode_tools=decoder,
                                          lags={"vs_dvsi": 24, "encoder_tone_shift": 2})
@@ -855,6 +948,7 @@ def main():
     check_gates(board)
     check_encoder_metrics(board)
     check_tone_aggregation(board)
+    check_decode_changes(board)
     check_encoder_tones(board)
     check_dstar_encoder_tones(board)
     if importlib.util.find_spec("numpy") is None:

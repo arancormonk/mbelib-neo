@@ -467,6 +467,11 @@ def read_pcm(path):
     return np.frombuffer(data[: len(data) // 2 * 2], dtype="<i2").astype(np.float64)
 
 
+def pcm_sha256(path):
+    """SHA-256 of the int16 samples of a raw s16le file or a 16-bit mono WAV (its header left out)."""
+    return hashlib.sha256(read_pcm(path).astype("<i2").tobytes()).hexdigest()
+
+
 def load_json(path):
     return json.loads(Path(path).read_text())
 
@@ -772,8 +777,9 @@ def score_tone_vector(tools, vectors, mode, name, work, encoder=False, decode_to
         if "shift" in agreement:
             used["encoder_tone_shift"] = agreement.pop("shift")
         metrics.update(agreement)
+    # The decode's hash stays outside "tone": flatten() averages and reduces every metric there.
     return {"mode": mode, "name": name, "partition": "tones", "tone": metrics, "lags": used,
-            "alignment": {"vs_dvsi": versus["alignment_corr"]}}
+            "alignment": {"vs_dvsi": versus["alignment_corr"]}, "pcm_sha256": pcm_sha256(f"{base}_ours.wav")}
 
 
 # --------------------------------------------------------------------------------------------
@@ -919,6 +925,7 @@ def score_channel_vector(tools, vectors, mode, name, work, lags=None):
     metrics["errors_per_frame"] = mean([record["errors"] for record in records])
     return {"mode": mode, "name": name, "partition": "channel", "kind": kind, "channel": metrics,
             "lags": {"clean_vs_dvsi": lag}, "alignment": {"clean_vs_dvsi": corr},
+            "pcm_sha256": pcm_sha256(f"{base}_ours.wav"),
             "frames": {"loud": loud, "dvsi_muted": dvsi_muted, "muted": muted,
                        "lsd": frame_lsd(read_pcm(f"{base}_ours.wav"), dvsi_errored, lag, gain)}}
 
@@ -1066,6 +1073,33 @@ def add_pcm_changes(summary, candidate, baseline):
         groups = [key for key in summary if key.startswith(f"{mode}/")] or [f"{mode}/tones"]
         for group in set(groups) | {f"{mode}/tones"}:
             summary.setdefault(group, {"vectors": [], "mean": {}})["mean"]["speech.pcm_changed_vectors"] = count
+
+
+def decode_changes(candidate, baseline, partition):
+    """Per mode, the baseline's vectors of `partition` ("tones" or "channel") whose decode of DVSI's bits
+    differs in the candidate.
+
+    As in pcm_changes(), a vector missing from the candidate, or without a hash on either side, counts as
+    changed, so a baseline scored by a tool that recorded none cannot pass an identity gate.
+    """
+    after = {(r["mode"], r["name"]): r.get("pcm_sha256") for r in candidate["vectors"]
+             if r.get("partition") == partition}
+    counts = {}
+    for result in baseline["vectors"]:
+        if result.get("partition") != partition:
+            continue
+        before, now = result.get("pcm_sha256"), after.get((result["mode"], result["name"]))
+        counts[result["mode"]] = counts.get(result["mode"], 0) + (before is None or now is None or before != now)
+    return counts
+
+
+def add_decode_changes(summary, candidate, baseline):
+    """Expose decode_changes() as tone.pcm_changed_vectors in each mode's tones group and as
+    channel.pcm_changed_vectors in its channel group (after aggregate(), so no mean or worst-vector
+    reduction sees them)."""
+    for partition, metric in (("tones", "tone.pcm_changed_vectors"), ("channel", "channel.pcm_changed_vectors")):
+        for mode, count in decode_changes(candidate, baseline, partition).items():
+            summary.setdefault(f"{mode}/{partition}", {"vectors": [], "mean": {}})["mean"][metric] = count
 
 
 def bootstrap_interval(groups, replicates=2000, seed=0x5EED):
@@ -1384,6 +1418,7 @@ def main():
         except ValueError as error:
             sys.exit(str(error))
         add_pcm_changes(summary, report, baseline)
+        add_decode_changes(summary, report, baseline)
         add_encoder_row_changes(summary, report, baseline)
     (args.out / "scoreboard.json").write_text(json.dumps(report, indent=1) + "\n")
     (args.out / "scoreboard.md").write_text(markdown(summary) + "\n")

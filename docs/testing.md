@@ -1037,8 +1037,14 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   apart.
 - `--compare` adds paired per-vector deltas with bootstrap 95% intervals and the
   worst vector, and counts the baseline's speech vectors whose PCM changed
-  (a vector missing from the run counts as changed). Both runs are measured at
-  one lag per comparison, so a change that moves the evaluator's alignment
+  (`speech.pcm_changed_vectors`). Each tone vector's and each channel-error
+  vector's decode of DVSI's bits is hashed by its samples (`pcm_sha256`), and
+  each mode's tones and channel groups count the baseline's vectors whose
+  decode changed (`tone.pcm_changed_vectors`, `channel.pcm_changed_vectors`).
+  In all three counts a vector missing from the run, or without a hash in
+  either run, counts as changed, so a baseline scored by a version of the
+  script that recorded no hashes cannot pass an identity gate. Both runs are
+  measured at one lag per comparison, so a change that moves the evaluator's alignment
   search does not also move the samples measured: `--lags-from` takes the lags
   a scoreboard recorded (`lags` in each vector's entry, with the frame shift of
   the encoder-tone comparison), or, given two, their joint lags. Where the two
