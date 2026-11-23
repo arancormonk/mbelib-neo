@@ -1043,7 +1043,12 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   decode changed (`tone.pcm_changed_vectors`, `channel.pcm_changed_vectors`).
   In all three counts a vector missing from the run, or without a hash in
   either run, counts as changed, so a baseline scored by a version of the
-  script that recorded no hashes cannot pass an identity gate. Both runs are
+  script that recorded no hashes cannot pass an identity gate. A tone or
+  channel gate set's `speech.pcm_changed_vectors` check speaks only for the
+  speech vectors the run scored, counted against the baseline: a run whose
+  two reports leave out the same speech vectors passes it. That the speech
+  partitions are complete comes from evaluating the speech gate sets in the
+  same run, as the protocol does. Both runs are
   measured at one lag per comparison, so a change that moves the evaluator's alignment
   search does not also move the samples measured: `--lags-from` takes the lags
   a scoreboard recorded (`lags` in each vector's entry, with the frame shift of
