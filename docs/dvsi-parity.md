@@ -2143,11 +2143,12 @@ tone vectors and no other stream: every check came out as before. The D-STAR che
 detector agreement to no change on any vector in the five metrics its description names, and
 pass. The final partition was not held out for these changes.
 
-The three changes of 2.6.12 were each scored against the commit before them, on the development,
-validation, tone and channel partitions, and each a second time with the decode counts below;
-`joint-search-development` failed both times and was kept as declared. The final partition was then
-scored once for the three together, against a gate set declared before it ([November 2026: encoders
-and rate-33 rows 18 to 31](#november-2026-encoders-and-rate-33-rows-18-to-31)), and passed.
+The three changes of 2.6.12 were each scored once against the commit before them, on the
+development, validation, tone and channel partitions; `joint-search-development` failed and was kept
+as declared. The final partition was then scored once for the three together, against a gate set
+declared before it ([November 2026: encoders and rate-33 rows 18 to
+31](#november-2026-encoders-and-rate-33-rows-18-to-31)), and passed. After that, each change was
+scored a second time on the four other partitions, with the decode counts below.
 
 `r33-row-grid-tones` and `r33-row-grid-channel` state that the D-STAR and P25 decodes of DVSI's bits
 are unchanged, but checked it through `speech.pcm_changed_vectors`, a count over the speech vectors
@@ -2168,6 +2169,6 @@ sets pass, with nine rate-33 tone decodes changed. After their first scoring the
 given the same counts, at most 0 in all three modes, and both changes were scored again on the
 development, validation, tone and channel partitions, with the same builds and protocol: the
 development and validation results are the same to the last digit (`joint-search-development`
-failing as before, by 0.0105 and 0.0123 dB against 0.01), every other check passes as before, and
-for either change none of the decodes of the 52 tone and 8 channel-error vectors changes in any
-mode.
+failing as before: the distance from the input rises by 0.0105 and 0.0123 dB, against a limit of
+0.01), every other check passes as before, and for either change none of the decodes of the 52 tone
+and 8 channel-error vectors changes in any mode.
