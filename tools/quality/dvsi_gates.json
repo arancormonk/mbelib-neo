@@ -3692,5 +3692,268 @@
         "min_coverage": 0.1
       }
     ]
+  },
+  "joint-search-development": {
+    "description": "The D-STAR and AMBE+2 (rate-33) encoders refine their six spectral vector indices (b3..b8) together after the nearest-row search, two passes minimising the decoder's mean-removed residual error weighted by the square root of each harmonic's amplitude relative to the frame's geometric mean (bounded 0.1..10), and their magnitude scales are recalibrated, development vectors: every decode of DVSI's bits is unchanged, the IMBE encoder's bits are unchanged, and for the D-STAR and rate-33 encoders the log-spectral distance of the decoded encoding from DVSI's encoding and from the input rises by no more than 0.01 dB, its envelope correlation with the input falls by no more than 0.002, and its level gap to DVSI's encoding grows by no more than 0.1 dB.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.1
+      }
+    ]
+  },
+  "joint-search-validation": {
+    "description": "The D-STAR and AMBE+2 (rate-33) encoders refine their six spectral vector indices (b3..b8) together after the nearest-row search, two passes minimising the decoder's mean-removed residual error weighted by the square root of each harmonic's amplitude relative to the frame's geometric mean (bounded 0.1..10), and their magnitude scales are recalibrated, validation vectors: every decode of DVSI's bits is unchanged, the IMBE encoder's bits are unchanged, and for the D-STAR and rate-33 encoders the log-spectral distance of the decoded encoding from DVSI's encoding and from the input rises by no more than 0.01 dB, its envelope correlation with the input falls by no more than 0.002, and its level gap to DVSI's encoding grows by no more than 0.1 dB.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.1
+      }
+    ]
+  },
+  "joint-search-tones": {
+    "description": "The D-STAR and AMBE+2 (rate-33) encoders refine their six spectral vector indices (b3..b8) together after the nearest-row search, two passes minimising the decoder's mean-removed residual error weighted by the square root of each harmonic's amplitude relative to the frame's geometric mean (bounded 0.1..10), and their magnitude scales are recalibrated, on the tone vectors: every decode of DVSI's bits is unchanged (no tone vector moves in detector agreement, wrong tones, tone level, frequency or twist in any mode), and the D-STAR and rate-33 encoders' tone results are unchanged on every vector (agreement with DVSI's tone frames, tone frames where DVSI sends voice, and the level of the tone frames both send).",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
+  },
+  "joint-search-channel": {
+    "description": "The D-STAR and AMBE+2 (rate-33) encoders refine their six spectral vector indices (b3..b8) together after the nearest-row search, two passes minimising the decoder's mean-removed residual error weighted by the square root of each harmonic's amplitude relative to the frame's geometric mean (bounded 0.1..10), and their magnitude scales are recalibrated, under channel errors (dam at 1.1-10.6% bit errors): every decode of DVSI's bits is unchanged, so in every mode the mute decisions agree with DVSI's exactly as before at every error rate, hard and soft, and the output on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) is as far from DVSI's as before.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
   }
 }
