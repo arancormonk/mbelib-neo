@@ -273,6 +273,12 @@ test_never_rises(const struct codec* c) {
         random_frame(c, &q);
         const struct ambe_enc_frame open = q;
         ambe_enc_refine(&q, c->t);
+        /* Before the decoder's reconstruction reads the codebooks at them. */
+        if (!indices_receivable(c, &open) || !indices_receivable(c, &q) || q.b[0] != open.b[0] || q.b[1] != open.b[1]
+            || q.b[2] != open.b[2]) {
+            printf("%s: frame %d sent an index the decoder cannot receive, or changed b0..b2\n", c->name, f);
+            return 1;
+        }
         double e_open, e_refined;
         if (weighted_error(c, &open, open.b, &e_open) != 0 || weighted_error(c, &q, q.b, &e_refined) != 0) {
             printf("%s: frame %d did not decode to a finite error\n", c->name, f);
@@ -280,10 +286,6 @@ test_never_rises(const struct codec* c) {
         }
         if (e_refined > e_open + (1e-4 * e_open) + 1e-6) {
             printf("%s: frame %d (L %d): weighted error rose from %.9g to %.9g\n", c->name, f, q.L, e_open, e_refined);
-            return 1;
-        }
-        if (!indices_receivable(c, &q) || q.b[0] != open.b[0] || q.b[1] != open.b[1] || q.b[2] != open.b[2]) {
-            printf("%s: frame %d sent an index the decoder cannot receive, or changed b0..b2\n", c->name, f);
             return 1;
         }
         changed += memcmp(q.b, open.b, sizeof(q.b)) != 0;
@@ -330,7 +332,7 @@ test_exact_target_kept(const struct codec* c) {
         ambe_enc_quantize_nearest(&q, c->t);
         const struct ambe_enc_frame open = q;
         double e_open;
-        if (weighted_error(c, &open, open.b, &e_open) != 0) {
+        if (!indices_receivable(c, &open) || weighted_error(c, &open, open.b, &e_open) != 0) {
             return 1;
         }
         ambe_enc_refine(&q, c->t);
