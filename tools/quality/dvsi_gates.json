@@ -3471,5 +3471,226 @@
         "min_coverage": 0.1
       }
     ]
+  },
+  "unvoiced-code-development": {
+    "description": "A voice frame with no voiced band coded at one fixed pitch code per codec (D-STAR b0 123, rate 33 b0 119, P25 b0 127), its amplitudes measured on that code's harmonic grid, development vectors: every decode of DVSI's bits is unchanged, and for each encoder the log-spectral distance of its decoded encoding from DVSI's encoding and from the input rises by no more than 0.01 dB and its level gap to DVSI's encoding by no more than 0.1 dB.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.1
+      }
+    ]
+  },
+  "unvoiced-code-validation": {
+    "description": "A voice frame with no voiced band coded at one fixed pitch code per codec (D-STAR b0 123, rate 33 b0 119, P25 b0 127), its amplitudes measured on that code's harmonic grid, validation vectors: every decode of DVSI's bits is unchanged, and for each encoder the log-spectral distance of its decoded encoding from DVSI's encoding and from the input rises by no more than 0.01 dB and its level gap to DVSI's encoding by no more than 0.1 dB.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.level_gap_db",
+        "rule": "no_increase",
+        "value": 0.1
+      }
+    ]
+  },
+  "unvoiced-code-tones": {
+    "description": "A voice frame with no voiced band coded at one fixed pitch code per codec, on the tone vectors: every decode of DVSI's bits is unchanged (no tone vector moves in detector agreement, wrong tones, tone level, frequency or twist in any mode), and on no D-STAR or rate-33 vector do the encoder's tone frames agree less often with DVSI's or appear where DVSI sends voice more often.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "all_no_increase"
+      }
+    ]
+  },
+  "unvoiced-code-channel": {
+    "description": "A voice frame with no voiced band coded at one fixed pitch code per codec, under channel errors (dam at 1.1-10.6% bit errors): every decode of DVSI's bits is unchanged, so in every mode the mute decisions agree with DVSI's exactly as before at every error rate, hard and soft, and the output on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) is as far from DVSI's as before.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
   }
 }
