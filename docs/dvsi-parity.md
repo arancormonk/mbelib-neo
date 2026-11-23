@@ -551,7 +551,8 @@ Annex A tabulates f0 up to 0.2% higher for some codes (b0 70-76) and has two ove
 count follows the rule Annex A's own L column follows (every harmonic at or below 0.9254 of
 Nyquist), which on this law differs from the column only at b0 17: 12, not 11. DVSI's output
 carries the twelfth harmonic there (closer to an L = 12 decode in 9 of 11 frames). The encoder
-quantizes to the nearest code in log2.
+quantizes to the nearest code in log2, except on a frame with no voiced band, which it sends at b0
+119 ([Encoder pitch code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)).
 
 ### Rate 33: error counts and repeats
 

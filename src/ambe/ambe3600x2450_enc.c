@@ -10,7 +10,8 @@
  * Quantizes the speech model of mbe_speech_analysis.c as TIA-102.BABA-1
  * clause 4 describes (clause numbers below refer to that addendum):
  *
- *  - b0: the Annex A fundamental nearest the analysed one (4.1).
+ *  - b0: the Annex A fundamental nearest the analysed one (4.1), except that
+ *    a frame with V/UV vector 16 (no voiced band) goes out at b0 119.
  *  - b1: the V/UV vector among the first 17 of Annex B nearest the band
  *    decisions of TIA-102.BABA 5.2, weighted by the squared spectral
  *    amplitudes (4.2, eq 4).

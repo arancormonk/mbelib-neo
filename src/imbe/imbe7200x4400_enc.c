@@ -11,8 +11,10 @@
  * 6 describes (equation numbers below refer to it), against the tables
  * mbe_decodeImbe4400Parms() dequantizes with:
  *
- *  - b0 from the refined fundamental (eq 45); L and K as the decoder derives
- *    them from b0 (eqs 46-48), which equal the analysis' (eqs 31, 34).
+ *  - b0 from the refined fundamental (eq 45), except that a frame with no
+ *    voiced band goes out at b0 127 (below); L and K as the decoder derives
+ *    them from b0 (eqs 46-48), which equal the analysis' (eqs 31, 34) at the
+ *    refined fundamental.
  *  - b1 from the band V/UV decisions of 5.2 (eq 49).
  *  - Spectral amplitudes by the estimator of each band's decision (5.3, eqs 43
  *    and 44), then the prediction residual (eqs 52-55), six block DCTs and
