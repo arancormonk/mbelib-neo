@@ -11,8 +11,7 @@ the library.
   `mbe_neo::mbe_static`, or `libmbe-neo` through pkg-config.
 - Public API: declarations under `include/mbelib-neo/`.
 - Codec implementation: project-owned C sources under `src/`.
-- Vendored FFT implementation: PFFFT/FFTPACK sources under
-  `src/external/pffft/`.
+- Embedded FFT implementation: pffft-neo, pinned in `tools/ci-dependency-pins.env`.
 - Build and packaging system: CMake, CMake presets, install rules, CMake package
   export, and pkg-config metadata.
 - Test and validation system: CTest executables under `tests/`, fuzz targets
@@ -107,13 +106,12 @@ Install rules export:
 
 ## Dependency Architecture
 
-The compiled third-party code is a pinned PFFFT fork, downloaded and verified
+The compiled third-party code is pffft-neo at a pinned revision, downloaded and verified
 at configure time (or supplied locally for offline builds). Its two production
 C sources compile directly into both libraries; only `mbe_unvoiced_fft.c` may
 include its headers. Debug disables explicit FMA as well as contraction, scalar
-mode uses scalar-one, and SIMD backend selection follows compiler features
-(PFFFT is not dispatched at run time; the library's own AVX2/FMA kernel copies
-are, see [run-time dispatch](build-installation.md#run-time-avx2fma-dispatch)).
+mode uses one lane, and SIMD builds use the FFT backend selected by compiler
+features and pffft-neo's CPU/size dispatch. See [run-time dispatch](build-installation.md#run-time-avx2fma-dispatch).
 CI and analysis
 tools are managed through pinned workflow actions, hashed Python requirement
 files, and documented supply-chain guardrails.

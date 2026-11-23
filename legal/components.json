@@ -91,34 +91,36 @@
       }
     },
     {
-      "id": "pffft",
-      "name": "PFFFT",
+      "id": "pffft-neo",
+      "name": "pffft-neo",
       "paths": [
-        "third_party/pffft-*.tar.gz"
+        "third_party/pffft-neo-*.tar.gz"
       ],
       "distribution": [
         "source",
         "binary"
       ],
-      "origin": "https://github.com/arancormonk/pffft",
+      "origin": "https://github.com/arancormonk/pffft-neo",
       "revision": "PFFFT_SHA in tools/ci-dependency-pins.env",
-      "license_declared": "LicenseRef-PFFFT",
-      "license_concluded": "LicenseRef-PFFFT",
+      "license_declared": "GPL-2.0-or-later AND LicenseRef-PFFFT",
+      "license_concluded": "GPL-2.0-or-later AND LicenseRef-PFFFT",
       "notices": [
+        "LICENSE",
         "LICENSES/LicenseRef-PFFFT.txt"
       ],
       "copyright_permission": "notice-retained",
       "gpl_compatibility": "compatible",
       "patent_status": "not-assessed",
-      "assessment": "Compiled backends retain mixed upstream notices; exact texts are recorded instead of a blanket BSD classification. Original pinned source archive accompanies corresponding source.",
+      "assessment": "pffft-neo contributions are GPL-2.0-or-later. Inherited PFFFT and FFTPACK notices accompany the binaries and the pinned source archive accompanies corresponding source.",
       "sources": [
         "cmake/Pffft.cmake",
         "tools/ci-dependency-pins.env",
         "docs/dependencies.md"
       ],
-      "review_date": "2026-11-13",
+      "review_date": "2026-11-23",
       "notice_sha256": {
-        "LICENSES/LicenseRef-PFFFT.txt": "c93a161018e2db933f1a659f9153620c4705e3acca16a4464cf5e447dc58467d"
+        "LICENSE": "640d90f6ee401241ff62834d0d1b33f83049e99b8bfdfa04ed1b0a1635dde3e7",
+        "LICENSES/LicenseRef-PFFFT.txt": "c2bc1b84e8eb267b46fc25cc62bab7db5ba6b0ad538ed50e802cfd6b139fb2b0"
       }
     },
     {

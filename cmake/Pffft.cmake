@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Compile the pinned fork into mbelib; do not configure its C++ project.
+# Embed the pinned pffft-neo implementation in both library artifacts.
 include(FetchContent)
 
 set(_pffft_pins "${CMAKE_CURRENT_LIST_DIR}/../tools/ci-dependency-pins.env")
@@ -37,9 +37,11 @@ if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
 endif()
 set(_pffft_url
-    "https://codeload.github.com/arancormonk/pffft/tar.gz/${PFFFT_SHA}"
+    "https://codeload.github.com/arancormonk/pffft-neo/tar.gz/${PFFFT_SHA}"
 )
-set(_pffft_bundle "${PROJECT_SOURCE_DIR}/third_party/pffft-${PFFFT_SHA}.tar.gz")
+set(_pffft_bundle
+    "${PROJECT_SOURCE_DIR}/third_party/pffft-neo-${PFFFT_SHA}.tar.gz"
+)
 set(_pffft_disconnected "${FETCHCONTENT_FULLY_DISCONNECTED}")
 if(NOT FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT AND EXISTS "${_pffft_bundle}")
     file(SHA256 "${_pffft_bundle}" _pffft_bundle_hash)
@@ -77,66 +79,21 @@ set(PFFFT_SOURCES
     "${MBELIB_PFFFT_SOURCE_DIR}/src/pffft_common.c"
 )
 set(PFFFT_INCLUDE_DIR "${MBELIB_PFFFT_SOURCE_DIR}/include/pffft")
-set(_pffft_notice_sources
-    src/pffft.c
-    src/pffft_priv_impl.h
-    src/pffft_passes_impl.h
-    src/pffft_pass_config.h
-    src/pffft_cplx_impl.h
-    src/pffft_real_impl.h
-    src/pffft_internal.h
-    src/pffft_setup.h
-    src/pffft_cpu_x86.h
-    src/pffft_wide_impl.h
-    src/pffft_wide_select.h
-    src/pffft_wide_sizes.h
-    src/pffft_wide_api.h
-    src/pffft_wide_tu.c
-    include/pffft/pffft.h
-    include/pffft/pffft_double.h
-    src/simd/pf_float.h
-    src/simd/pf_scalar_float.h
-    src/simd/pf_sse1_float.h
-    src/simd/pf_fma_x86.h
-    src/simd/pf_neon_float.h
-    src/simd/pf_wasm_float.h
-    src/simd/pf_altivec_float.h
+foreach(
+    _file
+    IN
+    ITEMS
+        ${PFFFT_SOURCES}
+        "${PFFFT_INCLUDE_DIR}/pffft.h"
+        "${MBELIB_PFFFT_SOURCE_DIR}/README.md"
+        "${MBELIB_PFFFT_SOURCE_DIR}/LICENSE"
+        "${MBELIB_PFFFT_SOURCE_DIR}/third_party/pffft/LICENSE.txt"
+        "${MBELIB_PFFFT_SOURCE_DIR}/third_party/pffft/LicenseRef-PFFFT.txt"
 )
-foreach(_file IN ITEMS src/pffft_common.c LICENSE.txt ${_pffft_notice_sources})
-    if(NOT EXISTS "${MBELIB_PFFFT_SOURCE_DIR}/${_file}")
+    if(NOT EXISTS "${_file}")
         message(
             FATAL_ERROR
-            "Incompatible PFFFT source directory ${MBELIB_PFFFT_SOURCE_DIR}: missing ${_file}. Use the pinned fork; for offline builds set FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT."
+            "Incompatible PFFFT source directory ${MBELIB_PFFFT_SOURCE_DIR}: missing ${_file}. Use the pinned pffft-neo checkout."
         )
     endif()
 endforeach()
-file(READ "${MBELIB_PFFFT_SOURCE_DIR}/src/simd/pf_fma_x86.h" _pffft_fma)
-if(NOT _pffft_fma MATCHES "PFFFT_DISABLE_FMA")
-    message(
-        FATAL_ERROR
-        "Incompatible PFFFT revision: PFFFT_DISABLE_FMA support is required. Use the pinned fork."
-    )
-endif()
-
-# Include the license headers of every compiled backend, not just LICENSE.txt.
-set(PFFFT_NOTICES "${PROJECT_BINARY_DIR}/PFFFT-NOTICES.txt")
-file(
-    WRITE "${PFFFT_NOTICES}"
-    "PFFFT: https://github.com/arancormonk/pffft\nPinned revision: ${PFFFT_SHA}\n\n"
-)
-foreach(_file IN LISTS _pffft_notice_sources)
-    file(READ "${MBELIB_PFFFT_SOURCE_DIR}/${_file}" _text)
-    string(FIND "${_text}" "*/" _end)
-    math(EXPR _end "${_end} + 2")
-    string(SUBSTRING "${_text}" 0 ${_end} _notice)
-    file(APPEND "${PFFFT_NOTICES}" "${_file}\n${_notice}\n\n")
-endforeach()
-
-if(MBELIB_ENABLE_WARNINGS AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
-    # Upstream's private FFT helpers have external linkage and optional stack
-    # scratch uses VLAs. These exceptions apply only to dependency sources.
-    set_source_files_properties(
-        ${PFFFT_SOURCES}
-        PROPERTIES COMPILE_OPTIONS "-Wno-missing-prototypes;-Wno-vla"
-    )
-endif()

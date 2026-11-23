@@ -49,7 +49,7 @@ This document records mbelib-neo's evidence for OpenSSF OSPS Baseline Level 1.
   `src/tetra/tetra_acelp_codebooks.c`: numeric codebook data from ETSI
   EN 300 395-2, identified as `LicenseRef-ETSI-EN-300-395-2-data` and not
   covered by the GPL grant (see `docs/tetra-acelp.md`). Third-party license
-  notices are retained under `LICENSES/` and `src/external/pffft/`.
+  notices are retained under `LICENSES/` and in the pinned pffft-neo archive.
 - Release install trees include the project license, GPL text, ISC text, the
   ETSI data notice, and upstream attribution.
 - The public Git repository records changes, authors, and timestamps.

@@ -23,7 +23,7 @@ COMMON_CFLAGS=(
   -I"$GEN_INCLUDE_DIR"
   -I"$PROJECT_DIR"
   -I"$PROJECT_DIR/src/internal"
-  -I"$SRC/pffft/include/pffft"
+  -I"$SRC/pffft-neo/include/pffft"
 )
 
 PROJECT_WARNING_FLAGS=(
@@ -79,11 +79,11 @@ for source in "${sources[@]}"; do
   objects+=("$object")
 done
 
-# Production PFFFT only; FFTPACK is the fork's separate reference implementation.
+# Compile the same pffft-neo sources as the CMake build.
 for source in pffft.c pffft_common.c; do
   object="$OBJ_DIR/pffft_$source.o"
   "$CC" "${FUZZ_CFLAGS[@]}" "${COMMON_CFLAGS[@]}" "${PROJECT_WARNING_FLAGS[@]}" \
-    -c "$SRC/pffft/src/$source" -o "$object"
+    -c "$SRC/pffft-neo/src/$source" -o "$object"
   objects+=("$object")
 done
 

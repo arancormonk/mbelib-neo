@@ -4,5 +4,5 @@ FROM gcr.io/oss-fuzz-base/base-builder@sha256:1f9cf74bc3d7029b528494542f9d9851b2
 COPY . $SRC/mbelib-neo
 WORKDIR $SRC/mbelib-neo
 RUN . tools/ci-dependency-pins.env && \
-    tools/fetch-pinned-git.sh https://github.com/arancormonk/pffft.git "$PFFFT_SHA" "$SRC/pffft"
+    tools/fetch-pinned-git.sh https://github.com/arancormonk/pffft-neo.git "$PFFFT_SHA" "$SRC/pffft-neo"
 COPY .clusterfuzzlite/build.sh $SRC/

@@ -466,29 +466,27 @@ endif()
 if(MBELIB_ENABLE_SIMD)
     target_compile_definitions(mbe-shared PRIVATE MBELIB_ENABLE_SIMD=1)
     target_compile_definitions(mbe-static PRIVATE MBELIB_ENABLE_SIMD=1)
-    # Mirror the fork's backend selection, including
-    # PFFFT-only backends (AltiVec and SSE1).
+    # Ask the dependency's headers which backend this compiler targets. The
+    # check is diagnostic (32-bit ARM CI checks the fallback); selection stays
+    # in pffft-neo, including its CPU/size dispatch and four-lane fallback.
     set(_mbelib_pffft_simd_probe_source
         [=[
-        #if (defined(__ppc__) || defined(__ppc64__) || defined(__powerpc__) || defined(__powerpc64__)) && (defined(__VEC__) || defined(__ALTIVEC__))
-        /* AltiVec */
-        #elif defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__wasm_simd128__)
-        /* NEON or native WebAssembly SIMD */
-        #elif defined(__x86_64__) || defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
-        /* SSE */
-        #else
-        #error No supported PFFFT SIMD backend
+        #define PFFFT_ENABLE_NEON 1
+        #include "simd/pf_float.h"
+        #if SIMD_SZ == 1
+        #error Scalar FFT backend
         #endif
         int mbelib_target_pffft_simd;
       ]=]
     )
+    set(_mbelib_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+    list(APPEND CMAKE_REQUIRED_INCLUDES "${MBELIB_PFFFT_SOURCE_DIR}/src")
     _mbelib_check_c_source_compiles_static("${_mbelib_pffft_simd_probe_source}" _mbelib_pffft_simd_available)
-    # The fork gates NEON/WASM behind opt-in macros. Its headers additionally
-    # check compiler target features; no host-based ISA flags are introduced.
+    set(CMAKE_REQUIRED_INCLUDES "${_mbelib_saved_required_includes}")
     foreach(_target mbe-shared mbe-static)
         target_compile_definitions(
             ${_target}
-            PRIVATE PFFFT_ENABLE_NEON=1 PFFFT_ENABLE_WASM=1
+            PRIVATE PFFFT_ENABLE_NEON=1 PFFFT_SCALVEC_ENABLED=1
         )
     endforeach()
     if(MBELIB_TARGET_X86_32)
@@ -563,8 +561,6 @@ if(MBELIB_ENABLE_SIMD)
     # The x86-32 handling above guarantees SSE2, even if the default target
     # probed without the library's additional SSE2 flag did not provide SSE.
     if(NOT _mbelib_pffft_simd_available AND NOT MBELIB_TARGET_X86_32)
-        target_compile_definitions(mbe-shared PRIVATE PFFFT_SIMD_DISABLE=1)
-        target_compile_definitions(mbe-static PRIVATE PFFFT_SIMD_DISABLE=1)
         set(_mbelib_pffft_fallback_hint "")
         if(
             CMAKE_SIZEOF_VOID_P EQUAL 4
@@ -740,11 +736,8 @@ else()
         AND MSVC
         AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang"
     )
-        # PFFFT's 8-lane AVX2 FFT backend: GCC and Clang build it inside
-        # pffft.c; MSVC needs it as a translation unit of its own, compiled
-        # with /arch:AVX2 (PFFFT's README, "MSVC and the 8-lane code").
-        # pffft.c only calls it after its CPU check; /GL- keeps link-time
-        # code generation from inlining AVX2 code into code that runs first.
+        # pffft-neo uses a separate AVX2 unit on MSVC. /GL- keeps its
+        # instructions out of baseline code that runs before CPU selection.
         set(_mbelib_pffft_wide_tu
             "${MBELIB_PFFFT_SOURCE_DIR}/src/pffft_wide_tu.c"
         )
@@ -1081,10 +1074,17 @@ install(
 )
 
 install(
-    FILES "${MBELIB_PFFFT_SOURCE_DIR}/LICENSE.txt"
-    DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft
+    FILES
+        "${MBELIB_PFFFT_SOURCE_DIR}/README.md"
+        "${MBELIB_PFFFT_SOURCE_DIR}/LICENSE"
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft-neo
 )
-install(FILES "${PFFFT_NOTICES}" DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft)
+install(
+    FILES
+        "${MBELIB_PFFFT_SOURCE_DIR}/third_party/pffft/LICENSE.txt"
+        "${MBELIB_PFFFT_SOURCE_DIR}/third_party/pffft/LicenseRef-PFFFT.txt"
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}/pffft-neo/third_party/pffft
+)
 
 install(
     DIRECTORY "${PROJECT_SOURCE_DIR}/legal/"

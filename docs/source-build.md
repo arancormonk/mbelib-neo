@@ -16,7 +16,7 @@ ctest --preset dev-debug --output-on-failure
 cmake --install build/dev-debug --prefix /your/install/prefix
 ```
 
-The original pinned PFFFT archive is in `third_party/`; CMake verifies its
+The original pinned pffft-neo archive is in `third_party/`; CMake verifies its
 SHA-256 before extracting it locally. No download or populated build cache is
 needed. An explicit `FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT` override takes
 precedence and makes its provenance the caller's responsibility. Ordinary Git

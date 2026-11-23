@@ -50,9 +50,10 @@ def validate(inventory, read, names):
             if not exception or exception not in read("legal/status.md").decode():
                 raise ValueError("Distributed unresolved component lacks a disclosed exception")
         declared = component["license_declared"]
-        if declared.startswith("LicenseRef-") and not any(declared in n for n in component["notices"]):
-            raise ValueError(f"Custom license lacks extracted text: {declared}")
-    required = {"first-party", "isc-origins", "pffft", "etsi-data", "op25-tooling",
+        for license_id in re.findall(r"LicenseRef-[A-Za-z0-9.-]+", declared):
+            if not any(Path(n).stem == license_id for n in component["notices"]):
+                raise ValueError(f"Custom license lacks extracted text: {license_id}")
+    required = {"first-party", "isc-origins", "pffft-neo", "etsi-data", "op25-tooling",
                 "dvsi-reference", "etsi-reference", "speech-corpora", "license-texts"}
     if not required.issubset(ids):
         raise ValueError("Component inventory is incomplete")

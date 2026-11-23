@@ -104,12 +104,12 @@ def create(root, tag, expected_commit, destination, dependency=None):
     data = dependency.read_bytes() if dependency else download_archive(pins["PFFFT_SHA"])
     if hashlib.sha256(data).hexdigest() != pins["PFFFT_ARCHIVE_SHA256"]:
         raise ValueError("PFFFT archive SHA256 differs from release pin")
-    files[f"third_party/pffft-{pins['PFFFT_SHA']}.tar.gz"] = (data, 0o644)
+    files[f"third_party/pffft-neo-{pins['PFFFT_SHA']}.tar.gz"] = (data, 0o644)
     timestamp = int(git(root, "show", "-s", "--format=%ct", commit))
     identity = {
-        "SPDX-License-Identifier": "GPL-2.0-or-later", "schema_version": 1,
+        "SPDX-License-Identifier": "GPL-2.0-or-later", "schema_version": 2,
         "tag": tag, "commit": commit, "version": version, "source_date_epoch": timestamp,
-        "pffft": pins, "files": [
+        "pffft-neo": pins, "files": [
             {"path": name, "sha256": hashlib.sha256(content).hexdigest(), "mode": mode}
             for name, (content, mode) in sorted(files.items())
         ],

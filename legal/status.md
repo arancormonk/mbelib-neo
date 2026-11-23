@@ -12,8 +12,8 @@ and patent status are separate fields. Aggregate conclusions remain
 Notice hashes use UTF-8 text with LF line endings, including on Windows;
 archive and SBOM checksums always cover the actual delivered bytes.
 
-Original mbelib contributions retain their ISC notice. PFFFT's exact retained
-license texts use `LicenseRef-PFFFT`, covering its compiled backends. Both sets
+Original mbelib contributions retain their ISC notice. pffft-neo licenses its contributions under
+GPL-2.0-or-later and retains inherited notices under `LicenseRef-PFFFT`. Both sets
 of notices accompany installations. The OP25 patch is GPL-3.0-or-later and
 retains Max H. Parke's attribution and the complete GPLv3 text. It is separate
 developer tooling in the source archive, never part of the installed library.

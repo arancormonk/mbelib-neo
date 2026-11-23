@@ -15,7 +15,7 @@ END = "# END pinned PFFFT"
 def update(text, pins):
     block = f'''{BEGIN}
 _pffft_sha={pins["PFFFT_SHA"]}
-source+=("pffft-$_pffft_sha.tar.gz::https://codeload.github.com/arancormonk/pffft/tar.gz/$_pffft_sha")
+source+=("pffft-neo-$_pffft_sha.tar.gz::https://codeload.github.com/arancormonk/pffft-neo/tar.gz/$_pffft_sha")
 sha256sums+=('{pins["PFFFT_ARCHIVE_SHA256"]}')
 {END}
 '''
@@ -28,12 +28,15 @@ sha256sums+=('{pins["PFFFT_ARCHIVE_SHA256"]}')
         text = text.replace("build() {", block + "\nbuild() {", 1)
     else:
         raise ValueError("Unsupported PKGBUILD: expected one build() function")
+    # Refresh the unpack directory in already-published recipes as well.
+    text = text.replace('-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/pffft-$_pffft_sha"',
+                        '-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/pffft-neo-$_pffft_sha"')
     if "-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=" not in text:
         anchor = "        -DCMAKE_INSTALL_PREFIX=/usr \\\n"
         if text.count(anchor) != 1:
             raise ValueError("Unsupported PKGBUILD: expected one CMake install prefix")
         text = text.replace(anchor, anchor +
-                            '        -DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/pffft-$_pffft_sha" \\\n'
+                            '        -DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/pffft-neo-$_pffft_sha" \\\n'
                             '        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \\\n')
         # A -git recipe must reject a branch whose dependency pin moved before
         # the AUR metadata was refreshed, rather than silently compile stale FFT.

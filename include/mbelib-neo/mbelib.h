@@ -409,9 +409,7 @@ typedef struct mbe_ambe2400_encoder mbe_ambe2400_encoder;
 /**
  * @brief Allocate a fresh encoder context, including its FFT plan.
  *
- * Encoding never allocates. Allocation failures inside the vendored pffft
- * setup are not recoverable; the same limitation applies to decoder plan
- * allocation.
+ * The context owns all FFT storage. Encoding never allocates.
  *
  * @return Owned context, or NULL when the context or its FFT plan buffers
  * cannot be allocated.
@@ -735,8 +733,7 @@ typedef struct mbe_ambe2450_encoder mbe_ambe2450_encoder;
 /**
  * @brief Allocate a fresh encoder context, including its FFT plans.
  *
- * Encoding never allocates. As for mbe_ambe2400EncoderAlloc(), allocation
- * failures inside the vendored pffft setup are not recoverable.
+ * The context owns all FFT storage. Encoding never allocates.
  *
  * @return Owned context, or NULL when the context or its plan buffers cannot
  * be allocated.
@@ -915,8 +912,7 @@ typedef struct mbe_imbe4400_encoder mbe_imbe4400_encoder;
 /**
  * @brief Allocate a fresh encoder context, including its FFT plans.
  *
- * Encoding never allocates. As for mbe_ambe2400EncoderAlloc(), allocation
- * failures inside the vendored pffft setup are not recoverable.
+ * The context owns all FFT storage. Encoding never allocates.
  *
  * @return Owned context, or NULL when the context or its plan buffers cannot
  * be allocated.

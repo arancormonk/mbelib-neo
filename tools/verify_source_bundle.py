@@ -15,7 +15,7 @@ def run(*command, cwd):
 
 
 def check_dependency_preferences(source, work):
-    dependency = next((source / "third_party").glob("pffft-*.tar.gz"))
+    dependency = next((source / "third_party").glob("pffft-neo-*.tar.gz"))
     original = dependency.read_bytes()
     extracted = source / "build/dev-debug/_deps/mbelib_pffft-src"
     try:

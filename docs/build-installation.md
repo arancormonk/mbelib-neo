@@ -32,9 +32,8 @@ provides those instructions, with scalar routines otherwise. The option defaults
 to ON for Release, RelWithDebInfo, and MinSizeRel builds of 64-bit targets, and
 for 64-bit targets under a multi-config generator (Ninja Multi-Config, Visual
 Studio, Xcode), which ignores `CMAKE_BUILD_TYPE`; it defaults to OFF for
-single-config Debug builds and 32-bit targets. The downloaded PFFFT library uses its own supported
-backends (including SSE and AltiVec); CMake explicitly selects scalar FFT code
-when none is available, even with SIMD ON. Warnings-as-errors remains enabled by
+single-config Debug builds and 32-bit targets. pffft-neo selects SSE or NEON from the compiler target, with
+a four-lane scalar fallback. Disabling SIMD selects its single-lane scalar FFT. Warnings-as-errors remains enabled by
 default in either case.
 
 ### Run-time AVX2/FMA dispatch
@@ -54,8 +53,8 @@ probe requires the whole x86-64-v3 set (AVX2, FMA, BMI1/2, LZCNT, MOVBE, F16C)
 and OS support for the YMM state. A build whose compiler target already has
 AVX2 (`-march=native` on an AVX2 host, `-march=x86-64-v3`, `/arch:AVX2`) calls
 its kernels directly with no check. The rest of the library, including the
-encoders' codebook searches, PCM conversion and PFFFT, keeps the target's
-instructions. 32-bit x86 builds, universal macOS builds (several
+encoders' codebook searches and PCM conversion, keeps the target's
+instructions. pffft-neo separately dispatches real FFTs by CPU and transform size. 32-bit x86 builds, universal macOS builds (several
 `CMAKE_OSX_ARCHITECTURES`) and non-x86 targets do not dispatch; MinGW GCC
 dispatches only when its assembler accepts `-muse-unaligned-vector-move`
 (binutils 2.38 or later), since GCC does not align the Windows x64 stack for
@@ -135,7 +134,7 @@ should preserve it.
 
 ## Non-Recursive Build Structure
 
-PFFFT is fetched as a SHA-256-verified commit archive, or supplied with
+pffft-neo is fetched as a SHA-256-verified commit archive, or supplied with
 `FETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT` for offline builds. Its top-level CMake
 project is not configured; the build remains C99-only. See
 [dependency management](dependencies.md) for cache, update and rollback steps.
