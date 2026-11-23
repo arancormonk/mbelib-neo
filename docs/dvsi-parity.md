@@ -597,11 +597,13 @@ of the [mbevocoder](https://github.com/srcejon/mbevocoder) project (`docs/decode
 bands always span 3.58 kHz, `w0 = 2.81 / L` radians per sample, the pitch code setting only L. The
 decoder now does so: a voice frame of rows 18 to 31 takes that w0, with L from b0 as before, and its
 unvoiced factor `0.2046 / sqrt(w0)` from it. The grid's w0 is the model's pitch like any other and
-enters the history; the prediction (4.4) depends on L alone, so the next voice frame's predicted
-amplitudes do not change. Rows 0 to 17, silence, tone and lost frames decode to the same parameters
-as before. The frame after one of rows 18 to 31 still plays differently: its synthesis starts from
-that frame's changed model (the mid-frame model between the two and the unvoiced overlap carry it),
-and a lost frame repeats it. The encoder still never sends these rows, so its bits do not change.
+enters the history; the prediction (4.4) depends on L alone, so for the same history the next voice
+frame's predicted log2 amplitudes do not change. Rows 0 to 17, silence and tone frames decode to the
+same parameters as before, and lost frames are classified and repeated by the same rule, so a lost
+frame after one of rows 18 to 31 repeats that frame's changed model. A voice or silence frame
+after one of these rows plays differently too: its synthesis starts from the changed model (the
+mid-frame model between the two and the unvoiced overlap carry it). The encoder still never sends
+these rows, so its bits do not change.
 
 DVSI's vectors bear the grid out. On the plain voice frames of the 25 development and validation
 vectors (DVSI's bits, decoded by both), the log-spectral distance from DVSI's decode falls on every
