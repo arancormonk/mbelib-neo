@@ -561,6 +561,57 @@ Rows 1, 3, 13, 15 and 17 play some columns neither voiced nor unvoiced on DVSI's
 distance against DVSI's decode on frames coded 13 or 15: 6.87 dB voiced, 7.56 dB unvoiced), so the
 table keeps Annex B's voiced columns there.
 
+**Rows 18 to 31: the band grid.** Annex B lists rows 18 to 31 all unvoiced, like row 16, and clause
+4.1 gives every voice frame the fundamental of its pitch code. The published AMBE-3000R measurements
+of the [mbevocoder](https://github.com/srcejon/mbevocoder) project (`docs/decoder-quality.md`,
+"Unvoiced rows 18-31: the band grid") report that the chip plays these rows on a band grid whose L
+bands always span 3.58 kHz, `w0 = 2.81 / L` radians per sample, the pitch code setting only L. The
+decoder now does so: a voice frame of rows 18 to 31 takes that w0, with L from b0 as before, and its
+unvoiced factor `0.2046 / sqrt(w0)` from it. The grid's w0 is the model's pitch like any other and
+enters the history; the prediction (4.4) depends on L alone, so the next frame's amplitudes do not
+change. Rows 0 to 17, silence, tone and lost frames are unchanged, and the encoder still never sends
+these rows, so its bits do not change.
+
+DVSI's vectors bear the grid out. On the plain voice frames of the 25 development and validation
+vectors (DVSI's bits, decoded by both), the log-spectral distance from DVSI's decode falls on every
+group of these rows: by 0.18 dB on rows 18, 19 and 21 to 23 (1869 frames), 0.20 on row 20 (634),
+0.05 on rows 24 and 25 (875), 0.10 on rows 26, 27, 30 and 31 (1591) and 0.13 on rows 28 and 29
+(1101); the waveform correlation of the plain rows rises by 0.004. Taking the unvoiced factor from
+the coded w0 instead cannot be told apart (-0.0086 against -0.0081 dB on the scoreboard). The
+constant was checked once, on the development vectors alone (4568 frames of rows 18 to 31): the
+change in mean log-spectral distance from DVSI's decode on those frames, from 5.94 dB at the coded
+pitch, is
+
+| `L w0` | 2.75 | 2.78 | 2.81 | 2.84 | 2.87 |
+|---|---|---|---|---|---|
+| Change (dB) | -0.088 | -0.136 | -0.133 | -0.073 | +0.031 |
+
+Paired against 2.81 frame for frame, 2.78 is -0.002 ± 0.010 dB (standard error), so the published
+value stands.
+
+The same document's other statement, that row 17 plays as row 16, does not hold on DVSI's vectors:
+played all unvoiced, row-17 frames lose 0.064 of waveform correlation with DVSI's decode and gain
+0.35 dB of log-spectral distance from it, and PESQ against the input falls by 0.0022 ± 0.0011 (worse
+on 17 of the 25 vectors). Row 17 keeps its lowest column voiced.
+
+On the scoreboard (joint lags, against the commit before the change), rate 33 decoding DVSI's bits,
+mean paired change with its 95% interval:
+
+| Partition | LSD vs DVSI (dB) | Waveform corr. vs DVSI | Envelope corr. vs DVSI | Level vs DVSI (dB) | LSD vs input (dB) |
+|---|---|---|---|---|---|
+| development | -0.0081 [-0.0130, -0.0053] | +0.00001 | +0.00004 | -0.0001 | -0.0014 [-0.0024, -0.0006] |
+| validation | -0.0079 [-0.0101, -0.0043] | +0.00001 | +0.00002 | -0.0001 | -0.0021 [-0.0030, -0.0007] |
+
+Narrow-band PESQ (ITU-T P.862) against the input rises by 0.0035 ± 0.0015 (better on 19 of the 25
+vectors) and ESTOI by 0.0002 ± 0.0001 (17 of 25); DVSI's own decode of the same bits scores 0.0217 ±
+0.0052 above this library's before the change. Under channel errors (`dam` at 1.1 to 10.6%) the
+mute decisions do not change and the output on the frames neither DVSI nor this library mutes comes
+0.003 dB (hard decisions) and 0.005 dB (soft) closer to DVSI's. The decodes of nine tone vectors change,
+but no tone metric moves. The gate sets `r33-row-grid-development`,
+`-validation`, `-tones` and `-channel` were declared before scoring and pass: D-STAR and P25 decodes
+and every encoder's bits are unchanged. The final partition was not scored for this change. What
+these rows do beyond the grid is not modelled ([Known differences](#known-differences)).
+
 ### Rate 33 tone transitions
 
 DVSI's rate-33 decoder joins a tone to the frames around it over 80 samples, as its D-STAR decoder
@@ -1491,6 +1542,7 @@ other checks pass. The final partition was not scored for this change.
 | Rate-33 frame repeat after a tone | 7.3 with 5.6: the previous frame's decoded model; silent on a tone before it | the tone repeats at its level until the repeat limit's mute fades it out | DVSI ([Rate 33 lost frames and tones](#rate-33-lost-frames-and-tones)) |
 | Amplitude limit (P25, rate 33) | eqs 115-116 scale a frame whose amplitudes sum past 20480 (error-free) | no scaling | DVSI ([Amplitude limit](#amplitude-limit)) |
 | Rate-33 V/UV vectors | Annex B rows and eq 5's columns; rows 17-31 all unvoiced | each voiced column reaches 250 Hz into an unvoiced one below; row 17 voices its lowest column | DVSI ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
+| Rate-33 V/UV rows 18-31 | Annex B: every band unvoiced, as row 16; 4.1 (Annex A): the fundamental of the frame's pitch code | a band grid whose L bands span 3.58 kHz, `w0 = 2.81 / L`, the pitch code setting only L; in one subframe some 500 Hz columns play a signal not determined ([Known differences](#known-differences)) | the band grid ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
 | Encoder pitch code of a frame with no voiced band | TIA-102.BABA-1 4.1 and TIA-102.BABA 6.1 (eq 45): the code of the frame's own estimated fundamental, for every voice frame | D-STAR and P25: never the tracked pitch (a default code or one of 56 codes kept for such frames); rate 33: b0 119 on 20.7% of its row-16 frames | one fixed code per codec: D-STAR b0 123, rate 33 b0 119, P25 b0 127, amplitudes measured on its grid ([Encoder pitch code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)) |
 | Encoder spectral vectors (D-STAR, rate 33) | TIA-102.BABA-1 4.3.1 and 4.3.2: each of b3..b8 the row closest to its own target (minimum mean-squared error) | appears to follow the text (its re-quantizations pick this library's nearest PRBA rows on 84-91% of frames) | the nearest rows, then the six refined together to lower the amplitude-weighted error of the residual the decoder reconstructs ([Joint choice of the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors)) |
 | Encoder voicing over background noise | eq (37) decides voicing from the fit error and E(P) alone | suppresses background noise by default (documented); voices far less of it at low pitches | at pitches below about 90 Hz a 500 Hz column holding little more than the learned background noise is unvoiced ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)) |
@@ -1507,15 +1559,57 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
 - Rate-33 V/UV rows 1, 3, 13, 15 and 17: DVSI's decoder plays some of their columns between voiced
   and unvoiced, a state the binary voicing of `mbe_parms` cannot hold; this library plays them
   voiced, the nearer value.
-- Rate-33 V/UV rows 18 to 31 play as plain noise here, as Annex B gives them and as row 16 does.
-  DVSI's decoder plays them otherwise, and DVSI's encoder sends rows 17 to 31 on 12.2% of the voice
-  frames of the speech vectors (row 16 on 37.3%). Against a frame of row 16, rows 18 to 23 change
-  the frame's second half and the start of the next frame, rows 26 to 31 its first half, rows 24
-  and 25 both; and part of what DVSI plays there is impulsive (kurtosis 13.7 on row 20 and about 7
-  on rows 24 and 25, against 2.7 for noise) without being periodic at the frame's pitch. Our
-  frames correlate with DVSI's 0.99 on row 16, 0.91-0.96 on rows 18, 19, 21 to 23, 26, 27, 30 and
-  31, 0.82-0.83 on rows 28 and 29, 0.74 on row 20 and 0.34-0.47 on rows 24 and 25. What each row
-  tells the decoder is not determined.
+- Rate-33 V/UV rows 18 to 31 play here as unvoiced noise on their band grid
+  ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)); DVSI's decoder plays more than that. DVSI's
+  encoder sends rows 17 to 31 on 12.2% of the voice frames of the speech vectors (row 16 on 37.3%).
+  Putting DVSI's samples in place of ours on the frames of rows 17 to 31 would raise PESQ against
+  the input by 0.019 ± 0.004 on the 25 development and validation vectors, nearly all of the
+  0.021 ± 0.005 by which DVSI's decode of the rate-33 bits scored above ours before the grid; the
+  grid takes about 0.003 of it. On plain voice frames (before the grid) our frames correlate with DVSI's
+  0.98 on row 16, 0.93 on row 17, 0.89 on rows 18, 19 and 21 to 23, 0.87 on rows 26, 27, 30 and
+  31, 0.61 on rows 28 and 29, 0.75 on row 20 and 0.50 on rows 24 and 25.
+  - **Where they act.** Each row replaces a fixed set of 500 Hz columns in one 10 ms subframe and
+    leaves the other bands as row 16 plays them (coherence with ours 0.93-0.97); in the affected
+    ones DVSI's signal has a coherence of 0.4-0.5 with ours and lies 1.5 to 8 dB below it within the
+    subframe. Rows 18 to 23 act on the frame's own (second) subframe, rows 26 to 31 on the mid-frame
+    (first) one, and the two halves mirror each other; each partly affected band is the 250 Hz
+    reach into the column below, as in the voicing rule:
+
+    | Columns | Own subframe | Mid-frame subframe |
+    |---|---|---|
+    | 0 | 18 | 26 |
+    | 0 and 1 | 19 | 29 |
+    | 2 | 21 | 27 |
+    | 7 | 22 | 30 |
+    | 5 to 7 (own), 6 and 7 (mid) | 23 | 31 |
+    | all, impulsive | 20 | 28 |
+
+    Rows 24 and 25 act on both subframes, 24 on every band and 25 above about 750 Hz, as attenuated
+    noise (1.5 to 13 dB down) that does not correlate with ours (coherence 0.05-0.19). Their level
+    over the frame follows no law of time: rows 18 to 31 other than 20, 24, 25 and 28 play within
+    about 1 dB of our level in every 20-sample block.
+  - **What plays there is not determined.** It is not periodic at the coded pitch or at the grid's
+    (normalized autocorrelation at the period 0.08-0.44, as for our noise in the same bands,
+    0.09-0.48), and it is not DVSI's noise generator restarted from 0 at the subframe (correlation
+    0.09 or less at offsets -3 to 3 samples).
+  - **Rules tried and not adopted.** Scaling the unvoiced bands of those columns in that subframe
+    (rows 20, 24, 25 and 28 aside) brings our waveform closer to DVSI's (correlation +0.02 and
+    log-spectral distance up to 0.24 dB lower on the frames concerned, 0.39 with the grid; on the scoreboard -0.005 to
+    -0.007 dB alone and -0.013 to -0.015 dB with the grid) but not closer to the input: by 0.5, PESQ
+    -0.0013 ± 0.0014 and ESTOI -0.0003 ± 0.0001 (3 of 25 vectors better), log-spectral distance from
+    the input +0.004 dB; by 0.3, PESQ -0.0023 ± 0.0016; with the grid, the grid's PESQ gain falls
+    from 0.0027 to 0.0007. Voicing those columns in that subframe instead is worse on every waveform
+    measure: correlation with DVSI's -0.03 to -0.16 on these rows and -0.11 on rows 0 to 15 (the
+    pulse trains it starts move later pulses), the scoreboard's log-spectral distance from DVSI's
+    decode +0.07 to +0.09 dB and its waveform correlation -0.08 to -0.12; ESTOI falls by 0.0003 ±
+    0.0001 (8 of 25 better), while PESQ rises by 0.005 ± 0.004, within its error.
+  - **The impulsive rows.** Row 20 plays a quiet second half (1.8 to 18 dB below ours by
+    20-sample block) and then a burst about 108 samples plus one coded pitch period into the frame
+    (43% of frames within 4 samples of it, against 7% by chance). Row 28 plays a quiet first half
+    (4 to 13 dB down), with a peak related to the pitch on a minority of frames. Rows 24 and 25 are
+    peaky (kurtosis about 8.5 against 3.8 for ours), and on a given pitch code row 25's peak often
+    falls at the same place (60% of frames within 3 samples of their code's median); no single law
+    was found.
 - The pitch code of a P25 or D-STAR frame with no voiced band tells DVSI's decoder more than the
   marks of [Voiced onsets and offsets](#voiced-onsets-and-offsets). Frames at the encoders' default
   codes (P25 b0 25, D-STAR b0 34) match DVSI's output sample for sample, across level steps too
@@ -1581,8 +1675,8 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   within 0.03%.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2
   searches 0-16 and keeps the lowest index on ties, and this library's encoder never sends them.
-  Rows 18-31 decode all unvoiced here, as row 16 does; row 17 voices its lowest column
-  ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)).
+  Rows 18-31 decode all unvoiced here, as row 16 does, but on their band grid; row 17 voices its
+  lowest column ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)).
 - Rate-33 silence frames play on 15 bands on the strength of the published AMBE-3000R measurements;
   DVSI's vectors do not tell 14 bands from 15. A run of consecutive silence frames is not verified,
   since DVSI's vectors hold none ([Rate 33 silence frames](#rate-33-silence-frames)).
