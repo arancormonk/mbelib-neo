@@ -4084,6 +4084,15 @@
       {
         "mode": [
           "dstar",
+          "p25"
+        ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
           "r33"
         ],
         "metric": "tone.encoder_agreement",
@@ -4155,6 +4164,15 @@
           "p25"
         ],
         "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.pcm_changed_vectors",
         "rule": "max",
         "value": 0
       },
