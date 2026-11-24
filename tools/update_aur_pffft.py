@@ -28,9 +28,13 @@ sha256sums+=('{pins["PFFFT_ARCHIVE_SHA256"]}')
         text = text.replace("build() {", block + "\nbuild() {", 1)
     else:
         raise ValueError("Unsupported PKGBUILD: expected one build() function")
-    # Refresh the unpack directory in already-published recipes as well.
-    text = text.replace('-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/pffft-$_pffft_sha"',
-                        '-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/pffft-neo-$_pffft_sha"')
+    # Refresh the unpack directory in already-published recipes as well, in either spelling of the variable.
+    text = re.sub(r'(-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="\$srcdir/)pffft-(\$_pffft_sha|\$\{_pffft_sha\})"',
+                  r'\1pffft-neo-\2"', text)
+    # CMake honours the last of several overrides, so every one must name pffft-neo's unpack directory.
+    overrides = re.findall(r"-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=(\S*)", text)
+    if any(not re.fullmatch(r'"\$srcdir/pffft-neo-(\$_pffft_sha|\$\{_pffft_sha\})"', value) for value in overrides):
+        raise ValueError("Unsupported PKGBUILD: a PFFFT source override names another directory")
     if "-DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT=" not in text:
         anchor = "        -DCMAKE_INSTALL_PREFIX=/usr \\\n"
         if text.count(anchor) != 1:
