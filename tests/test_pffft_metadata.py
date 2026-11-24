@@ -66,6 +66,18 @@ class PinTests(unittest.TestCase):
         self.assertIn(override, result)
         published = result.replace('pffft-neo-', 'pffft-').replace('pffft-neo/', 'pffft/')
         self.assertEqual(aur.update(published, pins), result)
+        # The braced spelling of the variable moves too.
+        braced = published.replace('pffft-$_pffft_sha" \\', 'pffft-${_pffft_sha}" \\')
+        self.assertIn('"$srcdir/pffft-${_pffft_sha}"', braced)
+        self.assertIn('"$srcdir/pffft-neo-${_pffft_sha}"', aur.update(braced, pins))
+        # An override this helper cannot move is refused rather than kept, also behind a correct one.
+        with self.assertRaisesRegex(ValueError, "override"):
+            aur.update(result.replace('"$srcdir/pffft-neo-$_pffft_sha"', '"$srcdir/fft"'), pins)
+        doubled = result.replace('"$srcdir/pffft-neo-$_pffft_sha" \\\n',
+                                 '"$srcdir/pffft-neo-$_pffft_sha" \\\n        -DFETCHCONTENT_SOURCE_DIR_MBELIB_PFFFT="$srcdir/fft" \\\n')
+        self.assertIn('"$srcdir/fft"', doubled)
+        with self.assertRaisesRegex(ValueError, "override"):
+            aur.update(doubled, pins)
         self.assertIn('grep -qx "PFFFT_SHA=$_pffft_sha"', result)
 
     @unittest.skipUnless(sys.platform != "win32" and shutil.which("bash"), "AUR requires a Unix shell")
