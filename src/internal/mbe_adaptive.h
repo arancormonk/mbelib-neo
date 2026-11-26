@@ -222,6 +222,11 @@ enum mbe_frame_mark {
      * crossfades to the silence model over the second, the pulse train
      * running on through the frame. */
     MBE_FRAME_MARK_PREVIOUS_HELD = 3,
+    /* A P25 tone sent as voice frames, played as DVSI's decoder plays it: the
+     * model is the tone model (imbe7200x4400.c), and the frame's own model
+     * stands at mid-frame too, so the tone's amplitude moves from the last
+     * frame's to its own over the first 10 ms and holds over the second. */
+    MBE_FRAME_MARK_TONE = 4,
     /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };

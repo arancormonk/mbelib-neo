@@ -330,6 +330,15 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
         mbe_subframe_own_model(prev_mp, model);
         return;
     }
+    if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
+        /* A P25 tone frame's own model stands at mid-frame: DVSI's decoder
+         * brings a tone's amplitude from the last frame's to its own over the
+         * first subframe and holds it over the second (a first tone frame is at
+         * full level from sample 80; the frame after the last holds the tone
+         * fading out over its first 80 samples). */
+        mbe_subframe_own_model(cur_mp, model);
+        return;
+    }
     const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
     const int longer = (prev_mp->L < cur_mp->L) ? cur_mp->L : prev_mp->L;
     model->L = shorter;

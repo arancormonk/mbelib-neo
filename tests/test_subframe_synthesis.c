@@ -225,12 +225,12 @@ set_imbe_b0(char imbe_d[88], int b0) {
 /* The frame marks: only an exact stored value counts, and one replaces another. */
 static void
 test_frame_marks(void) {
-    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE, MBE_FRAME_MARK_PITCH_CARRIES,
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE,         MBE_FRAME_MARK_PITCH_CARRIES,
                                                 MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
-                                                MBE_FRAME_MARK_LATE_ONSET};
+                                                MBE_FRAME_MARK_TONE,         MBE_FRAME_MARK_LATE_ONSET};
 
     static const uint32_t others[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0x80000000u, 0x3F800001u, 0x40400001u,
-                                      0x40800000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
+                                      0x40A00000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
     mbe_parms mp;
     memset(&mp, 0, sizeof(mp));
     assert(mbe_frame_mark(&mp) == MBE_FRAME_MARK_NONE);

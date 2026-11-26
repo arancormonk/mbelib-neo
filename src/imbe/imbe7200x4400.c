@@ -628,6 +628,144 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
     return mbe_eccImbe7200x4400DataInternal(imbe_fr, imbe_d, NULL);
 }
 
+/*
+ * P25 tones sent as voice frames. P25 has no tone frames: DVSI's encoder
+ * sends a tone it detects as voice frames built from TIA-102.BABA-1 Annex J
+ * (the pitch code b0 = floor(4 pi / w0 - 39) of the tone's fundamental, the
+ * tone's harmonics l1 and l2 large, and one voicing word b1 per tone), and
+ * DVSI's decoder recognises such a frame and plays a tone model in place of
+ * its decoded harmonics, as US 7,970,606 describes (a frame whose fundamental
+ * is a table entry's, whose tone harmonics are voiced and dominate the other
+ * magnitudes, is a tone frame). The rows: the distinct (b0, b1, l1, l2) of the
+ * DTMF (128..143), KNOX (144..159) and single tones (5..122) as DVSI's encoder
+ * sends them, b1 the K band voicing bits as transmitted, band 1 the most
+ * significant (the pitch code and harmonics follow Annex J; the voicing word,
+ * which is not the bands of l1 and l2 under the decoder's band mapping, was
+ * read from DVSI's bit streams of its tone vectors). Single tones on one code
+ * and word share a row's pair at several harmonics (b0 17, 1000: l 1, 2 and
+ * 3). Left out: three single tones whose harmonic lies past the frame's L
+ * (120..122 at b0 2 and 3, harmonic 10 of 9), and the call-progress tones
+ * (160..163), whose frames DVSI's decoder plays as their decoded harmonics.
+ */
+struct imbe_tone_row {
+    unsigned char b0;
+    unsigned short b1;
+    unsigned char l1;
+    unsigned char l2;
+};
+
+static const struct imbe_tone_row imbe_tone_rows[] = {
+    {1, 0x001, 7, 7},     {1, 0x001, 8, 8},     {1, 0x001, 9, 9},     {1, 0x002, 4, 4},     {1, 0x002, 5, 5},
+    {1, 0x002, 6, 6},     {1, 0x004, 2, 2},     {1, 0x004, 3, 3},     {2, 0x001, 7, 7},     {2, 0x001, 8, 8},
+    {2, 0x001, 9, 9},     {2, 0x002, 4, 4},     {2, 0x002, 5, 5},     {2, 0x002, 6, 6},     {2, 0x004, 3, 3},
+    {3, 0x001, 7, 7},     {3, 0x001, 8, 8},     {3, 0x001, 9, 9},     {3, 0x002, 4, 4},     {3, 0x002, 5, 5},
+    {3, 0x002, 6, 6},     {3, 0x004, 1, 1},     {3, 0x004, 2, 2},     {3, 0x004, 3, 3},     {4, 0x001, 10, 10},
+    {4, 0x002, 7, 7},     {4, 0x003, 8, 8},     {4, 0x003, 9, 9},     {4, 0x004, 4, 4},     {4, 0x004, 5, 5},
+    {4, 0x006, 6, 6},     {4, 0x00C, 3, 3},     {5, 0x001, 10, 10},   {5, 0x002, 7, 7},     {5, 0x003, 8, 8},
+    {5, 0x003, 9, 9},     {5, 0x004, 4, 4},     {5, 0x004, 5, 5},     {5, 0x006, 6, 6},     {5, 0x008, 2, 2},
+    {6, 0x002, 7, 7},     {6, 0x002, 8, 8},     {6, 0x004, 4, 4},     {6, 0x004, 5, 5},     {6, 0x006, 6, 6},
+    {6, 0x00C, 3, 3},     {7, 0x002, 7, 7},     {7, 0x004, 4, 4},     {7, 0x004, 5, 5},     {7, 0x006, 6, 6},
+    {7, 0x008, 1, 1},     {7, 0x008, 2, 2},     {7, 0x00C, 3, 3},     {8, 0x004, 4, 4},     {8, 0x004, 5, 5},
+    {8, 0x006, 6, 6},     {9, 0x004, 4, 4},     {9, 0x004, 5, 5},     {9, 0x008, 2, 2},     {9, 0x00C, 3, 3},
+    {10, 0x004, 4, 4},    {10, 0x004, 5, 5},    {10, 0x00C, 3, 3},    {12, 0x004, 4, 4},    {12, 0x008, 1, 1},
+    {12, 0x008, 2, 2},    {12, 0x00C, 3, 3},    {13, 0x004, 4, 4},    {13, 0x00C, 3, 3},    {14, 0x008, 2, 2},
+    {15, 0x00C, 3, 3},    {17, 0x008, 1, 1},    {17, 0x008, 2, 2},    {17, 0x008, 3, 3},    {20, 0x010, 3, 3},
+    {21, 0x010, 2, 2},    {25, 0x010, 1, 1},    {25, 0x010, 2, 2},    {29, 0x00C, 4, 7},    {29, 0x010, 2, 2},
+    {34, 0x020, 1, 1},    {34, 0x020, 2, 2},    {36, 0x038, 4, 7},    {39, 0x020, 2, 2},    {44, 0x070, 4, 7},
+    {46, 0x040, 1, 1},    {53, 0x070, 4, 7},    {56, 0x060, 4, 7},    {63, 0x080, 1, 1},    {67, 0x060, 4, 7},
+    {80, 0x040, 7, 9},    {80, 0x060, 7, 11},   {92, 0x1E0, 7, 11},   {97, 0x380, 7, 9},    {97, 0x3C0, 7, 11},
+    {98, 0x260, 6, 14},   {106, 0x3C0, 7, 11},  {112, 0x7C0, 7, 11},  {117, 0x7F0, 8, 14},  {118, 0x6F0, 6, 14},
+    {127, 0x7C8, 8, 17},  {128, 0x7C0, 7, 11},  {133, 0x7B0, 8, 14},  {144, 0x7E4, 8, 17},  {146, 0x798, 7, 15},
+    {151, 0x7E4, 8, 17},  {164, 0x0F4, 12, 17}, {175, 0x7F8, 10, 14}, {186, 0x331, 12, 23}, {186, 0x3F4, 12, 17},
+    {189, 0x332, 11, 21}, {189, 0x3F2, 10, 19}, {195, 0x3F4, 12, 17}, {196, 0x312, 11, 21}, {196, 0x3E4, 9, 17},
+    {197, 0x3F2, 10, 19},
+};
+
+/* Others over tone: a frame passes when the rms of its other decoded
+ * magnitudes is under this share of the rms of the tone's (DVSI's tone vectors:
+ * at most 0.296, 99.9% under 0.242; frames of the speech vectors whose (b0, b1)
+ * is a dual tone's: 0.482 and above). */
+#define IMBE_TONE_SHARE 0.375
+/* The word a tone frame's decode leaves in the otherwise unused Vl[0] (Vl is
+ * indexed from 1, and P25 keeps nothing there): the flag, b0 in bits 16-23,
+ * l2 in bits 8-15 and l1 in bits 0-7. */
+#define IMBE_TONE_FLAG  (1 << 24)
+
+/* The frame's voicing word as transmitted, band 1 the most significant bit:
+ * band j holds harmonics 3j - 2 .. 3j, the last band the rest
+ * (imbe_decode_voicing()). */
+static unsigned
+imbe_voicing_word(const mbe_parms* mp) {
+    unsigned word = 0u;
+    for (int band = 1; band <= mp->K; band++) {
+        word = (word << 1) | (mp->Vl[(3 * band) - 2] != 0 ? 1u : 0u);
+    }
+    return word;
+}
+
+/* A decoded magnitude squared, in double, or -1 for one that is not finite
+ * (a caller's history can make it so; read from the bit pattern). */
+static double
+imbe_power(const float* magnitude) {
+    uint32_t bits;
+    memcpy(&bits, magnitude, sizeof(bits));
+    if ((bits & UINT32_C(0x7FFFFFFF)) >= UINT32_C(0x7F800000)) {
+        return -1.0;
+    }
+    return (double)*magnitude * (double)*magnitude;
+}
+
+/* The share of the other harmonics against the tone's, squared: the mean of
+ * M_l^2 over the other harmonics over its mean over the tone's (one harmonic
+ * for a single tone); -1 if a magnitude is not finite or the tone's are 0. */
+static double
+imbe_tone_share2(const mbe_parms* mp, int l1, int l2) {
+    double tone = 0.0, others = 0.0;
+    int tones = 0;
+    for (int l = 1; l <= mp->L; l++) {
+        const double power = imbe_power(&mp->Ml[l]);
+        if (power < 0.0) {
+            return -1.0;
+        }
+        if (l == l1 || l == l2) {
+            tone += power;
+            tones++;
+        } else {
+            others += power;
+        }
+    }
+    if (!(tone > 0.0)) {
+        return -1.0;
+    }
+    return (others / (double)(mp->L - tones)) / (tone / (double)tones);
+}
+
+/*
+ * The tone a decoded P25 voice frame carries, as the word to keep in Vl[0], or
+ * 0: among the rows of the frame's pitch code and voicing word whose harmonics
+ * are within L, the one whose tone harmonics dominate most, if the others'
+ * rms is under IMBE_TONE_SHARE of the tone's (decoded magnitudes, before
+ * enhancement).
+ */
+static int
+imbe_tone_word(const mbe_parms* mp, int b0) {
+    const unsigned word = imbe_voicing_word(mp);
+    double best = IMBE_TONE_SHARE * IMBE_TONE_SHARE;
+    int found = 0;
+    for (size_t i = 0; i < sizeof(imbe_tone_rows) / sizeof(imbe_tone_rows[0]); i++) {
+        const struct imbe_tone_row* row = &imbe_tone_rows[i];
+        if (row->b0 != b0 || row->b1 != word || row->l2 > mp->L) {
+            continue;
+        }
+        const double share = imbe_tone_share2(mp, row->l1, row->l2);
+        if (share >= 0.0 && share < best) {
+            best = share;
+            found = IMBE_TONE_FLAG | (b0 << 16) | (row->l2 << 8) | row->l1;
+        }
+    }
+    return found;
+}
+
 /* mbe_decodeImbe4400Parms(), the pitch played for b0 chosen by `pitch`. */
 static int
 imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, mbe_parms* prev_mp) {
@@ -670,6 +808,10 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
     // determine log2Ml by applying ci,j to previous log2Ml
     imbe_update_spectral_amplitudes(cur_mp, prev_mp, Tl, imbe_spectral_rho(cur_mp->L));
 
+    /* A P25 tone sent as voice frames (ProVoice has no DVSI reference): the
+     * synthesis plays its tone model (imbe4400_play_tone()). */
+    cur_mp->Vl[0] = (pitch == IMBE_PITCH_DVSI) ? imbe_tone_word(cur_mp, b0) : 0;
+
     return 0;
 }
 
@@ -678,7 +820,9 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
  *
  * The pitch stored is a fit to the one DVSI's P25 decoder plays for b0
  * (imbe_decode_fundamental()): this decoder has no frame context, so a P25
- * one. The ProVoice frame paths keep the nominal pitch.
+ * one. The ProVoice frame paths keep the nominal pitch. A frame that is a P25
+ * tone sent as voice frames leaves its tone in the otherwise unused Vl[0]
+ * (imbe_tone_word()), 0 otherwise; the decoded model is unchanged.
  * @param imbe_d  Demodulated IMBE parameter bits (88).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
@@ -912,13 +1056,106 @@ imbe4400_mute_noise(const mbe_process_result* result) {
     return imbe4400_is_provoice(result) ? MBE_MUTE_NOISE_COMFORT : MBE_MUTE_NOISE_SPEC;
 }
 
+/* The tone model's level: the tone harmonics' rms (decoded magnitudes) times
+ * this, then times DVSI's synthesis table droop (imbe4400_play_tone()). DVSI's
+ * dual tones measure 2.0975 times that rms and its single tones 2.114, where
+ * this library renders a voiced harmonic at 2.1308 times its magnitude; at
+ * 0.988 the steady tone frames of knox_1..16 and dtone_1..16 play a median
+ * 0.012 dB above DVSI's (0.9866 would be exact there) and those of the DTMF,
+ * alert, alltone and call-progress vectors 0.022 dB (dual) and 0.031 dB
+ * (single) below it. */
+#define IMBE_TONE_LEVEL 0.988
+
+/* The tone a frame's model carries (the word imbe_tone_word() left in Vl[0])
+ * and its level, or 0; read before enhancement. A word a caller's state holds
+ * counts only with a pitch code and harmonics a decode can give. */
+struct imbe_tone {
+    int b0;
+    int l1;
+    int l2;
+    double amplitude; /* the rms of the tone harmonics' decoded magnitudes, times IMBE_TONE_LEVEL */
+};
+
+static int
+imbe4400_take_tone(const mbe_parms* mp, struct imbe_tone* tone) {
+    const int word = mp->Vl[0];
+    if ((word & ~0x00FFFFFF) != IMBE_TONE_FLAG || !mbe_harmonic_count_is_valid(mp->L)) {
+        return 0;
+    }
+    tone->b0 = (word >> 16) & 0xFF;
+    tone->l2 = (word >> 8) & 0xFF;
+    tone->l1 = word & 0xFF;
+    if (tone->b0 > 207 || tone->l1 < 1 || tone->l1 > tone->l2 || tone->l2 > mp->L) {
+        return 0;
+    }
+    const double p1 = imbe_power(&mp->Ml[tone->l1]);
+    const double p2 = imbe_power(&mp->Ml[tone->l2]);
+    if (p1 < 0.0 || p2 < 0.0) {
+        return 0;
+    }
+    tone->amplitude = IMBE_TONE_LEVEL * sqrt((tone->l1 == tone->l2) ? p1 : 0.5 * (p1 + p2));
+    return 1;
+}
+
+/* sinc^2(pi l / 256), sinc(x) = sin(x) / x: the droop of DVSI's synthesis
+ * table (US 8,200,497's K = 256 table read with linear interpolation) at
+ * harmonic l. */
+static double
+imbe_tone_droop(int l) {
+    const double x = M_PI * (double)l / 256.0;
+    const double sinc = sin(x) / x;
+    return sinc * sinc;
+}
+
+/*
+ * The model DVSI's decoder plays for a P25 tone sent as voice frames (measured
+ * on its decodes of 3,717 steady frames of the 36 dual tones and of the single
+ * tones): its pitch is eq 46's fundamental cut to a grid of 2^-19 cycle per
+ * sample, floor(2^21 / (2 b0 + 79)) / 2^19 (in double, rounded to float once;
+ * not the speech pitch of imbe_dvsi_pitch_offset()); the tone's harmonics are
+ * voiced at one amplitude, the rms of their decoded magnitudes times
+ * IMBE_TONE_LEVEL, times sinc^2(pi l / 256) (the two components' measured
+ * amplitude ratio is that droop's within 0.0004), and every other harmonic is
+ * unvoiced at 0 (two components leave 0.0009 of the frame, so the others are at
+ * least 27 dB down; the patent says 20 dB is typical), as TIA-102.BABA-1
+ * clause 8 builds a tone's voice parameters. L, K and log2Ml stay the decoded
+ * frame's: the voiced phases are regenerated from them, which predicts DVSI's
+ * frame-to-frame phase on tone frames to 0.001 cycle. The frame is marked
+ * MBE_FRAME_MARK_TONE, so the synthesizer takes its own model at mid-frame
+ * (with its own phases: on the steady frames of DVSI's knox_1..16 and
+ * dtone_1..16 they follow DVSI's waveform at a median correlation of 0.9924,
+ * those from the mean of the two frames' log2Ml at 0.9903). Unlike an AMBE
+ * tone frame, such a frame runs DVSI's noise generator on as any voice frame
+ * does: the unvoiced frames two and three after a tone run of dtmf and
+ * alltone follow DVSI's waveform at a median correlation of 0.80 and 0.99
+ * (154 and 7 frames) so, and at -0.01 and -0.10 with the generator held.
+ */
+static void
+imbe4400_play_tone(mbe_parms* mp, const struct imbe_tone* tone) {
+    const double steps = floor(2097152.0 / (double)((2 * tone->b0) + 79));
+    mp->w0 = (float)(2.0 * M_PI * steps / 524288.0);
+    for (int l = 1; l <= mp->L; l++) {
+        const int sounds = (l == tone->l1) || (l == tone->l2);
+        mp->Vl[l] = sounds ? 1 : 0;
+        mp->Ml[l] = sounds ? (float)(tone->amplitude * imbe_tone_droop(l)) : 0.0f;
+    }
+    mbe_set_frame_mark(mp, MBE_FRAME_MARK_TONE);
+}
+
 static void
 imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_mute_noise mute_noise,
                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     int frame_muted = mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp);
+    struct imbe_tone tone;
 
     mbe_moveMbeParms(cur_mp, prev_mp);
+    /* The prediction history (prev_mp) keeps the decoded frame; a tone frame's
+     * synthesis model is the tone model, from its decoded magnitudes. */
+    const int plays_tone = !imbe4400_is_provoice(result) && imbe4400_take_tone(cur_mp, &tone);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
+    if (plays_tone) {
+        imbe4400_play_tone(cur_mp, &tone);
+    }
     /* As DVSI's P25 decoder, without eq 116's scaling; ProVoice, which plays
      * through the same path, likewise. */
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise,
