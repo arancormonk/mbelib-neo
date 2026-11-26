@@ -993,6 +993,20 @@ run_held_sequence(const char* seq, int one_state, int held_as_lost, struct held_
     }
 }
 
+/* Whether a frame plays no more than the mute noise (uniform within
+ * MBE_AMBE_MUTE_NOISE_AMPLITUDE int16 steps): nothing of a model under it. The
+ * margin is for a build that may compute the noise's last bit otherwise. */
+static int
+at_mute_noise_level(const float* pcm) {
+    const float bound = MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN * 1.0001f;
+    for (int n = 0; n < 160; ++n) {
+        if (!(fabsf(pcm[n]) <= bound)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* The prediction history two runs leave after a frame: log2Ml and w0 by their
  * bits, L, and every Vl (element 0 holds the held history's count). */
 static void
@@ -1017,13 +1031,19 @@ assert_same_history(const mbe_parms* a, const mbe_parms* b, const char* seq, siz
  * A held prediction history (a voice frame with an uncorrectable C0 word),
  * with one state as cur_mp and prev_mp_enhanced as with three. A frame that
  * holds a history plays as a lost frame, and so does every frame after it
- * until the next voice frame, which predicts from it: through repeats,
- * single and dual tones, the repeat limit's mute and the voice after it, each
- * sequence plays sample for sample as its copy with lost frames in place of
- * the held ones, in both arrangements, so each repeat renders the repeated
- * model with its own log2Ml. And the history committed to prev_mp after each
- * frame is the same with one state as with three (the decoder and the D-STAR
- * encoder predict from it).
+ * until the next voice frame, which predicts from it: through repeats, single
+ * and dual tones and the repeat limit's mute, each sequence plays sample for
+ * sample as its copy with lost frames in place of the held ones, in both
+ * arrangements, up to the first voice frame after a held one (that frame
+ * predicts from another history than the copy's), so each repeat renders the
+ * repeated model with its own log2Ml. Every repeat after the repeat limit's
+ * mute, until a voice or tone frame, plays the mute noise alone, in both
+ * arrangements and both copies. And the history committed to prev_mp after
+ * each frame (log2Ml, L, w0 and the voicing) is the same with one state as
+ * with three, in these sequences, none of which has channel errors: with
+ * errors the voicing and amplitudes a tone's first frame commits can differ
+ * between the arrangements (the decoder and the D-STAR encoder predict from
+ * log2Ml, L and w0).
  */
 static void
 test_one_state_held_history(void) {
@@ -1049,6 +1069,20 @@ test_one_state_held_history(void) {
                 char what[64];
                 snprintf(what, sizeof(what), "%s frame %zu, %s", seq, f, one_state ? "one state" : "three states");
                 assert_same_pcm(runs[one_state][0].pcm[f], runs[one_state][1].pcm[f], 160, what);
+            }
+            /* After the repeat limit's mute, until a voice or tone frame, the
+             * mute noise alone: two streams that both replayed speech there
+             * would match each other. */
+            for (int held_as_lost = 0; held_as_lost < 2; ++held_as_lost) {
+                const struct held_run* run = &runs[one_state][held_as_lost];
+                for (size_t f = 1; f < n; ++f) {
+                    const int after_limit = run->prev[f - 1].repeatCount >= MBE_MAX_FRAME_REPEATS;
+                    if (after_limit && (seq[f] == 'L' || seq[f] == 'U') && !at_mute_noise_level(run->pcm[f])) {
+                        printf("%s frame %zu, %s: speech after the repeat limit\n", seq, f,
+                               one_state ? "one state" : "three states");
+                        assert(0);
+                    }
+                }
             }
         }
         for (size_t f = 0; f < n; ++f) {
@@ -1250,6 +1284,53 @@ test_repeat_limit_mute(void) {
     assert_same_pcm(prev.log2Ml, rprev.log2Ml, sizeof(prev.log2Ml) / sizeof(prev.log2Ml[0]), "log2Ml after the mute");
     assert_same_pcm(&prev.gamma, &rprev.gamma, 1, "gamma after the mute");
     puts("repeat limit: fades out, mutes at DVSI's level, keeps the prediction history");
+}
+
+/*
+ * The repeats after the repeat limit's mute play the mute noise alone, with
+ * one state as cur_mp and prev_mp_enhanced as with three: with one state each
+ * repeat loaded the repeated model over the silent last frame the mute left,
+ * and the mute faded that speech out again on every frame. The 4th repeat
+ * still fades the last frame out. The state left as the last frame carries the
+ * repeat count at the limit in both arrangements.
+ */
+static void
+test_repeat_limit_mute_holds(void) {
+    char voice[49], lost[49];
+    memset(voice, 0, sizeof(voice));
+    memset(lost, 0, sizeof(lost));
+    put_b0(voice, 60);
+    voice[38] = voice[39] = voice[40] = voice[41] = 1; /* b1 15 */
+    put_b2(voice, 40);
+    put_b0(lost, 125);
+    for (int one_state = 0; one_state < 2; ++one_state) {
+        mbe_parms cur, prev, enh;
+        mbe_parms* last = one_state ? &cur : &enh;
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int f = 0; f < 7; ++f) {
+            mbe_process_result r;
+            float out[160];
+            make_result(&r, 0);
+            const int ret = mbe_processAmbe2400Dataf(out, &r, (f == 0) ? voice : lost, &cur, &prev, last);
+            assert(ret == 0);
+            (void)ret;
+            assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (f >= 4));
+            if (f == 4) {
+                /* The limit's frame fades the last frame out. */
+                assert(!at_mute_noise_level(out));
+            }
+            if (f > 4 && !at_mute_noise_level(out)) {
+                printf("%s, lost frame %d: speech after the repeat limit\n", one_state ? "one state" : "three states",
+                       f);
+                assert(0);
+            }
+            if (f >= 4) {
+                assert(last->repeatCount == MBE_MAX_FRAME_REPEATS);
+            }
+        }
+    }
+    puts("repeat limit: the repeats after it stay at the mute noise, with one state as with three");
 }
 
 /* Reaching the repeat limit while the error rate mutes does not fade the
@@ -2332,6 +2413,7 @@ main(void) {
     test_noise_overlap_across_a_tone();
     test_tone_transitions_after_mute();
     test_repeat_limit_mute();
+    test_repeat_limit_mute_holds();
     test_error_rate_mute_level();
     test_repeat_limit_under_error_mute();
     test_repeat_limit_noise_continuity();

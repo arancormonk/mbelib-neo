@@ -797,15 +797,28 @@ ambe2400_commit(const mbe_parms* cur_mp, mbe_parms* prev_mp, const struct ambe24
  * the last frame out rather than cutting it, then plays its mute noise, and
  * keeps the prediction history: the voice after five lost frames follows
  * DVSI's best this way (docs/dvsi-parity.md). The last synthesized frame
- * becomes a silent copy of itself, so the voice after the mute fades in.
+ * becomes a silent copy of itself, so the voice after the mute fades in, and
+ * every repeat after it, until a voice or tone frame, plays the mute noise
+ * alone.
+ *
+ * A caller may keep one state as cur_mp and prev_mp_enhanced. A repeat after
+ * the limit's first frame has then loaded the repeated model over the silent
+ * last frame that frame left (ambe2400_update_decode_state()); it is silenced
+ * again, so the frame fades nothing out, as with three states. And the state
+ * keeps this frame's error state, the repeat count at the limit, as three
+ * states' prev_mp_enhanced does.
  */
 static void
 ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, const struct ambe2400_amplitudes* amp,
                            mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
-    mbe_parms silent = *prev_mp_enhanced;
+    const int after_limit = prev_mp->repeatCount >= MBE_MAX_FRAME_REPEATS;
     float noise[160];
 
     ambe2400_commit(cur_mp, prev_mp, amp);
+    if (cur_mp == prev_mp_enhanced && after_limit) {
+        memset(prev_mp_enhanced->Ml, 0, sizeof(prev_mp_enhanced->Ml));
+    }
+    mbe_parms silent = *prev_mp_enhanced;
     memset(silent.Ml, 0, sizeof(silent.Ml));
     silent.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
@@ -816,7 +829,9 @@ ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, co
     memcpy(cur_mp->noiseOverlap, silent.noiseOverlap, sizeof(cur_mp->noiseOverlap));
     memcpy(cur_mp->previousUw, silent.previousUw, sizeof(cur_mp->previousUw));
     mbe_moveMbeParms(&silent, prev_mp_enhanced);
-    mbe_copy_error_state(prev_mp_enhanced, cur_mp);
+    /* This frame's error state, which prev_mp now holds (cur_mp is
+     * prev_mp_enhanced, and silent, with one state). */
+    mbe_copy_error_state(prev_mp_enhanced, prev_mp);
     ambe2400_mute_noise(noise);
     /* While the error level mutes, the last frames' speech was never played:
      * the fade still advances the state but stays silent. */
@@ -976,14 +991,16 @@ ambe2400_take_lost_frame(const mbe_process_result* result, int bad, const mbe_pa
  * frame whose uncorrectable C0 word held the history played the model with
  * them and left them there (ambe2400_synthesize_voice()), and so does every
  * repeat after it and the speech under a tone's first frame
- * (ambe2400_speech_under_tone()). Two such frames play nothing of the model
- * and leave prev_mp_enhanced's as they were: one that continues a held dual
- * tone (ambe2400_play_tone() from ambe2400_synthesize_frame(); the speech
+ * (ambe2400_speech_under_tone()). Two such frames leave prev_mp_enhanced's as
+ * they were: one that continues a held dual tone, which plays nothing of the
+ * model (ambe2400_play_tone() from ambe2400_synthesize_frame(); the speech
  * under the tone's first frame, a repeat of the same model, left them), and
- * one that reaches the repeat limit (ambe2400_mute_repeat_limit(), which
- * leaves a silent copy of the last synthesized frame). Neither lets a frame
- * play the model before a voice frame ends the hold: the dual tone goes on
- * until the repeat limit's mute, and every repeat after that mute is muted.
+ * the 4th repeat, which reaches the repeat limit (ambe2400_mute_repeat_limit():
+ * it fades the last synthesized frame out, with the log2Ml that frame left,
+ * and leaves a silent copy of it). Neither lets a frame play the model with
+ * other log2Ml before a voice frame ends the hold: the dual tone goes on until
+ * the repeat limit's mute, and every repeat after that mute plays the mute
+ * noise alone.
  *
  * A held history's are read here, before the frame is decoded: a caller may
  * keep one state as cur_mp and prev_mp_enhanced, which the decode and the
@@ -1106,6 +1123,14 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
         ambe2400_mute_noise(aout_buf);
     }
     ambe2400_hold_tone(cur_mp, index, volume, muted, history);
+    /* With one state as cur_mp and prev_mp_enhanced, the speech under a tone's
+     * first frame left that state as the repeat it synthesized, enhanced and
+     * adaptively smoothed with this frame's error state, and that model is
+     * committed (with the prediction history's log2Ml). Three states commit
+     * cur_mp's: the last frame's model as that frame enhanced and smoothed it
+     * with its own error state. With channel errors enough for the smoothing to voice a band
+     * or scale the amplitudes, the two commit different voicing and
+     * amplitudes, as on main; neither is established against DVSI's decoder. */
     ambe2400_commit(cur_mp, prev_mp, amp);
 }
 
