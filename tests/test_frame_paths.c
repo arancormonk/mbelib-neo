@@ -863,8 +863,8 @@ assert_ambe2400_tone_spectrum(const float pcm[20][160], double frequency, int to
 
 /* Library samples against a reference rendered through the library: bit for
  * bit, or, where `tolerant` (K_LIBRARY_FAST_MATH, passed in so that the bound
- * is computed in both modes), within 1e-5 of the largest magnitude the
- * reference holds. */
+ * is computed in both modes), within 1e-5 * (1 + peak), peak the largest
+ * magnitude the reference holds. */
 static int
 samples_match_reference(const float* out, const float* want, size_t count, int tolerant) {
     double peak = 0.0;
@@ -883,8 +883,10 @@ samples_match_reference(const float* out, const float* want, size_t count, int t
 
 /*
  * Sample t, counted from the first tone frame's start, of the D-STAR single
- * tone of ID 5..7 at `volume` as DVSI's decoders start a tone after a frame
- * that was not a tone frame, a fresh pulse train: A cos(2 pi F (t - 16) + p),
+ * tone of ID 5..7 at `volume` as the library starts every tone that follows a
+ * frame that is not a tone frame, a fresh pulse train (DVSI's decoders start a
+ * tone so only after a frame with no voiced band, and continue a voiced
+ * frame's train into the tone): A cos(2 pi F (t - 16) + p),
  * F = 2048 ID / 2^19 cycle per sample (harmonic ID / 16 + 1 = 1 of the
  * fundamental 2048 ID / 1 steps of 2^-19), p the output high-pass's phase at F
  * (a second-order Butterworth at 100 Hz: pi - atan2(sqrt(2) x, 1 - x^2), x =
@@ -1001,7 +1003,9 @@ test_ambe2400_accepted_tones(void) {
                     if (cases[c].accepted && tones_enabled) {
                         /* The first tone frame fades the tone in over its first 80
                          * samples (under the last frame's fading speech): past them
-                         * the fresh tone, then the frames the renderer continues. */
+                         * the fresh tone, within 3e-4 of its amplitude of the formula
+                         * (computed here in double), then the frames the renderer
+                         * continues. */
                         const int from = (n == 0) ? 80 : 0;
                         const double amplitude = ambe2400_tone_amplitude(0);
                         for (int i = from; i < 160; ++i) {
@@ -1012,9 +1016,14 @@ test_ambe2400_accepted_tones(void) {
                             assert(samples_match_reference(pcm[n], tone[n], 160, K_LIBRARY_FAST_MATH));
                         }
                     } else if (cases[c].accepted) {
-                        /* No tones: silence past the first frame's fading speech. */
-                        const size_t from = (n == 0) ? 80u : 0u;
-                        assert(float_array_equal_exact(pcm[n] + from, tone[n] + from, 160 - from));
+                        /* No tones: silence past the first frame's fading speech,
+                         * every sample +0 or -0 by its bits. */
+                        const int from = (n == 0) ? 80 : 0;
+                        for (int i = from; i < 160; ++i) {
+                            uint32_t bits;
+                            memcpy(&bits, &pcm[n][i], sizeof(bits));
+                            assert((bits & 0x7FFFFFFFu) == 0u);
+                        }
                     } else if (n >= 4) {
                         short muted[160];
                         (void)short_from_float(AMBE2400, pcm[n], muted);

@@ -2575,9 +2575,10 @@ test_loud_tone_first_frame(void) {
 
 /*
  * The frequencies a tone frame plays, in 2^-19 cycle per sample: harmonics l1
- * and l2 of the fundamental n of TIA-102.BABA-1 Annex J on that grid as DVSI's
- * decoders play it (n, l1, l2 written out here: DTMF 128 and 129, KNOX 145 and
- * 147, whose n are DVSI's own, 150.80 and 86.47 Hz, call progress 161 and 163),
+ * and l2 of a dual tone's fundamental n on that grid as DVSI's decoders play
+ * it, TIA-102.BABA-1 Annex J's except for KNOX 145 and 147, whose n are DVSI's
+ * own, 150.80 and 86.47 Hz (n, l1, l2 written out here: DTMF 128 and 129, KNOX
+ * 145 and 147, call progress 161 and 163),
  * and for a single tone harmonic ID / 16 + 1 of floor(2048 ID / l) (5, 16, 30,
  * 46, 57, 122). Table 9's nominal frequencies stay what the encoders and the
  * detector look for.
@@ -2591,7 +2592,7 @@ test_tone_played_steps(void) {
         {5, 10240u, 10240u},     /* l 1: 156.25 Hz */
         {16, 32768u, 32768u},    /* l 2 of 16384: 500 Hz */
         {30, 61440u, 61440u},    /* l 2 of 30720: 937.5 Hz */
-        {46, 94206u, 94206u},    /* l 3 of 31402: 1437.470 Hz, not 1437.5 */
+        {46, 94206u, 94206u},    /* l 3 of 31402: 1437.469 Hz, not 1437.5 */
         {57, 116736u, 116736u},  /* l 4 of 29184: 1781.25 Hz */
         {122, 249856u, 249856u}, /* l 8 of 31232: 3812.5 Hz */
         {128, 17u * 5145u, 12u * 5145u},
@@ -2653,8 +2654,10 @@ high_pass_phase(double hz) {
 }
 
 /*
- * A tone as DVSI's decoders start it after a frame that was not a tone frame,
- * in double: each component (m steps of 2^-19 cycle per sample) at sample t
+ * A tone as the library starts every tone that follows a frame that is not a
+ * tone frame, a fresh pulse train (DVSI's decoders start one so only after a
+ * frame with no voiced band, and continue a voiced frame's train into the
+ * tone), in double: each component (m steps of 2^-19 cycle per sample) at sample t
  * from the first tone frame's start is amplitude cos(2 pi F (t - 16) + p), F =
  * m / 2^19 and p the high-pass's phase at it; one component for a single tone.
  */
@@ -2672,9 +2675,11 @@ fresh_tone_reference(double out[160], int first_sample, unsigned upper, unsigned
 }
 
 /*
- * A tone after a voice frame starts as a fresh pulse train: the second half of
- * its first frame (past the crossfade with the speech) is fresh_tone_reference()
- * within a few 1e-4 of the amplitude, for a dual tone (DTMF 129) and a single
+ * A tone after a voice frame starts as a fresh pulse train (the library's
+ * start, a known difference from DVSI's decoders, which continue a voiced
+ * frame's train into the tone): the second half of its first frame (past the
+ * crossfade with the speech) is fresh_tone_reference() within 3e-4 of the
+ * amplitude, for a dual tone (DTMF 129) and a single
  * tone (46); its second frame continues the phases (the same reference from
  * sample 160), and so does a tone that changes to another (ID 32).
  */
@@ -2877,9 +2882,10 @@ test_noise_generator_through_frame_kinds(void) {
     assert(frames == 12);
 }
 
-/* FNV-1a over 32-bit values, each as four bytes from the least significant:
- * a step is a bijection of the state, so a change of any one value changes
- * the result. */
+/* FNV-1a over 32-bit values, each as four bytes from the least significant.
+ * Not every change of a value moves the result (two 32-bit values can hash
+ * alike from one state); every one-unit change of any entry of the tables
+ * pinned with it was checked to move it. */
 static uint32_t
 fnv1a_add(uint32_t hash, uint32_t value) {
     for (int byte = 0; byte < 4; ++byte) {
@@ -2894,8 +2900,9 @@ fnv1a_add(uint32_t hash, uint32_t value) {
  * mbe_tone_played_steps() for every ID 0..255, then of (found, first, second)
  * of mbe_tone_dstar_played_steps() for every index 0..255, 0xE538DD77. A
  * one-unit change of any of the 36 dual-tone rows' fundamental n or harmonics
- * l1, l2 moves a component (upper = l2 n, lower = l1 n), and so the hash, as
- * does a change of the single-tone rule or of D-STAR's DTMF mapping.
+ * l1, l2 moves a component (upper = l2 n, lower = l1 n), and every such change
+ * was checked to move the hash; a change of the single-tone rule or of
+ * D-STAR's DTMF mapping moves components too.
  */
 #define PLAYED_TONE_TABLE_HASH UINT32_C(0xE538DD77)
 

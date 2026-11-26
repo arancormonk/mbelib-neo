@@ -9,9 +9,11 @@
  *    where +3.17 dBm0 decodes at -2.52 dB per component;
  *  - D-STAR: 3.54 + 0.355 (volume - 255) dB from the 8-bit tone volume.
  * Dual tones carry both components at that level. The frequencies are the
- * ones DVSI's decoders play: harmonics l1 and l2 of TIA-102.BABA-1 Annex J's
- * fundamental on a grid of 2^-19 cycle per sample (single tones: harmonic
- * ID / 16 + 1 of a fundamental under 500 Hz), not Table 9's nominal pair.
+ * ones DVSI's decoders play: harmonics l1 and l2 of a fundamental on a grid of
+ * 2^-19 cycle per sample, TIA-102.BABA-1 Annex J's for the dual tones except
+ * IDs 145 and 147, whose fundamentals are DVSI's own (single tones: harmonic
+ * ID / 16 + 1 of a fundamental under 500 Hz, their own rule, not Annex J's
+ * harmonic numbers), not Table 9's nominal pair.
  * NOTONES builds output silence.
  */
 #include <assert.h>
@@ -174,12 +176,14 @@ expect_tone(const char* name, process_fn process, const char d[49], double f1, d
     assert(fabs(a - level_db) < 0.1);
     assert(fabs(b - level_db) < 0.1);
     /* Everything else is at least 40 dB down: the components are the whole signal. */
-    assert(residual_db(pcm, n, f1, f2) < -40.0);
+    const double residual = residual_db(pcm, n, f1, f2);
+    assert(residual < -40.0);
 #endif
 }
 
-/* A component of `steps` 2^-19 cycle per sample, in Hz: the fundamental the
- * tone's Annex J row gives on that grid times its harmonic number. */
+/* A component of `steps` 2^-19 cycle per sample, in Hz: the tone's played
+ * fundamental on that grid (Annex J's, but for dual tones 145 and 147 and the
+ * single tones' own rule, mbe_tone.h) times its harmonic number. */
 static double
 played_hz(int fundamental, int harmonic) {
     return (double)fundamental * (double)harmonic * 8000.0 / 524288.0;

@@ -2459,6 +2459,23 @@ test_error_rate_mute_level(void) {
     puts("error-rate mute: DVSI-level noise");
 }
 
+/* Whether x is `want` bit for bit. */
+static int
+float_is(float x, float want) {
+    uint32_t a, b;
+    memcpy(&a, &x, sizeof(a));
+    memcpy(&b, &want, sizeof(b));
+    return a == b;
+}
+
+/* Whether x is +0 or -0, by its bits. */
+static int
+float_is_zero(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & 0x7FFFFFFFu) == 0u;
+}
+
 /*
  * D-STAR tones play the frequencies DVSI's decoders play, through the index
  * mapping of the nominal lookup: DTMF 128 + 4 * column + row as the AMBE+2
@@ -2504,7 +2521,7 @@ test_tone_played_frequencies(void) {
     }
     float f1, f2;
     const int nominal = mbe_tone_lookup_dstar_freqs(134, &f1, &f2);
-    assert(nominal && fabsf(f1 - 852.0f) == 0.0f && fabsf(f2 - 1336.0f) == 0.0f);
+    assert(nominal && float_is(f1, 852.0f) && float_is(f2, 1336.0f));
 
     char voice[NVOICE][49], tone[49];
     make_voice(voice);
@@ -2515,7 +2532,7 @@ test_tone_played_frequencies(void) {
     float probe_out[160];
     memset(&probe, 0, sizeof(probe));
     mbe_synthesizeTonefdstar(probe_out, tone, &probe, 134);
-    if (fabsf(probe_out[40]) == 0.0f && fabsf(probe_out[41]) == 0.0f) {
+    if (float_is_zero(probe_out[40]) && float_is_zero(probe_out[41])) {
         return;
     }
     mbe_parms cur, prev, enh;

@@ -9,8 +9,9 @@
  * model the synthesis plays for a frame that passes it.
  *
  * DVSI's P25 encoder sends a tone as voice frames at the pitch code of the
- * tone's Annex J fundamental, with one voicing word per tone and the tone's
- * harmonics large; DVSI's decoder recognises such a frame and plays a tone
+ * tone's Annex J fundamental, with a voicing word that is the same in every
+ * steady frame of the tone (12,555 steady frames compared; 112 frames at tone
+ * boundaries carry another pair) and the tone's harmonics large; DVSI's decoder recognises such a frame and plays a tone
  * model. The frames here are built with the IMBE encoder's quantizer
  * (mbe_imbe4400_quantize_amplitudes()) from a pitch code, a voicing word and
  * log2 amplitudes, and decoded as the library decodes P25.
@@ -762,20 +763,79 @@ test_public_decoder_clears_the_word(void) {
     puts("p25 tones: the public decoder clears the word on a special frame");
 }
 
+/* Two states alike byte for byte (copied to bytes, not compared as floats). */
+static int
+same_state(const mbe_parms* a, const mbe_parms* b) {
+    unsigned char x[sizeof(mbe_parms)], y[sizeof(mbe_parms)];
+    memcpy(x, a, sizeof(x));
+    memcpy(y, b, sizeof(y));
+    for (size_t i = 0; i < sizeof(x); ++i) {
+        if (x[i] != y[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * A status error is not a frame: the public parameter decoder given a bit that
+ * is not 0 or 1 after a tone frame returns MBE_STATUS_INVALID_BITS and writes
+ * nothing, so cur_mp keeps the tone word it held and both states are
+ * unchanged byte for byte; given no state it returns
+ * MBE_STATUS_INVALID_ARGUMENT and writes nothing either.
+ */
+static void
+test_public_decoder_status_error(void) {
+    char imbe_d[88];
+    float logm[57];
+    int K;
+    mbe_parms history = fresh_history();
+    tone_amplitudes(logm, harmonics_of(53, &K), 4, 7, 11.0f, 2.0f);
+    build_frame(imbe_d, 53, 0x70u, logm, &history);
+    mbe_parms cur = decode(imbe_d, &history);
+    assert(cur.Vl[0] == tone_word(53, 4, 7));
+    mbe_parms prev = cur;
+    const mbe_parms cur_before = cur, prev_before = prev;
+
+    imbe_d[5] = 2;
+    int rc = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+    assert(rc == MBE_STATUS_INVALID_BITS);
+    assert(same_state(&cur, &cur_before) && same_state(&prev, &prev_before) && cur.Vl[0] == tone_word(53, 4, 7));
+    imbe_d[5] = 0;
+    rc = mbe_decodeImbe4400Parms(imbe_d, &cur, NULL);
+    assert(rc == MBE_STATUS_INVALID_ARGUMENT);
+    assert(same_state(&cur, &cur_before));
+    (void)rc;
+    puts("p25 tones: a status error of the public decoder writes nothing");
+}
+
 /*
  * ProVoice keeps no tone word: Vl[0] reads 0 in all three states after its
  * frames, a repeat of a history that holds a P25 tone word included (a stream
- * that changed codec), which plays no tone model either.
+ * moved between the codecs' entry points, outside the stream contract), which
+ * plays no tone model either. A P25 repeat after that frame plays the repeated
+ * model as speech: the decoded tone frame's own voicing at its P25 pitch,
+ * unmarked, no word anywhere.
  */
 static void
 test_provoice_keeps_no_word(void) {
     struct stream pv;
     float out[160];
     stream_after_tone(&pv);
+    const mbe_parms decoded = pv.prev;
     play_repeat(out, &pv, 1);
     assert(mbe_frame_mark(&pv.enhanced) != MBE_FRAME_MARK_TONE);
     assert(pv.cur.Vl[0] == 0 && pv.prev.Vl[0] == 0 && pv.enhanced.Vl[0] == 0);
-    puts("p25 tones: ProVoice keeps no word");
+
+    play_repeat(out, &pv, 0);
+    assert(mbe_frame_mark(&pv.enhanced) != MBE_FRAME_MARK_TONE);
+    assert(pv.cur.Vl[0] == 0 && pv.prev.Vl[0] == 0 && pv.enhanced.Vl[0] == 0);
+    assert(same_float(pv.enhanced.w0, decoded.w0) && !same_float(pv.enhanced.w0, tone_pitch(53)));
+    assert(pv.enhanced.L == decoded.L);
+    for (int l = 1; l <= decoded.L; ++l) {
+        assert(pv.enhanced.Vl[l] == decoded.Vl[l]);
+    }
+    puts("p25 tones: ProVoice keeps no word; a P25 repeat after it plays speech");
 }
 
 /*
@@ -814,9 +874,10 @@ test_tone_repeat_limit(void) {
     puts("p25 tones: three repeats play the tone, the fourth mutes, the reset clears the word and the mark");
 }
 
-/* FNV-1a over 32-bit values, each as four bytes from the least significant:
- * a step is a bijection of the state, so a change of any one value changes
- * the result. */
+/* FNV-1a over 32-bit values, each as four bytes from the least significant.
+ * Not every change of a value moves the result (two 32-bit values can hash
+ * alike from one state); every one-unit change of any entry of the tables
+ * pinned with it was checked to move it. */
 static uint32_t
 fnv1a_add(uint32_t hash, uint32_t value) {
     for (int byte = 0; byte < 4; ++byte) {
@@ -831,8 +892,8 @@ fnv1a_add(uint32_t hash, uint32_t value) {
  * with 1 <= l1 <= l2 <= L of b0 and a voicing word of b0's K bits, the rows of
  * one (b0, b1) pair all dual or all single tones; the index derived from the
  * rows (the first row of each code 0..197 and the end); and an FNV-1a hash of
- * the rows' fields in order and then of the 199 index entries (0x93A8CEBD),
- * which any one-unit change of a field or an entry moves.
+ * the rows' fields in order and then of the 199 index entries (0x93A8CEBD):
+ * every one-unit change of a field or an entry was checked to move it.
  */
 #define P25_TONE_TABLE_HASH UINT32_C(0x93A8CEBD)
 
@@ -887,6 +948,7 @@ main(void) {
     test_every_row_plays();
     test_forged_tone_mark();
     test_public_decoder_clears_the_word();
+    test_public_decoder_status_error();
     test_provoice_keeps_no_word();
     test_tone_repeat_limit();
     test_tone_table_pinned();
