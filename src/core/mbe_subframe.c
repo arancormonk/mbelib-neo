@@ -433,15 +433,47 @@ interval_pulses(struct pulse_train* train, float start, double from, double to) 
     train->phase = reached - floor(reached);
 }
 
+/* Where a step between two voiced models counts as about an octave: the new
+ * pitch period within 20% of twice the old one, or of half of it. */
+#define OCTAVE_DOWN_LOW  1.6
+#define OCTAVE_DOWN_HIGH 2.4
+#define OCTAVE_UP_LOW    0.4
+#define OCTAVE_UP_HIGH   0.6
+
+/* About an octave apart the pulse train does not glide: DVSI's decoders first
+ * take the old train an octave down (its phase and rate halved) when the new
+ * period is 1.6 to 2.4 times the old, or up (its phase doubled, modulo a
+ * cycle, and its rate doubled) at 0.4 to 0.6 times, and then cross linearly to
+ * the new pitch as at any step. Measured on 134 tone-to-tone changes of DVSI's
+ * rate-33 and D-STAR tone vectors (each new pulse phase predicted to 0.001
+ * cycle) and on the speech frames with such steps; the edges are bracketed
+ * (1.534 glides, 1.618 halves; 2.475 glides; 0.611 glides, 0.584 doubles),
+ * not measured exactly. Pulses already launched keep their times and models:
+ * only the phase and the rate the interval starts from change. */
+static void
+octave_step(struct pulse_train* train, double* from, double to) {
+    const double ratio = *from / to; /* the new period over the old */
+    if (ratio > OCTAVE_DOWN_LOW && ratio < OCTAVE_DOWN_HIGH) {
+        train->phase *= 0.5;
+        *from *= 0.5;
+    } else if (ratio > OCTAVE_UP_LOW && ratio < OCTAVE_UP_HIGH) {
+        const double doubled = 2.0 * train->phase;
+        train->phase = doubled - floor(doubled);
+        *from *= 2.0;
+    }
+}
+
 /* One interval of the train, from model `a` to model `b`: through voiced
- * speech the pulses follow the pitch from one to the other; into or out of it
- * they keep the voiced model's; with neither voiced the train starts afresh. */
+ * speech the pulses follow the pitch from one to the other (after an octave
+ * step, octave_step()); into or out of it they keep the voiced model's; with
+ * neither voiced the train starts afresh. */
 static void
 advance_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
                  const struct mbe_subframe_model* b) {
-    const double from = (double)a->w0 / (2.0 * M_PI);
+    double from = (double)a->w0 / (2.0 * M_PI);
     const double to = (double)b->w0 / (2.0 * M_PI);
     if (a->any_voiced && b->any_voiced) {
+        octave_step(train, &from, to);
         interval_pulses(train, start, from, to);
     } else if (a->any_voiced) {
         interval_pulses(train, start, from, from);

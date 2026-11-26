@@ -20,7 +20,8 @@
  *    and falls over MBE_PULSE_PEAK more, so a response lasts a period and
  *    MBE_PULSE_PEAK samples and the responses of a steady train add up to
  *    the harmonics; the pulse rate moves linearly from one model's pitch to
- *    the next's across an interval;
+ *    the next's across an interval, after taking the train an octave down or
+ *    up first where the new period is within 20% of twice or of half the old;
  *  - the unvoiced part is mbe_synthesizeUnvoicedSubframes().
  */
 
