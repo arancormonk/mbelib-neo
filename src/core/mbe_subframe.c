@@ -249,14 +249,16 @@ ambe2450_mid_pitch_wave(float w0) {
  * Its range: the product of two floats is exact in double and the mean lies
  * between a and b, so it is finite, positive and normal as they are; h lies
  * within C0 -+ sqrt(C1^2 + S1^2), 4.244e-5 -+ 8.440e-4, so the two factors
- * together lie between 0.99889 and 1.00059 (cos and sin are within [-1, 1]
- * for any finite t; t is finite for every positive normal w0, within
- * 4 pi (2.65 - 128) .. 4 pi (2.65 + 126)). The pitch is then positive and
- * finite in double. A mean so near FLT_MAX that the product passes it gives
- * 0 (the conversion of a double past the float range is not defined), and one
- * so near FLT_MIN that the product falls under it rounds to a subnormal float
- * or 0: the caller rejects either as no pitch (positive_normal()), as it
- * rejects every pitch that is not positive and normal. */
+ * together lie between 0.998898 and 1.000587 (cos and sin are within [-1, 1]
+ * for any finite t; t is finite for every positive normal w0, log2 P lying in
+ * (log2(2 pi) - 128, log2(2 pi) + 126], log2(2 pi) = 2.6515). The pitch is
+ * then positive and finite in double. A mean so near FLT_MAX that the product
+ * passes it gives 0, no pitch, which the caller rejects (positive_normal()) as
+ * it rejects every pitch that is not positive and normal (the conversion of a
+ * double past the float range is not defined): the two largest floats, in
+ * either order, reach about 1.0005 FLT_MAX. At the lower end no pair falls
+ * under FLT_MIN: that would take both pitches within about 0.23% of FLT_MIN,
+ * where the two factors together are about 1.0005. */
 static float
 ambe2450_mid_pitch(float a, float b) {
     /* The factor as the float it is declared, also under x87 excess
@@ -275,12 +277,14 @@ ambe2450_mid_pitch(float a, float b) {
  * Between two voiced frames of different pitch, the rate-33 rendering plays
  * the geometric mean times MBE_AMBE2450_MID_PITCH_FACTOR times the half-octave
  * wave (ambe2450_mid_pitch(); docs/dvsi-parity.md, "Rate 33: mid-frame
- * pitch"), a fit to DVSI's rate-33 decodes (mbe_subframe.h): DVSI's pulse
- * train moves against ours by about 0.05 samples over a frame whose pitch
- * code differs from the frame before's, and by the estimator's noise
- * (0.018) over one whose code is the same, and the offset follows the two
- * frames' periods with a period of half an octave. How the decoder comes to
- * it is not known. D-STAR and P25 show no such jump at a step. Both pitches
+ * pitch"), a fit to DVSI's rate-33 decodes (mbe_subframe.h): over a frame
+ * whose pitch code steps by one to five codes from the frame before's, the
+ * lag between DVSI's decode and ours read at its two boundaries changes by a
+ * median of 0.040 to 0.066 samples, against 0.018 over one whose code is the
+ * same (the level of everything that is not the mid-frame pitch), and a wave
+ * in the two frames' periods with a period of half an octave fits that
+ * change. How the decoder comes to it is not known. The same measurement's
+ * grouped medians show no such jump at a step in D-STAR or P25. Both pitches
  * are positive and normal here (mbe_subframe_mid_model()). */
 static float
 mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {

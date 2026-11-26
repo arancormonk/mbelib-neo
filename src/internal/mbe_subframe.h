@@ -78,15 +78,16 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
 /* The rate-33 rendering plays the mid-frame pitch between two voiced frames of
  * different pitch at the geometric mean of their pitches times this, times the
  * half-octave wave below (docs/dvsi-parity.md, "Rate 33: mid-frame pitch").
- * A measured offset, not a known mechanism: DVSI's rate-33 pulse train falls
- * behind ours by 0.013 samples a frame for each mid-frame pitch taken between
- * two different pitch codes, and by nothing between equal ones, measured on
- * steps of one to three codes in either direction; as a factor on the
- * mid-frame pitch the development vectors fit 1 - 2.9e-4 (1 - 3.3e-4 scored a
- * residual energy against DVSI's of 0.0564, against 0.0683 at 1). Implemented
- * as 1 - 3.0e-4 for every step. Measured later frame by frame, the offset
- * varies with the two frames' pitch codes: this factor stands for its mean,
- * which the wave's constant term moves by +4.2e-5 (to -2.58e-4 in all). */
+ * A measured offset, not a known mechanism: a least-squares fit of one shift
+ * of DVSI's rate-33 pulse train against ours for each mid-frame pitch taken
+ * between two different pitch codes gives -0.010 samples over the frame pairs
+ * measured and -0.011 over those whose two code steps are of at most three
+ * codes (development vectors); as a factor on the mid-frame pitch the
+ * development vectors fit 1 - 2.9e-4 (1 - 3.3e-4 scored a residual energy against DVSI's
+ * of 0.0564, against 0.0683 at 1). Implemented as 1 - 3.0e-4 for every step.
+ * Measured later frame by frame, the offset varies with the two frames' pitch
+ * codes; the wave fitted on top of this factor has a constant term of
+ * +4.2e-5 (the two constant terms sum to -2.58e-4). */
 #define MBE_AMBE2450_MID_PITCH_FACTOR  (1.0f - 3.0e-4f)
 
 /* The half-octave wave of rate 33's mid-frame pitch (docs/dvsi-parity.md,
@@ -101,12 +102,13 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * DVSI's decode and ours, read at the frame's two boundaries (where both play
  * the frame's own pitch), on 10,045 frames between two different pitch codes
  * (the selection is in docs/dvsi-parity.md); it takes the median absolute
- * change from 0.0493 to 0.0225 samples there, and from 0.0506 to 0.0263 on
+ * change from 0.0493 to 0.0226 samples there, and from 0.0506 to 0.0266 on
  * the 2,638 such frames of the validation vectors.
  * The P25 pitch law (imbe_dvsi_pitch_offset(), imbe7200x4400.c) is a wave in
- * the same variable with the same period (amplitude 5.00e-4, phase 75.4
- * degrees), but there it is in the pitch each code plays; here it is in the
- * mid-frame pitch alone. What in DVSI's decoder makes it is not known. */
+ * the same variable with the same period (its first harmonic: amplitude
+ * 5.00e-4, phase 75.4 degrees; it has a second), but there it is in the
+ * pitch each code plays; here it is in the mid-frame pitch alone. What in
+ * DVSI's decoder makes it is not known. */
 #define MBE_AMBE2450_MID_PITCH_WAVE_C0 4.244e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_C1 9.374e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_S1 8.388e-4
