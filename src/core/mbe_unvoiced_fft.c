@@ -223,6 +223,21 @@ mbe_subframe_state_adopt(mbe_parms* mp) {
     mbe_subframe_state_mark(mp);
 }
 
+/*
+ * A sample of an overlap a frame carries into the next (previousUw, the
+ * TIA-102.BABA rendering's noise overlap): as stored if it is a finite number,
+ * else 0. A caller's state can hold anything there, and a sample that is not
+ * finite would pass into the output (the output limit lets a NaN through).
+ * Read from the bit pattern, which fast-math cannot fold (see
+ * subframe_mark_is_set()).
+ */
+static float
+overlap_sample(const float* sample) {
+    uint32_t bits;
+    memcpy(&bits, sample, sizeof(bits));
+    return ((bits & UINT32_C(0x7FFFFFFF)) < UINT32_C(0x7F800000)) ? *sample : 0.0f;
+}
+
 void
 mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap) {
     if (buffer == NULL || seed == NULL || overlap == NULL) {
@@ -239,7 +254,9 @@ mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap) {
     if (subframe_mark_is_set(&overlap[MBE_SUBFRAME_STATE_SLOT])) {
         memset(overlap, 0, MBE_NOISE_OVERLAP * sizeof(float));
     }
-    memmove(buffer, overlap, MBE_NOISE_OVERLAP * sizeof(float));
+    for (int i = 0; i < MBE_NOISE_OVERLAP; ++i) {
+        buffer[i] = overlap_sample(&overlap[i]);
+    }
     mbe_generate_noise_lcg(buffer + MBE_NOISE_OVERLAP, MBE_FFT_SIZE - MBE_NOISE_OVERLAP, seed);
     memmove(overlap, buffer + MBE_FFT_SIZE - MBE_NOISE_OVERLAP, MBE_NOISE_OVERLAP * sizeof(float));
 }
@@ -275,7 +292,7 @@ mbe_wola_combine(float* output, const float* prevUw, const float* currUw, int N)
         const float weight = previous_window * previous_window + current_window * current_window;
         float sample = 0.0f;
         if (previous_window > 0.0f) {
-            sample += previous_window * prevUw[128 + n];
+            sample += previous_window * overlap_sample(&prevUw[128 + n]);
         }
         if (current_window > 0.0f) {
             sample += current_window * currUw[128 + n - N];
@@ -527,7 +544,7 @@ mbe_synthesizeUnvoicedSubframes(float* output, mbe_parms* cur_mp, const mbe_parm
      * the other rendering wrote that state: its overlap is not a subframe. */
     if (mbe_subframe_state_is_marked(prev_mp)) {
         for (int n = 0; n < MBE_SUBFRAME; ++n) {
-            output[n] += prev_mp->previousUw[MBE_UNVOICED_TAIL_OFFSET + n];
+            output[n] += overlap_sample(&prev_mp->previousUw[MBE_UNVOICED_TAIL_OFFSET + n]);
         }
     }
     /* Mid-frame subframe, centred on sample 80; then the frame's own, centred

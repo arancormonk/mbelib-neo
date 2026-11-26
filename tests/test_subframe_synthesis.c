@@ -1666,6 +1666,111 @@ test_output_limit_option(void) {
     }
 }
 
+/* A stream's next frame: its state, with `model`'s pitch, voicing and amplitudes. */
+static mbe_parms
+with_model(const mbe_parms* state, const mbe_parms* model) {
+    mbe_parms cur = *state;
+    cur.w0 = model->w0;
+    cur.L = model->L;
+    memcpy(cur.Vl, model->Vl, sizeof(cur.Vl));
+    copy_amplitudes(&cur, model);
+    mbe_set_frame_mark(&cur, MBE_FRAME_MARK_NONE);
+    return cur;
+}
+
+/* The next frame of a stream rendered whole (voiced and unvoiced, with `plan`),
+ * at unit gain, from `last`, which receives the new state. */
+static void
+next_whole_frame(float out[160], mbe_parms* last, const mbe_parms* model, mbe_fft_plan* plan) {
+    mbe_parms cur = with_model(last, model);
+    memset(out, 0, 160 * sizeof(float));
+    mbe_synthesize_subframes(out, &cur, last, plan, 1.0f, 0, MBE_VOICED_SYNTHESIS_DVSI);
+    *last = cur;
+}
+
+/* Every 7th of `n` overlap samples from `start`: `value` in one copy of a
+ * state, 0 in the other. */
+static void
+corrupt_overlap(float* bad, float* clean, int start, int n, uint32_t value) {
+    for (int k = start; k < start + n; k += 7) {
+        memcpy(&bad[k], &value, sizeof(value));
+        clean[k] = 0.0f;
+    }
+}
+
+/*
+ * The unvoiced overlap a frame plays from the state before it is a caller's
+ * state too: a sample of it that is not a finite number (not a number, plus
+ * or minus infinity) plays as 0, and the frame is finite. The subframe
+ * rendering's overlap (previousUw from MBE_UNVOICED_TAIL_OFFSET) directly and
+ * through the P25 data path, and the TIA-102.BABA rendering's
+ * (mbe_synthesizeSpeechf(): previousUw and the noise overlap).
+ */
+static void
+test_untrusted_unvoiced_overlap(void) {
+    static const uint32_t bits[] = {0x7FC00000u, 0xFFC00000u, 0x7F800000u, 0xFF800000u};
+    mbe_fft_plan* plan = mbe_fft_plan_alloc();
+    assert(plan != NULL);
+    mbe_parms mixed, unused[2];
+    mbe_initMbeParms(&mixed, &unused[0], &unused[1]);
+    set_model(&mixed, 200.0, 18, 6, 16.0f); /* 12 unvoiced bands */
+    for (size_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
+        float out[2][160];
+
+        mbe_parms last;
+        fresh_stream(&last);
+        next_whole_frame(out[0], &last, &mixed, plan);
+        assert(mbe_subframe_state_is_marked(&last));
+        mbe_parms bad = last, clean = last;
+        corrupt_overlap(bad.previousUw, clean.previousUw, MBE_UNVOICED_TAIL_OFFSET, MBE_SUBFRAME, bits[i]);
+        next_whole_frame(out[0], &bad, &mixed, plan);
+        next_whole_frame(out[1], &clean, &mixed, plan);
+        assert(all_finite(out[0], 160));
+        assert(same_or_close(out[0], out[1], 160));
+
+        mbe_parms cur[2], prev[2], enhanced[2];
+        char imbe_d[88];
+        memset(imbe_d, 1, sizeof(imbe_d));
+        set_imbe_b0(imbe_d, 100);
+        mbe_initMbeParms(&cur[0], &prev[0], &enhanced[0]);
+        int rc = mbe_processImbe4400Dataf(out[0], NULL, imbe_d, &cur[0], &prev[0], &enhanced[0]);
+        assert(rc >= 0);
+        assert(mbe_subframe_state_is_marked(&enhanced[0]));
+        cur[1] = cur[0];
+        prev[1] = prev[0];
+        enhanced[1] = enhanced[0];
+        corrupt_overlap(enhanced[0].previousUw, enhanced[1].previousUw, MBE_UNVOICED_TAIL_OFFSET, MBE_SUBFRAME,
+                        bits[i]);
+        for (int k = 0; k < 2; ++k) {
+            rc = mbe_processImbe4400Dataf(out[k], NULL, imbe_d, &cur[k], &prev[k], &enhanced[k]);
+            assert(rc >= 0);
+        }
+        (void)rc;
+        assert(all_finite(out[0], 160));
+        assert(same_or_close(out[0], out[1], 160));
+
+        /* The TIA-102.BABA rendering: two frames, so that the noise overlap is drawn noise. */
+        mbe_parms spec, unused, spec_prev;
+        mbe_initMbeParms(&spec, &spec_prev, &unused);
+        for (int f = 0; f < 2; ++f) {
+            mbe_parms model = with_model(&spec, &mixed);
+            mbe_synthesizeSpeechf(out[0], &model, &spec);
+            spec = model;
+        }
+        mbe_parms spec_bad = spec, spec_clean = spec;
+        corrupt_overlap(spec_bad.previousUw, spec_clean.previousUw, 128, 128, bits[i]);
+        corrupt_overlap(spec_bad.noiseOverlap, spec_clean.noiseOverlap, 0, 96, bits[i]);
+        for (int k = 0; k < 2; ++k) {
+            mbe_parms* state = (k == 0) ? &spec_bad : &spec_clean;
+            mbe_parms model = with_model(state, &mixed);
+            mbe_synthesizeSpeechf(out[k], &model, state);
+        }
+        assert(all_finite(out[0], 160));
+        assert(same_or_close(out[0], out[1], 160));
+    }
+    mbe_fft_plan_free(plan);
+}
+
 /* Pulse state that no frame stores is dropped, and never read as an index or
  * a count: a stream handed such a state plays as one starting afresh. */
 static void
@@ -2176,6 +2281,7 @@ main(void) {
     test_ambe2450_mid_pitch();
     test_from_silence();
     test_output_limit_option();
+    test_untrusted_unvoiced_overlap();
     test_pulse_state_is_validated();
     test_invalid_models();
     test_subnormal_pitch_is_no_pitch();
