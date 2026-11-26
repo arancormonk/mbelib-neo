@@ -145,7 +145,8 @@ enum mbe_voiced_synthesis {
     MBE_VOICED_SYNTHESIS_DVSI,
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's rate-33 (AMBE 3600x2450) decoder
      * renders it, whose mid-frame pitch between two voiced frames of
-     * different pitch lies a little below their geometric mean
+     * different pitch is their geometric mean times a factor and a
+     * half-octave wave in their periods, within -0.11% and +0.06% of it
      * (mbe_subframe_mid_model(); docs/dvsi-parity.md, "Rate 33: mid-frame
      * pitch"), and which honours the marks of the rate-33 rows 13, 15 and 17
      * (MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET whatever the
