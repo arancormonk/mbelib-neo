@@ -5623,5 +5623,493 @@
         "value": 0
       }
     ]
+  },
+  "mid-voicing-development": {
+    "description": "Which bands DVSI's AMBE-3000 decoders voice in the first half of a frame: a P25 (and ProVoice) voice frame after a frame with no voiced band sounds at mid-frame only the voiced harmonics in, or within 250 Hz below, a covered 500 Hz column ([0, 505), [505, 1005), ... [3005, 3505) Hz, covered when the frame's voicing is voiced at both its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next above each other edge; none above 3505 Hz), the rest starting in the second half (this contains the old late onset of a frame voiced only below 505 Hz); and rate-33 V/UV rows 13, 15 and 17 give the mid-frame model voicing of their own (row 13 columns 0-1, row 15 none whatever the frame before, row 17 column 0, through the decoder's harmonic rule), row 17's own voicing all unvoiced as Annex B lists it; the head of fix/tone-model (cc272ef) against the change, development vectors: D-STAR's decode of DVSI's bits is unchanged (no vector's PCM changes), every encoder's bits are unchanged, and for P25 and rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.010 (P25) and 0.004 (rate 33) more (mean, 95% interval above 0) and by no more than 0.001 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.005 dB (mean) and 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean).",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.004,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
+  },
+  "mid-voicing-validation": {
+    "description": "Which bands DVSI's AMBE-3000 decoders voice in the first half of a frame: a P25 (and ProVoice) voice frame after a frame with no voiced band sounds at mid-frame only the voiced harmonics in, or within 250 Hz below, a covered 500 Hz column ([0, 505), [505, 1005), ... [3005, 3505) Hz, covered when the frame's voicing is voiced at both its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next above each other edge; none above 3505 Hz), the rest starting in the second half (this contains the old late onset of a frame voiced only below 505 Hz); and rate-33 V/UV rows 13, 15 and 17 give the mid-frame model voicing of their own (row 13 columns 0-1, row 15 none whatever the frame before, row 17 column 0, through the decoder's harmonic rule), row 17's own voicing all unvoiced as Annex B lists it; the head of fix/tone-model (cc272ef) against the change, validation vectors: D-STAR's decode of DVSI's bits is unchanged (no vector's PCM changes), every encoder's bits are unchanged, and for P25 and rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.002 (P25) and 0.002 (rate 33) more (mean, 95% interval above 0) and by no more than 0.001 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.005 dB (mean) and 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean).",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
+  },
+  "mid-voicing-tones": {
+    "description": "Which bands DVSI's AMBE-3000 decoders voice in the first half of a frame: a P25 (and ProVoice) voice frame after a frame with no voiced band sounds at mid-frame only the voiced harmonics in, or within 250 Hz below, a covered 500 Hz column ([0, 505), [505, 1005), ... [3005, 3505) Hz, covered when the frame's voicing is voiced at both its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next above each other edge; none above 3505 Hz), the rest starting in the second half (this contains the old late onset of a frame voiced only below 505 Hz); and rate-33 V/UV rows 13, 15 and 17 give the mid-frame model voicing of their own (row 13 columns 0-1, row 15 none whatever the frame before, row 17 column 0, through the decoder's harmonic rule), row 17's own voicing all unvoiced as Annex B lists it; the head of fix/tone-model (cc272ef) against the change, on the tone vectors: D-STAR's decodes are unchanged, the speech vectors' as well as the tone vectors', the D-STAR and rate-33 encoders' tone frames agree with DVSI's, and appear where DVSI sends voice, exactly as often as before on every vector, and for P25 and rate 33 the steady tones' frequency error against DVSI's output rises by no more than 0.0005 on any vector, the tone level and the balance of a dual tone's two components move further from DVSI's by no more than 0.02 dB (mean), the share of windows playing a wrong tone rises on no vector, and the detector's agreement with DVSI's tone output falls by no more than 0.005 on any vector. Coverage, checked on the head's own scoreboard of these partitions before this set was declared: in P25 and rate 33 the detector agreement is measured on all 52 tone vectors; the frequency, level and wrong-tone figures on all but cp1, cpvbad and dtmfvbad, and the balance on all but those and alert (a single tone), where DVSI's decode has no steady window holding a tone, so that neither run can measure them there.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0005
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.005
+      }
+    ]
+  },
+  "mid-voicing-channel": {
+    "description": "Which bands DVSI's AMBE-3000 decoders voice in the first half of a frame: a P25 (and ProVoice) voice frame after a frame with no voiced band sounds at mid-frame only the voiced harmonics in, or within 250 Hz below, a covered 500 Hz column ([0, 505), [505, 1005), ... [3005, 3505) Hz, covered when the frame's voicing is voiced at both its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next above each other edge; none above 3505 Hz), the rest starting in the second half (this contains the old late onset of a frame voiced only below 505 Hz); and rate-33 V/UV rows 13, 15 and 17 give the mid-frame model voicing of their own (row 13 columns 0-1, row 15 none whatever the frame before, row 17 column 0, through the decoder's harmonic rule), row 17's own voicing all unvoiced as Annex B lists it; the head of fix/tone-model (cc272ef) against the change, under channel errors (dam at 1.1-10.6% bit errors): D-STAR's decodes are unchanged, the speech vectors' as well as the channel-error vectors', every encoder's bits are unchanged, no mute decision changes in any mode (on every vector, hard and soft, the share of loud frames muted, the agreement with DVSI's mutes and the false and missed mute rates are exactly as before), and for P25 and rate 33 the output on the loud frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) comes no further from DVSI's than 0.01 dB (mean over the error rates), hard and soft decisions.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "dstar",
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "mid-voicing-final": {
+    "description": "Which bands DVSI's AMBE-3000 decoders voice in the first half of a frame: a P25 (and ProVoice) voice frame after a frame with no voiced band sounds at mid-frame only the voiced harmonics in, or within 250 Hz below, a covered 500 Hz column ([0, 505), [505, 1005), ... [3005, 3505) Hz, covered when the frame's voicing is voiced at both its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next above each other edge; none above 3505 Hz), the rest starting in the second half (this contains the old late onset of a frame voiced only below 505 Hz); and rate-33 V/UV rows 13, 15 and 17 give the mid-frame model voicing of their own (row 13 columns 0-1, row 15 none whatever the frame before, row 17 column 0, through the decoder's harmonic rule), row 17's own voicing all unvoiced as Annex B lists it; the head of fix/tone-model (cc272ef) against the change, final vectors (irstia and mark; scored once, after the review): D-STAR's decode of DVSI's bits is unchanged, every encoder's bits are unchanged, and for P25 and rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0005 less (mean) and 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.03 dB on any vector, loses no more than 0.001 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, and its level against DVSI's moves by at most 0.05 dB.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.03
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
   }
 }
