@@ -24,7 +24,7 @@ was supplied. The integrating agent reviewed the new implementations separately.
 | Tone oscillator and redundancy check | Independent implementation of oscillator/state contracts and the local check over BABA-1 §7.2 Table 10 fields. |
 | Frame repetition | TIA-102.BABA §7.7 equations 97–104 and BABA-1 §§5.6–5.7; new default-model reset. Existing per-frame accounting and generator continuity remain. |
 | Spectral enhancement and voiced synthesis | Retained specification-supported equations 105–110 and 134–138, compatible ISC-origin code and subsequent project optimizations. |
-| Regenerated phase and calibration | Retained project implementation using US 5,701,390 equations 7–9, with independently measured low-band, shelf and output gains. Patent status is separate. |
+| Regenerated phase and calibration | Retained project implementation using US 5,701,390 equations 7–9 (on the codec paths over each frame's decoded log2 magnitudes, in the public `mbe_synthesizeSpeechf()` over the enhanced ones), with independently measured low-band, shelf and output gains. Patent status is separate. |
 | Tone frequencies and parameter decoding | Retained specification tables, ISC-origin code and project measurements; no public signature or structure changes. |
 
 The specification's equations support algorithms; they do not establish the
