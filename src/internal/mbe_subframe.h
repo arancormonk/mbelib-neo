@@ -76,16 +76,40 @@ struct mbe_subframe_model {
 void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model);
 
 /* The rate-33 rendering plays the mid-frame pitch between two voiced frames of
- * different pitch at the geometric mean of their pitches times this
- * (docs/dvsi-parity.md, "Rate 33: mid-frame pitch"). A measured offset, not a
- * known mechanism: DVSI's rate-33 pulse train falls behind ours by 0.013
- * samples a frame for each mid-frame pitch taken between two different pitch
- * codes, and by nothing between equal ones, measured on steps of one to three
- * codes in either direction; as a factor on the mid-frame pitch the
- * development vectors fit 1 - 2.9e-4 (1 - 3.3e-4 scored a residual energy
- * against DVSI's of 0.0564, against 0.0683 at 1). Implemented as 1 - 3.0e-4
- * for every step; larger steps were not measured. */
-#define MBE_AMBE2450_MID_PITCH_FACTOR (1.0f - 3.0e-4f)
+ * different pitch at the geometric mean of their pitches times this, times the
+ * half-octave wave below (docs/dvsi-parity.md, "Rate 33: mid-frame pitch").
+ * A measured offset, not a known mechanism: DVSI's rate-33 pulse train falls
+ * behind ours by 0.013 samples a frame for each mid-frame pitch taken between
+ * two different pitch codes, and by nothing between equal ones, measured on
+ * steps of one to three codes in either direction; as a factor on the
+ * mid-frame pitch the development vectors fit 1 - 2.9e-4 (1 - 3.3e-4 scored a
+ * residual energy against DVSI's of 0.0564, against 0.0683 at 1). Implemented
+ * as 1 - 3.0e-4 for every step. Measured later frame by frame, the offset
+ * varies with the two frames' pitch codes: this factor stands for its mean,
+ * which the wave's constant term moves by +4.2e-5 (to -2.58e-4 in all). */
+#define MBE_AMBE2450_MID_PITCH_FACTOR  (1.0f - 3.0e-4f)
+
+/* The half-octave wave of rate 33's mid-frame pitch (docs/dvsi-parity.md,
+ * "Rate 33: mid-frame pitch"): between two voiced frames of different pitch,
+ * with periods Pa and Pb in samples (2 pi / w0), the rate-33 rendering plays
+ * the geometric mean of the two pitches times MBE_AMBE2450_MID_PITCH_FACTOR
+ * times 1 + (h(Pa) + h(Pb)) / 2, where, with t = 4 pi log2(P),
+ *   h(P) = C0 + C1 cos(t) + S1 sin(t),
+ * a wave in the period that repeats every half octave (amplitude 8.44e-4,
+ * phase 83.6 degrees). A fit to DVSI's rate-33 decodes of the development
+ * vectors: least squares on the change over a frame of the lag between
+ * DVSI's decode and ours, read at the frame's two boundaries (where both play
+ * the frame's own pitch), on 10,045 frames between two different pitch codes
+ * (the selection is in docs/dvsi-parity.md); it takes the median absolute
+ * change from 0.0493 to 0.0225 samples there, and from 0.0506 to 0.0263 on
+ * the 2,638 such frames of the validation vectors.
+ * The P25 pitch law (imbe_dvsi_pitch_offset(), imbe7200x4400.c) is a wave in
+ * the same variable with the same period (amplitude 5.00e-4, phase 75.4
+ * degrees), but there it is in the pitch each code plays; here it is in the
+ * mid-frame pitch alone. What in DVSI's decoder makes it is not known. */
+#define MBE_AMBE2450_MID_PITCH_WAVE_C0 4.244e-5
+#define MBE_AMBE2450_MID_PITCH_WAVE_C1 9.374e-5
+#define MBE_AMBE2450_MID_PITCH_WAVE_S1 8.388e-4
 
 /**
  * @brief The mid-frame model between two frames.
@@ -95,14 +119,16 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * unvoiced frame before a voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES),
  * and the geometric mean when neither has. In the rate-33 rendering
  * (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) the geometric mean of two voiced
- * frames whose pitches differ is multiplied by MBE_AMBE2450_MID_PITCH_FACTOR;
- * no other case changes. A band takes the current frame's
- * voicing at its frequency, or the previous frame's when the current frame has
- * no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT and the previous
- * frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no band is
- * voiced (the caller passes it for a frame marked MBE_FRAME_MARK_LATE_ONSET:
- * in the rate-33 rendering whatever the frame before, in the others after a
- * frame with no voiced band; mbe_synthesize_subframes()).
+ * frames whose pitches differ is multiplied by MBE_AMBE2450_MID_PITCH_FACTOR
+ * and by the half-octave wave (MBE_AMBE2450_MID_PITCH_WAVE_C0), in double,
+ * rounded to float once; no other case changes. A band takes the current
+ * frame's voicing at its frequency, or the previous frame's when the current
+ * frame has no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT and the
+ * previous frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no
+ * band is voiced (the caller passes it for a frame marked
+ * MBE_FRAME_MARK_LATE_ONSET: in the rate-33 rendering whatever the frame
+ * before, in the others after a frame with no voiced band;
+ * mbe_synthesize_subframes()).
  * In P25's rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE), when the current frame
  * is marked MBE_FRAME_MARK_ONSET_COLUMNS and the previous frame has no voiced
  * band, a band voiced so is voiced only if its frequency lies in one of the

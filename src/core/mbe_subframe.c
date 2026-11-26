@@ -6,6 +6,7 @@
 /** @file Speech synthesis in 10 ms subframes, as DVSI's decoders render it (mbe_subframe.h). */
 #include "mbe_subframe.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -229,19 +230,58 @@ same_pitch(const float* a, const float* b) {
     return a_bits == b_bits;
 }
 
+/* The half-octave wave h(P) of rate 33's mid-frame pitch at a frame's pitch
+ * w0 (positive and normal), P = 2 pi / w0 its period in samples
+ * (MBE_AMBE2450_MID_PITCH_WAVE_C0, mbe_subframe.h). In double with the
+ * double-precision functions, as the P25 pitch law is (imbe7200x4400.c), so
+ * that the pitch does not move with a libm's single-precision ones. */
+static double
+ambe2450_mid_pitch_wave(float w0) {
+    const double t = 4.0 * M_PI * log2((2.0 * M_PI) / (double)w0);
+    return MBE_AMBE2450_MID_PITCH_WAVE_C0 + (MBE_AMBE2450_MID_PITCH_WAVE_C1 * cos(t))
+           + (MBE_AMBE2450_MID_PITCH_WAVE_S1 * sin(t));
+}
+
+/* Rate 33's mid-frame pitch between two voiced frames of different pitch a
+ * and b (each positive and normal): their geometric mean times
+ * MBE_AMBE2450_MID_PITCH_FACTOR times 1 + (h(Pa) + h(Pb)) / 2, formed in
+ * double from the stored floats and rounded to float once.
+ * Its range: the product of two floats is exact in double and the mean lies
+ * between a and b, so it is finite, positive and normal as they are; h lies
+ * within C0 -+ sqrt(C1^2 + S1^2), 4.244e-5 -+ 8.440e-4, so the two factors
+ * together lie between 0.99889 and 1.00059 (cos and sin are within [-1, 1]
+ * for any finite t; t is finite for every positive normal w0, within
+ * 4 pi (2.65 - 128) .. 4 pi (2.65 + 126)). The pitch is then positive and
+ * finite in double. A mean so near FLT_MAX that the product passes it gives
+ * 0 (the conversion of a double past the float range is not defined), and one
+ * so near FLT_MIN that the product falls under it rounds to a subnormal float
+ * or 0: the caller rejects either as no pitch (positive_normal()), as it
+ * rejects every pitch that is not positive and normal. */
+static float
+ambe2450_mid_pitch(float a, float b) {
+    /* The factor as the float it is declared, also under x87 excess
+     * precision, where its constant expression is otherwise evaluated wider. */
+    const float factor = mbe_round_to_float(MBE_AMBE2450_MID_PITCH_FACTOR);
+    const double mean = sqrt((double)a * (double)b);
+    const double wave = 0.5 * (ambe2450_mid_pitch_wave(a) + ambe2450_mid_pitch_wave(b));
+    const double pitch = mean * (double)factor * (1.0 + wave);
+    return (pitch <= (double)FLT_MAX) ? (float)pitch : 0.0f;
+}
+
 /* The mid-frame pitch: between the two frames' when both are pitched speech
  * or neither is, the voiced frame's when only one has a voiced band, unless
  * the unvoiced frame before a voiced one is marked as carrying its pitch
  * (MBE_FRAME_MARK_PITCH_CARRIES).
  * Between two voiced frames of different pitch, the rate-33 rendering plays
- * the geometric mean times MBE_AMBE2450_MID_PITCH_FACTOR (docs/dvsi-parity.md,
- * "Rate 33: mid-frame pitch"), a measured offset: DVSI's rate-33 pulse train
- * falls behind ours by 0.013 samples a frame for each mid-frame pitch taken
- * between two different pitch codes, and by nothing between equal ones, on
- * steps of one to three codes in either direction (about 16,000 frame pairs);
- * the factor is fitted on the development vectors (mbe_subframe.h), applied
- * to every step, and how the decoder comes to it is not known. D-STAR and P25
- * show nothing of the kind. */
+ * the geometric mean times MBE_AMBE2450_MID_PITCH_FACTOR times the half-octave
+ * wave (ambe2450_mid_pitch(); docs/dvsi-parity.md, "Rate 33: mid-frame
+ * pitch"), a fit to DVSI's rate-33 decodes (mbe_subframe.h): DVSI's pulse
+ * train moves against ours by about 0.05 samples over a frame whose pitch
+ * code differs from the frame before's, and by the estimator's noise
+ * (0.018) over one whose code is the same, and the offset follows the two
+ * frames' periods with a period of half an octave. How the decoder comes to
+ * it is not known. D-STAR and P25 show no such jump at a step. Both pitches
+ * are positive and normal here (mbe_subframe_mid_model()). */
 static float
 mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
     const int prev_voiced = model_has_voiced_band(prev_mp);
@@ -252,12 +292,11 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
     if (cur_voiced && !prev_voiced && mbe_frame_mark(prev_mp) != MBE_FRAME_MARK_PITCH_CARRIES) {
         return cur_mp->w0;
     }
-    const float mean = sqrtf(prev_mp->w0 * cur_mp->w0);
     if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced
         && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
-        return mean * MBE_AMBE2450_MID_PITCH_FACTOR;
+        return ambe2450_mid_pitch(prev_mp->w0, cur_mp->w0);
     }
-    return mean;
+    return sqrtf(prev_mp->w0 * cur_mp->w0);
 }
 
 /* Whether the mid-frame model keeps the previous frame's voicing instead of

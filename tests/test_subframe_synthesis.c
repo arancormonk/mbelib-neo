@@ -15,6 +15,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include "ambe3600x2450_internal.h"
 #include "imbe4400_internal.h"
 #include "mbe_adaptive.h"
 #include "mbe_subframe.h"
@@ -614,12 +615,30 @@ reference_voiced(const mbe_parms* mp) {
     return 0;
 }
 
+/* The half-octave wave of rate 33's mid-frame pitch at pitch w0, in double:
+ * h(P) = 4.244e-5 + 9.374e-5 cos t + 8.388e-4 sin t, t = 4 pi log2 P, with P
+ * = 2 pi / w0 the period in samples (docs/dvsi-parity.md, "Rate 33: mid-frame
+ * pitch"). */
+static double
+reference_r33_wave(double w0) {
+    const double t = 4.0 * M_PI * log2(2.0 * M_PI / w0);
+    return 4.244e-5 + (9.374e-5 * cos(t)) + (8.388e-4 * sin(t));
+}
+
+/* Rate 33's mid-frame pitch between two voiced frames of different pitch, in
+ * double: the geometric mean, 3.0e-4 lower, times 1 plus the mean of the two
+ * frames' waves. */
+static double
+reference_r33_mid_pitch(double a, double b) {
+    return sqrt(a * b) * (1.0 - 3.0e-4) * (1.0 + (0.5 * (reference_r33_wave(a) + reference_r33_wave(b))));
+}
+
 /* The mid-frame pitch between two frames, in double: the previous frame's own
  * where a silence frame holds it; the voiced frame's where only one is voiced,
  * unless the unvoiced one before is marked as carrying its pitch; else the
- * geometric mean, which the rate-33 rendering takes 3.0e-4 lower between two
- * voiced frames of different pitch (docs/dvsi-parity.md, "Rate 33: mid-frame
- * pitch"). */
+ * geometric mean, which the rate-33 rendering takes 3.0e-4 lower and moves by
+ * the half-octave wave between two voiced frames of different pitch
+ * (reference_r33_mid_pitch()). */
 static double
 reference_mid_pitch(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced_synthesis rendering) {
     const int prev_voiced = reference_voiced(prev), cur_voiced = reference_voiced(cur);
@@ -629,11 +648,10 @@ reference_mid_pitch(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced
     if (cur_voiced && !prev_voiced && mbe_frame_mark(prev) != MBE_FRAME_MARK_PITCH_CARRIES) {
         return (double)cur->w0;
     }
-    const double mean = sqrt((double)prev->w0 * (double)cur->w0);
     const int differ = !same_bits(&prev->w0, &cur->w0, 1);
     return (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced && differ)
-               ? mean * (1.0 - 3.0e-4)
-               : mean;
+               ? reference_r33_mid_pitch((double)prev->w0, (double)cur->w0)
+               : sqrt((double)prev->w0 * (double)cur->w0);
 }
 
 /* The P25 onset rule, in double, from its statement: a voiced harmonic at `hz`
@@ -836,7 +854,8 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         mbe_subframe_mid_model(&last, &cur, late, rendering, &models[1]);
         mbe_subframe_own_model(&cur, &models[2]);
         /* The mid-frame pitch, the library's within float rounding, is then the
-         * reference's: 3.0e-4 is thousands of times that rounding. */
+         * reference's: 3.0e-4, and the wave's swing of 1.7e-3, are thousands
+         * of times that rounding. */
         const double mid_pitch = reference_mid_pitch(&last, &cur, rendering);
         assert(fabs((double)models[1].w0 / mid_pitch - 1.0) < 1.0e-6);
         models[1].w0 = (float)mid_pitch;
@@ -1610,7 +1629,8 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     assert(same_bits(muted.PSIl, heard.PSIl, 57));
     assert(same_bits(&muted.noiseSeed, &heard.noiseSeed, 1));
     /* The pulses the pitch step leaves: the mid-frame pitch's offset in the
-     * rate-33 rendering moves them, by the cycles it takes from the frame. */
+     * rate-33 rendering (the factor and the half-octave wave) moves them, by
+     * the cycles it takes from the frame. */
     mbe_parms other = last;
     other.w0 = model.w0;
     other.L = model.L;
@@ -1620,7 +1640,8 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
                                                  ? MBE_VOICED_SYNTHESIS_DVSI
                                                  : MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
     mbe_advance_subframes(&other, &last, 0, others);
-    const double lost = 3.0e-4 * cycles_of(sqrt(210.0 * 190.0), 80.0);
+    const double wave = 0.5 * (reference_r33_wave((double)w0_of(210.0)) + reference_r33_wave((double)w0_of(190.0)));
+    const double lost = (1.0 - ((1.0 - 3.0e-4) * (1.0 + wave))) * cycles_of(sqrt(210.0 * 190.0), 80.0);
     const double offset = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) ? -lost : lost;
     assert(fabs(cycles_apart(pulse_phase(&advanced), pulse_phase(&other) + offset)) < 1e-6);
 }
@@ -1679,6 +1700,30 @@ within_an_ulp(float a, float b) {
     return fabs((double)a - (double)b) <= ulp;
 }
 
+/* Whether a lies within an ulp of float of the double b. */
+static int
+within_an_ulp_of(float a, double b) {
+    const float nearest = (float)b;
+    const double ulp = (double)nextafterf(fabsf(nearest), INFINITY) - (double)fabsf(nearest);
+    return fabs((double)a - b) <= ulp;
+}
+
+/* Whether the library is built with fast-math (CMake defines
+ * MBELIB_TEST_LIBRARY_FAST_MATH): it may then evaluate an expression otherwise
+ * than this test does. */
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define MID_PITCH_FAST_MATH 1
+#else
+#define MID_PITCH_FAST_MATH 0
+#endif
+
+/* Whether a is b: bit for bit, or within an ulp where `tolerant` (the build
+ * mode is passed in, not tested around the only use of a value). */
+static int
+same_or_an_ulp(float a, float b, int tolerant) {
+    return same_bits(&a, &b, 1) || (tolerant && within_an_ulp(a, b));
+}
+
 /* The mid-frame models of the two renderings between prev and cur, and the
  * rate-33 one's pitch over the other's. */
 static double
@@ -1690,24 +1735,119 @@ rate33_mid_pitch_ratio(const mbe_parms* prev, const mbe_parms* cur, struct mbe_s
     return (double)rate33->w0 / (double)common->w0;
 }
 
+/* A voiced model at rate-33 pitch code b0, with the pitch and harmonic count
+ * the rate-33 decoder stores for it. */
+static void
+rate33_code_model(mbe_parms* mp, int b0) {
+    int b[9] = {b0, 0, 20, 100, 30, 10, 5, 5, 3};
+    char ambe_d[49];
+    mbe_parms cur, prev, enhanced;
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    mbe_ambe2450_pack(b, ambe_d);
+    const int rc = mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev);
+    assert(rc == MBE_AMBE2450_FRAME_VOICE);
+    (void)rc;
+    set_model(mp, 100.0, cur.L, cur.L, 10.0f);
+    mp->w0 = cur.w0;
+}
+
+/* The mid-frame pitch of each rendering between two voiced frames at rate-33
+ * pitch codes a and b: in the rate-33 rendering the formula
+ * (reference_r33_mid_pitch(), in double) within an ulp of float, the mean of
+ * the two frames' h(P) being near *wave (to 5e-5) where wave is not NULL; in
+ * D-STAR's and the IMBE rendering the geometric mean in float, unchanged by
+ * the wave (bit for bit in an IEEE build); returns that mean of h. */
+static double
+check_code_pair(int a, int b, const double* wave, int tolerant) {
+    mbe_parms prev, cur;
+    struct mbe_subframe_model model;
+    rate33_code_model(&prev, a);
+    rate33_code_model(&cur, b);
+    const double mean_wave = 0.5 * (reference_r33_wave((double)prev.w0) + reference_r33_wave((double)cur.w0));
+    assert(wave == NULL || fabs(mean_wave - *wave) < 5.0e-5);
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &model);
+    const double want = reference_r33_mid_pitch((double)prev.w0, (double)cur.w0);
+    assert(within_an_ulp_of(model.w0, want));
+    /* Away from the factor alone by the wave: more than float rounding. */
+    const double factor_alone = sqrt((double)prev.w0 * (double)cur.w0) * (1.0 - 3.0e-4);
+    assert(fabs(mean_wave) < 1.0e-5 || fabs((double)model.w0 / factor_alone - 1.0 - mean_wave) < 1.0e-6);
+    const float common = sqrtf(prev.w0 * cur.w0);
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &model);
+    assert(same_or_an_ulp(model.w0, common, tolerant));
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &model);
+    assert(same_or_an_ulp(model.w0, common, tolerant));
+    /* Equal pitches: the frame's own pitch, the wave not applied, in every
+     * rendering (sqrtf(w0 * w0), which IEEE arithmetic rounds back to w0, a
+     * fast-math build within an ulp). */
+    for (int r = 0; r < 3; ++r) {
+        static const enum mbe_voiced_synthesis renderings[3] = {
+            MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_IMBE, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450};
+
+        mbe_subframe_mid_model(&cur, &cur, 0, renderings[r], &model);
+        assert(same_or_an_ulp(model.w0, cur.w0, tolerant));
+    }
+    return mean_wave;
+}
+
+/* The wave's range over the rate-33 pitch codes, and its pitch codes nearest
+ * its maximum and its minimum. */
+static void
+rate33_wave_extremes(int* top, int* bottom, double* high, double* low) {
+    *high = -1.0;
+    *low = 1.0;
+    for (int b0 = 0; b0 < MBE_AMBE2450_PITCH_CODES; ++b0) {
+        mbe_parms mp;
+        rate33_code_model(&mp, b0);
+        const double h = reference_r33_wave((double)mp.w0);
+        if (h > *high) {
+            *high = h;
+            *top = b0;
+        }
+        if (h < *low) {
+            *low = h;
+            *bottom = b0;
+        }
+    }
+}
+
 /* Rate 33's mid-frame pitch (docs/dvsi-parity.md, "Rate 33: mid-frame pitch"):
  * between two voiced frames of different pitch the geometric mean times
- * 1 - 3.0e-4; every other case as in the other codecs' rendering. */
+ * 1 - 3.0e-4 times 1 + (h(Pa) + h(Pb)) / 2; every other case as in the other
+ * codecs' rendering. */
 static void
-test_ambe2450_mid_pitch(void) {
+test_ambe2450_mid_pitch(int tolerant) {
     struct mbe_subframe_model common, rate33;
     mbe_parms prev, cur, enhanced;
     mbe_initMbeParms(&cur, &prev, &enhanced);
 
-    /* (i) Both voiced, the pitch stepping either way. */
+    /* (i) Pairs of rate-33 pitch codes, the formula within an ulp. The wave
+     * reaches 4.244e-5 -+ 8.440e-4 (C0 -+ sqrt(C1^2 + S1^2)); over the codes
+     * its extremes lie within 1e-5 of those. */
+    int top = 0, bottom = 0;
+    double high = 0.0, low = 0.0;
+    rate33_wave_extremes(&top, &bottom, &high, &low);
+    assert(high > 8.864e-4 - 1.0e-5 && high < 8.865e-4 && low < -8.015e-4 + 1.0e-5 && low > -8.016e-4);
+    /* Near the maximum (both codes beside the top) and near the minimum. */
+    const double near_top = check_code_pair(top, top + 1, &high, tolerant);
+    const double near_bottom = check_code_pair(bottom - 1, bottom, &low, tolerant);
+    assert(near_top > 8.5e-4 && near_bottom < -7.6e-4);
+    (void)near_top;
+    (void)near_bottom;
+    static const int pairs[][2] = {{0, 1},   {1, 0},   {10, 20}, {60, 50}, {100, 119}, {119, 100},
+                                   {5, 119}, {58, 59}, {47, 48}, {30, 31}, {76, 77},   {118, 119}};
+    for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i) {
+        (void)check_code_pair(pairs[i][0], pairs[i][1], NULL, tolerant);
+    }
+
+    /* Both voiced at pitches off the code grid, the pitch stepping either way. */
     for (int order = 0; order < 2; ++order) {
         set_model(&prev, order ? 180.0 : 150.0, 24, 20, 10.0f);
         set_model(&cur, order ? 150.0 : 180.0, 20, 10, 20.0f);
         const double ratio = rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33);
         const double mean = sqrt((double)prev.w0 * (double)cur.w0);
         assert(fabs((double)common.w0 / mean - 1.0) < 1e-6);
-        assert(fabs((double)rate33.w0 / (mean * (1.0 - 3.0e-4)) - 1.0) < 1e-6);
-        assert(fabs(ratio - (1.0 - 3.0e-4)) < 2e-7);
+        assert(within_an_ulp_of(rate33.w0, reference_r33_mid_pitch((double)prev.w0, (double)cur.w0)));
+        assert(fabs(ratio - reference_r33_mid_pitch((double)prev.w0, (double)cur.w0) / mean) < 2e-7);
         (void)ratio;
     }
     /* A step of the smallest size a pitch takes. */
@@ -1715,15 +1855,16 @@ test_ambe2450_mid_pitch(void) {
     cur = prev;
     cur.w0 = nextafterf(prev.w0, 1.0f);
     const double step_ratio = rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33);
-    assert(fabs(step_ratio - (1.0 - 3.0e-4)) < 2e-7);
+    assert(fabs(step_ratio - (1.0 - 3.0e-4) * (1.0 + reference_r33_wave((double)prev.w0))) < 2e-7);
     (void)step_ratio;
 
-    /* (ii) Equal pitches: that pitch, in both, the factor not applied. Within
-     * an ulp, not bit for bit: the mean is sqrtf(w0 * w0), which IEEE
-     * arithmetic rounds back to w0 but a fast-math build need not. */
+    /* (ii) Equal pitches: that pitch, in both, the factor and the wave not
+     * applied. Bit for bit in an IEEE build; within an ulp with fast-math:
+     * the mean is sqrtf(w0 * w0), which IEEE arithmetic rounds back to w0 but
+     * a fast-math build need not. */
     set_model(&cur, 150.0, 24, 12, 20.0f);
     (void)rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33);
-    assert(within_an_ulp(common.w0, cur.w0) && within_an_ulp(rate33.w0, cur.w0));
+    assert(same_or_an_ulp(common.w0, cur.w0, tolerant) && same_or_an_ulp(rate33.w0, cur.w0, tolerant));
 
     /* (iii) One frame without a voiced band: the voiced frame's pitch, in both. */
     set_model(&prev, 150.0, 24, 0, 10.0f);
@@ -1754,6 +1895,33 @@ test_ambe2450_mid_pitch(void) {
     mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PREVIOUS_HELD);
     (void)rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33);
     assert(same_bits(&common.w0, &prev.w0, 1) && same_bits(&rate33.w0, &prev.w0, 1));
+
+    /* (v) The ends of the float range a caller's state can reach: a pitch
+     * the wave would take past FLT_MAX is none, one it takes under FLT_MIN
+     * is none, and every pitch the rendering keeps is positive and normal. */
+    static const float ends[][2] = {{FLT_MAX, 3.0e38f},  {3.0e38f, FLT_MAX}, {FLT_MIN, 1.2e-38f},
+                                    {1.2e-38f, FLT_MIN}, {FLT_MIN, FLT_MAX}, {1.0e-20f, 1.0e20f}};
+    for (size_t i = 0; i < sizeof(ends) / sizeof(ends[0]); ++i) {
+        set_model(&prev, 150.0, 24, 20, 10.0f);
+        set_model(&cur, 180.0, 20, 10, 20.0f);
+        prev.w0 = ends[i][0];
+        cur.w0 = ends[i][1];
+        mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &rate33);
+        const double want = reference_r33_mid_pitch((double)prev.w0, (double)cur.w0);
+        uint32_t bits;
+        memcpy(&bits, &rate33.w0, sizeof(bits));
+        if (want > (double)FLT_MAX || want < (double)FLT_MIN) {
+            assert(bits == 0u && !rate33.any_voiced);
+        } else {
+            assert(within_an_ulp_of(rate33.w0, want));
+        }
+        /* 0, or from FLT_MIN (0x00800000) up to FLT_MAX (0x7F7FFFFF). */
+        assert(bits == 0u || (bits >= UINT32_C(0x00800000) && bits <= UINT32_C(0x7F7FFFFF)));
+        /* And the frame renders finite samples. */
+        float out[160] = {0};
+        mbe_synthesize_subframes(out, &cur, &prev, NULL, 1.0f, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+        assert(all_finite(out, 160));
+    }
 }
 
 /* The frame a parameter set holds, given a model and mark. */
@@ -3379,7 +3547,7 @@ main(void) {
     test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI);
     test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
     test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
-    test_ambe2450_mid_pitch();
+    test_ambe2450_mid_pitch(MID_PITCH_FAST_MATH);
     test_from_silence();
     test_output_limit_option();
     test_untrusted_unvoiced_overlap();
