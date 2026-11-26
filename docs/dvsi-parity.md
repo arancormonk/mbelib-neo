@@ -71,9 +71,9 @@ appear here.
   [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)) hold it out too: the study that found
   them read the development and validation vectors and DVSI's tone vectors, never `irstia` or
   `mark`; the change set was measured and gated on the development, validation, tone and channel
-  partitions, and the final partition is to be scored once for it, after the review, against the
-  gate set `mid-voicing-final`, declared before any build was scored ([November 2026: mid-frame
-  voicing](#november-2026-mid-frame-voicing)).
+  partitions, and the final partition was scored once for it, after the review, against the gate
+  set `mid-voicing-final`, declared before any build was scored, which it passed ([November 2026:
+  mid-frame voicing](#november-2026-mid-frame-voicing)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -3852,7 +3852,7 @@ set with the fixes (`201bafd`'s code). Both builds aligned freely first and were
 their joint lags, both runs' encodings decoded by the candidate's decoder. The study
 that found these rules read the development and validation vectors and DVSI's tone vectors, never
 `irstia` or `mark`; the change set was measured and gated on the development, validation, tone and
-channel partitions, and the final partition is held out, to be scored once, after the review
+channel partitions, and the final partition was held out and scored once, after the review
 ([Method](#method); below).
 
 **Speech**, decoding DVSI's bits: the waveform correlation with DVSI's decode, sample for sample
@@ -3949,7 +3949,7 @@ against the change set with the review's fixes:
 | `mid-voicing-validation` | passes every check |
 | `mid-voicing-tones` | passes every check |
 | `mid-voicing-channel` | passes every check |
-| `mid-voicing-final` | declared; not yet scored (below) |
+| `mid-voicing-final` | passes (scored once, after the review, at `504740c`; below) |
 
 Every check passed with the same values before the fixes, `c2ba220` against the change set, but
 one: P25's soft-decision distance on the loud frames of the channel set (above).
@@ -3988,8 +3988,35 @@ encoder's bits unchanged, and for P25 and rate 33 the waveform correlation with 
 falling by no more than 0.0005 on the mean and 0.002 on any vector, the distance from DVSI's decode
 rising by no more than 0.01 dB on the mean and 0.03 dB on any vector, the envelope correlation
 falling by no more than 0.001, the distance from the input rising by no more than 0.01 dB, and the
-level against DVSI's moving by at most 0.05 dB. The final partition will be scored once for this
-change set, after its review; it has not been scored.
+level against DVSI's moving by at most 0.05 dB. The final partition was scored once for this change
+set, on 2026-11-26, after its review: the tone model change's code (the branch's build of
+`c2ba220`, whose decoder code `adecb29` shares) against `504740c`, the reviewed code and documents,
+on `irstia` and `mark`, both builds aligned freely first and then scored at their joint lags, both
+runs' encodings decoded by the candidate's decoder. It passes all 18 checks of `mid-voicing-final`
+(none fails). The library's decode of DVSI's bits, partition means over the two vectors and the
+waveform correlation of each:
+
+| Codec | Waveform corr. vs DVSI, sample for sample, mean | `irstia` | `mark` | LSD vs DVSI (dB), mean | LSD vs input (dB), mean |
+|---|---|---|---|---|---|
+| P25 | 0.9798 → 0.9837 | 0.9727 → 0.9795 | 0.9869 → 0.9880 | 1.5696 → 1.5248 | 5.3703 → 5.3690 |
+| Rate 33 | 0.9766 → 0.9783 | 0.9697 → 0.9715 | 0.9834 → 0.9850 | 1.5592 → 1.5328 | 5.5208 → 5.5211 |
+| D-STAR | 0.9830 → 0.9830 | 0.9774 → 0.9774 | 0.9886 → 0.9886 | 1.7794 → 1.7794 | 5.5432 → 5.5432 |
+
+The gate's paired deltas: the waveform correlation +0.003939 for P25 on the mean (`irstia`
++0.006790, `mark` +0.001088) and +0.001702 for rate 33 (+0.001795, +0.001608); the distance from
+DVSI's decode -0.04488 dB for P25 (-0.0443 and -0.0455 dB) and -0.02643 dB for rate 33 (-0.0228 and
+-0.0301 dB); the envelope correlation +0.00031 for P25 (0.9840 → 0.9843) and +0.00022 for rate 33
+(0.9781 → 0.9783); the distance from the input -0.0013 dB for P25 (`irstia` 5.3272 → 5.3236, `mark`
+5.4134 → 5.4145) and +0.0003 dB for rate 33 (`irstia` 5.5626 → 5.5614, `mark` 5.4790 → 5.4807); the
+level against DVSI's -0.0009 dB (P25) and -0.0011 dB (rate 33); D-STAR's decode unchanged (no
+vector with changed PCM), and every encoder's bits unchanged (no vector with changed rows in any
+mode). What this shows: on the two held-out vectors the waveform correlation with DVSI's decode
+rises on both vectors in both codecs, more on `irstia` (P25 +0.0068) than on `mark`, and the
+distance from DVSI's decode falls on both, as on the development and validation partitions. What
+it does not show: it is two vectors, a check that nothing moves the wrong way past its limit
+rather than a measure of the change's size; and the distance from the input rises on `mark` in
+both codecs, by 0.001 to 0.002 dB, and falls on `irstia`, within the gate's limits but not an
+improvement.
 
 ### Scoring history
 
@@ -4081,6 +4108,6 @@ against it, with the same partition means and vector hashes, and a third time af
 fixes, `adecb29` (the same code as `c2ba220`) against the fixed change set, where only P25's
 soft-decision distance on the loud frames of the channel set moved (-0.0106 to -0.0109 dB); all
 four pass each time ([November 2026: mid-frame voicing](#november-2026-mid-frame-voicing)). The
-final partition has not been
-scored for the mid-frame voicing change; it is to be scored once, after the review, against
-`mid-voicing-final`, declared in `6acba79`.
+final partition was scored once for the mid-frame voicing change, on 2026-11-26, after the review:
+the tone model change's code against `504740c`, the reviewed code and documents, against
+`mid-voicing-final`, declared in `6acba79`. It passes all 18 checks.
