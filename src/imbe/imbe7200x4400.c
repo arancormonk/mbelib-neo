@@ -88,7 +88,7 @@ imbe_get_dct_cache(void) {
 
 /* Which pitch a decoded pitch code plays (imbe_decode_fundamental()). */
 enum imbe_pitch {
-    IMBE_PITCH_DVSI,    /* P25: the pitch DVSI's P25 decoder plays for b0 */
+    IMBE_PITCH_DVSI,    /* P25: a fit to the pitch DVSI's P25 decoder plays for b0 */
     IMBE_PITCH_NOMINAL, /* ProVoice: TIA-102.BABA eq 46 as it stands */
 };
 
@@ -121,11 +121,11 @@ imbe_dvsi_pitch_offset(int b0) {
  * always has (4 pi rounded to float, divided by b0 + 39.5 in float, the
  * quotient rounded to float also where the arithmetic keeps excess
  * precision), and L and K, and with them the bit layout, follow it for every
- * pitch code. The pitch stored for synthesis is the one DVSI's P25 decoder
- * plays on speech: that float times 1 + g (imbe_dvsi_pitch_offset(), -7.06e-4
- * to +3.38e-4), the product formed in double and rounded to float once (a
- * tone its encoder sent as voice frames DVSI's decoder plays at eq 46's
- * harmonic frequencies, which is not modelled). That is not the law
+ * pitch code. The pitch stored for synthesis is a fit to the one DVSI's P25
+ * decoder plays on speech: that float times 1 + g (imbe_dvsi_pitch_offset(),
+ * -7.06e-4 to +3.38e-4), the product formed in double and rounded to float
+ * once (a tone its encoder sent as voice frames DVSI's decoder plays at eq
+ * 46's harmonic frequencies, which is not modelled). That is not the law
  * evaluated wholly in double and rounded once: the nominal float's own
  * rounding stays in it (the two differ by an ulp at 79 of the 208 codes), as
  * it stays in L and K.
@@ -676,7 +676,7 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
 /**
  * @brief Decode IMBE 4400 parameters from demodulated bitstream.
  *
- * The pitch stored is the one DVSI's P25 decoder plays for b0
+ * The pitch stored is a fit to the one DVSI's P25 decoder plays for b0
  * (imbe_decode_fundamental()): this decoder has no frame context, so a P25
  * one. The ProVoice frame paths keep the nominal pitch.
  * @param imbe_d  Demodulated IMBE parameter bits (88).
