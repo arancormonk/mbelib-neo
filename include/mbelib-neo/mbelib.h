@@ -193,8 +193,11 @@ typedef struct mbe_soft_bit {
 /**
  * Processing/result flag (context): the parameter bits come from an IMBE
  * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
- * data API, as for the C0/C4 context, and a muted frame gets library comfort
- * noise instead of the TIA-102.BABA 7.8 level, as in the ProVoice frame APIs.
+ * data API, as for the C0/C4 context, and it decodes them as the ProVoice
+ * frame APIs do: a decoded frame keeps TIA-102.BABA eq 46's nominal pitch
+ * (P25's is the pitch DVSI's P25 decoder plays, mbe_decodeImbe4400Parms()),
+ * and a muted frame gets library comfort noise instead of the TIA-102.BABA 7.8
+ * level.
  */
 #define MBE_PROCESS_FLAG_PROVOICE         0x0200u
 /**
@@ -865,9 +868,11 @@ MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
  * @brief Decode IMBE 4400 parameters.
  *
  * `cur_mp->w0` is the pitch DVSI's P25 decoder plays for the pitch code b0:
- * TIA-102.BABA's 4 pi / (b0 + 39.5) moved by at most 0.071%; L and K are
- * TIA-102.BABA's. The ProVoice (7100x4400) process paths keep the nominal
- * pitch.
+ * TIA-102.BABA eq 46's 4 pi / (b0 + 39.5), computed in float as this decoder
+ * always has (and L and K, TIA-102.BABA's, from it), times 1 + g, g between
+ * -7.06e-4 and +3.38e-4 by b0, the product formed in double and rounded to
+ * float once. The ProVoice (7100x4400) process paths, and the IMBE 4400 data
+ * API given `MBE_PROCESS_FLAG_PROVOICE`, keep the nominal pitch.
  */
 MBE_API int mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate IMBE 7200x4400 interleaved data. */
@@ -899,8 +904,11 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * @param prev_mp_enhanced In/out: enhanced previous parameters for continuity.
  * @return Total error count on success, or a negative `MBE_STATUS_*` code.
  *
+ * A decoded frame plays at the pitch mbe_decodeImbe4400Parms() gives (P25), or
+ * at eq 46's nominal pitch when `result` carries `MBE_PROCESS_FLAG_PROVOICE`
+ * from a 7100x4400 decode; a repeated frame plays the repeated model's pitch.
  * A muted frame outputs the TIA-102.BABA 7.8 noise (P25), or library comfort
- * noise when `result` carries `MBE_PROCESS_FLAG_PROVOICE` from a 7100x4400 decode.
+ * noise when `result` carries `MBE_PROCESS_FLAG_PROVOICE`.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);

@@ -115,14 +115,27 @@ imbe_dvsi_pitch_offset(int b0) {
 
 /*
  * b0 and the fundamental, harmonic count and band count it gives (TIA-102.BABA
- * eqs 46-48). L and K, and with them the bit layout, follow the nominal pitch
- * of eq 46 for every pitch code; the pitch stored for synthesis is the one
- * DVSI's P25 decoder plays (imbe_dvsi_pitch_offset()), the nominal one moved
- * by at most 0.071%, rounded to float once. ProVoice (IMBE 7100x4400), which
- * reaches this decoder converted to the 7200 layout, has no DVSI reference and
- * keeps the nominal pitch (`pitch`). No pitch code's band voicing marks
- * (imbe_decode_voicing()) differ between the two: none comes within 0.071% of
- * MBE_VOICING_REACH_HZ.
+ * eqs 46-48). The nominal pitch of eq 46 is computed in float, as this decoder
+ * always has (4 pi rounded to float, divided by b0 + 39.5 in float), and L and
+ * K, and with them the bit layout, follow it for every pitch code. The pitch
+ * stored for synthesis is the one DVSI's P25 decoder plays: that float times
+ * 1 + g (imbe_dvsi_pitch_offset(), -7.06e-4 to +3.38e-4), the product formed
+ * in double and rounded to float once. That is not the law evaluated wholly
+ * in double and rounded once: the nominal float's own rounding stays in it
+ * (the two differ by an ulp at 79 of the 208 codes), as it stays in L and K.
+ * ProVoice (IMBE 7100x4400), which reaches this decoder converted to the 7200
+ * layout, has no DVSI reference and keeps the nominal pitch (`pitch`).
+ *
+ * The decisions on 505 Hz (MBE_VOICING_REACH_HZ) do not move for any pitch
+ * code: neither the late-onset mark imbe_decode_voicing() decodes, whatever
+ * harmonic is the top voiced one (the nearest to 505 Hz, b0 119's 5th
+ * harmonic, is 0.053% below it and the correction moves it further below),
+ * nor the harmonic whose voicing synthesis reads to tell whether a frame's
+ * voicing reaches 505 Hz (ceil(505 Hz / f0), voicing_persists() in
+ * mbe_subframe.c); checked for all 208 codes. Discrete steps elsewhere in
+ * synthesis (a band edge's transform bin, the mid-frame model's harmonic
+ * count, the harmonic where the high-band shelf starts) follow the pitch
+ * played and do move at some codes.
  */
 static int
 imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
@@ -158,6 +171,7 @@ imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cu
         cur_mp->K = 12;
     }
     if (pitch == IMBE_PITCH_DVSI) {
+        /* The nominal float, widened, times 1 + g; one rounding to float. */
         cur_mp->w0 = (float)((double)cur_mp->w0 * (1.0 + imbe_dvsi_pitch_offset(b0)));
     }
 

@@ -73,9 +73,16 @@ struct mbe_subframe_model {
  */
 void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model);
 
-/* DVSI's rate-33 decoder plays the mid-frame pitch between two voiced frames
- * of different pitch at the geometric mean of their pitches times this
- * (docs/dvsi-parity.md, "Rate 33: mid-frame pitch"). */
+/* The rate-33 rendering plays the mid-frame pitch between two voiced frames of
+ * different pitch at the geometric mean of their pitches times this
+ * (docs/dvsi-parity.md, "Rate 33: mid-frame pitch"). A measured offset, not a
+ * known mechanism: DVSI's rate-33 pulse train falls behind ours by 0.013
+ * samples a frame for each mid-frame pitch taken between two different pitch
+ * codes, and by nothing between equal ones, measured on steps of one to three
+ * codes in either direction; as a factor on the mid-frame pitch the
+ * development vectors fit 1 - 2.9e-4 (1 - 3.3e-4 scored a residual energy
+ * against DVSI's of 0.0564, against 0.0683 at 1). Implemented as 1 - 3.0e-4
+ * for every step; larger steps were not measured. */
 #define MBE_AMBE2450_MID_PITCH_FACTOR (1.0f - 3.0e-4f)
 
 /**
@@ -97,9 +104,11 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * at the band's frequency, read as the magnitudes are, each log2Ml used as
  * the decoder stored it: where the magnitudes' interpolation takes the
  * unvoiced factor out of an unvoiced band's Ml, nothing is taken out of or put
- * into its log2Ml, which carries no such factor (for the AMBE codecs an
- * unvoiced band's Ml is MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) times
- * 2^log2Ml). A current frame marked MBE_FRAME_MARK_PREVIOUS_HELD
+ * into its log2Ml, which carries no such factor (an AMBE decoder builds an
+ * ordinary voice frame's unvoiced band as Ml = MBE_UNVOICED_MAGNITUDE_FACTOR
+ * / sqrt(w0) times 2^log2Ml; Ml then also carries what log2Ml does not, such
+ * as rate 33's further silence scale and spectral enhancement). A current
+ * frame marked MBE_FRAME_MARK_PREVIOUS_HELD
  * (a rate-33 silence frame) instead gets the previous frame's own model
  * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
  * decoder plays it through the silence frame's first 10 ms and crossfades to
@@ -159,9 +168,11 @@ void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parm
  * For a frame muted inside the synthesis core: the pulse train and the noise
  * generator run on (the pulses still sounding are kept for the next frame),
  * and no unvoiced overlap is left for it. @p from_silence starts the train as
- * mbe_synthesize_subframes() does, so that the state left is the one
- * rendering the frame leaves; so does @p rendering, which must be the one the
- * stream renders with.
+ * mbe_synthesize_subframes() does, so that the pulse train and the noise
+ * generator end where rendering the frame leaves them; so does @p rendering,
+ * which must be the one the stream renders with. The state is not the one a
+ * rendering leaves in full: a rendered frame with unvoiced bands leaves its own
+ * subframe's second half in previousUw, an advanced one leaves none.
  */
 void mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence,
                            enum mbe_voiced_synthesis rendering);

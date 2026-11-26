@@ -1025,9 +1025,13 @@ test_imbe_pitch_law(void) {
         const double g = imbe_dvsi_offset(b0);
         low = (g < low) ? g : low;
         high = (g > high) ? g : high;
-        /* The nominal pitch in float, as eq 46 is computed, moved and rounded
-         * once: within an ulp of that, and of the exact value within the
-         * nominal float's own error (about an ulp) more. */
+        /* What the decoder stores: eq 46's nominal pitch as it computes it in
+         * float, times 1 + g in double, rounded to float once (within an ulp:
+         * a fast-math build may evaluate the library's expression otherwise
+         * than this test). Looser, against the law evaluated wholly in double
+         * (4 pi / (b0 + 39.5) times 1 + g) and rounded once: the nominal
+         * float's own rounding stays in the stored pitch, at most 1.21 ulps
+         * from that over the codes (b0 77), within 1.5. */
         assert(within_ulps(cur.w0, (double)nominal * (1.0 + g), 1.0));
         assert(within_ulps(cur.w0, (4.0 * M_PI / ((double)b0 + 39.5)) * (1.0 + g), 1.5));
         assert(cur.L == L && cur.K == K);

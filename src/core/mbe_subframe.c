@@ -232,13 +232,15 @@ same_pitch(const float* a, const float* b) {
  * or neither is, the voiced frame's when only one has a voiced band, unless
  * the unvoiced frame before a voiced one is marked as carrying its pitch
  * (MBE_FRAME_MARK_PITCH_CARRIES).
- * Between two voiced frames of different pitch, DVSI's rate-33 decoder plays
+ * Between two voiced frames of different pitch, the rate-33 rendering plays
  * the geometric mean times MBE_AMBE2450_MID_PITCH_FACTOR (docs/dvsi-parity.md,
- * "Rate 33: mid-frame pitch"). A measured offset: DVSI's rate-33 pulse train
- * falls behind ours by 0.013 samples a frame for every mid-frame pitch taken
- * between two different pitch codes, and by nothing between equal ones,
- * whatever the step's size and direction (about 16,000 frame pairs); how the
- * decoder comes to it is not known. D-STAR and P25 show nothing of the kind. */
+ * "Rate 33: mid-frame pitch"), a measured offset: DVSI's rate-33 pulse train
+ * falls behind ours by 0.013 samples a frame for each mid-frame pitch taken
+ * between two different pitch codes, and by nothing between equal ones, on
+ * steps of one to three codes in either direction (about 16,000 frame pairs);
+ * the factor is fitted on the development vectors (mbe_subframe.h), applied
+ * to every step, and how the decoder comes to it is not known. D-STAR and P25
+ * show nothing of the kind. */
 static float
 mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
     const int prev_voiced = model_has_voiced_band(prev_mp);
@@ -280,8 +282,10 @@ voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
  * frequency as the magnitudes are and used as the decoder stored it: where
  * common_log2_magnitudes() takes the unvoiced factor out of an unvoiced band's
  * Ml, nothing is taken out of or put into its log2Ml, which carries no such
- * factor (for the AMBE codecs an unvoiced band's Ml is
- * MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) times 2^log2Ml). */
+ * factor (an AMBE decoder builds an ordinary voice frame's unvoiced band as
+ * Ml = MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) times 2^log2Ml; Ml then also
+ * carries what log2Ml does not, such as rate 33's further silence scale and
+ * spectral enhancement). */
 static void
 fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, struct mbe_subframe_model* model) {
     const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
