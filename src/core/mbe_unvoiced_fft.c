@@ -241,14 +241,17 @@ overlap_sample(const float* sample) {
 #define LCG_LARGEST_SAMPLE_BITS UINT32_C(0x474F8400)
 
 /*
- * A sample of the TIA-102.BABA rendering's noise overlap: as stored if the
- * generator can have written it (0 to 53124), else 0. The library leaves
- * nothing else there: zeros (a fresh stream, the cold start) or the
+ * A sample of the TIA-102.BABA rendering's noise overlap: as stored if it
+ * lies in the range the generator writes, +0 to 53124, else 0. The test is of
+ * that range, not of the generator's sequence: any value in it passes (0.5 or
+ * a subnormal as well as the integers the generator writes). The library
+ * leaves nothing else there: zeros (a fresh stream, the cold start) or the
  * generator's samples, and the subframe rendering's pulse train is cleared by
  * its mark before this reads it. A caller's state can hold anything, and a
  * huge finite sample (FLT_MAX) would overflow the transform of the noise
- * buffer into NaN. Read from the bit pattern: a negative value or a NaN lies
- * above the bound as an unsigned pattern, and fast-math cannot fold the test.
+ * buffer into NaN. Read from the bit pattern: a negative value, -0 or a NaN
+ * lies above the bound as an unsigned pattern, and fast-math cannot fold the
+ * test.
  */
 static float
 noise_overlap_sample(const float* sample) {
@@ -273,8 +276,10 @@ mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap) {
     if (subframe_mark_is_set(&overlap[MBE_SUBFRAME_STATE_SLOT])) {
         memset(overlap, 0, MBE_NOISE_OVERLAP * sizeof(float));
     }
+    /* Copied first, as the buffers may overlap, then guarded in place. */
+    memmove(buffer, overlap, MBE_NOISE_OVERLAP * sizeof(float));
     for (int i = 0; i < MBE_NOISE_OVERLAP; ++i) {
-        buffer[i] = noise_overlap_sample(&overlap[i]);
+        buffer[i] = noise_overlap_sample(&buffer[i]);
     }
     mbe_generate_noise_lcg(buffer + MBE_NOISE_OVERLAP, MBE_FFT_SIZE - MBE_NOISE_OVERLAP, seed);
     memmove(overlap, buffer + MBE_FFT_SIZE - MBE_NOISE_OVERLAP, MBE_NOISE_OVERLAP * sizeof(float));

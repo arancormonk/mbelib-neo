@@ -1845,6 +1845,72 @@ test_untrusted_unvoiced_overlap(void) {
     mbe_fft_plan_free(plan);
 }
 
+/*
+ * mbe_generate_noise_with_overlap() directly: the head of the buffer is the
+ * overlap, sample for sample, where a sample lies in the range the generator
+ * writes (+0 to 53124, by its bit pattern; any value there, not only the
+ * generator's integers), and +0 where it does not (the next float above 53124,
+ * 53125, a negative value, -0, a NaN of either sign, either infinity, plus or
+ * minus FLT_MAX). The last overlap slot holds 7 (-1 there is the subframe
+ * rendering's mark, which clears the overlap). The head is copied as
+ * memmove() copies, so a buffer that overlaps the overlap plays what the
+ * copy gave before the guard: the same buffer and overlap as from separate
+ * buffers.
+ */
+static void
+test_noise_overlap_guard(void) {
+    static const struct {
+        uint32_t bits;
+        int kept;
+    } values[] = {
+        {0x00000000u, 1}, /* 0 */
+        {0x00000001u, 1}, /* the smallest subnormal */
+        {0x3F000000u, 1}, /* 0.5 */
+        {0x3F800000u, 1}, /* 1 */
+        {0x474F8400u, 1}, /* 53124 */
+        {0x474F8401u, 0}, /* the next float above 53124 */
+        {0x474F8500u, 0}, /* 53125 */
+        {0xBF800000u, 0}, /* -1 */
+        {0x80000000u, 0}, /* -0 */
+        {0x7FC00000u, 0}, {0xFFC00000u, 0}, {0x7F800000u, 0}, {0xFF800000u, 0}, {0x7F7FFFFFu, 0}, /* FLT_MAX */
+        {0xFF7FFFFFu, 0},                                                                         /* -FLT_MAX */
+    };
+
+    const float last_slot = 7.0f;
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        float overlap[MBE_NOISE_OVERLAP], buffer[MBE_FFT_SIZE];
+        for (int k = 0; k < MBE_SUBFRAME_STATE_SLOT; ++k) {
+            memcpy(&overlap[k], &values[i].bits, sizeof(values[i].bits));
+        }
+        overlap[MBE_SUBFRAME_STATE_SLOT] = last_slot;
+        float seed = 1.0f;
+        mbe_generate_noise_with_overlap(buffer, &seed, overlap);
+        const uint32_t want = values[i].kept ? values[i].bits : 0u;
+        for (int k = 0; k < MBE_SUBFRAME_STATE_SLOT; ++k) {
+            uint32_t got;
+            memcpy(&got, &buffer[k], sizeof(got));
+            assert(got == want);
+        }
+        assert(same_bits(&buffer[MBE_SUBFRAME_STATE_SLOT], &last_slot, 1));
+    }
+
+    /* Overlapping buffers: overlap at s, buffer at s + 1. */
+    float s[MBE_FFT_SIZE + 1], apart_overlap[MBE_NOISE_OVERLAP], apart_buffer[MBE_FFT_SIZE];
+    for (int k = 0; k < MBE_NOISE_OVERLAP; ++k) {
+        s[k] = (float)(k + 1);
+        apart_overlap[k] = (float)(k + 1);
+    }
+    float seed = 1.0f, apart_seed = 1.0f;
+    mbe_generate_noise_with_overlap(s + 1, &seed, s);
+    mbe_generate_noise_with_overlap(apart_buffer, &apart_seed, apart_overlap);
+    /* The buffer past the overlap's new contents (the overlap is written last). */
+    assert(
+        same_bits(&s[MBE_NOISE_OVERLAP], &apart_buffer[MBE_NOISE_OVERLAP - 1], MBE_FFT_SIZE - MBE_NOISE_OVERLAP + 1));
+    assert(same_bits(s, apart_overlap, MBE_NOISE_OVERLAP));
+    assert(same_bits(&seed, &apart_seed, 1));
+    assert(s[MBE_NOISE_OVERLAP] > 95.5f && s[MBE_NOISE_OVERLAP] < 96.5f); /* buffer[95]: overlap[95] */
+}
+
 /* Pulse state that no frame stores is dropped, and never read as an index or
  * a count: a stream handed such a state plays as one starting afresh. */
 static void
@@ -2357,6 +2423,7 @@ main(void) {
     test_from_silence();
     test_output_limit_option();
     test_untrusted_unvoiced_overlap();
+    test_noise_overlap_guard();
     test_pulse_state_is_validated();
     test_invalid_models();
     test_subnormal_pitch_is_no_pitch();

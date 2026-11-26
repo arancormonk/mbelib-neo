@@ -132,8 +132,11 @@ void mbe_seedUnvoicedNoiseLcg(uint32_t seed);
  * Library cold-start policy: seed < 0 emits an all-zero buffer,
  * then primes state for the next call with MBE_LCG_DEFAULT_SEED.
  *
- * An overlap sample the generator cannot have written (outside 0 to 53124,
- * NaN included) is read as 0.
+ * An overlap sample outside the range the generator writes (+0 to 53124 by
+ * its bit pattern: -0, a negative value, a NaN or an infinity among those
+ * outside) is read as 0; any value inside the range is read as stored. The
+ * overlap is copied into the buffer as memmove() copies, so the two may
+ * overlap.
  *
  * @param buffer Output buffer of 256 samples.
  * @param seed In/out LCG state.
