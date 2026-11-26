@@ -56,6 +56,10 @@
  * frame (frame 11, of 24; it has no row 13 or 15), moved its float and int16
  * hashes; the D-STAR and public hashes did not move, and P25's onset columns
  * reach no golden sequence.
+ * The half-octave wave of rate 33's mid-frame pitch, between two voiced
+ * frames of different pitch, moved the AMBE+2 float and int16 hashes (scalar,
+ * SSE2 and AVX2; the same under glibc 2.39 and 2.44); the D-STAR and public
+ * hashes did not move.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -72,13 +76,13 @@ golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x4BCEBCBEu;
-        e.ambe2450_s16 = 0xCEDD488Eu;
+        e.ambe2450_f32 = 0x4E454F6Du;
+        e.ambe2450_s16 = 0xDD5D42D0u;
         e.ambe2400_f32 = 0xC89A3643u;
         e.ambe2400_s16 = 0xD93C5851u;
     } else {
-        e.ambe2450_f32 = 0xDA9F61C4u;
-        e.ambe2450_s16 = 0x38C9638Du;
+        e.ambe2450_f32 = 0x5E331243u;
+        e.ambe2450_s16 = 0x20570E3Bu;
         e.ambe2400_f32 = 0x25F7B472u;
         e.ambe2400_s16 = 0x71A03C76u;
     }
