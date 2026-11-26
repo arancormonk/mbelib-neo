@@ -236,13 +236,14 @@ enum mbe_frame_mark {
      * after a frame with no voiced band, DVSI's P25 decoder sounds at
      * mid-frame only the voiced harmonics that lie in a covered 500 Hz column
      * or within 250 Hz below one, and starts the others with the frame's
-     * second half (docs/dvsi-parity.md, "Voiced onsets and offsets"). The
-     * columns are [0, 505), [505, 1005), ... [3005, 3505) Hz, none above; one
-     * is covered when the frame's voicing is voiced at both its ends, read at
-     * harmonic 1 for 0 Hz and at the harmonic at or next above each other
-     * edge (unvoiced past L), all at the pitch the frame plays. A frame voiced
-     * only below 505 Hz covers none: its voiced bands, and its pulse train,
-     * start at mid-frame. After a voiced frame the mark changes nothing. */
+     * second half (docs/dvsi-parity.md, "P25: the bands that start with the
+     * frame"). The columns are [0, 505), [505, 1005), ... [3005, 3505) Hz,
+     * none above; one is covered when the frame's voicing is voiced at both
+     * its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next
+     * above each other edge (unvoiced past L), all at the pitch the frame
+     * plays. A frame voiced only below 505 Hz covers none: its voiced bands,
+     * and its pulse train, start at mid-frame. After a voiced frame the mark
+     * changes nothing. */
     MBE_FRAME_MARK_ONSET_COLUMNS = 5,
     /* A rate-33 voice frame of V/UV row 17: the mid-frame model voices the
      * 500 Hz column 0 (through mbe_ambe2450_harmonic_voiced(), at its own
@@ -258,8 +259,8 @@ enum mbe_frame_mark {
      * row 15; after a voiced frame the pulse train runs on through the
      * unvoiced mid-frame, at the previous frame's pitch into it and this
      * frame's out of it). The rate-33 rows 13, 15 and 17 give each half of
-     * the frame its own voicing (docs/dvsi-parity.md, "Rate 33: V/UV
-     * vectors"); a lost frame that repeats such a frame plays the repeated
+     * the frame its own voicing (docs/dvsi-parity.md, "Rate 33: rows 13, 15
+     * and 17"); a lost frame that repeats such a frame plays the repeated
      * model's own voicing through (the rate-33 path clears these marks on a
      * repeat). */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,

@@ -240,7 +240,8 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
 
 /*
  * Reads the band voicing, and marks what it tells DVSI's decoder beyond the
- * bands themselves (docs/dvsi-parity.md, "Voiced onsets and offsets"):
+ * bands themselves (docs/dvsi-parity.md, "Voiced onsets and offsets" and "P25:
+ * the bands that start with the frame"):
  *  - no voiced band, at a pitch code other than the ones DVSI's encoder sends
  *    only with such frames (IMBE_UNVOICED_CODES_*): the voicing of the frame
  *    before it lasts to mid-frame;

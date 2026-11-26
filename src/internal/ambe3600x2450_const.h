@@ -34,10 +34,11 @@
  * 17 a voicing of their own in the first half of the frame (the mid-frame
  * model's): row 13 columns 0-1, row 15 none, row 17 column 0, while row 17's
  * own voicing is Annex B's, all unvoiced (ambe2450_decode_vuv() marks them;
- * docs/dvsi-parity.md, "Rate 33: V/UV vectors"). DVSI's decoders also render
- * parts of rows 1 and 3 partly voiced, a state this table cannot express;
- * voiced is the nearer of the two binary values there. Rows 18-31 decode on a
- * band grid of their own pitch (MBE_AMBE2450_GRID_SPAN in ambe3600x2450.c).
+ * docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17"). Rows 1 and 3, which
+ * DVSI's decoders were measured to play partly between voiced and unvoiced,
+ * are not resolved, and the table keeps Annex B's rows there (same section).
+ * Rows 18-31 decode on a band grid of their own pitch (MBE_AMBE2450_GRID_SPAN
+ * in ambe3600x2450.c).
  * The encoder searches rows 0-16 only (clause 4.2), so it reads none of rows
  * 17-31.
  */

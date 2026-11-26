@@ -65,7 +65,15 @@ appear here.
   change set was measured and gated on the development, validation, tone and channel partitions,
   and the final partition was scored once for it, after the review, against the gate set
   `tone-model-final`, declared before any build was scored, which it passed ([November 2026: tones
-  and the octave step](#november-2026-tones-and-the-octave-step)).
+  and the octave step](#november-2026-tones-and-the-octave-step)). The two decoder changes of the
+  mid-frame voicing change set (from `6acba79`; [P25: the bands that start with the
+  frame](#p25-the-bands-that-start-with-the-frame) and
+  [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)) hold it out too: the study that found
+  them read the development and validation vectors and DVSI's tone vectors, never `irstia` or
+  `mark`; the change set was measured and gated on the development, validation, tone and channel
+  partitions, and the final partition is to be scored once for it, after the review, against the
+  gate set `mid-voicing-final`, declared before any build was scored ([November 2026: mid-frame
+  voicing](#november-2026-mid-frame-voicing)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -600,18 +608,25 @@ output shows none, and make D-STAR repeat at 5% where DVSI does not.
 ### Rate 33: V/UV vectors
 
 DVSI's rate-33 decoder voices a harmonic when its own 500 Hz column of the V/UV vector (Annex B, eq
-5) is voiced or when the column 250 Hz above it is: each voiced column reaches half a column
-(250 Hz) into an unvoiced one below it, as D-STAR's 1 kHz bands reach 250 Hz into theirs ([D-STAR voicing bands](#d-star-voicing-bands)).
-It also reads row 17 with its lowest column voiced, where Annex B lists rows 17 to 31 all
-unvoiced like row 16. The decoder, and the encoder's eqs 4 and 8, now read the voicing that way;
-the encoder still searches rows 0 to 16 (clause 4.2), so row 17 only changes how DVSI's bits play.
-On DVSI's speech vectors our decode of frames coded 17 comes 0.5 dB of log-spectral distance closer
-to DVSI's (27 frames), and of voiced frames generally 0.03 dB.
+5) is voiced or when the column 250 Hz above it is: each voiced column reaches half a column (250
+Hz) into an unvoiced one below it, as D-STAR's 1 kHz bands reach 250 Hz into theirs ([D-STAR voicing
+bands](#d-star-voicing-bands)). The decoder, and the encoder's eqs 4 and 8, now read the voicing
+that way. From 2.6.7 to 2.6.12, and in this series up to the mid-frame voicing change (`adecb29`),
+the decoder also read row 17 with its lowest column voiced, where Annex B lists rows 17 to 31 all
+unvoiced like row 16; the encoder searches rows 0 to 16 (clause 4.2), so row 17 only changed how
+DVSI's bits play. On DVSI's speech vectors that reading brought our decode of frames coded 17 0.5 dB
+of log-spectral distance closer to DVSI's (27 frames), and of voiced frames generally 0.03 dB. Since
+the mid-frame voicing change (2.6.13) row 17's own voicing is Annex B's again, all unvoiced, and its
+lowest column is voiced in the first half of the frame only ([Rate 33: rows 13, 15 and
+17](#rate-33-rows-13-15-and-17)).
 
-Rows 1, 3, 13, 15 and 17 play some columns neither voiced nor unvoiced on DVSI's decoder (see
-[Known differences](#known-differences)); voiced is the nearer binary value for each (log-spectral
-distance against DVSI's decode on frames coded 13 or 15: 6.87 dB voiced, 7.56 dB unvoiced), so the
-table keeps Annex B's voiced columns there.
+As measured for 2.6.7, rows 1, 3, 13, 15 and 17 played some columns neither voiced nor unvoiced
+on DVSI's decoder; voiced was the nearer binary value (log-spectral distance against DVSI's decode
+on frames coded 13 or 15: 6.87 dB voiced, 7.56 dB unvoiced), so the table kept Annex B's voiced
+columns there. For rows 13, 15 and 17 what played so is a first half of the frame voiced otherwise
+than its end ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)); rows 1 and 3 are not
+resolved, and the table keeps Annex B's voiced columns for them ([Known
+differences](#known-differences)).
 
 **Rows 18 to 31: the band grid.** Annex B lists rows 18 to 31 all unvoiced, like row 16, and clause
 4.1 gives every voice frame the fundamental of its pitch code. The published AMBE-3000R measurements
@@ -648,8 +663,11 @@ value stands.
 The same document's other statement, that row 17 plays as row 16, does not hold on DVSI's vectors:
 played all unvoiced, row-17 frames lose 0.064 of waveform correlation with DVSI's decode and gain
 0.35 dB of log-spectral distance from it, and PESQ against the input falls by 0.0022 ± 0.0011 (worse
-on 17 of the 25 vectors; this ± is over the vectors, [Method](#method)). Row 17 keeps its lowest
-column voiced.
+on 17 of the 25 vectors; this ± is over the vectors, [Method](#method)). Row 17 kept its lowest
+column voiced. That measurement compares two readings that each hold for the whole frame; on DVSI's
+decoder row 17 voices its lowest column in the frame's first half and no band at its end, which
+neither reading is, and the decoder reads it so since the mid-frame voicing change ([Rate 33: rows
+13, 15 and 17](#rate-33-rows-13-15-and-17)).
 
 On the scoreboard (joint lags, against the commit before the change), rate 33 decoding DVSI's bits,
 mean paired change with its 95% interval:
@@ -1098,7 +1116,11 @@ every frame.
   frame's and this one's stands at mid-frame: its pitch the geometric mean of the two (in rate 33,
   between two voiced frames of different pitch, a little below it: [Rate 33: mid-frame
   pitch](#rate-33-mid-frame-pitch)), its harmonic count that pitch's, each band's voicing this
-  frame's at the band's frequency, its
+  frame's at the band's frequency (except where a frame mark says otherwise: [Voiced onsets and
+  offsets](#voiced-onsets-and-offsets); since the mid-frame voicing change also a P25 frame after a
+  frame with no voiced
+  band, [P25: the bands that start with the frame](#p25-the-bands-that-start-with-the-frame), and
+  rate 33's V/UV rows 13, 15 and 17, [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)), its
   magnitudes the two frames' at that frequency, met in the log domain. Unvoiced magnitudes enter
   that mean without their factor `0.2046 / sqrt(w0)` and take the mid-frame pitch's on the way
   out. With one frame voiced and the other not, the mid-frame pitch is the voiced frame's.
@@ -1149,7 +1171,8 @@ block of the step frame, main and now:
 
 The single-band steps come out worse: on the unit a band above 1 kHz that turns voiced starts
 with the frame and one that turns unvoiced lasts to mid-frame, while the lowest band does the
-opposite on both; the mid-frame model here takes this frame's voicing for every band.
+opposite on both; the mid-frame model of a D-STAR frame here takes this frame's voicing for every
+band.
 
 On DVSI's vectors, at joint lags against the commit before (the unvoiced synthesis above),
 development / validation / final:
@@ -1211,9 +1234,14 @@ what those fields say (one mark per frame, in the unused element 0 of `PHIl`):
 - **D-STAR b0 64..71, 88..103 and 112..119 carry their pitch** into a voiced frame after them:
   its first subframe runs at the geometric mean of the two pitches (253 onsets of 253 on DVSI's
   vectors), and at the voiced frame's own pitch after any other unvoiced frame (925 of 925).
-- **Late onsets.** A rate-33 frame coded with V/UV row 15 after an unvoiced one starts its
-  voiced bands in its second subframe, and so does a P25 frame whose voicing does not reach
-  505 Hz (all 40 such onsets on DVSI's vectors).
+- **Late onsets.** A rate-33 frame coded with V/UV row 15 starts its voiced bands in its second
+  subframe; before the mid-frame voicing change the library did so only after an unvoiced frame, and
+  with it does so whatever the frame before, beside rows 13 and 17, whose first halves have voicings
+  of their own ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)). Before the mid-frame
+  voicing change the same mark started the voiced bands of a P25 frame whose voicing does not reach
+  505 Hz in its second subframe after an unvoiced one (all 40 such onsets on DVSI's vectors); with
+  it that case is part of the column rule of [P25: the bands that start with the
+  frame](#p25-the-bands-that-start-with-the-frame), and P25 no longer sets the mark.
 
 With these, voiced runs after two or more unvoiced frames start where DVSI's do in 95% of cases for
 P25 (791 of 831 on ten vectors), 96% for D-STAR (812 of 846) and 96% for rate 33 (775 of 810).
@@ -1222,14 +1250,12 @@ voiced runs of three voiced frames or more after a frame with no voiced band, lo
 where the two frames after the first correlate with DVSI's under 0.8), 25 of 1,945 D-STAR runs were
 out of line before that step and 4 of 1,945 are with it: most of the misses after a pitch-carrying
 code were a step of about an octave into the second subframe ([The pulse train across an
-octave](#the-pulse-train-across-an-octave)). Not resolved: P25 onsets that DVSI's decoder starts in
-the frame's second subframe and the library starts with the frame. Measured for the tone model
-change, 29 of the
-1,940 P25 onsets of the development and validation vectors are such onsets; in 28 of them the
-harmonic at or next above 505 Hz is unvoiced, but so it is in 42 onsets that DVSI's decoder starts
-with the frame, and no rule is adopted (the measurement is in [Known
-differences](#known-differences)). See also [Known differences](#known-differences) for what the
-unvoiced pitch codes and rate 33's rows 17 to 31 further tell DVSI's decoder.
+octave](#the-pulse-train-across-an-octave)). P25 onsets that DVSI's decoder starts in the frame's
+second subframe and the library started with the frame were open before the mid-frame voicing
+change; its
+column rule and the onsets that rule still does not fit are in [P25: the bands that start with the
+frame](#p25-the-bands-that-start-with-the-frame). See also [Known differences](#known-differences)
+for what the unvoiced pitch codes and rate 33's rows 18 to 31 further tell DVSI's decoder.
 
 ### Phase regeneration
 
@@ -1486,13 +1512,18 @@ and so the bit layout follow it as before. The pitch stored for synthesis is tha
 `1 + g`, g computed in double with the double-precision libm functions (from -7.06e-4 at b0 127 to
 +3.38e-4 at b0 96), the product formed in double and rounded to float once. That is not the law
 evaluated wholly in double, from which it differs by an ulp at 79 of the 208 codes. For all 208
-codes and any harmonic as the top voiced one, neither the late-onset mark the decoder sets ([Voiced
-onsets and offsets](#voiced-onsets-and-offsets)) nor the harmonic whose voicing the synthesis reads
-to tell whether a frame's voicing reaches 505 Hz (`ceil(505 Hz / f0)`) moves under the correction:
-the nearest harmonic to 505 Hz is b0 119's 5th, 0.053% below it, and the correction moves it further
-below. Other discrete steps of synthesis follow the pitch played and do move at some codes (a band
-edge's transform bin, the mid-frame model's harmonic count, the harmonic where the high-band shelf
-starts). ProVoice, which reaches the same data path, has no DVSI reference and keeps eq 46; the
+codes and any harmonic as the top voiced one, neither the late-onset mark the decoder set before
+the mid-frame voicing change ([Voiced onsets and offsets](#voiced-onsets-and-offsets)) nor the
+harmonic whose voicing the
+synthesis reads to tell whether a frame's voicing reaches 505 Hz (`ceil(505 Hz / f0)`) moves under
+the correction: the nearest harmonic to 505 Hz is b0 119's 5th, 0.053% below it, and the correction
+moves it further below. Other discrete steps of synthesis follow the pitch played and do move at
+some codes (a band edge's transform bin, the mid-frame model's harmonic count, the harmonic where
+the high-band shelf starts, and since the mid-frame voicing change the harmonics at which a P25
+onset's 500
+Hz columns are read: [P25: the bands that start with the
+frame](#p25-the-bands-that-start-with-the-frame)). ProVoice, which reaches the same data path, has
+no DVSI reference and keeps eq 46; the
 public `mbe_decodeImbe4400Parms()`, which has no frame context, decodes P25's. The P25 encoder
 quantizes from its own pitch code, so its bits do not change.
 
@@ -1790,6 +1821,254 @@ the first frame followed the mid-frame model like any voiced onset (0.01, 0.03, 
 step](#november-2026-tones-and-the-octave-step) selects other frames (those the tone test passes,
 between two such frames, with DVSI's frame above a level); on that selection the median correlation
 rises from 0.388 to 0.986, which is not the comparison with the rows above.
+
+### P25: the bands that start with the frame
+
+After a frame with no voiced band, DVSI's P25 decoder does not start every voiced band of the next
+frame with that frame. It reads the frame's voicing in fixed 500 Hz columns, starts the voiced
+harmonics that lie in a column the voicing covers, or within 250 Hz below one, with the frame, and
+starts the other voiced harmonics at mid-frame. TIA-102.BABA renders a frame in one piece and
+defines no mid-frame model ([Synthesis in subframes](#synthesis-in-subframes)), so this is not a
+departure from its text.
+
+**What was open.** Before this change (up to 2.6.12, and in this series up to `adecb29`; the
+measurements below were made on `cc272ef`, the tone model change before its review's fixes, whose
+later commits change no decode of a stream a decoder produces) the mid-frame model took this frame's
+voicing, so a voiced frame after a frame with no voiced band started its voiced bands, and its pulse
+train, with the frame. One exception was known for P25: a frame voiced only below 505 Hz started
+them at mid-frame (`MBE_FRAME_MARK_LATE_ONSET`, set in `imbe_decode_voicing()`; [Voiced onsets and
+offsets](#voiced-onsets-and-offsets)). The P25 voiced runs that DVSI's decoder starts half a frame
+later than the library were an open item of [Known differences](#known-differences), and P25's
+voiced runs out of line with DVSI's held the largest single part of the residual left in the three
+codecs (the accounting is in [November 2026: mid-frame voicing](#november-2026-mid-frame-voicing)).
+
+**Which onsets start late.** Two test builds outside the repository, of `cc272ef` with environment
+switches in `src/core/mbe_subframe.c` (with the switches off their P25 decodes of the 25 vectors
+equal that code's byte for byte), decode every onset late (after a frame with no voiced band the
+mid-frame model has no voiced band) and none late. An onset is a voiced frame after a frame with no
+voiced band, followed by two voiced frames; the two frames after it together (320 samples) have a
+standard deviation of at least 300 in DVSI's decode; the first three and the last four frames of a
+file are left out. DVSI's decode "follows" a build when their correlation over the 400 samples from
+the onset frame's mid-point is above 0.8 and more than 0.1 above the other build's. Over the 1,940
+P25 onsets of the 25 development and validation vectors:
+
+| P25, 1,940 onsets | Count | The library at `cc272ef` |
+|---|---|---|
+| DVSI's decode follows the early start | 1,771 | early in 1,771 |
+| DVSI's decode follows the late start | 72 | late in 43 (voiced only below 505 Hz), early in 29 |
+| Both fit (within 0.1 of each other, both above 0.8) | 83 | |
+| Neither fits | 14 | |
+
+1,898 onsets were in line (above 0.8) at `cc272ef`, and 1,926 would be with the better start for
+each. The late start is a function of the voicing bits and the pitch, not of the amplitudes:
+
+- A frame voiced in its first band only (harmonics 1 to 3) starts late exactly when 3 f0 < 505 Hz:
+  late at b0 56 and above (3 f0 502.6 Hz), early at b0 55 and below (507.9 Hz), without exception
+  and whatever the frame's level.
+- One voicing word starts early or late by pitch: `1000001100` early at b0 86 (f0 127.5 Hz) and late
+  at b0 92 (121.7 Hz); `1011` followed by unvoiced bands early at b0 79 and late at b0 92, 99 and
+  102.
+
+The other codecs have no such onsets left. Of rate 33's 1,847 onsets labelled so, DVSI's decode
+follows the late start in 1,461, all of them V/UV row 15, and the early one in 293 (rows 0 to 14);
+both fit 83 and neither 10, and the library already started every labelled one as DVSI's decoder
+does: in rate 33 the encoder signals the late start by the row. Of D-STAR's 1,945, DVSI's decode
+follows the early start in 1,845 and the late one in none (both 96, neither 4). The rule below is
+P25's own: its bit stream cannot signal the late start, and DVSI's decoder infers it.
+
+**The rule.** The columns are fixed: [0, 505), [505, 1005), [1005, 1505), [1505, 2005), [2005,
+2505), [2505, 3005) and [3005, 3505) Hz, and nothing above 3505 Hz. A column is covered when the
+frame's voicing is voiced at both its ends, the voicing read at harmonic 1 for the end at 0 Hz and
+at the harmonic at or next above the edge for the others (unvoiced when that harmonic is past L). At
+a voiced frame after a frame with no voiced band, a voiced harmonic at frequency f sounds in the
+mid-frame model only if the column that holds f, or the column that holds f + 250 Hz, is covered.
+Every other voiced harmonic of the frame is unvoiced in the mid-frame model: it starts in the
+frame's second half. If no harmonic sounds at mid-frame, the pulse train starts at mid-frame, as a
+late onset's does. The rule contains the late onset it replaces: a frame voiced only below 505 Hz
+covers no column.
+
+**The evidence by onset.** A whole-frame form of the rule (an onset late exactly when no column is
+covered, every voiced band early otherwise) finds 70 of the 72 late onsets and calls 3 of the 1,771
+early ones late, where the library at `cc272ef` found 43 of the 72 and called none of the 1,771
+late. Five onsets of the development and validation vectors do not fit it, and they are not
+explained: early on DVSI's decoder with no column covered, `clean` frame 477 (word `110000001100`,
+b0 181), `t04` frame 208 (`100000001100`, b0 171) and `ucarm15a` frame 769 (`100011000110`, b0 164),
+all at f0 72 to 79 Hz with two-band runs above 1.8 kHz; late with a column covered, `p01mirs` frame
+2101 (`11110000000`, b0 106) and `ucarf15a` frame 2022 (`100000000001`, b0 153, whose twelfth band
+has 11 harmonics). The constants of the whole-frame form, varied one at a time (late onsets found of
+72 / early onsets called late of 1,771):
+
+| First edge (Hz) / spacing (Hz) | 505 / 500 | 500 / 500 | 510 / 500 | 505 / 480 | 505 / 520 | 505 / 450 | 505 / 550 |
+|---|---|---|---|---|---|---|---|
+| Found / called late | 70 / 3 | 68 / 3 | 70 / 4 | 67 / 3 | 70 / 4 | 60 / 2 | 68 / 6 |
+
+The first edge is also bracketed by the frames voiced in their first band only, between 502.6 and
+507.9 Hz.
+
+**The evidence by harmonic.** In the 1,771 onsets DVSI's decoder starts early, each voiced
+harmonic's band of the first half (a Hann window over samples -40 to 120 of the frame, the band half
+a harmonic spacing either side of the harmonic) is compared with the decodes of the two test builds;
+the library's unvoiced part is DVSI's generator ([Unvoiced synthesis](#unvoiced-synthesis)), so both
+are deterministic and differ only where the voicing does. Over the 25,660 voiced harmonics where the
+two builds' residuals against DVSI's decode differ by more than 20% of the band's energy, the share
+on which a reading agrees with the build that fits better (a harmonic that sounds with the one that
+starts none late, a silent one with the one that starts all late) is 0.9565 with the rule, 0.9494
+without the 250 Hz reach, and 0.8441 with every voiced harmonic sounding (the library at `cc272ef`).
+Below the top of a voiced run, the share of harmonics that sound rises with their distance below it:
+0.06 to 0.25 within 250 Hz, about 0.5 at 250 to 400 Hz, 0.9 from 450 Hz and 0.99 from 700 Hz (the
+top column of a run, not covered, is silent). By this measure the reach of 250 Hz scores alike
+anywhere from 150 to 500 Hz (0.9547 to 0.9565, 250 Hz best); a first edge of 500 Hz scores 0.9578,
+505 Hz 0.9565, 495 Hz 0.9559 and 510 Hz 0.9538, and a spacing of 495 Hz 0.9558, 500 Hz 0.9565 and
+505 Hz 0.9482. An edge of 500 Hz would make the frames voiced in the first band only at b0 56, whose
+third harmonic lies at 502.6 Hz, cover column 0 and start early, where DVSI's decoder starts them
+late; 505 Hz is kept. Above 3 kHz the agreement is 0.878 (2,641 harmonics), and 0.70 with a top
+column that counts when its lower end is voiced.
+
+**Where it does not apply.**
+
+- Bands that turn voiced inside a voiced run: applying the rule to every harmonic that turns voiced,
+  not only at onsets, is worse (development residual 0.0312 of the signal against 0.0309 with
+  onsets only, 6 vectors lower than with onsets only).
+- Tone frames: a frame played as a P25 tone model keeps its own model at mid-frame ([P25 tones sent
+  as voice frames](#p25-tones-sent-as-voice-frames)), and its decodes of the tone vectors keep their
+  tone figures ([November 2026: mid-frame voicing](#november-2026-mid-frame-voicing)).
+- D-STAR and rate 33: no onset of D-STAR follows the late start, and rate 33's follow the row
+  (above). Rate 33's rows give parts of their frames a mid-frame voicing of their own ([Rate 33:
+  rows 13, 15 and 17](#rate-33-rows-13-15-and-17)).
+
+**Which pitch the columns are read at.** With eq 46's nominal pitch and with the pitch the library
+plays ([P25 pitch](#p25-pitch), up to 0.07% off it) the harmonic at or next above an edge differs at
+8 of the 208 × 7 pairs of pitch code and column edge, and at 6 of the 208 × 7 pairs with the edges
+250 Hz lower; the edges are known to about 5 Hz only, so the measurements cannot tell the two
+pitches apart. The library reads the columns at the pitch it plays. (An earlier count of 32 pairs
+took the law's two extremes for every code.) No pitch code puts an edge on a harmonic: the nearest
+lie 2.86e-4 of a harmonic away at the pitch P25 plays (b0 3 at 1505 Hz) and 1.55e-4 at ProVoice's
+nominal pitch (b0 36 at 2755 Hz), so no build's arithmetic (x87 excess precision, fast-math's
+reordering) moves a harmonic across an edge (`test_p25_onset_edges`).
+
+**How the library carries it.** The decoder marks every P25 and ProVoice voice frame that has a
+voiced band `MBE_FRAME_MARK_ONSET_COLUMNS` (5.0f in the otherwise unused `PHIl[0]`, set in
+`imbe_decode_voicing()`), and P25 no longer sets `MBE_FRAME_MARK_LATE_ONSET`. The mid-frame model
+(`mbe_subframe_mid_model()` in `src/core/mbe_subframe.c`) applies the rule only to a frame with this
+mark after a frame with no voiced band; after a voiced frame the mark changes nothing. The edges'
+positions among the frame's harmonics, `edge * pi / (4000 * w0)`, are formed in double from the
+stored (played) `w0`, and they are compared as bit patterns before `ceil()` makes an index of them
+(a caller's state can hold any pitch). ProVoice, which shares the data path and has no DVSI
+reference, takes the same rule at its nominal pitch. An onset frame that the error rate mutes, which
+the synthesis core advances without rendering (`mbe_advance_subframes()`), leaves the stream where
+the same frame heard leaves it. `PHIl[0]` of every voiced P25 frame, the IMBE encoder's `cur_mp`
+included, now reads 5.0f where it read 0; no encoder reads it, and the encoder's bits do not change.
+A `MBE_FRAME_MARK_TONE` on a P25 or ProVoice frame that plays no tone model (a caller's state;
+decoded streams do not reach this) now gives way to `MBE_FRAME_MARK_ONSET_COLUMNS` when the model
+has a voiced band and to no mark otherwise, so the history holds what a decode leaves.
+
+**What it gives.** Measured with a local script on the scratch builds (the correlation of our decode
+with DVSI's, sample for sample over the whole file, and the residual energy over the signal's, means
+over the vectors), P25 decoding DVSI's bits:
+
+| P25 | Correlation | Residual | Vectors up / down |
+|---|---|---|---|
+| development, `cc272ef` | 0.9687 | 0.0633 | |
+| development, whole-frame form | 0.9848 | 0.0311 | 16 / 0 |
+| development, the rule | 0.9848 | 0.0309 | 20 / 0 (largest rise `lvl` +0.0879) |
+| validation, `cc272ef` | 0.9855 | 0.0289 | |
+| validation, the rule | 0.9896 | 0.0208 | 5 / 0 (`t04` +0.0122) |
+
+(The scoreboard, at its joint lags, gives 0.9849 for the rule on development: [November 2026:
+mid-frame voicing](#november-2026-mid-frame-voicing).) On the 1,863 onset frames where the rule and
+the whole-frame form differ, the rule is closer to DVSI's decode in 1,668, and the residual of those
+frames falls from 0.0928 to 0.0733 of their energy (their first half from 0.2262 to 0.1874); the
+250 Hz reach is closer in 143 of the 166 onset frames it changes. The library's decode equals the
+scratch build's with the rule on all 25 development and validation vectors (16-bit samples). What
+is left of P25's onsets is in [Known differences](#known-differences).
+
+### Rate 33: rows 13, 15 and 17
+
+TIA-102.BABA-1 Annex B gives each V/UV row one voicing, and the specification defines no mid-frame
+model, so a voicing of the first half of the frame is not in its text and this is not a departure
+from it. Annex B lists three rows with the pattern 1110 0000 (10, 13 and 15, column 0 first), three
+all voiced (0, 1 and 3) and rows 17 to 31 all unvoiced, like row 16. On DVSI's decoder rows 13, 15
+and 17 give each half of the frame its own voicing: the row's own pattern holds at the frame's end,
+and the first half voices row 13's columns 0 and 1, none for row 15 and column 0 for row 17. Before
+this change the library decoded each row's own pattern as printed, with two exceptions it had
+measured: row 15 marked `MBE_FRAME_MARK_LATE_ONSET`, which voiced no band at mid-frame after a frame
+with no voiced band ([Voiced onsets and offsets](#voiced-onsets-and-offsets)), and row 17 with
+column 0 voiced in the whole frame ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)).
+
+**Where the alignment was lost.** Rate 33's onsets were right (1,838 of 1,847 in line; [P25: the
+bands that start with the frame](#p25-the-bands-that-start-with-the-frame) for the labels). Its
+voiced runs under a correlation of 0.8 with DVSI's decode started in line and lost it abruptly at
+the same sequences of rows: row 14 then row 15 (`fambm22a` frames 2364 and 2561, `t02` 1095, `noisy`
+623), row 17 then row 13 or 15 (`t02` 1597, `damcar` 350), and rows 17, 14 and 13 (`fambf22c`
+1468).
+
+**Each row**, measured on the same vectors and builds of `cc272ef` with switches of the same kind (a
+mid-frame column mask per V/UV row, and the row's own columns; the masks go through the decoder's
+own rule, a harmonic voiced when its 500 Hz column or the one 250 Hz above it is voiced), on the
+row's loud frames. The residual is the energy of the difference from DVSI's decode over the
+signal's:
+
+- **Row 15**: no voiced band at mid-frame, whatever the frame before; its own voicing 1110 0000. On
+  its 1,619 loud frames the residual (first half / frame / frame after) is 0.2317 / 0.1253 / 0.0354
+  as the library decoded it at `cc272ef` and 0.2306 / 0.1242 / 0.0343 so; with column 0, or columns
+  0 and 1, voiced at mid-frame instead, 0.37 / 1.19 / 2.03 or worse. Whole files: development 0.9737
+  → 0.9782 (12 vectors up, 3 down, the largest fall 0.0005, the largest rise `fambm22a` +0.0401),
+  validation 0.9788 → 0.9833 (5 up). After a voiced frame the pulse train is not restarted: it runs
+  through the unvoiced mid-frame at the old pitch and on at the new one, as the library's train
+  already does when only one end of a subframe has a voiced band ([Synthesis in
+  subframes](#synthesis-in-subframes)). Holding the previous frame's whole model to mid-frame
+  instead is worse (development 0.9600).
+- **Row 13**: columns 0 and 1 voiced at mid-frame; its own voicing 1110 0000. On its 638 loud frames
+  the residual (first half / frame) is 0.0423 / 0.0352 as the library decoded it (columns 0 to 2 at
+  mid-frame), 0.0221 / 0.0195 with columns 0 and 1, 0.1427 / 0.1062 with column 0 only and 0.5925 /
+  0.4598 with none.
+- **Row 17**: column 0 voiced at mid-frame and no voiced band at the frame's end; its own voicing is
+  Annex B's. On its 115 loud frames the residual (first half / frame / frame after) is 0.0564 /
+  0.0703 / 0.6057 as the library decoded it (column 0 voiced in both halves), 0.0564 / 0.0635 /
+  0.1656 so, and 0.1055 / 0.1884 / 0.1656 with nothing voiced at all (Annex B's row played as row
+  16, which the library had measured worse than its own reading: [Rate 33: V/UV
+  vectors](#rate-33-vuv-vectors)); columns 0-1, 0-2, 0-3 or all voiced at mid-frame are a little
+  worse than column 0 (0.0593 to 0.0631 in the first half). A row-17 frame does not carry its pitch
+  into the next voiced frame's first half: with the mid-frame pitch between a row-17 frame and a
+  voiced frame taken as the geometric mean of the two instead of the voiced frame's, 18 development
+  vectors rise and 2 fall, against 19 and 1, with the same means.
+- **Rows 1 and 3**: nothing resolved. Row 1 (482 frames): first half 0.0330 as the library decodes
+  it, 0.0326 with its top column unvoiced at mid-frame, 0.0349 to 0.65 with fewer columns. Row 3
+  (416 frames): 0.0227 as the library decodes it, 0.0241 with its top column unvoiced at mid-frame.
+  With their own top column unvoiced instead, within 0.0004 either way. The library keeps Annex B's
+  rows.
+
+The three readings together are in the speech table of [November 2026: mid-frame
+voicing](#november-2026-mid-frame-voicing); with them the residual energy against DVSI's decode,
+mean over the vectors, falls from 0.0527 to 0.0388 of the signal on development and from 0.0423 to
+0.0331 on validation. D-STAR sends four voicing bits, one per 1 kHz band, and no row table, so it
+has nothing of the kind.
+
+**How the library carries it.** The rate-33 decoder (`ambe2450_decode_vuv()`) marks a voice frame of
+row 17 `MBE_FRAME_MARK_MID_COLUMN_0` (6.0f) and one of row 13 `MBE_FRAME_MARK_MID_COLUMNS_0_1`
+(7.0f); row 15 keeps `MBE_FRAME_MARK_LATE_ONSET`, which now means no band voiced at mid-frame,
+whatever the frame before (`starts_late()` in `src/core/mbe_subframe.c` no longer looks at the
+previous frame; P25 no longer uses the mark). The mid-frame model (`mbe_subframe_mid_model()`) takes
+each band's voicing from the row the mark names, through `mbe_ambe2450_harmonic_voiced()` at the
+mid-frame model's own pitch, whatever the two frames' voicing; a band with no state keeps none. The
+V/UV table's row 17 (`AmbeVuv[17]` in `src/internal/ambe3600x2450_const.h`) is all unvoiced again,
+as in Annex B, so the frame's `Vl` and the unvoiced amplitude scale follow it, and so does the
+public parameter decoder: `mbe_decodeAmbe2450Parms()` returns a row-17 frame with no voiced band and
+every amplitude at the unvoiced scale `0.2046 / sqrt(w0)`, where 2.6.7 to 2.6.12 (and this series up
+to `adecb29`) returned column 0 voiced. The frame's mark carries its mid-frame voicing, and only the
+codec process functions read it: the public `mbe_synthesizeSpeechf()` has no mid-frame model and
+plays such a model all unvoiced.
+
+A lost-frame repeat and the speech under a tone's first frame go through `ambe2450_load_repeat()`,
+which drops the marks of rows 13, 15 and 17: the mid-frame voicing belongs to a decoded frame,
+between the frame before it and its own model, and the repeated model plays its own voicing through.
+The fade-out of a mute already cleared the mark. A decoded frame under a mute (unheard) and the
+first frame from silence keep their row's mid-frame voicing; a row-17 frame from silence then voices
+column 0 at the kept model's pitch when the kept model was voiced. That is a design choice: no
+vector shows it. TIA-102.BABA-1 says nothing on either, as it knows no mid-frame model.
+
+The library's rate-33 encoder never sends rows 1, 3, 13, 15 or 17 (it searches rows 0 to 16, and
+ties keep the lower index), so its bits, and the decode of its own bit streams, do not change.
 
 ### Rate 33: mid-frame pitch
 
@@ -2468,7 +2747,7 @@ this change alone ([November 2026: encoders and rate-33 rows 18 to
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 | Unvoiced synthesis (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 117-126: the 11.2 noise generator, one 256-sample window per frame | a 16-bit generator, `x <- 173 x + 13849`, and 10 ms subframes under a square-root triangular window | DVSI ([Unvoiced synthesis](#unvoiced-synthesis)) |
 | Voiced synthesis (P25, rate 33) | eq 127-141: a frame in one piece; harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS`; the phase advances by `l 80 (w0(-1) + w0(0))` per frame, through unvoiced frames too | two 10 ms subframes around a mid-frame model, linear crossfades, a train of pitch pulses that starts afresh after an unvoiced subframe, harmonic phases regenerated from the decoded log2 amplitudes | DVSI ([Synthesis in subframes](#synthesis-in-subframes), [Phase regeneration](#phase-regeneration)) |
-| Where voicing starts and ends inside a frame (P25, rate 33) | the frame's V/UV decisions hold for the whole frame | the pitch code of a frame with no voiced band (P25), V/UV row 15 (rate 33) and how far up the voicing reaches (P25) move it to mid-frame | DVSI ([Voiced onsets and offsets](#voiced-onsets-and-offsets)) |
+| Where voicing starts and ends inside a frame (P25, rate 33) | the frame's V/UV decisions hold for the whole frame | the pitch code of a frame with no voiced band (P25) moves it to mid-frame; after a frame with no voiced band, a P25 frame starts only the voiced harmonics in or within 250 Hz below the 500 Hz columns its voicing covers with the frame, the others at mid-frame; V/UV rows 13, 15 and 17 (rate 33) voice the first half of the frame otherwise than their end | DVSI ([Voiced onsets and offsets](#voiced-onsets-and-offsets), [P25: the bands that start with the frame](#p25-the-bands-that-start-with-the-frame), [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)) |
 | Rate-33 tone frames | clause 7 gives the tone a frame carries, nothing on the frames around it | the tone crossfades with the speech over 80 samples at both ends | DVSI ([Rate 33 tone transitions](#rate-33-tone-transitions)) |
 | Rate-33 tone frequencies | 7.3: the tone synthesized from its decoded frequency parameters; Table 9: the nominal frequencies | harmonics l1 and l2 of Annex J's fundamental on a grid of 2^-19 cycle per sample (indices 145 and 147 at fundamentals of its own), a single tone as harmonic `ID / 16 + 1` of a fundamental under 500 Hz; DTMF within 0.48% of nominal, call progress within 3.41% | DVSI ([Tones as harmonics of a fundamental](#tones-as-harmonics-of-a-fundamental)) |
 | Rate-33 silence frames | 4.1 eq 2: L = 14; 4.3-4.4: amplitudes decoded as a voice frame's | 15 bands, amplitudes a further 13.8 dB down, the previous frame's model held to mid-frame | DVSI ([Rate 33 silence frames](#rate-33-silence-frames)) |
@@ -2476,7 +2755,7 @@ this change alone ([November 2026: encoders and rate-33 rows 18 to
 | Rate-33 tone ID 255 | 7.3 and Table 9: a tone of zero amplitude, whatever AD | a lost frame, as an unusable tone index | DVSI ([Rate 33 lost frames and tones](#rate-33-lost-frames-and-tones)) |
 | Rate-33 frame repeat after a tone | 7.3 with 5.6: the previous frame's decoded model; silent on a tone before it | the tone repeats at its level until the repeat limit's mute fades it out | DVSI ([Rate 33 lost frames and tones](#rate-33-lost-frames-and-tones)) |
 | Amplitude limit (P25, rate 33) | eqs 115-116 scale a frame whose amplitudes sum past 20480 (error-free) | no scaling | DVSI ([Amplitude limit](#amplitude-limit)) |
-| Rate-33 V/UV vectors | Annex B rows and eq 5's columns; rows 17-31 all unvoiced | each voiced column reaches 250 Hz into an unvoiced one below; row 17 voices its lowest column | DVSI ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
+| Rate-33 V/UV vectors | Annex B rows and eq 5's columns, one voicing per frame; rows 17-31 all unvoiced | each voiced column reaches 250 Hz into an unvoiced one below; each row's own voicing, at the frame's end, is Annex B's; rows 13, 15 and 17 voice the first half of the frame otherwise (row 13 columns 0 and 1, row 15 none, row 17 column 0) | DVSI ([Rate 33: V/UV vectors](#rate-33-vuv-vectors), [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)) |
 | Rate-33 V/UV rows 18-31 | Annex B: every band unvoiced, as row 16; 4.1 (Annex A): the fundamental of the frame's pitch code | a band grid whose L bands span 3.58 kHz, `w0 = 2.81 / L`, the pitch code setting only L; in one subframe (rows 24 and 25: in both) some 500 Hz columns play a signal not determined ([Known differences](#known-differences)) | the band grid ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)) |
 | Encoder pitch code of a frame with no voiced band | TIA-102.BABA-1 4.1 and TIA-102.BABA 6.1 (eq 45): the code of the frame's own estimated fundamental, for every voice frame | D-STAR and P25: never the tracked pitch (a default code or one of 56 codes kept for such frames); rate 33: b0 119 on 20.7% of its row-16 frames | one fixed code per codec: D-STAR b0 123, rate 33 b0 119, P25 b0 127, amplitudes measured on its grid ([Encoder pitch code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)) |
 | Encoder spectral vectors (D-STAR, rate 33) | TIA-102.BABA-1 4.3.1 and 4.3.2: each of b3..b8 the row closest to its own target (minimum mean-squared error) | appears to follow the text (its re-quantizations pick this library's nearest PRBA rows on 84-91% of frames) | the nearest rows, then the six refined together to lower the amplitude-weighted error of the residual the decoder reconstructs ([Joint choice of the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors)) |
@@ -2491,9 +2770,15 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
 
 - Soft-decision D-STAR streams are not muted on the error level, where DVSI mutes some of them
   (see above).
-- Rate-33 V/UV rows 1, 3, 13, 15 and 17: DVSI's decoder plays some of their columns between voiced
-  and unvoiced, a state the binary voicing of `mbe_parms` cannot hold; this library plays them
-  voiced, the nearer value.
+- Rate-33 V/UV rows 1 and 3: as measured for 2.6.7, DVSI's decoder plays some of their columns
+  between voiced and unvoiced; no reading tried resolves them, and the library plays Annex B's
+  rows ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17), where rows 13, 15 and 17, read so
+  before, turned out to voice each half of the frame apart).
+- Rate 33 inside voiced runs, with rows 13, 15 and 17 read as DVSI's decoder plays them. Two losses
+  of alignment with DVSI's waveform remain that nothing tried explains, both a row-17 frame followed
+  by a row-13 frame with a pitch step (`clean` frames 1416-1417, `t02` 1618-1619). Inside the runs
+  that stay in line the residual still grows with the run's length, from 0.0175 of the signal in
+  frames 0 to 3 to 0.0675 from frame 20 on (development); it is not explained.
 - Rate-33 V/UV rows 18 to 31 play here as unvoiced noise on their band grid
   ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)); DVSI's decoder plays more than that. DVSI's
   encoder sends rows 17 to 31 on 12.2% of the voice frames of the speech vectors (row 16 on 37.3%).
@@ -2594,27 +2879,20 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   gain of DVSI's decoder over the library's, by harmonic number, follows it in rate 33 up to l 29
   (-0.33 dB at l 25-29, against -0.31) and partly in D-STAR, not in P25, and a fit takes nothing off
   the 0.6 to 0.75 dB rms scatter. It is modelled for P25's tone frames only.
-- P25 voiced onsets that DVSI's decoder starts a subframe late and the library starts with the
-  frame ([Voiced onsets and offsets](#voiced-onsets-and-offsets)). Measured on the tone model
-  change's decode with
-  two test builds outside the repository, one that starts every onset late (no voiced band in the
-  mid-frame model after a frame with no voiced band) and one that starts none late, over the 1,940
-  onsets of P25 voiced runs on the 25 development and validation vectors (a voiced frame after a
-  frame with no voiced band, followed by two voiced frames, the two frames after the onset frame
-  together, 320 samples, with a standard deviation of at least 300 in DVSI's decode; a file's first
-  three and last four frames left out), each compared with DVSI's decode over the 400 samples from
-  the onset frame's mid-point: DVSI's decode follows the early start in 1,771 (correlation above 0.8
-  and more than 0.1 above the other build's), the late start in 72, both in 83 (both above 0.8,
-  neither more than 0.1 above the other) and neither in 14. Of the 72 late ones the library starts 43 late
-  (the frames voiced only below 505 Hz) and 29 early; those 29 are the open item. 1,898 onsets are in
-  line now (above 0.8), and 1,926 would be with the better start for each. In 28 of the 29 the
-  harmonic at or next above 505 Hz is unvoiced, as in all 43 the library starts late, but so it is
-  in 42 onsets that DVSI's decoder starts early; a rule is under study, and none is adopted here.
+- P25 onsets the column rule does not fit ([P25: the bands that start with the
+  frame](#p25-the-bands-that-start-with-the-frame)): the five onsets of the development and
+  validation vectors that its whole-frame form does not explain (three that DVSI's decoder starts
+  early with no column covered, two it starts late with a column covered), the 14 onsets that
+  neither start fits, and on the development vectors three runs of `noisy` that neither start fits
+  (frames 2795, 4 samples off; 2620, 19 samples; 1944) and `dam40` frame 758 (every frame at a
+  correlation of 1.0, one frame's level).
 - A single band whose voicing changes between two frames, on a DVMEGA DVstick 30
   ([#157](https://github.com/arancormonk/mbelib-neo/issues/157)): a band above 1 kHz that turns
   voiced starts with the frame and one that turns unvoiced lasts to mid-frame, and the lowest band
-  does the opposite on both. The mid-frame model here takes the current frame's voicing for every
-  band ([Synthesis in subframes](#synthesis-in-subframes)).
+  does the opposite on both. The mid-frame model of a D-STAR frame here takes the current frame's
+  voicing for every band ([Synthesis in subframes](#synthesis-in-subframes)); the column rule of
+  [P25: the bands that start with the frame](#p25-the-bands-that-start-with-the-frame) is P25's
+  own.
 - Encoder: pauses keep their level, where DVSI's encoders suppress background noise
   ([Encoder voicing over background noise](#encoder-voicing-over-background-noise)). In the
   quietest quarter of each speech vector's frames, our rate-33 encoding decoded, as measured for
@@ -2656,8 +2934,13 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   The means over the vectors of each vector's own ratio are 0.0317, 0.0664 and 0.0561 ([November
   2026: phase regeneration and pitch](#november-2026-phase-regeneration-and-pitch)), and with the
   tone model change 0.0191, 0.0633 and 0.0527 ([November 2026: tones and the octave
-  step](#november-2026-tones-and-the-octave-step)); the pooled figures and their parts below were
-  measured for PR #196's decoder changes, before the tone model change. Of it:
+  step](#november-2026-tones-and-the-octave-step)), and with the mid-frame voicing change 0.0191
+  (D-STAR's decode does not change), 0.0309 and 0.0388 ([P25: the bands that start with the
+  frame](#p25-the-bands-that-start-with-the-frame), [Rate 33: rows 13, 15 and
+  17](#rate-33-rows-13-15-and-17)). The pooled figures and their parts below were measured for
+  PR #196's decoder changes, before the tone model change; an accounting by kind of frame measured
+  before and with the mid-frame voicing change is in [November 2026: mid-frame
+  voicing](#november-2026-mid-frame-voicing). Of it:
   - Voiced runs that line up with DVSI's (run correlation 0.8 or more) hold 0.018, 0.021 and 0.033.
     P25's no longer grow with the run's length (0.019 to 0.028 over frames 0 to 3, 4 to 7 and so
     on); D-STAR's are 0.016 to 0.018 over a run's first twenty frames and 0.037 past them; rate 33's
@@ -2681,14 +2964,19 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
     (D-STAR 0.2%, P25 0.3%; frames whose two frames before correlate 0.9 or more and whose two
     frames after fall under 0.8), more often across large pitch steps (over 20%: 6 of 65 in rate
     33). Of the frames at the largest steps, a frame-to-frame pitch ratio of 0.30 to 0.42 (three in
-    rate 33, one in D-STAR), all four come back in line with the octave step ([The pulse
-    train across an octave](#the-pulse-train-across-an-octave)). What moves the pulse train at the
-    others, as what sets rate 33's mid-frame pitch ([Rate 33: mid-frame
+    rate 33, one in D-STAR), all four come back in line with the octave step ([The pulse train
+    across an octave](#the-pulse-train-across-an-octave)). Rate 33's runs under 0.8 lost the
+    alignment at sequences of V/UV rows (row 14 then row 15, row 17 then row 13 or 15), which the
+    mid-frame voicing change reads as DVSI's decoder plays them ([Rate 33: rows 13, 15 and
+    17](#rate-33-rows-13-15-and-17)); the 0.6% was measured before. What moves the pulse train at
+    the others, as what sets rate 33's mid-frame pitch ([Rate 33: mid-frame
     pitch](#rate-33-mid-frame-pitch)), is not known.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2
   searches 0-16 and keeps the lowest index on ties, and this library's encoder never sends them.
-  Rows 18-31 decode all unvoiced here, as row 16 does, but on their band grid; row 17 voices its
-  lowest column ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)).
+  Rows 18-31 decode all unvoiced here, as row 16 does, but on their band grid ([Rate 33: V/UV
+  vectors](#rate-33-vuv-vectors)); row 17 decodes all unvoiced, as Annex B lists it, with its lowest
+  column voiced in the frame's first half ([Rate 33: rows 13, 15 and
+  17](#rate-33-rows-13-15-and-17)).
 - Rate-33 silence frames play on 15 bands on the strength of the published AMBE-3000R measurements;
   DVSI's vectors do not tell 14 bands from 15. A run of consecutive silence frames is not verified,
   since DVSI's vectors hold none ([Rate 33 silence frames](#rate-33-silence-frames)).
@@ -3411,6 +3699,118 @@ there (rate 33's two decodes are unchanged, P25's correlation by at most 1.7e-06
 nothing for or against the change set in those two codecs; every `mark` figure is the same at four
 decimals.
 
+### November 2026: mid-frame voicing
+
+The tone model change's code against the two decoder changes of the mid-frame voicing change set
+(branch `fix/mid-frame-voicing`, from `6acba79`):
+
+- [P25: the bands that start with the frame](#p25-the-bands-that-start-with-the-frame): after a
+  frame with no voiced band, a P25 (and ProVoice) frame sounds at mid-frame only the voiced
+  harmonics in, or within 250 Hz below, a 500 Hz column its voicing covers.
+- [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17): these V/UV rows voice the first half
+  of the frame otherwise than its end, and row 17's own voicing is Annex B's, all unvoiced.
+
+The change set was written on `cc272ef`, the tone model change before its review's fixes, and the
+gate sets name `cc272ef`, the branch point when they were declared, as the baseline. The run
+reported here was made after the change set was moved onto the tone branch's final code: `c2ba220`
+against the change set on it. The two baselines decode alike: all 255 decode hashes and 75
+encoder-row hashes of `c2ba220` equal `cc272ef`'s, and every partition mean and vector hash of this
+run equals the run made before the move. Both builds aligned freely first and were
+then scored at their joint lags, both runs' encodings decoded by the candidate's decoder. The study
+that found these rules read the development and validation vectors and DVSI's tone vectors, never
+`irstia` or `mark`; the change set was measured and gated on the development, validation, tone and
+channel partitions, and the final partition is held out, to be scored once, after the review
+([Method](#method); below).
+
+**Speech**, decoding DVSI's bits: the waveform correlation with DVSI's decode, sample for sample
+(`vs_dvsi.waveform_corr_unshifted`), partition means with the mean paired change and its 95%
+interval, the change in log-spectral distance from DVSI's decode (`vs_dvsi.lsd_db`), and the vectors
+whose correlation rises and falls:
+
+| Codec | Partition | Waveform corr. vs DVSI | LSD vs DVSI (dB) | Vectors up / down |
+|---|---|---|---|---|
+| P25 | development | 0.9687 → 0.9849 (+0.0161, 95% interval 0.0088 to 0.0192) | -0.035 | 20 / 0 (largest rise `lvl` +0.088) |
+| P25 | validation | 0.9855 → 0.9896 (+0.0041, interval 0.00004 to 0.0091) | -0.023 | 5 / 0 |
+| Rate 33 | development | 0.9737 → 0.9806 (+0.0069, interval 0.0041 to 0.0112) | -0.023 | 19 / 1 (`ucarm20a` -0.0006; largest rise `fambm22a` +0.040) |
+| Rate 33 | validation | 0.9788 → 0.9834 (+0.0046) | -0.026 | 5 / 0 |
+
+The envelope correlation with DVSI's decode and the distance from the input improve slightly
+everywhere, and the level against DVSI's moves by under 0.0006 dB on any vector. D-STAR's decodes
+are identical, and every encoder's bits are unchanged in all three modes.
+
+**Where the residual sits**, on the development vectors: the energy of the difference between our
+decode and DVSI's over the signal's, by kind of frame (an accounting of its own, not the mean over
+the vectors of each vector's ratio, which [P25: the bands that start with the
+frame](#p25-the-bands-that-start-with-the-frame) and [Rate 33: rows 13, 15 and
+17](#rate-33-rows-13-15-and-17) give), at `cc272ef` and with the change (the scratch builds, whose
+decodes the library's equal):
+
+| Codec | Build | Residual | Voiced runs in line | Voiced runs under a correlation of 0.8 | Frames with no voiced band |
+|---|---|---|---|---|---|
+| D-STAR | `cc272ef` and with the change | 0.0204 | 0.0172 | 0.0008 | 0.0024 |
+| P25 | `cc272ef` | 0.0647 | 0.0211 | 0.0407 (82 of 1,959 runs) | 0.0029 |
+| P25 | with the change | 0.0333 | 0.0212 | 0.0094 (38 runs) | 0.0027 |
+| Rate 33 | `cc272ef` | 0.0603 | 0.0331 | 0.0246 | 0.0025 |
+| Rate 33 | with the change | 0.0449 | 0.0332 | 0.0091 (25 runs) | 0.0025 |
+
+The run counts are the accounting's own. On the validation vectors P25's residual with the change is
+0.0206 (0.0156 + 0.0024 + 0.0027). In both P25 and rate 33 the voiced runs in line hold about what
+they held before, and the runs out of line give up most of theirs.
+
+**Tones.** The decodes of 9 P25 tone vectors and 1 rate-33 tone vector change, and every tone
+metric's paired change is exactly 0. Frame for frame against DVSI's decode, as measured in [November
+2026: tones and the octave step](#november-2026-tones-and-the-octave-step), the steady tone frames'
+median correlation stays at 0.9997 (rate 33) and 0.9862 (P25) and the first tone frames' median
+residual at -31.6 and -13.0 dB (a P25 tone frame keeps its own model at mid-frame: [P25: the bands
+that start with the frame](#p25-the-bands-that-start-with-the-frame)).
+
+**Channel errors.** No mute decision changes at any error rate, hard or soft. On the loud frames
+neither decoder mutes, the log-spectral distance from DVSI's decode changes, means over the error
+rates, by +0.005 dB for P25 with hard decisions (worst vector `dam_e2_hd`, +0.034) and -0.011 with
+soft ones, and by -0.018 dB (hard) and -0.011 dB (soft) for rate 33.
+
+**PESQ** ([Method](#method)) of the decode of DVSI's bits on the 25 development and validation
+vectors (mean paired change ± standard error clustered by recording):
+
+| Codec | Against the input | Against DVSI's decode |
+|---|---|---|
+| P25 | 3.033 → 3.035, +0.0017 ± 0.0010 (16 of 25 vectors better; DVSI's own decode 3.026) | 4.274 → 4.278, +0.0033 ± 0.0007 (23 of 25) |
+| Rate 33 | 2.953 → 2.956, +0.0023 ± 0.0013 (19 of 25; DVSI's own decode 2.980) | 4.238 → 4.244, +0.0052 ± 0.0009 (24 of 25) |
+
+**Cost.** No measurable cost: every codec's median complete frame decode moves by -1.3% to +0.3%,
+`cc272ef` against the change set on it, measured on a busy machine (load 1.5 to 2.5;
+[benchmarks](testing.md#mid-frame-voicing)).
+
+**Gate sets**, declared in the change set's first commit, `6acba79`, before any build was scored,
+and evaluated in one run over the development, validation, tone and channel partitions, `c2ba220`
+against the change set:
+
+| Gate set | Result |
+|---|---|
+| `mid-voicing-development` | passes every check |
+| `mid-voicing-validation` | passes every check |
+| `mid-voicing-tones` | passes every check |
+| `mid-voicing-channel` | passes every check |
+| `mid-voicing-final` | declared; not yet scored (below) |
+
+Notes on the declarations. A check that the mean rises by at least a value is the scoreboard's
+`increase` rule, which also requires the 95% interval above 0, stricter than a rise of the mean
+alone; the sets' descriptions say so. In the tones set, `cp1`, `cpvbad` and `dtmfvbad` (and `alert`,
+a single tone, for the balance) have no steady tone window in DVSI's decode, so neither run measures
+those metrics there; the set's description records it, from the baseline's own scoreboard, before
+scoring. That no mute decision changes is expressed as zero change, on every vector, of the mute
+agreement, the mute rate and the false and missed mute rates, hard and soft. The sets' descriptions
+name `cc272ef` as the baseline (above).
+
+**The final partition.** The gate set `mid-voicing-final` was declared with the others in `6acba79`,
+before any build was scored: on `irstia` and `mark`, D-STAR's decode of DVSI's bits unchanged, every
+encoder's bits unchanged, and for P25 and rate 33 the waveform correlation with DVSI's decode
+falling by no more than 0.0005 on the mean and 0.002 on any vector, the distance from DVSI's decode
+rising by no more than 0.01 dB on the mean and 0.03 dB on any vector, the envelope correlation
+falling by no more than 0.001, the distance from the input rising by no more than 0.01 dB, and the
+level against DVSI's moving by at most 0.05 dB. The final partition will be scored once for this
+change set, after its review; it has not been scored.
+
 ### Scoring history
 
 The final partition was scored twice, with the library unchanged in between. The first scoring fixed
@@ -3492,3 +3892,12 @@ The final partition was scored once for the tone model change, on 2026-11-26, af
 `fac0111` against
 `c2ba220`, the reviewed code, against `tone-model-final`, declared in `c736edf`. It passes all 24
 checks ([November 2026: tones and the octave step](#november-2026-tones-and-the-octave-step)).
+
+The two decoder changes of the mid-frame voicing change set were scored together, on the
+development, validation, tone and channel partitions in one combined run with the four gate sets
+declared in `6acba79`, before any build of the change set was scored: first `cc272ef` against the
+change set on it, then, after the change set was moved onto the tone branch's final code, `c2ba220`
+against it, with the same partition means and vector hashes; all four pass both times ([November
+2026: mid-frame voicing](#november-2026-mid-frame-voicing)). The final partition has not been
+scored for the mid-frame voicing change; it is to be scored once, after the review, against
+`mid-voicing-final`, declared in `6acba79`.
