@@ -1439,6 +1439,13 @@ if(MBELIB_BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/include"
             "${PROJECT_SOURCE_DIR}/src/internal"
     )
+    # The P25 pitch law is compared bit for bit in an IEEE build only.
+    if(MBELIB_ENABLE_FAST_MATH)
+        target_compile_definitions(
+            test_params
+            PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
+        )
+    endif()
     if(_SAN_CFLAGS)
         target_compile_options(test_params PRIVATE ${_SAN_CFLAGS})
     endif()

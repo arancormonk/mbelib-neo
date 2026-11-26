@@ -101,10 +101,12 @@ enum imbe_pitch {
  *   g = C0 + C1 cos(t) + S1 sin(t) + C2 cos(2t) + S2 sin(2t),
  * from about -7.1e-4 to +3.4e-4 over b0 0..207. Measured from the drift of
  * DVSI's pulse train against ours at one pitch code (the phase advance per
- * frame of each voiced harmonic, 69 pitch codes from DVSI's speech and
- * synthetic pulse-train vectors; the fit leaves 0.006% rms). In double with
- * the double-precision functions, so that the pitch does not move with a
- * libm's single-precision ones; no state.
+ * frame of each voiced harmonic) on DVSI's speech and synthetic pulse-train
+ * vectors: fitted on 69 rows of one pitch code and corpus with five frame
+ * pairs or more (50 pulse-train, 19 speech; 5,401 pairs on 61 pitch codes),
+ * each row weighing at most 40 pairs; the fit leaves 0.0064% rms with those
+ * weights. In double with the double-precision functions, so that the pitch
+ * does not move with a libm's single-precision ones; no state.
  */
 static double
 imbe_dvsi_pitch_offset(int b0) {
@@ -116,13 +118,17 @@ imbe_dvsi_pitch_offset(int b0) {
 /*
  * b0 and the fundamental, harmonic count and band count it gives (TIA-102.BABA
  * eqs 46-48). The nominal pitch of eq 46 is computed in float, as this decoder
- * always has (4 pi rounded to float, divided by b0 + 39.5 in float), and L and
- * K, and with them the bit layout, follow it for every pitch code. The pitch
- * stored for synthesis is the one DVSI's P25 decoder plays: that float times
- * 1 + g (imbe_dvsi_pitch_offset(), -7.06e-4 to +3.38e-4), the product formed
- * in double and rounded to float once. That is not the law evaluated wholly
- * in double and rounded once: the nominal float's own rounding stays in it
- * (the two differ by an ulp at 79 of the 208 codes), as it stays in L and K.
+ * always has (4 pi rounded to float, divided by b0 + 39.5 in float, the
+ * quotient rounded to float also where the arithmetic keeps excess
+ * precision), and L and K, and with them the bit layout, follow it for every
+ * pitch code. The pitch stored for synthesis is the one DVSI's P25 decoder
+ * plays on speech: that float times 1 + g (imbe_dvsi_pitch_offset(), -7.06e-4
+ * to +3.38e-4), the product formed in double and rounded to float once (a
+ * tone its encoder sent as voice frames DVSI's decoder plays at eq 46's
+ * harmonic frequencies, which is not modelled). That is not the law
+ * evaluated wholly in double and rounded once: the nominal float's own
+ * rounding stays in it (the two differ by an ulp at 79 of the 208 codes), as
+ * it stays in L and K.
  * ProVoice (IMBE 7100x4400), which reaches this decoder converted to the 7200
  * layout, has no DVSI reference and keeps the nominal pitch (`pitch`).
  *
@@ -153,9 +159,13 @@ imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cu
         return 1;
     }
 
-    cur_mp->w0 = ((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    /* Rounded to float here, where the contract names it: under x87 excess
+     * precision the quotient could otherwise reach the correction below
+     * unrounded (mbe_round_to_float(), mbe_math.h). */
+    const float nominal = mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    cur_mp->w0 = nominal;
 
-    int L = (int)(0.9254 * (int)((M_PI / cur_mp->w0) + 0.25));
+    int L = (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
     if ((L > 56) || (L < 9)) {
 #ifdef IMBE_DEBUG
         fprintf(stderr, "invalid L: %i\n", L);
@@ -172,7 +182,7 @@ imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cu
     }
     if (pitch == IMBE_PITCH_DVSI) {
         /* The nominal float, widened, times 1 + g; one rounding to float. */
-        cur_mp->w0 = (float)((double)cur_mp->w0 * (1.0 + imbe_dvsi_pitch_offset(b0)));
+        cur_mp->w0 = (float)((double)nominal * (1.0 + imbe_dvsi_pitch_offset(b0)));
     }
 
 #ifdef IMBE_DEBUG

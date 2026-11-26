@@ -21,6 +21,7 @@
 #include "ambe3600x2450_const.h"
 #include "ambe3600x2450_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_math.h"
 #include "mbe_subframe.h"
 #include "mbe_tone.h"
 #include "mbe_unvoiced_fft.h"
@@ -985,7 +986,8 @@ test_ambe2450_pitch_law(void) {
  * computes it (in float), and the harmonic and band counts it gives (eqs 47-48). */
 static float
 imbe_nominal_w0(int b0) {
-    return (float)(4 * M_PI) / (float)((float)b0 + 39.5);
+    /* Rounded to float, also under x87 excess precision. */
+    return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
 }
 
 /* The relative offset of the pitch DVSI's P25 decoder plays for b0, in double:
@@ -1002,6 +1004,33 @@ static int
 within_ulps(float a, double b, double ulps) {
     const double ulp = (double)nextafterf((float)b, INFINITY) - (double)(float)b;
     return fabs((double)a - b) <= ulps * ulp;
+}
+
+/* x rounded to double, also under x87 excess precision. */
+static double
+round_to_double(double x) {
+    volatile double rounded = x;
+    return rounded;
+}
+
+/* Whether the library is built with fast-math (CMake defines
+ * MBELIB_TEST_LIBRARY_FAST_MATH): it may then evaluate an expression otherwise
+ * than this test does. */
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define LIBRARY_FAST_MATH 1
+#else
+#define LIBRARY_FAST_MATH 0
+#endif
+
+/* Whether the stored pitch is `want`: bit for bit, or within an ulp where
+ * `tolerant` (the build mode is passed in, not tested around the only use of
+ * a value). */
+static int
+pitch_matches(float stored, float want, int tolerant) {
+    uint32_t a, b;
+    memcpy(&a, &stored, sizeof(a));
+    memcpy(&b, &want, sizeof(b));
+    return (a == b) || (tolerant && within_ulps(stored, (double)want, 1.0));
 }
 
 /* P25 plays every pitch code at DVSI's pitch: the nominal one times 1 + g,
@@ -1026,13 +1055,19 @@ test_imbe_pitch_law(void) {
         low = (g < low) ? g : low;
         high = (g > high) ? g : high;
         /* What the decoder stores: eq 46's nominal pitch as it computes it in
-         * float, times 1 + g in double, rounded to float once (within an ulp:
-         * a fast-math build may evaluate the library's expression otherwise
-         * than this test). Looser, against the law evaluated wholly in double
-         * (4 pi / (b0 + 39.5) times 1 + g) and rounded once: the nominal
-         * float's own rounding stays in the stored pitch, at most 1.21 ulps
-         * from that over the codes (b0 77), within 1.5. */
-        assert(within_ulps(cur.w0, (double)nominal * (1.0 + g), 1.0));
+         * float, times 1 + g in double, rounded to float once. Bit for bit
+         * where the library's arithmetic is IEEE (the x87 build included,
+         * which rounds the nominal pitch to float before the correction; g
+         * comes from the same libm here as in the library); within an ulp
+         * when it is built with fast-math, which may evaluate the library's
+         * expression otherwise than this test. Looser, against the law
+         * evaluated wholly in double (4 pi / (b0 + 39.5) times 1 + g), not
+         * rounded: the nominal float's own rounding stays in the stored
+         * pitch, at most 1.21 ulps from that over the codes (b0 77), within
+         * 1.5. (Rounded once to float, that law differs from the stored pitch
+         * by an ulp at 79 codes.) */
+        const float want = mbe_round_to_float((float)round_to_double((double)nominal * (1.0 + g)));
+        assert(pitch_matches(cur.w0, want, LIBRARY_FAST_MATH));
         assert(within_ulps(cur.w0, (4.0 * M_PI / ((double)b0 + 39.5)) * (1.0 + g), 1.5));
         assert(cur.L == L && cur.K == K);
 
@@ -1047,9 +1082,8 @@ test_imbe_pitch_law(void) {
             const int processed = mbe_processImbe4400Dataf(out, &result, imbe_d, &pcur, &pprev, &penh);
             assert(processed >= 0 && (result.flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
             (void)processed;
-            /* Within an ulp, not bit for bit: a fast-math build may compute
-             * the library's expressions differently from the test's. */
-            assert(within_ulps(pprev.w0, provoice ? (double)nominal : (double)cur.w0, 1.0));
+            /* Bit for bit, or within an ulp in a fast-math build. */
+            assert(pitch_matches(pprev.w0, provoice ? nominal : cur.w0, LIBRARY_FAST_MATH));
             assert(pprev.L == L && pprev.K == K);
             /* Where g is more than a few ulps, the two pitches differ. */
             assert(provoice || fabs(g) < 1.0e-6 || !within_ulps(pprev.w0, (double)nominal, 2.0));
