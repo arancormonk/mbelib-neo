@@ -1894,8 +1894,10 @@ test_untrusted_unvoiced_overlap(void) {
  * minus FLT_MAX). The last overlap slot holds 7 (-1 there is the subframe
  * rendering's mark, which clears the overlap). The head is copied as
  * memmove() copies, so a buffer that overlaps the overlap plays what the
- * copy gave before the guard: the same buffer and overlap as from separate
- * buffers.
+ * copy gave before the guard. With the overlap at s and the buffer at s + 1,
+ * the new overlap, written last, replaces buffer[0..94]; what survives of
+ * the buffer (buffer[95] on), the new overlap and the seed are those of the
+ * same call on separate buffers.
  */
 static void
 test_noise_overlap_guard(void) {

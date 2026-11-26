@@ -1007,6 +1007,31 @@ at_mute_noise_level(const float* pcm) {
     return 1;
 }
 
+/* Whether a frame is digital silence: every sample +0 or -0, by its bits. */
+static int
+is_silent(const float* pcm) {
+    for (int n = 0; n < 160; ++n) {
+        uint32_t bits;
+        memcpy(&bits, &pcm[n], sizeof(bits));
+        if ((bits & 0x7FFFFFFFu) != 0u) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A repeat after the repeat limit's mute with one state as with three: the
+ * same samples, by their bits (both are the library's own output), and the
+ * mute noise, not silence, which the level bound alone would accept. */
+static void
+assert_same_mute_noise(const float* one_state, const float* three_states, const char* what) {
+    assert_same_pcm(one_state, three_states, 160, what);
+    if (is_silent(three_states)) {
+        printf("%s: silence where the mute noise plays\n", what);
+        assert(0);
+    }
+}
+
 /* The prediction history two runs leave after a frame: log2Ml and w0 by their
  * bits, L, and every Vl (element 0 holds the held history's count). */
 static void
@@ -1038,7 +1063,8 @@ assert_same_history(const mbe_parms* a, const mbe_parms* b, const char* seq, siz
  * predicts from another history than the copy's), so each repeat renders the
  * repeated model with its own log2Ml. Every repeat after the repeat limit's
  * mute, until a voice or tone frame, plays the mute noise alone, in both
- * arrangements and both copies. And the history committed to prev_mp after
+ * arrangements and both copies, and with one state the samples three states
+ * play there (not silence). And the history committed to prev_mp after
  * each frame (log2Ml, L, w0 and the voicing) is the same with one state as
  * with three, in these sequences, none of which has channel errors: with
  * errors the voicing and amplitudes a tone's first frame commits can differ
@@ -1082,6 +1108,17 @@ test_one_state_held_history(void) {
                                one_state ? "one state" : "three states");
                         assert(0);
                     }
+                }
+            }
+        }
+        /* And there one state plays the three states' mute noise. */
+        for (int held_as_lost = 0; held_as_lost < 2; ++held_as_lost) {
+            const struct held_run* three = &runs[0][held_as_lost];
+            for (size_t f = 1; f < n; ++f) {
+                if (three->prev[f - 1].repeatCount >= MBE_MAX_FRAME_REPEATS && (seq[f] == 'L' || seq[f] == 'U')) {
+                    char what[64];
+                    snprintf(what, sizeof(what), "%s frame %zu, %s", seq, f, held_as_lost ? "held as lost" : "held");
+                    assert_same_mute_noise(runs[1][held_as_lost].pcm[f], three->pcm[f], what);
                 }
             }
         }
@@ -1290,12 +1327,15 @@ test_repeat_limit_mute(void) {
  * The repeats after the repeat limit's mute play the mute noise alone, with
  * one state as cur_mp and prev_mp_enhanced as with three: with one state each
  * repeat loaded the repeated model over the silent last frame the mute left,
- * and the mute faded that speech out again on every frame. The 4th repeat
- * still fades the last frame out. The state left as the last frame carries the
- * repeat count at the limit in both arrangements.
+ * and the mute faded that speech out again on every frame. Those repeats play
+ * with one state the samples they play with three, which are the mute noise,
+ * not silence. The 4th repeat still fades the last frame out. The state left
+ * as the last frame carries the repeat count at the limit in both
+ * arrangements.
  */
 static void
 test_repeat_limit_mute_holds(void) {
+    static float pcm[2][7][160]; /* [one state][frame] */
     char voice[49], lost[49];
     memset(voice, 0, sizeof(voice));
     memset(lost, 0, sizeof(lost));
@@ -1310,7 +1350,7 @@ test_repeat_limit_mute_holds(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int f = 0; f < 7; ++f) {
             mbe_process_result r;
-            float out[160];
+            float* out = pcm[one_state][f];
             make_result(&r, 0);
             const int ret = mbe_processAmbe2400Dataf(out, &r, (f == 0) ? voice : lost, &cur, &prev, last);
             assert(ret == 0);
@@ -1329,6 +1369,11 @@ test_repeat_limit_mute_holds(void) {
                 assert(last->repeatCount == MBE_MAX_FRAME_REPEATS);
             }
         }
+    }
+    for (int f = 5; f < 7; ++f) {
+        char what[64];
+        snprintf(what, sizeof(what), "lost frame %d after the repeat limit, one state", f);
+        assert_same_mute_noise(pcm[1][f], pcm[0][f], what);
     }
     puts("repeat limit: the repeats after it stay at the mute noise, with one state as with three");
 }
