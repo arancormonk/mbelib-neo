@@ -1195,8 +1195,9 @@ ambe2450_process_valid(float* aout_buf, mbe_process_result* result, int silence,
  * samples of the frame after it, fading out on top of that frame's output
  * (or of a mute's noise). TIA-102.BABA-1 does not say how a tone frame joins
  * the frames around it. Its phases are the tone state cur_mp carries; a
- * tone's first frame sets them as DVSI's decoder starts a tone, and its
- * frequencies are the harmonics DVSI's decoder plays (mbe_tone_played_steps()).
+ * tone's first frame sets them as DVSI's decoder starts a tone after a frame
+ * with no voiced band (mbe_startToneAmbe2450()), and its frequencies are the
+ * harmonics DVSI's decoder plays (mbe_tone_played_steps()).
  */
 
 /* Gain of the incoming signal at sample n of a transition frame. */
@@ -1256,8 +1257,10 @@ ambe2450_process_tone(float* aout_buf, mbe_process_result* result, const char am
         /* A tone's first frame fades in over the repeat (or silence): the
          * tone is rendered unlimited and the whole frame limited after the
          * crossfade, so that its samples past the fade are the limited tone.
-         * It starts as DVSI's decoder starts a tone after a frame that was
-         * not one, as a fresh pulse train (mbe_startToneAmbe2450()). */
+         * It starts as a fresh pulse train (mbe_startToneAmbe2450()), as
+         * DVSI's decoder starts a tone after a frame with no voiced band; after
+         * a voiced frame DVSI's decoder continues that frame's train into the
+         * tone, which is not modelled. */
         mbe_startToneAmbe2450(cur_mp, ambe2450_read_tone_id(ambe_d));
         mbe_renderToneAmbe2450f(aout_buf, cur_mp, ambe2450_read_tone_id(ambe_d), ambe2450_read_tone_ad(ambe_d),
                                 MBE_OUTPUT_UNLIMITED);

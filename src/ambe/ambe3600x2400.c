@@ -1107,9 +1107,11 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
     if (entering && ambe2400_last_frame_audible(prev_mp)) {
         ambe2400_speech_under_tone(speech, amp, cur_mp, prev_mp, prev_mp_enhanced);
     }
-    /* A tone after a frame that was not one starts as DVSI's decoder starts
-     * it, as a fresh pulse train (mbe_startToneDstar()); a tone after a tone
-     * goes on from the phases it left. */
+    /* A tone after a frame that was not one starts as a fresh pulse train
+     * (mbe_startToneDstar()), as DVSI's decoder starts one after a frame with no
+     * voiced band; after a voiced frame DVSI's decoder continues that frame's
+     * train into the tone, which is not modelled. A tone after a tone goes on
+     * from the phases it left. */
     if (entering) {
         mbe_startToneDstar(cur_mp, index);
     }

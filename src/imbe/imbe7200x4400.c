@@ -139,8 +139,8 @@ imbe_harmonic_count(float nominal) {
  * pitch code. The pitch stored for synthesis is a fit to the one DVSI's P25
  * decoder plays on speech: that float times 1 + g (imbe_dvsi_pitch_offset(),
  * -7.06e-4 to +3.38e-4), the product formed in double and rounded to float
- * once (a tone its encoder sent as voice frames DVSI's decoder plays at eq
- * 46's harmonic frequencies, which is not modelled). That is not the law
+ * once (a tone its encoder sent as voice frames DVSI's decoder plays at another
+ * pitch, eq 46's fundamental cut to a 2^-19 grid: imbe4400_play_tone()). That is not the law
  * evaluated wholly in double and rounded once: the nominal float's own
  * rounding stays in it (the two differ by an ulp at 79 of the 208 codes), as
  * it stays in L and K.
@@ -644,16 +644,26 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
  * P25 tones sent as voice frames. P25 has no tone frames: DVSI's encoder
  * sends a tone it detects as voice frames built from TIA-102.BABA-1 Annex J
  * (the pitch code b0 = floor(4 pi / w0 - 39) of the tone's fundamental, the
- * tone's harmonics l1 and l2 large, and one voicing word b1 per tone), and
+ * tone's harmonics l1 and l2 large, and one voicing word b1 per tone, the same
+ * in every steady frame of the tone), and
  * DVSI's decoder recognises such a frame and plays a tone model in place of
  * its decoded harmonics, as US 7,970,606 describes (a frame whose fundamental
  * is a table entry's, whose tone harmonics are voiced and dominate the other
  * magnitudes, is a tone frame). The rows: the distinct (b0, b1, l1, l2) of the
  * DTMF (128..143), KNOX (144..159) and single tones (5..122) as DVSI's encoder
  * sends them, b1 the K band voicing bits as transmitted, band 1 the most
- * significant (the pitch code and harmonics follow Annex J; the voicing word,
- * which is not the bands of l1 and l2 under the decoder's band mapping, was
- * read from DVSI's bit streams of its tone vectors). Single tones on one code
+ * significant. The harmonics are Annex J's (a single tone's l1 = l2 is Annex
+ * J's harmonic number: 1 for IDs 5..12, 2 for 13..25, 3 for 26..38, and one
+ * more for each 13 IDs up to 10 for 116..122; not the ID / 16 + 1 by which the
+ * rate-33 and D-STAR decoders play a single tone, mbe_tone.h). The pitch code
+ * is that of the fundamental Annex J gives: a dual tone's printed f0 (DVSI's
+ * own 150.80 and 86.47 Hz for 145 and 147, mbe_tone.h), and for a single tone
+ * the quotient 31.25 ID / l, which Annex J prints rounded (10.417 ID for
+ * 26..38, 5.2803 ID for 65..76; built from the printed values, the codes of
+ * IDs 32, 65, 66, 68, 69, 71, 73, 74 and 76 would come out otherwise). So
+ * built, the codes equal those in DVSI's bit streams for all 154 tones. The
+ * voicing word, which is not the bands of l1 and l2 under the decoder's band
+ * mapping, was read from DVSI's bit streams of its tone vectors. Single tones on one code
  * and word share a row's pair at several harmonics (b0 17, 1000: l 1, 2 and
  * 3). Left out: three single tones whose harmonic lies past the frame's L
  * (120..122 at b0 2 and 3, harmonic 10 of 9), and the call-progress tones
@@ -742,10 +752,13 @@ mbe_imbe4400_tone_first_row(int b0) {
  * speech vectors whose (b0, b1) is a dual tone's start at 0.482. */
 #define IMBE_TONE_SHARE_DUAL   0.375
 /* For a single tone, whose pairs also hold speech frames of high voices with a
- * dominant fundamental: DVSI's decoder plays such speech frames as tones up to
- * a share of 0.0234 and as speech from 0.0236 on (isolated frames of the 25
- * development and validation vectors), and 98.9% of the single-tone frames of
- * its tone vectors lie under this (median 0.003). */
+ * dominant fundamental. On the isolated speech frames of the 25 development and
+ * validation vectors that pass a single-tone row, those with a share up to
+ * 0.0234 (five) follow DVSI's output as well or better through the tone path,
+ * and from 0.0236 on (about 65) the speech path follows it better in nearly
+ * every case, with one exception at 0.0289: the limit lies between, not at a
+ * clean split. 98.9% of the single-tone frames of DVSI's tone vectors lie under
+ * it (median 0.003). */
 #define IMBE_TONE_SHARE_SINGLE 0.0235
 /* The word a tone frame's decode leaves in the otherwise unused Vl[0] (Vl is
  * indexed from 1, and P25 keeps nothing there): the flag, b0 in bits 16-23,
@@ -1163,8 +1176,10 @@ imbe4400_mute_noise(const mbe_process_result* result) {
 
 /* The tone model's level: the tone harmonics' rms (decoded magnitudes) times
  * this, then times DVSI's synthesis table droop (imbe4400_play_tone()). DVSI's
- * dual tones measure 2.0975 times that rms and its single tones 2.114, where
- * this library renders a voiced harmonic at 2.1308 times its magnitude; at
+ * dual tones measure a median 2.0974 times that rms on the 3,574 steady DTMF
+ * and KNOX frames (2.0975 with the 143 call-progress frames the tone path
+ * leaves out) and its single tones 2.114, where this library renders a voiced
+ * harmonic at 2.1308 times its magnitude; at
  * 0.988 the steady tone frames of knox_1..16 and dtone_1..16 play a median
  * 0.012 dB above DVSI's (0.9866 would be exact there) and those of the DTMF,
  * alert, alltone and call-progress vectors 0.022 dB (dual) and 0.031 dB
@@ -1219,19 +1234,23 @@ imbe_tone_droop(int l) {
 
 /*
  * The model DVSI's decoder plays for a P25 tone sent as voice frames (measured
- * on its decodes of 3,717 steady frames of the 36 dual tones and of the single
- * tones): its pitch is eq 46's fundamental cut to a grid of 2^-19 cycle per
+ * on its decodes of the steady frames of the DTMF and KNOX tones, 3,574, and of
+ * the single tones): its pitch is eq 46's fundamental cut to a grid of 2^-19 cycle per
  * sample, floor(2^21 / (2 b0 + 79)) / 2^19 (in double, rounded to float once;
  * not the speech pitch of imbe_dvsi_pitch_offset()); the tone's harmonics are
  * voiced at one amplitude, the rms of their decoded magnitudes times
- * IMBE_TONE_LEVEL, times sinc^2(pi l / 256) (the two components' measured
- * amplitude ratio is that droop's within 0.0004), and every other harmonic is
- * unvoiced at 0 (two components leave 0.0009 of the frame, so the others are at
- * least 27 dB down; the patent says 20 dB is typical), as TIA-102.BABA-1
- * clause 8 builds a tone's voice parameters. L, K and log2Ml stay the decoded
- * frame's: the voiced phases are regenerated from them, which predicts DVSI's
- * frame-to-frame phase on tone frames to 0.001 cycle. The frame is marked
- * MBE_FRAME_MARK_TONE, so the synthesizer takes its own model at mid-frame
+ * IMBE_TONE_LEVEL, times sinc^2(pi l / 256) (on DVSI's P25 decodes the upper
+ * component over the lower is a median 0.9999 of the droop's ratio; the bound
+ * of 0.0004 is the rate-33 and D-STAR measurement, docs/dvsi-parity.md); and every other
+ * harmonic is unvoiced at 0, the library's choice, as TIA-102.BABA-1 clause 8
+ * builds a tone's voice parameters (the measurement bounds them: two components
+ * leave 0.0009 of the frame, so the others are at least 27 dB down; the patent
+ * says 20 dB is typical). L, K and log2Ml stay the decoded frame's: the voiced
+ * phases are regenerated from them, which predicts DVSI's frame-to-frame phase
+ * on tone frames within 0.0009 cycle (standard deviation, median over 64
+ * components). Only this function marks a frame MBE_FRAME_MARK_TONE
+ * (imbe4400_synthesize_frame() clears the mark on any other), and the mark
+ * makes the synthesizer take the frame's own model at mid-frame
  * (with its own phases: on the steady frames of DVSI's knox_1..16 and
  * dtone_1..16 they follow DVSI's waveform at a median correlation of 0.9924,
  * those from the mean of the two frames' log2Ml at 0.9903). Unlike an AMBE

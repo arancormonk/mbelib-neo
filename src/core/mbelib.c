@@ -968,13 +968,17 @@ mbe_renderTonef(float* out, mbe_parms* mp, uint32_t step1, uint32_t step2, float
 
 /*
  * The oscillator phase that starts a component of m steps as DVSI's decoders
- * start a tone after a frame that was not a tone frame: as a fresh pulse
- * train from the frame's start, so that sample n (0..159) of the frame is
+ * start a tone after a frame with no voiced band: as a fresh pulse train from
+ * the frame's start, so that sample n (0..159) of the frame is
  * cos(2 pi F (n - MBE_PULSE_PEAK) + p), F the frequency in cycles per sample
  * and p the output high-pass's phase at it (mbe_low_band_phase()). Measured on
  * DVSI's rate-33 and D-STAR tone vectors: the phase is the same at every such
  * onset of a tone within 0.0002 cycle, and within 0.005 cycle of this over the
- * 64 DTMF and KNOX components. The renderer plays phase_sine() of the phase
+ * 64 DTMF and KNOX components. After a voiced frame DVSI's decoders continue
+ * that frame's pulse train into the tone instead (cp2, cp31); the codec paths
+ * start every tone after a frame that was not a tone frame this way, the
+ * voiced case included, which is a known difference (docs/dvsi-parity.md,
+ * "Tones as harmonics of a fundamental"). The renderer plays phase_sine() of the phase
  * after adding the step, -cos of it: the phase before sample 0 is
  * step (-1 - MBE_PULSE_PEAK) + 2^32 (1/2 + p / (2 pi)).
  */

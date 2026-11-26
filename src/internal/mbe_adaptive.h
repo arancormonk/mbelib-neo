@@ -225,7 +225,9 @@ enum mbe_frame_mark {
     /* A P25 tone sent as voice frames, played as DVSI's decoder plays it: the
      * model is the tone model (imbe7200x4400.c), and the frame's own model
      * stands at mid-frame too, so the tone's amplitude moves from the last
-     * frame's to its own over the first 10 ms and holds over the second. */
+     * frame's to its own over the first 10 ms and holds over the second. Only
+     * imbe4400_play_tone() sets it, on the frame it plays; no decoder does,
+     * and the P25 and ProVoice data path clears it on any other frame. */
     MBE_FRAME_MARK_TONE = 4,
     /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
@@ -336,8 +338,10 @@ void mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad, enu
 
 /**
  * @brief Set the tone phases in @p mp to start an AMBE+2 tone as DVSI's decoders
- * start a tone after a frame that was not a tone frame: a fresh pulse train
- * from the frame's start (mbelib.c, tone_start_phase()). The next
+ * start a tone after a frame with no voiced band: a fresh pulse train from the
+ * frame's start (mbelib.c, tone_start_phase()). The codec paths call it for a
+ * tone after any frame that was not a tone frame; after a voiced frame DVSI's
+ * decoders continue that frame's pulse train instead (not modelled). The next
  * mbe_renderToneAmbe2450f() of that ID then plays the tone from there. An ID
  * with no tone leaves them as they are.
  */

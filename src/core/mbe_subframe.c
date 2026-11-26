@@ -453,12 +453,17 @@ interval_pulses(struct pulse_train* train, float start, double from, double to) 
  * take the old train an octave down (its phase and rate halved) when the new
  * period is 1.6 to 2.4 times the old, or up (its phase doubled, modulo a
  * cycle, and its rate doubled) at 0.4 to 0.6 times, and then cross linearly to
- * the new pitch as at any step. Measured on 134 tone-to-tone changes of DVSI's
- * rate-33 and D-STAR tone vectors (each new pulse phase predicted to 0.001
- * cycle) and on the speech frames with such steps; the edges are bracketed
- * (1.534 glides, 1.618 halves; 2.475 glides; 0.611 glides, 0.584 doubles),
- * not measured exactly. Pulses already launched keep their times and models:
- * only the phase and the rate the interval starts from change. */
+ * the new pitch as at any step. Measured on the tone-to-tone changes of DVSI's
+ * rate-33 and D-STAR tone vectors (129 of 134 classified, each within 0.0012
+ * cycle of its prediction; 5 cannot be told) and on the speech frames with
+ * such steps. The inner edges are bracketed, not measured: 1.534 glides and
+ * 1.618 halves; 0.611 glides and 0.584 doubles. Nothing brackets the outer
+ * ones: 2.475 glides, but no step was observed between the largest halved
+ * (1.72) and it, and the smallest observed to double is 0.528; 0.4 and 2.4 are
+ * this library's choice, by symmetry. The train keeps its pulses' launch
+ * times, not their models: a pulse launched before the step is rendered
+ * through both end models of each later interval it reaches, as before; only
+ * the phase and the rate the interval starts from change. */
 static void
 octave_step(struct pulse_train* train, double* from, double to) {
     const double ratio = *from / to; /* the new period over the old */

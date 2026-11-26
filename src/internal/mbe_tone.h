@@ -79,14 +79,15 @@ mbe_tone_lookup_dstar_freqs(int tone_id, float* freq1, float* freq2) {
  * 9's nominal ones: DVSI's AMBE-3000 plays a tone through its voiced
  * synthesizer as a model of one or two harmonics of a fundamental, the tone
  * frame parameters of TIA-102.BABA-1 Annex J (f0, l1, l2 per tone index; clause
- * 8 turns a tone frame into such a model). Measured on DVSI's rate-33 and
- * D-STAR decodes of its tone vectors (both codecs play the same values), the
- * fundamentals lie on a grid of 2^-19 cycle per sample to 0.003 of a step.
- * Below, a component's frequency is counted in those steps: Annex J's f0 on
- * that grid, round(f0 * 2^19 / 8000), for 34 of the 36 dual tones; IDs 145 and
- * 147 are DVSI's own (9883 = 150.80 Hz and 5667 = 86.47 Hz, where the text
- * prints 150.89 and 86.5). So DTMF "1" (ID 129) plays 693.909 + 1214.340 Hz,
- * where Table 9 has 697 + 1209.
+ * 8 turns a tone frame into such a model). The 36 dual-tone fundamentals were
+ * measured on DVSI's rate-33 decodes of its tone vectors, where they lie on a
+ * grid of 2^-19 cycle per sample to 0.003 of a step; D-STAR has 20 of them (16
+ * DTMF and 4 call-progress indices, no KNOX ones), and its decodes give the
+ * same 20 values. Below, a component's frequency is counted in those steps:
+ * Annex J's f0 on that grid, round(f0 * 2^19 / 8000), for 34 of the 36 dual
+ * tones; IDs 145 and 147 are DVSI's own (9883 = 150.80 Hz and 5667 = 86.47 Hz,
+ * where the text prints 150.89 and 86.5). So DTMF "1" (ID 129) plays 693.909 +
+ * 1214.340 Hz, where Table 9 has 697 + 1209.
  */
 #define MBE_TONE_GRID_BITS 19
 
@@ -99,12 +100,18 @@ struct mbe_tone_harmonics {
 /*
  * The played components of an AMBE+2 tone ID, in 2^-19 cycle per sample,
  * `upper` and `lower` (equal for a single tone); 0 for an ID with no tone.
- * Dual tones (128..163): l2 f0 and l1 f0 of the table. Single tones (5..122):
- * harmonic l = ID / 16 + 1 of the fundamental floor(2048 ID / l), so that the
- * fundamental stays under 500 Hz (DVSI's decodes: ID 30 plays 937.5000 Hz, ID
- * 57 1781.2500 and ID 46 1437.470, three times 31402 steps; back-to-back
- * single tones keep the pulse train's phase only for these harmonic numbers),
- * within 0.1 Hz of the nominal 31.25 ID.
+ * Dual tones (128..163): l2 f0 and l1 f0 of the table. Single tones (5..122)
+ * follow a rule of their own, not Annex J's harmonic numbers: harmonic
+ * l = ID / 16 + 1 of the fundamental floor(2048 ID / l), so that the
+ * fundamental stays under 500 Hz, within 0.1 Hz of the nominal 31.25 ID. DVSI's
+ * decodes (nine runs of 17 frames per ID in alert and dtmf, and one short run
+ * in alltone): ID 30 plays 937.5000 Hz, ID 57 1781.2500 and ID 46 1437.470,
+ * three times 31402 steps, where Annex J's harmonic 4 would play it exactly;
+ * where alert plays the three back to back, the pulse train's phase carries
+ * from one to the next only for harmonic numbers in the ratio 2 : 3 : 4, which
+ * fixes their ratio, not the numbers themselves. For the other single tones the
+ * rule is plausible, not proven. (The P25 tone table's single tones use Annex
+ * J's harmonic numbers, imbe7200x4400.c.)
  */
 static inline int
 mbe_tone_played_steps(int tone_id, unsigned* upper, unsigned* lower) {

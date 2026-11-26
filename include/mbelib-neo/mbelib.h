@@ -881,8 +881,9 @@ MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
  * tone harmonics dominate the other decoded magnitudes) leaves the decoded
  * model in `cur_mp` as for any frame, and marks it in the otherwise unused
  * `cur_mp->Vl[0]`: a flag (bit 24) with b0 in bits 16-23 and the tone's
- * harmonic numbers in bits 8-15 and 0-7; `Vl[0]` is 0 on every other frame.
- * The IMBE process functions read it to play the tone model.
+ * harmonic numbers in bits 8-15 and 0-7. `cur_mp->Vl[0]` is 0 after every
+ * other frame, a special or invalid one (return 1) included; `prev_mp` is not
+ * written. The IMBE process functions read the word to play the tone model.
  */
 MBE_API int mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate IMBE 7200x4400 interleaved data. */
@@ -926,9 +927,12 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * every other harmonic unvoiced at 0, and the frame's own model at mid-frame.
  * `prev_mp` keeps the decoded frame (`Vl[0]` included) as the prediction
  * history, so a repeat plays the tone again; `cur_mp` and `prev_mp_enhanced`
- * are left holding the tone model synthesized. No result flag is set for it,
- * and ProVoice frames never play it. The 7200x4400 frame process functions
- * behave the same way.
+ * are left holding the tone model synthesized. A word in caller state counts
+ * only as a decode leaves it (a pitch code with tone rows, one of that code's
+ * harmonic pairs, the model at that code's harmonic count, tone magnitudes
+ * positive, finite and normal); any other plays as no tone. No result flag is
+ * set for it, and ProVoice frames never play it (their states keep 0 in
+ * `Vl[0]`). The 7200x4400 frame process functions behave the same way.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -1170,10 +1174,13 @@ MBE_API void mbe_spectralAmpEnhance(mbe_parms* cur_mp);
 /**
  * @brief Synthesize tone frame (AMBE tone indices) into float PCM.
  *
- * Plays the frequencies DVSI's decoders play for the tone ID, harmonics of
- * TIA-102.BABA-1 Annex J's fundamental on a grid of 2^-19 cycle per sample
- * (DTMF "1" at 693.909 + 1214.340 Hz), not Table 9's nominal ones (since
- * 2.6.14), and continues the oscillator phases `cur_mp` carries: this call
+ * Plays the frequencies DVSI's decoders play for the tone ID, not Table 9's
+ * nominal ones (since 2.6.14): a dual tone at harmonics l1 and l2 of
+ * TIA-102.BABA-1 Annex J's fundamental on DVSI's grid of 2^-19 cycle per
+ * sample (DTMF "1" at 693.909 + 1214.340 Hz), with two exceptions, IDs 145 and
+ * 147, whose fundamentals are DVSI's own; a single tone by its own rule,
+ * harmonic ID / 16 + 1 of a fundamental under 500 Hz. It continues the
+ * oscillator phases `cur_mp` carries: this call
  * has no frame history, so it never starts a tone afresh as the frame process
  * functions do.
  * @param aout_buf Output buffer of 160 float samples.
