@@ -57,6 +57,51 @@ same_samples(const float* a, const float* b, size_t count) {
     return 1;
 }
 
+/* The samples a frame draws, from every state the generator can be in, against
+ * the recurrence written out: sample n is the state n + 1 steps on, read as a
+ * signed 16-bit value, and the state handed to the next frame is the one 160
+ * steps on, with or without a buffer to draw into. Fails for a wrong step
+ * between the generator's lanes, a lane written to another sample, or another
+ * state returned. */
+static void
+test_frame_noise(void) {
+    enum { DRAWN = 240, FRAME = 160 };
+
+    for (uint32_t start = 0; start < 65536u; ++start) {
+        float noise[DRAWN];
+        float want[DRAWN];
+        uint32_t state = start;
+        uint32_t want_next = start;
+        for (int i = 0; i < DRAWN; ++i) {
+            state = ((173u * state) + 13849u) & 0xFFFFu;
+            want[i] = (float)((state < 32768u) ? (int)state : (int)state - 65536);
+            noise[i] = 32768.0f; /* no sample: a write that is left out shows */
+            if (i == FRAME - 1) {
+                want_next = state;
+            }
+        }
+        const uint32_t next = mbe_dvsi_noise_frame(start, noise);
+        const uint32_t undrawn = mbe_dvsi_noise_frame(start, NULL);
+        assert(next == want_next);
+        assert(undrawn == want_next);
+        assert(same_samples(noise, want, DRAWN));
+        (void)next;
+        (void)undrawn;
+        (void)want_next;
+    }
+    /* Only the low 16 bits are state, as for mbe_dvsi_noise_next(). */
+    float low[DRAWN], high[DRAWN];
+    const uint32_t next_low = mbe_dvsi_noise_frame(77u, low);
+    const uint32_t next_high = mbe_dvsi_noise_frame(0xFFFF0000u | 77u, high);
+    const uint32_t undrawn_high = mbe_dvsi_noise_frame(0xFFFF0000u | 77u, NULL);
+    assert(next_low == next_high && next_low < 65536u);
+    assert(undrawn_high == next_low);
+    assert(same_samples(low, high, DRAWN));
+    (void)next_low;
+    (void)next_high;
+    (void)undrawn_high;
+}
+
 /* Whether a stream's noise state is the generator state `state` (a float holds every one exactly). */
 static int
 noise_state_is(const mbe_parms* mp, uint32_t state) {
@@ -773,6 +818,7 @@ main(void) {
     mbe_fft_plan* plan = mbe_fft_plan_alloc();
     assert(plan != NULL);
     test_generator();
+    test_frame_noise();
     test_subframes_match_equations(plan);
     test_window_squares_sum_to_one(plan);
     test_cold_start_and_skip(plan);
