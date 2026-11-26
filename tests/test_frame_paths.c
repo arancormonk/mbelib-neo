@@ -637,6 +637,40 @@ DEFINE_FRAME_EQUIVALENCE(test_ambe2450_equivalence, AMBE2450, 24, mbe_processAmb
 DEFINE_FRAME_EQUIVALENCE(test_ambe2400_equivalence, AMBE2400, 24, mbe_processAmbe3600x2400, mbe_processAmbe2400)
 #undef DEFINE_FRAME_EQUIVALENCE
 
+/* The relative offset g of the pitch DVSI's P25 decoder plays for code b0
+ * (imbe7200x4400.c, imbe_dvsi_pitch_offset()), in double. */
+static double
+imbe_dvsi_offset(int b0) {
+    const double t = 4.0 * M_PI * log2(((double)b0 + 39.5) / 2.0);
+    return -1.980564e-4 + 1.263798e-4 * cos(t) + 4.835086e-4 * sin(t) + 2.352386e-5 * cos(2.0 * t)
+           + 7.623621e-5 * sin(2.0 * t);
+}
+
+/* The law's largest |g| over b0 0..207 is 7.056e-4 (b0 127): no P25 pitch is
+ * further than that from the nominal one. */
+#define IMBE_DVSI_OFFSET_MAX 7.06e-4
+
+/* TIA-102.BABA eq 46's fundamental for P25 pitch code b0, as the decoder
+ * computes it, in float; and the pitch the P25 decoder stores for it, that
+ * float times 1 + g, rounded to float once. */
+static float
+imbe_nominal_w0(int b0) {
+    return (float)(4 * M_PI) / (float)((float)b0 + 39.5);
+}
+
+static float
+imbe_p25_w0(int b0) {
+    return (float)((double)imbe_nominal_w0(b0) * (1.0 + imbe_dvsi_offset(b0)));
+}
+
+/* Whether a lies within an ulp of float of b (not bit for bit: a fast-math
+ * build may evaluate the library's expressions otherwise than this test). */
+static int
+within_an_ulp(float a, float b) {
+    const double ulp = (double)nextafterf(fabsf(b), INFINITY) - (double)fabsf(b);
+    return fabs((double)a - (double)b) <= ulp;
+}
+
 static void
 test_imbe_fundamental_roundtrip(void) {
     static const unsigned b0_indices[] = {0, 1, 2, 3, 4, 5, 85, 86};
@@ -676,6 +710,19 @@ test_imbe_fundamental_roundtrip(void) {
             assert(memcmp(decoded, data, sizeof(data)) == 0);
             assert(((result7200.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == (b0 > 207));
             const mbe_parms p25 = prev;
+            /* The soft P25 frame wrapper stores the same pitch. */
+            if (tag == 0u) {
+                mbe_soft_bit soft7200[184];
+                soft_from_bits(frame7200, soft7200, sizeof(soft7200) / sizeof(soft7200[0]));
+                cur = warm_cur;
+                prev = warm_prev;
+                enh = warm_enh;
+                const int soft_ret = mbe_processImbe7200x4400SoftFramef(
+                    pcm7100, &result7100, (const mbe_soft_bit(*)[23])soft7200, decoded, &cur, &prev, &enh);
+                assert(soft_ret == 0);
+                (void)soft_ret;
+                assert(b0 > 207 || within_an_ulp(prev.w0, imbe_p25_w0((int)b0)));
+            }
             cur = warm_cur;
             prev = warm_prev;
             enh = warm_enh;
@@ -699,15 +746,55 @@ test_imbe_fundamental_roundtrip(void) {
                 assert(float_array_equal_exact(&p25.w0, &prev.w0, 1));
                 assert(float_array_equal_exact(pcm7200, pcm7100, 160));
             } else {
-                const float nominal = (float)(4 * M_PI) / (float)((float)b0 + 39.5);
-                /* Relative to eq 46 in float: an ulp for ProVoice (a fast-math
-                 * build may evaluate it otherwise than this test), at most
-                 * 0.071% for P25. */
-                assert(fabs((double)prev.w0 / (double)nominal - 1.0) < 1.2e-7);
-                assert(fabs((double)p25.w0 / (double)nominal - 1.0) < 7.2e-4);
+                /* ProVoice: eq 46's pitch in float. P25: that times 1 + g, so
+                 * no further from it than the law's largest |g|. */
+                const float nominal = imbe_nominal_w0((int)b0);
+                assert(within_an_ulp(prev.w0, nominal));
+                assert(within_an_ulp(p25.w0, imbe_p25_w0((int)b0)));
+                assert(fabs((double)p25.w0 / (double)nominal - 1.0) <= IMBE_DVSI_OFFSET_MAX);
             }
         }
     }
+}
+
+/*
+ * A repeat plays the repeated model's pitch: a ProVoice stream that repeats
+ * its own history (frames with no valid pitch code after ProVoice voice
+ * frames) plays and keeps eq 46's nominal pitch, a P25 stream DVSI's. At b0
+ * 127, where the two lie furthest apart.
+ */
+static void
+test_imbe_repeat_keeps_its_pitch(void) {
+    static const unsigned b0_indices[] = {0, 1, 2, 3, 4, 5, 85, 86};
+    for (int provoice = 0; provoice < 2; ++provoice) {
+        mbe_parms cur, prev, enh;
+        init_params(&cur, &prev, &enh);
+        for (int f = 0; f < 5; ++f) {
+            const unsigned b0 = (f < 3) ? 127u : 250u;
+            char data[88] = {0}, frame[184], decoded[88];
+            float pcm[160];
+            mbe_process_result result;
+            for (unsigned i = 0; i < 8; ++i) {
+                data[b0_indices[i]] = (char)((b0 >> (7u - i)) & 1u);
+            }
+            const int bits = mbe_quality_frame_from_data(provoice ? "imbe7100" : "imbe7200", data, sizeof(data), frame,
+                                                         sizeof(frame));
+            assert(bits == (provoice ? 168 : 184));
+            (void)bits;
+            const int ret = provoice ? mbe_processImbe7100x4400Framef(pcm, &result, (const char (*)[24])frame, decoded,
+                                                                      &cur, &prev, &enh)
+                                     : mbe_processImbe7200x4400Framef(pcm, &result, (const char (*)[23])frame, decoded,
+                                                                      &cur, &prev, &enh);
+            assert(ret == 0);
+            (void)ret;
+            assert(((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == (b0 > 207u));
+            const float want = provoice ? imbe_nominal_w0(127) : imbe_p25_w0(127);
+            assert(within_an_ulp(prev.w0, want));
+            assert(within_an_ulp(enh.w0, want));
+        }
+    }
+    /* The two pitches are told apart. */
+    assert(!within_an_ulp(imbe_nominal_w0(127), imbe_p25_w0(127)));
 }
 
 static void
@@ -1126,6 +1213,7 @@ main(void) {
     test_ambe2450_equivalence();
     test_ambe2400_equivalence();
     test_imbe_fundamental_roundtrip();
+    test_imbe_repeat_keeps_its_pitch();
     test_ambe2400_accepted_tones();
     static const struct muted_short_path dstar = {
         "ambe2400", AMBE2400, mbe_processAmbe2400Dataf, mbe_processAmbe2400Data, 7, 0.75f,

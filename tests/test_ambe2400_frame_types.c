@@ -426,19 +426,79 @@ test_lost_plays_as_repeat(void) {
     puts("lost frames: b0 125, unused tone index, b0 127 play as error repeats; the 4th mutes");
 }
 
+/* The phases a frame's log2 amplitudes give (the kernel the codec paths
+ * regenerate them with, mbe_regenerate_phases_log2()), at harmonic count L. */
+static void
+phases_of(const float log2Ml[57], int L, float phase[57]) {
+    mbe_regenerate_phases_log2(log2Ml, L, phase);
+}
+
+/* How far apart two phases are, wrapped to [0, pi]. */
+static double
+phase_distance(double a, double b) {
+    const double d = fmod(fabs(a - b), 2.0 * M_PI);
+    return (d > M_PI) ? (2.0 * M_PI) - d : d;
+}
+
+/* The largest distance between the phases a synthesized frame left in its
+ * state (harmonic l's at the frame's end, PHIl, less the pulse train's,
+ * PSIl) and `phase`, over its harmonics. */
+static double
+rendered_phase_gap(const mbe_parms* state, const float phase[57]) {
+    double gap = 0.0;
+    for (int l = 1; l <= state->L; ++l) {
+        gap = fmax(gap, phase_distance((double)state->PHIl[l] - (double)state->PSIl[l], (double)phase[l]));
+    }
+    return gap;
+}
+
+/* The largest distance between two sets of phases over harmonics 1..L. */
+static double
+phase_gap(const float a[57], const float b[57], int L) {
+    double gap = 0.0;
+    for (int l = 1; l <= L; ++l) {
+        gap = fmax(gap, phase_distance((double)a[l], (double)b[l]));
+    }
+    return gap;
+}
+
+/*
+ * The envelopes a stream holding an uncorrectable frame's history carries
+ * apart, and the one it renders: the last synthesized frame (`enh`) holds the
+ * repeated model's log2Ml (those `lost_enh`, a stream of lost frames in their
+ * place, holds), the prediction history (`prev`) the held one, which differ
+ * in shape; and the frame's phases came from the first, not from the held
+ * history's nor from the amplitudes it rendered (Ml).
+ */
+static void
+assert_renders_the_repeated_envelope(const mbe_parms* enh, const mbe_parms* prev, const mbe_parms* lost_enh) {
+    float played[57], held[57], rendered[57];
+    assert(enh->L == lost_enh->L);
+    assert_same_pcm(&enh->log2Ml[1], &lost_enh->log2Ml[1], (size_t)enh->L, "the repeated model's log2Ml");
+    phases_of(enh->log2Ml, enh->L, played);
+    phases_of(prev->log2Ml, enh->L, held);
+    mbe_regenerate_phases(enh->Ml, enh->L, rendered);
+    assert(phase_gap(played, held, enh->L) > 0.1);
+    assert(phase_gap(played, rendered, enh->L) > 0.1);
+    assert(rendered_phase_gap(enh, played) < 1e-3);
+}
+
 /*
  * A frame whose C0 word is uncorrectable plays as a lost frame does, whatever
  * history it holds: a run of three such frames, or of lost frames after one,
  * plays sample for sample as three lost frames (all without corrections, so
  * the adaptive smoothing reads the same counts). Each repeat renders the
  * repeated model with its own log2 amplitudes, which its phases come from,
- * not with the held history's (docs/dvsi-parity.md, "Phase regeneration").
+ * not with the held history's nor from the amplitudes it renders
+ * (docs/dvsi-parity.md, "Phase regeneration"): the states carry the two
+ * envelopes apart (assert_renders_the_repeated_envelope()).
  */
 static void
 test_held_history_plays_the_repeated_model(void) {
     static const char patterns[4][3] = {{0, 0, 0}, {1, 1, 1}, {1, 0, 0}, {0, 1, 0}}; /* 1: uncorrectable C0 */
     char voice[NVOICE][49], b125[49];
-    float pcm[4][160 * 7];
+    static float pcm[4][160 * 7];
+    static mbe_parms lost_enh[7];
     make_voice(voice);
     memcpy(b125, voice[3], sizeof(b125));
     put_b0(b125, 125);
@@ -457,9 +517,16 @@ test_held_history_plays_the_repeated_model(void) {
                 make_result(&r, 0);
             }
             const char* bits = !lost ? voice[f] : (uncorrectable ? voice[(f == 4) ? 4 : 5] : b125);
-            assert(mbe_processAmbe2400Dataf(pcm[k] + ((size_t)160 * (size_t)f), &r, bits, &cur, &prev, &enh) >= 0);
+            const int ret = mbe_processAmbe2400Dataf(pcm[k] + ((size_t)160 * (size_t)f), &r, bits, &cur, &prev, &enh);
+            assert(ret >= 0);
+            (void)ret;
             assert(((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == lost);
             assert(((prev.Vl[0] & MBE_AMBE2400_HISTORY_HELD) != 0) == (f >= held_from));
+            if (k == 0) {
+                lost_enh[f] = enh;
+            } else if (f >= held_from) {
+                assert_renders_the_repeated_envelope(&enh, &prev, &lost_enh[f]);
+            }
         }
         assert_same_pcm(pcm[k], pcm[0], (size_t)160 * 7u, "uncorrectable C0 frames vs lost frames");
     }
@@ -921,6 +988,7 @@ run_held_sequence(const char* seq, int one_state, int held_as_lost, struct held_
         }
         const int ret = mbe_processAmbe2400Dataf(run->pcm[f], &r, bits, &cur, &prev, last);
         assert(ret >= 0);
+        (void)ret;
         run->prev[f] = prev;
     }
 }
@@ -1332,13 +1400,14 @@ enum resume_expect {
  * docs/dvsi-parity.md describes it: the history's amplitudes from log2Ml (the
  * decoder's unvoiced scale on unvoiced bands) at gain 0.3, enhanced, with the
  * unvoiced overlap a frame of it leaves from the noise block after the next
- * frame's.
+ * frame's, and the history's log2Ml, which its phases come from.
  */
 static void
 expected_resume_model(mbe_parms* enh, const mbe_parms* history) {
     mbe_parms m = *enh;
     m.L = history->L;
     m.w0 = history->w0;
+    memcpy(m.log2Ml, history->log2Ml, sizeof(m.log2Ml));
     memset(m.Ml, 0, sizeof(m.Ml));
     for (int l = 1; l <= history->L; ++l) {
         const float scale = (history->Vl[l] == 1) ? 1.0f : 0.2046f / sqrtf(history->w0);
@@ -1356,6 +1425,7 @@ expected_resume_model(mbe_parms* enh, const mbe_parms* history) {
     model.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechf(scratch, &second, &model, MBE_VOICED_SYNTHESIS_DVSI);
     memcpy(enh->Ml, m.Ml, sizeof(m.Ml));
+    memcpy(enh->log2Ml, m.log2Ml, sizeof(m.log2Ml));
     memcpy(&enh->Vl[1], &m.Vl[1], sizeof(m.Vl) - sizeof(m.Vl[0]));
     enh->L = m.L;
     enh->w0 = m.w0;
@@ -1391,6 +1461,14 @@ resume_run(enum resume_lead lead, int lost, int unvoiced, enum resume_expect exp
     const int uncorrectable = lead == RESUME_AFTER_UNCORRECTABLE;
     for (int i = 0; i < lost; ++i) {
         resume_frame(out, uncorrectable ? voice[(i + 1) % NVOICE] : b125, uncorrectable, &cur, &prev, &enh);
+    }
+    if (expect == RESUMES) {
+        /* The silent last frame's log2Ml, apart from the history's (they are
+         * the same there after lost frames): the frame resumed from must take
+         * the history's, or its phases are another envelope's. */
+        for (int l = 1; l <= 56; ++l) {
+            enh.log2Ml[l] += 4.0f * sinf(0.9f * (float)l);
+        }
     }
     mbe_parms tcur = cur, tprev = prev, tenh = enh;
     mbe_parms ecur = cur, eprev = prev, eenh = enh;
@@ -1773,8 +1851,41 @@ test_c0_uncorrectable_plays_lost(void) {
     puts("uncorrectable C0: plays as a lost frame, the next frame predicts from its decode");
 }
 
+/* Voice frames 0..2, voice frame 3 with an uncorrectable C0 word (`held`) or a
+ * lost frame in its place, then `between`: its output in `out`, the states
+ * after it in cur, prev and enh. */
+static void
+run_held_then(const char voice[NVOICE][49], const char between[49], int held, float out[160], mbe_parms* cur,
+              mbe_parms* prev, mbe_parms* enh) {
+    char b125[49];
+    mbe_process_result r;
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    mbe_initMbeParms(cur, prev, enh);
+    for (int i = 0; i < 3; ++i) {
+        make_result(&r, 0);
+        const int ret = mbe_processAmbe2400Dataf(out, &r, voice[i], cur, prev, enh);
+        assert(ret == 0);
+        (void)ret;
+    }
+    if (held) {
+        make_uncorrectable_result(&r, 0);
+    } else {
+        make_result(&r, 0);
+    }
+    int ret = mbe_processAmbe2400Dataf(out, &r, held ? voice[3] : b125, cur, prev, enh);
+    assert(ret == 0);
+    make_result(&r, 0);
+    ret = mbe_processAmbe2400Dataf(out, &r, between, cur, prev, enh);
+    assert(ret == 0);
+    (void)ret;
+}
+
 /* The history an uncorrectable frame leaves outlasts the frames that do not
- * replace it: a lost frame or a tone between it and the next voice frame. */
+ * replace it: a lost frame or a tone between it and the next voice frame.
+ * Either plays as after a lost frame in its place: the speech under the
+ * tone's first frame repeats the model the lost frame repeated, with that
+ * model's own log2Ml. */
 static void
 test_c0_uncorrectable_history_kept(void) {
     char voice[NVOICE][49], b125[49], tone[49], d[49];
@@ -1784,26 +1895,34 @@ test_c0_uncorrectable_history_kept(void) {
     pack_tone(tone, 126, 32, 180);
     const char* between[] = {b125, tone};
     for (size_t k = 0; k < sizeof(between) / sizeof(between[0]); ++k) {
-        mbe_parms cur, prev, enh, decoded, history;
+        mbe_parms cur, prev, enh, decoded, history, lcur, lprev, lenh;
         mbe_process_result r;
-        float out[160];
+        float out[160], lost_out[160];
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int i = 0; i < 3; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+            const int ret = mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh);
+            assert(ret == 0);
+            (void)ret;
         }
         decoded = cur;
         history = prev;
-        assert(mbe_decodeAmbe2400Parms(voice[3], &decoded, &history) == 0);
-        make_uncorrectable_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == 0);
-        make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, between[k], &cur, &prev, &enh) == 0);
+        const int decode = mbe_decodeAmbe2400Parms(voice[3], &decoded, &history);
+        assert(decode == 0);
+        (void)decode;
+        run_held_then((const char (*)[49])voice, between[k], 1, out, &cur, &prev, &enh);
+        run_held_then((const char (*)[49])voice, between[k], 0, lost_out, &lcur, &lprev, &lenh);
+        assert_same_pcm(out, lost_out, 160, "the frame after an uncorrectable one vs after a lost one");
+        assert_renders_the_repeated_envelope(&enh, &prev, &lenh);
         mbe_parms want = decoded, want_prev = decoded;
         memcpy(d, voice[4], sizeof(d));
-        assert(mbe_decodeAmbe2400Parms(d, &want, &want_prev) == 0);
+        const int want_decode = mbe_decodeAmbe2400Parms(d, &want, &want_prev);
+        assert(want_decode == 0);
+        (void)want_decode;
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+        const int ret = mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh);
+        assert(ret == 0);
+        (void)ret;
         assert(cur.L == want.L);
         assert_same_pcm(&prev.log2Ml[1], &want.log2Ml[1], (size_t)want.L, "prediction after the frame between");
         assert((prev.Vl[0] & ~0xFFFF) == 0); /* a decoded voice frame drops the held history */

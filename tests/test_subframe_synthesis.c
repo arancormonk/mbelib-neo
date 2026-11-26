@@ -98,6 +98,18 @@ copy_amplitudes(mbe_parms* dst, const mbe_parms* src) {
     memcpy(dst->log2Ml, src->log2Ml, sizeof(dst->log2Ml));
 }
 
+/* A stream's next frame: its state, with `model`'s pitch, voicing and amplitudes. */
+static mbe_parms
+with_model(const mbe_parms* state, const mbe_parms* model) {
+    mbe_parms cur = *state;
+    cur.w0 = model->w0;
+    cur.L = model->L;
+    memcpy(cur.Vl, model->Vl, sizeof(cur.Vl));
+    copy_amplitudes(&cur, model);
+    mbe_set_frame_mark(&cur, MBE_FRAME_MARK_NONE);
+    return cur;
+}
+
 /* The next frame of a stream: `last` is the frame before it as synthesized,
  * `model` the new frame's model and mark. Renders the voiced part alone (no
  * transform plan), at unit gain, the way `rendering` says, and leaves the new
@@ -1237,10 +1249,13 @@ test_subframes_crossfade_linearly(void) {
     assert(same_bits(to_silence.noiseOverlap, last.noiseOverlap, 96));
 }
 
-/* A frame the core mutes moves the stream's state on exactly as a rendered
- * frame does, and leaves nothing to overlap the next, in each rendering: the
- * pitch steps between two voiced frames, so that the rate-33 mid-frame pitch
- * differs from the others'. */
+/* A frame the core mutes moves the pulse train and the noise generator on
+ * exactly as a rendered frame does, in each rendering, and leaves no unvoiced
+ * overlap for the next, where a rendered frame with unvoiced bands leaves its
+ * own subframe's second half (so the two states are not the same): with no
+ * transform plan (the voiced part alone) and with one. The pitch steps
+ * between two voiced frames, so that the rate-33 mid-frame pitch differs from
+ * the others'. */
 static void
 test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     float out[160];
@@ -1267,6 +1282,19 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     for (int n = 0; n < 256; ++n) {
         assert(advanced.previousUw[n] == 0.0f);
     }
+    mbe_fft_plan* plan = mbe_fft_plan_alloc();
+    assert(plan != NULL);
+    mbe_parms whole = with_model(&last, &model);
+    memset(out, 0, sizeof(out));
+    mbe_synthesize_subframes(out, &whole, &last, plan, 1.0f, 0, rendering);
+    mbe_fft_plan_free(plan);
+    assert(same_bits(whole.PSIl, advanced.PSIl, 57) && same_bits(whole.PHIl, advanced.PHIl, 57));
+    assert(same_bits(whole.noiseOverlap, advanced.noiseOverlap, 96));
+    assert(same_bits(&whole.noiseSeed, &advanced.noiseSeed, 1));
+    const float no_overlap[256] = {0.0f};
+    assert(same_bits(whole.previousUw, no_overlap, MBE_UNVOICED_TAIL_OFFSET));
+    assert(
+        !same_bits(&whole.previousUw[MBE_UNVOICED_TAIL_OFFSET], &no_overlap[MBE_UNVOICED_TAIL_OFFSET], MBE_SUBFRAME));
 
     /* Through the core: a frame muted by the error rate leaves the state a
      * rendered frame leaves, so the frame after both plays the same voiced part. */
@@ -1299,6 +1327,13 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     const double lost = 3.0e-4 * cycles_of(sqrt(210.0 * 190.0), 80.0);
     const double offset = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) ? -lost : lost;
     assert(fabs(cycles_apart(pulse_phase(&advanced), pulse_phase(&other) + offset)) < 1e-6);
+}
+
+/* Whether a lies within an ulp of float of b. */
+static int
+within_an_ulp(float a, float b) {
+    const double ulp = (double)nextafterf(fabsf(b), INFINITY) - (double)fabsf(b);
+    return fabs((double)a - (double)b) <= ulp;
 }
 
 /* The mid-frame models of the two renderings between prev and cur, and the
@@ -1336,12 +1371,16 @@ test_ambe2450_mid_pitch(void) {
     set_model(&prev, 150.0, 24, 20, 10.0f);
     cur = prev;
     cur.w0 = nextafterf(prev.w0, 1.0f);
-    assert(fabs(rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33) - (1.0 - 3.0e-4)) < 2e-7);
+    const double step_ratio = rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33);
+    assert(fabs(step_ratio - (1.0 - 3.0e-4)) < 2e-7);
+    (void)step_ratio;
 
-    /* (ii) Equal pitches: that pitch, in both. */
+    /* (ii) Equal pitches: that pitch, in both, the factor not applied. Within
+     * an ulp, not bit for bit: the mean is sqrtf(w0 * w0), which IEEE
+     * arithmetic rounds back to w0 but a fast-math build need not. */
     set_model(&cur, 150.0, 24, 12, 20.0f);
     (void)rate33_mid_pitch_ratio(&prev, &cur, &common, &rate33);
-    assert(same_bits(&common.w0, &cur.w0, 1) && same_bits(&rate33.w0, &cur.w0, 1));
+    assert(within_an_ulp(common.w0, cur.w0) && within_an_ulp(rate33.w0, cur.w0));
 
     /* (iii) One frame without a voiced band: the voiced frame's pitch, in both. */
     set_model(&prev, 150.0, 24, 0, 10.0f);
@@ -1664,18 +1703,6 @@ test_output_limit_option(void) {
         assert(same_bits(&a.noiseSeed, &b.noiseSeed, 1) && same_or_close(&a.localEnergy, &b.localEnergy, 1));
         assert(memcmp(a.Vl, b.Vl, sizeof(a.Vl)) == 0 && a.amplitudeThreshold == b.amplitudeThreshold);
     }
-}
-
-/* A stream's next frame: its state, with `model`'s pitch, voicing and amplitudes. */
-static mbe_parms
-with_model(const mbe_parms* state, const mbe_parms* model) {
-    mbe_parms cur = *state;
-    cur.w0 = model->w0;
-    cur.L = model->L;
-    memcpy(cur.Vl, model->Vl, sizeof(cur.Vl));
-    copy_amplitudes(&cur, model);
-    mbe_set_frame_mark(&cur, MBE_FRAME_MARK_NONE);
-    return cur;
 }
 
 /* The next frame of a stream rendered whole (voiced and unvoiced, with `plan`),
@@ -2081,8 +2108,9 @@ imbe_lowest_band_bit(int b0) {
 }
 
 /* A P25 frame whose voicing does not reach MBE_VOICING_REACH_HZ is marked as a
- * late onset: three voiced harmonics at pitch codes 56 (502.6 Hz) and 100
- * (344 Hz) are, at codes 55 (507.9 Hz) and 30 (691 Hz) they are not. */
+ * late onset: three voiced harmonics at pitch codes 56 (502.8 Hz at the pitch
+ * the decoder plays) and 100 (344.2 Hz) are, at codes 55 (508.1 Hz) and 30
+ * (690.8 Hz) they are not. */
 static void
 test_p25_marks_late_onsets(void) {
     static const int codes[] = {56, 100, 207, 55, 30, 0};
