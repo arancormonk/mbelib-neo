@@ -882,6 +882,115 @@ test_one_state_as_current_and_last(void) {
 }
 
 /*
+ * A frame sequence for test_one_state_held_history(): V a voice frame, U the
+ * same voice frame with an uncorrectable C0 word (a held prediction history),
+ * L a lost frame (b0 125), S a single tone (index 32), D a dual tone (index
+ * 130). Each V, U or L takes the next of the voice frames, so a sequence and
+ * its copy with every U played as L carry the same voice frames.
+ */
+#define HELD_SEQ_MAX 16
+
+struct held_run {
+    float pcm[HELD_SEQ_MAX][160];
+    mbe_parms prev[HELD_SEQ_MAX]; /* prev_mp after each frame */
+};
+
+static void
+run_held_sequence(const char* seq, int one_state, int held_as_lost, struct held_run* run) {
+    char voice[NVOICE][49], lost[49], single[49], dual[49];
+    make_voice(voice);
+    memcpy(lost, voice[3], sizeof(lost));
+    put_b0(lost, 125);
+    pack_tone(single, 126, 32, 180);
+    pack_tone(dual, 126, 130, 180);
+    mbe_parms cur, prev, enh;
+    mbe_parms* last = one_state ? &cur : &enh;
+    mbe_setThreadRngSeed(1);
+    mbe_initMbeParms(&cur, &prev, &enh);
+    size_t v = 0;
+    for (size_t f = 0; seq[f] != '\0'; ++f) {
+        assert(f < HELD_SEQ_MAX);
+        const char kind = (held_as_lost && seq[f] == 'U') ? 'L' : seq[f];
+        const char* bits = (kind == 'S') ? single : (kind == 'D') ? dual : (kind == 'L') ? lost : voice[v % NVOICE];
+        v += (kind == 'V' || kind == 'U' || kind == 'L') ? 1u : 0u;
+        mbe_process_result r;
+        if (kind == 'U') {
+            make_uncorrectable_result(&r, 0);
+        } else {
+            make_result(&r, 0);
+        }
+        const int ret = mbe_processAmbe2400Dataf(run->pcm[f], &r, bits, &cur, &prev, last);
+        assert(ret >= 0);
+        run->prev[f] = prev;
+    }
+}
+
+/* The prediction history two runs leave after a frame: log2Ml and w0 by their
+ * bits, L, and every Vl (element 0 holds the held history's count). */
+static void
+assert_same_history(const mbe_parms* a, const mbe_parms* b, const char* seq, size_t f) {
+    int same = memcmp(a->Vl, b->Vl, sizeof(a->Vl)) == 0 && a->L == b->L;
+    for (int l = 0; l < 57; ++l) {
+        uint32_t x, y;
+        memcpy(&x, &a->log2Ml[l], sizeof(x));
+        memcpy(&y, &b->log2Ml[l], sizeof(y));
+        same &= x == y;
+    }
+    uint32_t wa, wb;
+    memcpy(&wa, &a->w0, sizeof(wa));
+    memcpy(&wb, &b->w0, sizeof(wb));
+    if (!same || wa != wb) {
+        printf("%s: prediction history after frame %zu differs\n", seq, f);
+        assert(0);
+    }
+}
+
+/*
+ * A held prediction history (a voice frame with an uncorrectable C0 word),
+ * with one state as cur_mp and prev_mp_enhanced as with three. A frame that
+ * holds a history plays as a lost frame, and so does every frame after it
+ * until the next voice frame, which predicts from it: through repeats,
+ * single and dual tones, the repeat limit's mute and the voice after it, each
+ * sequence plays sample for sample as its copy with lost frames in place of
+ * the held ones, in both arrangements, so each repeat renders the repeated
+ * model with its own log2Ml. And the history committed to prev_mp after each
+ * frame is the same with one state as with three (the decoder and the D-STAR
+ * encoder predict from it).
+ */
+static void
+test_one_state_held_history(void) {
+    static const char* const sequences[] = {
+        "VVVVULL",      "VVVVUUL",     "VVVVULLLLL",  "VVVVLLLULV", "VVVVUS",       "VVVVUSL",
+        "VVVVUSLV",     "VVVVULS",     "VVVVUSD",     "VVVVUD",     "VVVVUDLLLLV",  "VVVVDUL",
+        "VVVVDULLLV",   "VVVVSUL",     "VVVVLLLLV",   "VVVVLLLLVV", "VVVVULLLLVV",  "VVVVDLLLLLVV",
+        "VVVVULVLUSLV", "VVVVSLUSDUL", "VVVVLLLLSUL", "VVVVUVV",    "VVVVLLLLULLV",
+    };
+    static struct held_run runs[2][2]; /* [one state][held frames played as lost] */
+    for (size_t k = 0; k < sizeof(sequences) / sizeof(sequences[0]); ++k) {
+        const char* seq = sequences[k];
+        const size_t n = strlen(seq);
+        /* The frames that play as lost frames: up to the first voice frame after a held one. */
+        const char* held = strchr(seq, 'U');
+        const char* next_voice = held ? strchr(held, 'V') : NULL;
+        const size_t as_lost = next_voice ? (size_t)(next_voice - seq) : n;
+        for (int one_state = 0; one_state < 2; ++one_state) {
+            for (int held_as_lost = 0; held_as_lost < 2; ++held_as_lost) {
+                run_held_sequence(seq, one_state, held_as_lost, &runs[one_state][held_as_lost]);
+            }
+            for (size_t f = 0; f < as_lost; ++f) {
+                char what[64];
+                snprintf(what, sizeof(what), "%s frame %zu, %s", seq, f, one_state ? "one state" : "three states");
+                assert_same_pcm(runs[one_state][0].pcm[f], runs[one_state][1].pcm[f], 160, what);
+            }
+        }
+        for (size_t f = 0; f < n; ++f) {
+            assert_same_history(&runs[1][0].prev[f], &runs[0][0].prev[f], seq, f);
+        }
+    }
+    puts("state: a held history plays and predicts alike with one state as current and last");
+}
+
+/*
  * Tone transitions, as on DVSI's decoder: the first tone frame crossfades
  * linearly over its first 80 samples from the last frame repeated (what a lost
  * frame plays there) to the tone, and the first voice frame after it from the
@@ -2099,6 +2208,7 @@ main(void) {
     test_tone_ends_repeat_run();
     test_tone_muted_by_error_rate();
     test_one_state_as_current_and_last();
+    test_one_state_held_history();
     test_tone_transitions();
     test_noise_overlap_across_a_tone();
     test_tone_transitions_after_mute();

@@ -771,6 +771,28 @@ ambe2400_mute_noise(float* aout_buf) {
 }
 
 /*
+ * The log2 amplitudes (log2Ml, [0..56]) a frame works with. The model it
+ * plays regenerates its phases from its own (docs/dvsi-parity.md, "Phase
+ * regeneration"), which the prediction history need not be: a frame with an
+ * uncorrectable C0 word plays the repeated model and commits its own decode
+ * (ambe2400_take_lost_frame()).
+ */
+struct ambe2400_amplitudes {
+    float repeated[57];  /* the model prev_mp repeats (ambe2400_take_held_amplitudes()) */
+    float played[57];    /* the model the frame plays: its own decoded one, or the repeated one */
+    float committed[57]; /* the prediction history the frame commits to prev_mp */
+};
+
+/* Commit the frame to prev_mp, with the prediction history it commits: cur_mp
+ * holds those of the model it plays when a caller keeps one state as cur_mp
+ * and prev_mp_enhanced (with three states, cur_mp holds the history's). */
+static void
+ambe2400_commit(const mbe_parms* cur_mp, mbe_parms* prev_mp, const struct ambe2400_amplitudes* amp) {
+    mbe_moveMbeParms(cur_mp, prev_mp);
+    memcpy(prev_mp->log2Ml, amp->committed, sizeof(prev_mp->log2Ml));
+}
+
+/*
  * The repeat limit's mute (the 4th consecutive repeat). DVSI's decoder fades
  * the last frame out rather than cutting it, then plays its mute noise, and
  * keeps the prediction history: the voice after five lost frames follows
@@ -778,12 +800,12 @@ ambe2400_mute_noise(float* aout_buf) {
  * becomes a silent copy of itself, so the voice after the mute fades in.
  */
 static void
-ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, mbe_parms* cur_mp, mbe_parms* prev_mp,
-                           mbe_parms* prev_mp_enhanced) {
+ambe2400_mute_repeat_limit(float* aout_buf, const mbe_process_result* result, const struct ambe2400_amplitudes* amp,
+                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_parms silent = *prev_mp_enhanced;
     float noise[160];
 
-    mbe_moveMbeParms(cur_mp, prev_mp);
+    ambe2400_commit(cur_mp, prev_mp, amp);
     memset(silent.Ml, 0, sizeof(silent.Ml));
     silent.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechf(aout_buf, &silent, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI);
@@ -949,25 +971,40 @@ ambe2400_take_lost_frame(const mbe_process_result* result, int bad, const mbe_pa
  * The log2 amplitudes of the model prev_mp repeats, which a frame repeating it
  * regenerates its phases from (docs/dvsi-parity.md, "Phase regeneration"):
  * prev_mp's own, unless its prediction history is held. A held history's
- * log2Ml stand in prev_mp in place of those of the model it repeats; that
- * model's are where the last synthesized frame left them, since the frame
- * whose uncorrectable C0 word held the history played the model with them
- * (ambe2400_played_amplitudes()) and every frame after it that plays speech
- * while the history is held repeats the same model and leaves them in turn.
+ * log2Ml stand in prev_mp in place of those of the model it repeats; those
+ * are prev_mp_enhanced's whenever a frame can still play that model. The
+ * frame whose uncorrectable C0 word held the history played the model with
+ * them and left them there (ambe2400_synthesize_voice()), and so does every
+ * repeat after it and the speech under a tone's first frame
+ * (ambe2400_speech_under_tone()). Two such frames play nothing of the model
+ * and leave prev_mp_enhanced's as they were: one that continues a held dual
+ * tone (ambe2400_play_tone() from ambe2400_synthesize_frame(); the speech
+ * under the tone's first frame, a repeat of the same model, left them), and
+ * one that reaches the repeat limit (ambe2400_mute_repeat_limit(), which
+ * leaves a silent copy of the last synthesized frame). Neither lets a frame
+ * play the model before a voice frame ends the hold: the dual tone goes on
+ * until the repeat limit's mute, and every repeat after that mute is muted.
+ *
+ * A held history's are read here, before the frame is decoded: a caller may
+ * keep one state as cur_mp and prev_mp_enhanced, which the decode and the
+ * repeated model then overwrite. That state is left holding the log2Ml of the
+ * model the last frame played, where cur_mp would hold the history's; it gets
+ * the history's back here, as with three states, since a decode leaves the
+ * amplitudes above its harmonic count as cur_mp held them, and commits them.
+ * Returns whether the history is held; if not, the caller takes prev_mp's own
+ * after the decode, which extends them above prev_mp's harmonic count.
  */
-static const float*
-ambe2400_repeated_amplitudes(const mbe_parms* prev_mp, const mbe_parms* prev_mp_enhanced) {
-    return mbe_ambe2400_history_held(prev_mp) ? prev_mp_enhanced->log2Ml : prev_mp->log2Ml;
-}
-
-/* The log2 amplitudes of the model the frame plays, taken before a held
- * history replaces cur_mp's: its own decoded model's, or the repeated one's. */
-static void
-ambe2400_played_amplitudes(int bad, const mbe_parms* cur_mp, const mbe_parms* prev_mp,
-                           const mbe_parms* prev_mp_enhanced, float played[57]) {
-    const float* source =
-        (bad == MBE_AMBE2400_FRAME_LOST) ? ambe2400_repeated_amplitudes(prev_mp, prev_mp_enhanced) : cur_mp->log2Ml;
-    memcpy(played, source, sizeof(cur_mp->log2Ml));
+static int
+ambe2400_take_held_amplitudes(mbe_parms* cur_mp, const mbe_parms* prev_mp, const mbe_parms* prev_mp_enhanced,
+                              float repeated[57]) {
+    if (!mbe_ambe2400_history_held(prev_mp)) {
+        return 0;
+    }
+    memcpy(repeated, prev_mp_enhanced->log2Ml, sizeof(prev_mp_enhanced->log2Ml));
+    if (cur_mp == prev_mp_enhanced) {
+        memcpy(cur_mp->log2Ml, prev_mp->log2Ml, sizeof(cur_mp->log2Ml));
+    }
+    return 1;
 }
 
 /* Whether the error level muted the last frame. */
@@ -1010,8 +1047,8 @@ ambe2400_last_frame_audible(const mbe_parms* prev_mp) {
 /* Under the first tone frame, the last frame repeated, as a lost frame plays
  * it (the prediction history is unchanged), to be faded out. */
 static void
-ambe2400_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_parms* prev_mp,
-                           mbe_parms* prev_mp_enhanced) {
+ambe2400_speech_under_tone(float* speech, const struct ambe2400_amplitudes* amp, const mbe_parms* cur_mp,
+                           const mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     mbe_parms repeated = *cur_mp;
     /* Read now: a caller may keep one state as cur_mp and prev_mp_enhanced. */
     const float seed = cur_mp->noiseSeed;
@@ -1022,7 +1059,7 @@ ambe2400_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_par
         memcpy(overlap, prev_mp_enhanced->previousUw, sizeof(overlap));
     }
     mbe_repeat_load_model(&repeated, prev_mp);
-    memcpy(repeated.log2Ml, ambe2400_repeated_amplitudes(prev_mp, prev_mp_enhanced), sizeof(repeated.log2Ml));
+    memcpy(repeated.log2Ml, amp->repeated, sizeof(repeated.log2Ml));
     repeated.repeatCount = 0;
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(&repeated, MBE_HIGH_BAND_GAIN_AMBE2400);
     mbe_synthesizeSpeechWithPreEnhRm0f(speech, &repeated, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
@@ -1038,14 +1075,15 @@ ambe2400_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_par
 }
 
 static void
-ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int volume, int history, mbe_parms* cur_mp,
-                   mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int volume, int history,
+                   const struct ambe2400_amplitudes* amp, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                   mbe_parms* prev_mp_enhanced) {
     int held_index, held_volume;
     const int entering = !ambe2400_held_tone(prev_mp, &held_index, &held_volume);
     float speech[160] = {0};
 
     if (entering && ambe2400_last_frame_audible(prev_mp)) {
-        ambe2400_speech_under_tone(speech, cur_mp, prev_mp, prev_mp_enhanced);
+        ambe2400_speech_under_tone(speech, amp, cur_mp, prev_mp, prev_mp_enhanced);
     }
     /* A tone that goes on at another volume moves to it over the first
      * MBE_AMBE2400_TONE_FADE samples, before the output clips, as on DVSI's
@@ -1068,14 +1106,15 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
         ambe2400_mute_noise(aout_buf);
     }
     ambe2400_hold_tone(cur_mp, index, volume, muted, history);
-    mbe_moveMbeParms(cur_mp, prev_mp);
+    ambe2400_commit(cur_mp, prev_mp, amp);
 }
 
 static void
 ambe2400_synthesize_tone(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int index,
-                         mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+                         const struct ambe2400_amplitudes* amp, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                         mbe_parms* prev_mp_enhanced) {
     const int history = prev_mp->Vl[0] & MBE_AMBE2400_HISTORY_BITS;
-    ambe2400_play_tone(aout_buf, result, index, mbe_tone_dstar_volume(ambe_d), history, cur_mp, prev_mp,
+    ambe2400_play_tone(aout_buf, result, index, mbe_tone_dstar_volume(ambe_d), history, amp, cur_mp, prev_mp,
                        prev_mp_enhanced);
 }
 
@@ -1135,26 +1174,34 @@ ambe2400_tone_outlasts_lost_frame(int index) {
 /*
  * A voice frame, decoded or repeated. The state committed to prev_mp keeps the
  * prediction history's log2Ml; the frame is synthesized, and left as the last
- * synthesized frame, with those of the model it plays (`played`), and cur_mp
- * gets the history's back, as a tone frame next commits cur_mp to prev_mp
- * (ambe2400_play_tone()).
+ * synthesized frame, with those of the model it plays, and cur_mp gets the
+ * history's back, as the next frame's decode leaves those above its harmonic
+ * count as cur_mp holds them and commits them.
+ *
+ * A caller may keep one state as cur_mp and prev_mp_enhanced. It then stays
+ * the last synthesized frame, with the played model's log2Ml (the next frame
+ * gets the history's back, ambe2400_take_held_amplitudes()), and there is no
+ * last frame apart from this one to resume from after the repeat limit's
+ * mute: the frame plays its own model, and commits it, as any voice frame
+ * does with one state.
  */
 static void
-ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, const float played[57], mbe_parms* cur_mp,
-                          mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, const struct ambe2400_amplitudes* amp,
+                          mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
     if (cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
-        float history[57];
-        if (prev_mp->repeatCount >= MBE_MAX_FRAME_REPEATS) {
+        const int one_state = cur_mp == prev_mp_enhanced;
+        if (prev_mp->repeatCount >= MBE_MAX_FRAME_REPEATS && !one_state) {
             ambe2400_resume_after_mute(prev_mp_enhanced, prev_mp);
         }
-        mbe_moveMbeParms(cur_mp, prev_mp);
-        memcpy(history, cur_mp->log2Ml, sizeof(history));
-        memcpy(cur_mp->log2Ml, played, sizeof(history));
+        ambe2400_commit(cur_mp, prev_mp, amp);
+        memcpy(cur_mp->log2Ml, amp->played, sizeof(cur_mp->log2Ml));
         float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2400);
         mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_COMFORT,
                                            MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_SPEC);
-        mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
-        memcpy(cur_mp->log2Ml, history, sizeof(history));
+        if (!one_state) {
+            mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
+            memcpy(cur_mp->log2Ml, amp->committed, sizeof(cur_mp->log2Ml));
+        }
         if (ambe2400_error_rate_mutes(result, cur_mp)) {
             mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
             ambe2400_mute_noise(aout_buf);
@@ -1163,14 +1210,15 @@ ambe2400_synthesize_voice(float* aout_buf, mbe_process_result* result, const flo
     }
 
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
-    ambe2400_mute_repeat_limit(aout_buf, result, cur_mp, prev_mp, prev_mp_enhanced);
+    ambe2400_mute_repeat_limit(aout_buf, result, amp, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
 static void
 ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const char ambe_d[49], int bad,
-                          const float played[57], mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
+                          const struct ambe2400_amplitudes* amp, mbe_parms* cur_mp, mbe_parms* prev_mp,
+                          mbe_parms* prev_mp_enhanced) {
     if (ambe2400_is_tone(bad)) {
-        ambe2400_synthesize_tone(aout_buf, result, ambe_d, bad, cur_mp, prev_mp, prev_mp_enhanced);
+        ambe2400_synthesize_tone(aout_buf, result, ambe_d, bad, amp, cur_mp, prev_mp, prev_mp_enhanced);
         return;
     }
     struct ambe2400_tone_tail held = {0, 0, 0, prev_mp->swn, prev_mp->tonePhase};
@@ -1184,13 +1232,13 @@ ambe2400_synthesize_frame(float* aout_buf, mbe_process_result* result, const cha
     if (outlasts && cur_mp->repeatCount < MBE_MAX_FRAME_REPEATS) {
         cur_mp->swn = prev_mp->swn;
         cur_mp->tonePhase = prev_mp->tonePhase;
-        ambe2400_play_tone(aout_buf, result, held.index, held.volume, history, cur_mp, prev_mp, prev_mp_enhanced);
+        ambe2400_play_tone(aout_buf, result, held.index, held.volume, history, amp, cur_mp, prev_mp, prev_mp_enhanced);
         return;
     }
     if (leaving && repeat) {
         ambe2400_silence_after_tone(cur_mp, prev_mp_enhanced);
     }
-    ambe2400_synthesize_voice(aout_buf, result, played, cur_mp, prev_mp, prev_mp_enhanced);
+    ambe2400_synthesize_voice(aout_buf, result, amp, cur_mp, prev_mp, prev_mp_enhanced);
     /* The tone that went on fades out under the repeat limit's mute. */
     const int fades_out =
         (result->flags & MBE_PROCESS_FLAG_MUTE) == 0u || (outlasts && !ambe2400_error_rate_mutes(result, cur_mp));
@@ -1219,21 +1267,34 @@ mbe_processAmbe2400Dataf(float* aout_buf, mbe_process_result* result, const char
         return ret;
     }
 
+    struct ambe2400_amplitudes amp;
+    const int held = ambe2400_take_held_amplitudes(cur_mp, prev_mp, prev_mp_enhanced, amp.repeated);
     bad = mbe_decodeAmbe2400Parms(ambe_d, cur_mp, prev_mp);
     if (bad < 0) {
         return bad;
     }
+    if (!held) {
+        memcpy(amp.repeated, prev_mp->log2Ml, sizeof(amp.repeated));
+    }
 
-    float history[57], played[57];
+    float history[57];
     int history_bits;
     bad = ambe2400_take_lost_frame(result, bad, cur_mp, history, &history_bits);
     ambe2400_update_decode_state(ambe_d, bad, result, cur_mp, prev_mp);
-    ambe2400_played_amplitudes(bad, cur_mp, prev_mp, prev_mp_enhanced, played);
+    /* A voice frame decoded plays its own model; any other frame, the repeated
+     * one (a tone's first frame, under the tone). */
+    memcpy(amp.played, (bad == 0) ? cur_mp->log2Ml : amp.repeated, sizeof(amp.played));
     if (history_bits != 0) {
         memcpy(cur_mp->log2Ml, history, sizeof(cur_mp->log2Ml));
         cur_mp->Vl[0] = history_bits;
     }
-    ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, played, cur_mp, prev_mp, prev_mp_enhanced);
+    memcpy(amp.committed, cur_mp->log2Ml, sizeof(amp.committed));
+    /* One state as cur_mp and prev_mp_enhanced is the last synthesized frame
+     * wherever the frame synthesizes against it (ambe2400_commit()). */
+    if (cur_mp == prev_mp_enhanced) {
+        memcpy(cur_mp->log2Ml, amp.played, sizeof(cur_mp->log2Ml));
+    }
+    ambe2400_synthesize_frame(aout_buf, result, ambe_d, bad, &amp, cur_mp, prev_mp, prev_mp_enhanced);
     return result->total_errors;
 }
 
