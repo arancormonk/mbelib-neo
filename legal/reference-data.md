@@ -6,7 +6,7 @@ reference builds and generated audio stay outside release artifacts. Local
 measurement is an intended use, not a finding of permission. Public tests and
 examples use synthetic or specifically licensed fixtures. Values measured on or
 read from DVSI's vectors and kept in the source, such as the tone tables of
-2.6.14, are recorded with their basis in
+2.6.13, are recorded with their basis in
 [implementation-provenance.md](implementation-provenance.md); the vectors are
 not. Restricted-reference comparisons remain optional and local.
 

@@ -1182,17 +1182,17 @@ MBE_API void mbe_spectralAmpEnhance(mbe_parms* cur_mp);
  * @brief Synthesize tone frame (AMBE tone indices) into float PCM.
  *
  * Plays the frequencies DVSI's decoders play for the tone ID, not Table 9's
- * nominal ones (since 2.6.14): a dual tone at harmonics l1 and l2 of
- * TIA-102.BABA-1 Annex J's fundamental on DVSI's grid of 2^-19 cycle per
- * sample (DTMF "1" at 693.909 + 1214.340 Hz, where Table 9's nominal 697 +
- * 1209 Hz is what 2.6.13 played), with two exceptions, IDs 145 and 147, whose
- * fundamentals are DVSI's own; a single tone by its own rule, harmonic
- * ID / 16 + 1 of a fundamental under 500 Hz. It continues the oscillator
- * phases `cur_mp` carries: this call has no frame history, so it never starts
- * a tone afresh. The frame process functions start every tone that follows a
- * frame that is not a tone frame afresh, as a new pulse train; DVSI's decoders
- * start one so only after a frame with no voiced band and continue a voiced
- * frame's pulse train into the tone.
+ * nominal ones (since 2.6.13): a dual tone at harmonics l1 and l2 of
+ * TIA-102.BABA-1 Annex J's fundamental on DVSI's grid of 2^-19 cycle per sample
+ * (DTMF "1" at 693.909 + 1214.340 Hz, where Table 9's nominal 697 + 1209 Hz is
+ * what releases before 2.6.13 played), with two exceptions, IDs 145 and 147,
+ * whose fundamentals are DVSI's own; a single tone by its own rule, harmonic
+ * ID / 16 + 1 of a fundamental under 500 Hz. It continues the oscillator phases
+ * `cur_mp` carries: this call has no frame history, so it never starts a tone
+ * afresh. The frame process functions start every tone that follows a frame
+ * that is not a tone frame afresh, as a new pulse train; DVSI's decoders start
+ * one so only after a frame with no voiced band and continue a voiced frame's
+ * pulse train into the tone.
  * @param aout_buf Output buffer of 160 float samples.
  * @param ambe_d   AMBE parameter bits (49).
  * @param cur_mp   Current parameter set (tone synthesis state). NULL or invalid tone inputs synthesize silence.
@@ -1202,7 +1202,7 @@ MBE_API void mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms*
  * @brief Synthesize tone for D-STAR style indices into float PCM.
  *
  * Plays the frequencies DVSI's decoders play for the AMBE+2 tone of the same
- * nominal pair (mbe_synthesizeTonef()), not the nominal ones (since 2.6.14),
+ * nominal pair (mbe_synthesizeTonef()), not the nominal ones (since 2.6.13),
  * continuing the oscillator phases `cur_mp` carries.
  * @param aout_buf Output buffer of 160 float samples.
  * @param ambe_d   AMBE parameter bits (49); the tone volume is read from them.

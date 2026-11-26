@@ -716,7 +716,7 @@ other six ran from 6.047 to 6.070 us, below all of the branch's.
 
 ### Tones and the octave step
 
-2.6.14 adds three things to a decode ([DVSI
+The tone model change adds three things to a decode ([DVSI
 parity](dvsi-parity.md#november-2026-tones-and-the-octave-step)): the octave
 step of the pulse train, a test of every P25 voice frame against the P25 tone
 table (`imbe_tone_word()`), and the tone model of the frames that pass. The
@@ -1239,7 +1239,7 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   different tone. Single tones must agree within 10 Hz (they are 31.25 Hz
   apart); each dual-tone component within 25 Hz, since DVSI plays dual tones
   up to 20 Hz off nominal and neighbouring DTMF frequencies are 73 Hz or more
-  apart. Since 2.6.14 this library plays the frequencies DVSI's decoders play
+  apart. Since 2.6.13 this library plays the frequencies DVSI's decoders play
   for a rate-33 or D-STAR tone, and plays the P25 tones it recognises as DVSI's
   decoder does, so a tone can also be compared with DVSI's decode sample for
   sample, frame for frame at lag 0: the correlation of each steady tone frame
@@ -1293,7 +1293,7 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   of a check; `every_vector` fails the check instead.
   A paired check needs its metric from both runs on every vector it covers,
   so check the baseline's coverage of a metric before declaring a gate on it:
-  the P25 checks of `tone-model-tones` (the gate sets of 2.6.14 are
+  the P25 checks of `tone-model-tones` (the gate sets of the tone model change are
   `tone-model-development`, `-validation`, `-tones`, `-channel` and `-final`)
   fail on `knox_9`, whose P25 decode by the baseline has no steady tone window
   the detector recognises, while the candidate's has
