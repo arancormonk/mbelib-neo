@@ -1663,9 +1663,9 @@ enhancement. It runs for P25 only: ProVoice reaches the same data path but has n
   fundamental](#tones-as-harmonics-of-a-fundamental); the upper component over the lower is a median
   0.9999 of the sinc^2 ratio). The library takes 0.988 times the rms (`IMBE_TONE_LEVEL`): the steady
   tone frames of `knox_1` to `knox_16` and `dtone_1` to `dtone_16` then play 0.012 dB above DVSI's
-  (0.9866 would be exact there), and those of the DTMF, `alert`, `alltone` and call-progress vectors
-  0.022 dB (dual tones, 2,087 frames) and 0.031 dB (single tones, 411 frames) below it; at 0.98
-  they play -0.058 dB, at 1.00 +0.117 dB.
+  (0.9866 would be exact there; at 0.98 they would play -0.058 dB, at 1.00 +0.117 dB), and those
+  of the DTMF, `alert`, `alltone` and call-progress vectors 0.022 dB (dual tones, 2,087 frames)
+  and 0.031 dB (single tones, 411 frames) below it.
 - **The other harmonics:** gone. Two components leave 0.0009 of the frame where the tone holds
   60-70% of the decoded energy, so the others are at least 27 dB down. The library makes them
   unvoiced at 0, as clause 8 of TIA-102.BABA-1 builds a tone's voice parameters.
@@ -1873,10 +1873,10 @@ index 129, DTMF "1", its nominal pair):
 **It is the voiced synthesizer.** DVSI's tones carry the marks of its voiced synthesis, US
 8,200,497's impulse-response synthesis, which the library's [subframe
 synthesis](#synthesis-in-subframes) models: weak lines at `k f0 + m 100 Hz`; images of harmonic l at
-`(256 - l) f0` and `(256 + l) f0` about `(l / 256)^2` down (index 129: 3195.80 and 2375.52 Hz at
--62.1 and -62.9 dB for l 7, 3716.25 and 2895.94 Hz at -72.0 and -72.3 dB for l 4, where
-`(7 / 256)^2` is -62.5 dB and `(4 / 256)^2` -72.2 dB), as the patent's K = 256 table read with
-linear interpolation leaves them; and a ratio of the two components' amplitudes equal to
+`(256 - l) f0` and `(256 + l) f0`, folded into the band, about `(l / 256)^2` down (index 129:
+3195.80 and 2375.52 Hz at -62.1 and -62.9 dB for l 7, 3716.25 and 2895.94 Hz at -72.0 and -72.3 dB
+for l 4, where `(7 / 256)^2` is -62.5 dB and `(4 / 256)^2` -72.2 dB), as the patent's K = 256 table
+read with linear interpolation leaves them; and a ratio of the two components' amplitudes equal to
 `sinc^2(pi l2 / 256) / sinc^2(pi l1 / 256)` within 0.0004 for all 36 dual tones (0.9807 for index
 140's harmonics 12 and 23).
 
