@@ -2442,10 +2442,18 @@ test_invalid_models(void) {
         }
     }
     /* A harmonic count outside 1..56, in either frame: nothing is rendered,
-     * the state stays as it is, and the models have no band. */
+     * the state stays as it is, byte for byte (in P25's rendering too, which
+     * marks the model it renders only on a frame it accepts), and the models
+     * have no band. */
     static const int counts[] = {0, -1, 57, 1000, INT_MAX, INT_MIN};
+
+    static const enum mbe_voiced_synthesis renderings[] = {
+        MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_VOICED_SYNTHESIS_DVSI_IMBE};
+
     set_model(&good, 200.0, 18, 18, 16.0f);
-    for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); ++i) {
+    for (size_t k = 0; k < sizeof(counts) / sizeof(counts[0]) * 3; ++k) {
+        const size_t i = k / 3;
+        const enum mbe_voiced_synthesis rendering = renderings[k % 3];
         for (int which = 0; which < 2; ++which) {
             struct mbe_subframe_model model;
             fresh_stream(&last);
@@ -2457,16 +2465,16 @@ test_invalid_models(void) {
             for (int n = 0; n < 192; ++n) {
                 guarded[n] = 7.0f;
             }
-            mbe_synthesize_subframes(guarded + 16, &cur, &prev, NULL, 1.0f, 0, MBE_VOICED_SYNTHESIS_DVSI);
+            mbe_synthesize_subframes(guarded + 16, &cur, &prev, NULL, 1.0f, 0, rendering);
             for (int n = 0; n < 192; ++n) {
                 assert(guarded[n] == 7.0f);
             }
             memcpy(after, &cur, sizeof(after));
             assert(memcmp(after, before, sizeof(after)) == 0);
-            mbe_advance_subframes(&cur, &prev, 0, MBE_VOICED_SYNTHESIS_DVSI);
+            mbe_advance_subframes(&cur, &prev, 0, rendering);
             memcpy(after, &cur, sizeof(after));
             assert(memcmp(after, before, sizeof(after)) == 0);
-            mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &model);
+            mbe_subframe_mid_model(&prev, &cur, 0, rendering, &model);
             assert(model.L == 0 && !model.any_voiced);
             mbe_subframe_own_model(which ? &prev : &cur, &model);
             assert(model.L == 0 && !model.any_voiced);

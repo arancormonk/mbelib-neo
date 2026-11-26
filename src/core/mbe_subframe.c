@@ -832,6 +832,13 @@ silence_model(struct mbe_subframe_model* model) {
     }
 }
 
+/* Whether the synthesis takes the frame: both harmonic counts 1..56. A frame
+ * it does not take renders nothing and leaves the state as it is. */
+static int
+frame_accepted(const mbe_parms* cur_mp, const mbe_parms* prev_mp) {
+    return mbe_harmonic_count_is_valid(cur_mp->L) && mbe_harmonic_count_is_valid(prev_mp->L);
+}
+
 /* A frame's three models (the last frame's own, mid-frame, this frame's own)
  * and the pulse train it starts from, for rendering and advancing alike.
  * Starting from silence, the last frame's own model plays nothing and counts
@@ -849,7 +856,7 @@ silence_model(struct mbe_subframe_model* model) {
 static int
 prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence, enum mbe_voiced_synthesis rendering,
               struct mbe_subframe_model models[3], struct pulse_train* train) {
-    if (!mbe_harmonic_count_is_valid(cur_mp->L) || !mbe_harmonic_count_is_valid(prev_mp->L)) {
+    if (!frame_accepted(cur_mp, prev_mp)) {
         return 0;
     }
     mbe_subframe_own_model(prev_mp, &models[0]);
@@ -872,13 +879,16 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
  * adaptive smoothing (which can voice harmonics of a frame decoded with none):
  * MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band and is not a tone
  * model (MBE_FRAME_MARK_TONE), so that its onset is read in the 500 Hz columns
- * whatever mark it was decoded or repeated with; with no voiced band, not that
- * mark (none instead), any other mark kept. The prediction history the data
- * path committed before keeps the decoded model and its mark. Other renderings
- * leave the mark as it is. */
+ * whatever mark it was decoded or repeated with (a caller's
+ * MBE_FRAME_MARK_LATE_ONSET or MBE_FRAME_MARK_PREVIOUS_HELD there is
+ * overwritten and has no effect); with no voiced band, not that mark (none
+ * instead), any other mark kept. The prediction history the data path
+ * committed before keeps the decoded model and its mark. Other renderings
+ * leave the mark as it is. Called only on a frame the synthesis accepts
+ * (frame_accepted()), so that a rejected call leaves the state untouched. */
 static void
 mark_rendered_model(mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
-    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE || !mbe_harmonic_count_is_valid(cur_mp->L)) {
+    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
         return;
     }
     const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
@@ -900,6 +910,9 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
     struct mbe_unvoiced_subframe noise[2];
     struct pulse_train train;
 
+    if (!frame_accepted(cur_mp, prev_mp)) {
+        return;
+    }
     mark_rendered_model(cur_mp, rendering);
     if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
         return;
@@ -930,6 +943,9 @@ mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_sile
     struct mbe_subframe_model models[3];
     struct pulse_train train;
 
+    if (!frame_accepted(cur_mp, prev_mp)) {
+        return;
+    }
     mark_rendered_model(cur_mp, rendering);
     if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
         return;
