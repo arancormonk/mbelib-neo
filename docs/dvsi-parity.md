@@ -62,9 +62,9 @@ appear here.
   frames](#p25-tones-sent-as-voice-frames)) hold it out as well: the study that found them read
   DVSI's tone vectors and the development and validation vectors, never `irstia` or `mark`; the
   change set was measured and gated on the development, validation, tone and channel partitions,
-  and the final partition is to be scored once for it, after the review, against the gate set
-  `tone-model-final`, declared before any build was scored ([November 2026: tones and the octave
-  step](#november-2026-tones-and-the-octave-step)).
+  and the final partition was scored once for it, after the review, against the gate set
+  `tone-model-final`, declared before any build was scored, which it passed ([November 2026: tones
+  and the octave step](#november-2026-tones-and-the-octave-step)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -3231,8 +3231,8 @@ The head of PR #196 (`fac0111`, 2.6.13) against the changes of 2.6.14:
 Both builds aligned freely first and were then scored at their joint lags, both runs' encodings
 decoded by the candidate's decoder. The study that found these rules read DVSI's tone vectors and
 the development and validation vectors, never `irstia` or `mark`; the change set was measured and
-gated on the development, validation, tone and channel partitions, and the final partition is held
-out ([Method](#method); below).
+gated on the development, validation, tone and channel partitions, and the final partition was held
+out and scored once, after the review ([Method](#method); below).
 
 **Tones**, against DVSI's decode of the same bits, sample for sample at lag 0, measured with a local
 script on DVSI's 52 tone vectors of each codec. The frames it counts:
@@ -3336,7 +3336,7 @@ change set:
 | `tone-model-validation` | passes | |
 | `tone-model-tones` | fails 5 of its 20 checks | P25: the balance error falling by 1.0 dB, the level error not rising, the frequency error not rising by 0.0005 on any vector and the wrong-tone fraction not rising, all four for `knox_9`, which the comparison cannot pair; rate 33: the detector's agreement not falling on any vector (`alltone` -0.003175, allowed 0) |
 | `tone-model-channel` | passes | |
-| `tone-model-final` | declared; to be scored once, after the review | |
+| `tone-model-final` | passes (scored once, after the review, at `c2ba220`; below) | |
 
 The four P25 checks fail because the scoreboard cannot pair `knox_9`: `fac0111`'s P25 decode of it
 has no steady tone window the scoreboard's tone detector recognises, so its tone metrics are null
@@ -3367,8 +3367,31 @@ every mode the waveform correlation with DVSI's decode falls by no more than 0.0
 0.001 on any vector, the distance from DVSI's decode rises by no more than 0.01 dB on the mean and
 0.03 dB on any vector, the envelope correlation falls by no more than 0.001, the distance from the
 input rises by no more than 0.01 dB, the level against DVSI's moves by at most 0.05 dB, and every
-encoder's bits are unchanged). The final partition will be scored once for this change set, after
-its review, `fac0111` against the reviewed branch, against that gate set.
+encoder's bits are unchanged). The final partition was scored once for this change set, on
+2026-11-26, after the review: `fac0111` against the branch at `c2ba220`, the reviewed code (the
+commits after it change documents only), on `irstia` and `mark`, both builds aligned freely first
+and then scored at their joint lags, both runs' encodings decoded by the candidate's decoder. It
+passes all 24 checks of `tone-model-final` (none fails). The library's decode of DVSI's bits,
+`fac0111` → `c2ba220`, partition means over the two vectors and the waveform correlation of each:
+
+| Codec | Waveform corr. vs DVSI, sample for sample, mean | `irstia` | `mark` | LSD vs DVSI (dB), mean | LSD vs input (dB), mean |
+|---|---|---|---|---|---|
+| D-STAR | 0.9656 → 0.9830 | 0.9426 → 0.9774 | 0.9886 → 0.9886 | 1.7814 → 1.7794 | 5.5438 → 5.5432 |
+| P25 | 0.9798 → 0.9798 | 0.9727 → 0.9727 | 0.9869 → 0.9869 | 1.5700 → 1.5696 | 5.3702 → 5.3703 |
+| Rate 33 | 0.9766 → 0.9766 | 0.9697 → 0.9697 | 0.9834 → 0.9834 | 1.5592 → 1.5592 | 5.5208 → 5.5208 |
+
+The envelope correlation with DVSI's decode stays at 0.9766 (D-STAR), 0.9840 (P25) and 0.9781
+(rate 33), means. The gate's paired deltas: the waveform correlation +0.01738 for D-STAR on the
+mean (`irstia` +0.0348, `mark` 0), +8.4e-07 for P25 (`irstia` +1.7e-06) and 0 for rate 33; the
+distance from DVSI's decode -0.0020 dB (D-STAR), -0.0003 dB (P25) and 0; the distance from the
+input -0.0006 dB, +0.0001 dB and 0; the level against DVSI's +0.0010 dB, -0.000006 dB and 0; and
+every encoder's bits unchanged (no vector with changed rows in any mode). What this shows: on the
+two held-out vectors no metric of the gate set moves the wrong way past its limit, and D-STAR's
+decode follows DVSI's more closely, a gain that is all `irstia`'s (+0.0348 in waveform correlation;
+`mark` does not move). What it does not show: it is two vectors, and P25 and rate 33 do not move
+there (rate 33's two decodes are unchanged, P25's correlation by at most 1.7e-06), so it says
+nothing for or against the change set in those two codecs; every `mark` figure is the same at four
+decimals.
 
 ### Scoring history
 
@@ -3446,5 +3469,6 @@ tone path, `d245efd`, failed `tone-model-development` and `-validation` on P25; 
 limit was corrected (`b58d91d`) and the change set scored again with the same gate sets, builds of
 the baseline and protocol. `tone-model-tones` failed the same five checks both times and is kept as
 declared ([November 2026: tones and the octave step](#november-2026-tones-and-the-octave-step)).
-The final partition has not been scored for 2.6.14: it is scored once, after the review, against
-`tone-model-final`.
+The final partition was scored once for 2.6.14, on 2026-11-26, after the review: `fac0111` against
+`c2ba220`, the reviewed code, against `tone-model-final`, declared in `c736edf`. It passes all 24
+checks ([November 2026: tones and the octave step](#november-2026-tones-and-the-octave-step)).
