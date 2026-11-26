@@ -621,6 +621,54 @@ test_forged_tone_mark(void) {
     puts("p25 tones: the tone mark is the tone model's alone");
 }
 
+/*
+ * The public parameter decoder leaves 0 in Vl[0] on every frame that is not a
+ * tone: a special frame (b0 255, return 1) decoded into a state that held a
+ * tone word clears it there, and leaves the history it is given untouched (its
+ * word included: the process API's repeat takes the tone from it).
+ */
+static void
+test_public_decoder_clears_the_word(void) {
+    char imbe_d[88];
+    float logm[57];
+    int K;
+    mbe_parms history = fresh_history();
+    tone_amplitudes(logm, harmonics_of(53, &K), 4, 7, 11.0f, 2.0f);
+    build_frame(imbe_d, 53, 0x70u, logm, &history);
+    mbe_parms cur = decode(imbe_d, &history);
+    assert(cur.Vl[0] == tone_word(53, 4, 7));
+    mbe_parms prev = cur;
+    const mbe_parms before = prev;
+
+    special_frame(imbe_d);
+    const int rc = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+    assert(rc == 1);
+    (void)rc;
+    assert(cur.Vl[0] == 0);
+    assert(prev.Vl[0] == before.Vl[0] && prev.L == before.L && same_float(prev.w0, before.w0));
+    for (int l = 0; l <= 56; ++l) {
+        assert(prev.Vl[l] == before.Vl[l] && same_float(prev.Ml[l], before.Ml[l])
+               && same_float(prev.log2Ml[l], before.log2Ml[l]));
+    }
+    puts("p25 tones: the public decoder clears the word on a special frame");
+}
+
+/*
+ * ProVoice keeps no tone word: Vl[0] reads 0 in all three states after its
+ * frames, a repeat of a history that holds a P25 tone word included (a stream
+ * that changed codec), which plays no tone model either.
+ */
+static void
+test_provoice_keeps_no_word(void) {
+    struct stream pv;
+    float out[160];
+    stream_after_tone(&pv);
+    play_repeat(out, &pv, 1);
+    assert(mbe_frame_mark(&pv.enhanced) != MBE_FRAME_MARK_TONE);
+    assert(pv.cur.Vl[0] == 0 && pv.prev.Vl[0] == 0 && pv.enhanced.Vl[0] == 0);
+    puts("p25 tones: ProVoice keeps no word");
+}
+
 int
 main(void) {
     test_tone_test();
@@ -628,5 +676,7 @@ main(void) {
     test_tone_run_renders();
     test_impossible_tone_words();
     test_forged_tone_mark();
+    test_public_decoder_clears_the_word();
+    test_provoice_keeps_no_word();
     return 0;
 }

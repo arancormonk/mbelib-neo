@@ -115,6 +115,21 @@ imbe_dvsi_pitch_offset(int b0) {
     return C0 + (C1 * cos(t)) + (S1 * sin(t)) + (C2 * cos(2.0 * t)) + (S2 * sin(2.0 * t));
 }
 
+/* Eq 46's nominal fundamental of pitch code b0 (0..207), in float: rounded to
+ * float here, where the contract names it, as under x87 excess precision the
+ * quotient could otherwise reach what follows unrounded (mbe_round_to_float(),
+ * mbe_math.h). */
+static float
+imbe_nominal_fundamental(int b0) {
+    return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+}
+
+/* Eq 47's harmonic count of a nominal fundamental. */
+static int
+imbe_harmonic_count(float nominal) {
+    return (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
+}
+
 /*
  * b0 and the fundamental, harmonic count and band count it gives (TIA-102.BABA
  * eqs 46-48). The nominal pitch of eq 46 is computed in float, as this decoder
@@ -143,21 +158,6 @@ imbe_dvsi_pitch_offset(int b0) {
  * count, the harmonic where the high-band shelf starts) follow the pitch
  * played and do move at some codes.
  */
-/* Eq 46's nominal fundamental of pitch code b0 (0..207), in float: rounded to
- * float here, where the contract names it, as under x87 excess precision the
- * quotient could otherwise reach what follows unrounded (mbe_round_to_float(),
- * mbe_math.h). */
-static float
-imbe_nominal_fundamental(int b0) {
-    return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
-}
-
-/* Eq 47's harmonic count of a nominal fundamental. */
-static int
-imbe_harmonic_count(float nominal) {
-    return (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
-}
-
 static int
 imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
@@ -857,6 +857,11 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
     if (ret < 0) {
         return ret;
     }
+    /* Vl[0] holds a tone word only where this frame's decode recognises a
+     * tone (below): 0 on every other return, a special or invalid frame
+     * included, whatever cur_mp held before. prev_mp is not touched: the
+     * process functions repeat from it, its word included. */
+    cur_mp->Vl[0] = 0;
 
     if (imbe_decode_fundamental(imbe_d, pitch, cur_mp, &b0, &L9) != 0) {
         return 1;
@@ -896,7 +901,8 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
  * (imbe_decode_fundamental()): this decoder has no frame context, so a P25
  * one. The ProVoice frame paths keep the nominal pitch. A frame that is a P25
  * tone sent as voice frames leaves its tone in the otherwise unused Vl[0]
- * (imbe_tone_word()), 0 otherwise; the decoded model is unchanged.
+ * (imbe_tone_word()); every other frame, special and invalid frames included,
+ * leaves 0 there (prev_mp is not written). The decoded model is unchanged.
  * @param imbe_d  Demodulated IMBE parameter bits (88).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
@@ -1229,9 +1235,13 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
 
     /* Only imbe4400_play_tone() marks a frame MBE_FRAME_MARK_TONE, on the
      * frame it plays: the decoders never do, and the history never holds the
-     * mark, so one here came from a caller's state and is not the frame's. */
+     * mark, so one here came from a caller's state and is not the frame's.
+     * ProVoice keeps no tone word either: Vl[0] reads 0 after its frames. */
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
         mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
+    }
+    if (imbe4400_is_provoice(result)) {
+        cur_mp->Vl[0] = 0;
     }
     mbe_moveMbeParms(cur_mp, prev_mp);
     /* The prediction history (prev_mp) keeps the decoded frame; a tone frame's
