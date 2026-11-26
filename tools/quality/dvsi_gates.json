@@ -4383,5 +4383,831 @@
         "value": 0.005
       }
     ]
+  },
+  "phase-source-development": {
+    "description": "Voiced phases regenerated from each frame's decoded log2 amplitudes (log2Ml, before spectral enhancement, the high-band shelf and any scaling) on every codec path, as DVSI's decoders regenerate them and as US 5,701,390 applies its kernel to the decoded magnitudes, main against the change, development vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.015 more (mean, 95% interval above 0) and by no more than 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.05 dB on any vector, loses no more than 0.002 of envelope correlation with DVSI's decode, comes no further from the input than 0.02 dB, its level against DVSI's moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.015,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "phase-source-validation": {
+    "description": "Voiced phases regenerated from each frame's decoded log2 amplitudes (log2Ml, before spectral enhancement, the high-band shelf and any scaling) on every codec path, as DVSI's decoders regenerate them and as US 5,701,390 applies its kernel to the decoded magnitudes, main against the change, validation vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.015 more (mean, 95% interval above 0) and by no more than 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.05 dB on any vector, loses no more than 0.002 of envelope correlation with DVSI's decode, comes no further from the input than 0.02 dB, its level against DVSI's moves by at most 0.1 dB, and every encoder's bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.015,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "phase-source-tones": {
+    "description": "Voiced phases regenerated from each frame's decoded log2 amplitudes (log2Ml, before spectral enhancement, the high-band shelf and any scaling) on every codec path, as DVSI's decoders regenerate them and as US 5,701,390 applies its kernel to the decoded magnitudes, main against the change, on the tone vectors: on no D-STAR or rate-33 vector does our decode lose more than 0.005 of its agreement with DVSI's tone output (the share of steady windows where the detector finds the same tone in both), play a wrong tone more often, or move its tone level further from DVSI's by more than 0.05 dB, and the D-STAR and rate-33 encoders' tone frames agree with DVSI's, and appear where DVSI sends voice, exactly as often as before on every vector.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
+  },
+  "phase-source-channel": {
+    "description": "Voiced phases regenerated from each frame's decoded log2 amplitudes (log2Ml, before spectral enhancement, the high-band shelf and any scaling) on every codec path, as DVSI's decoders regenerate them and as US 5,701,390 applies its kernel to the decoded magnitudes, main against the change, under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's no less often on any vector, hard or soft, and on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) our output comes no further from DVSI's than 0.01 dB, hard or soft.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "p25-pitch-development": {
+    "description": "P25 pitch code b0 played at the pitch DVSI's P25 decoder plays, TIA-102.BABA eq 46's 4 pi / (b0 + 39.5) times 1 + g with g a smooth function of the nominal period that repeats every half octave (at most 0.071%; L, K and ProVoice's pitch unchanged), the phase-source change against it, development vectors: the D-STAR and rate-33 decodes of DVSI's bits are unchanged, every encoder's bits are unchanged, and for P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.01 more (mean, 95% interval above 0) and by no more than 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.05 dB on any vector, loses no more than 0.002 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, and its level against DVSI's moves by at most 0.05 dB.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
+  },
+  "p25-pitch-validation": {
+    "description": "P25 pitch code b0 played at the pitch DVSI's P25 decoder plays, TIA-102.BABA eq 46's 4 pi / (b0 + 39.5) times 1 + g with g a smooth function of the nominal period that repeats every half octave (at most 0.071%; L, K and ProVoice's pitch unchanged), the phase-source change against it, validation vectors: the D-STAR and rate-33 decodes of DVSI's bits are unchanged, every encoder's bits are unchanged, and for P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.01 more (mean, 95% interval above 0) and by no more than 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.05 dB on any vector, loses no more than 0.002 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, and its level against DVSI's moves by at most 0.05 dB.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
+  },
+  "p25-pitch-tones": {
+    "description": "P25 pitch code b0 played at the pitch DVSI's P25 decoder plays, TIA-102.BABA eq 46's 4 pi / (b0 + 39.5) times 1 + g with g a smooth function of the nominal period that repeats every half octave (at most 0.071%; L, K and ProVoice's pitch unchanged), the phase-source change against it, on the tone vectors: the D-STAR and rate-33 decodes of DVSI's bits are unchanged, the speech vectors' as well as the tone vectors'. P25 has no tone frames and its tone rows are not gated.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "p25-pitch-channel": {
+    "description": "P25 pitch code b0 played at the pitch DVSI's P25 decoder plays, TIA-102.BABA eq 46's 4 pi / (b0 + 39.5) times 1 + g with g a smooth function of the nominal period that repeats every half octave (at most 0.071%; L, K and ProVoice's pitch unchanged), the phase-source change against it, under channel errors (dam at 1.1-10.6% bit errors): the D-STAR and rate-33 decodes are unchanged, the speech vectors' as well as the channel-error vectors', and for P25 the mute decisions agree with DVSI's no less often on any vector, hard or soft, and the hard-decision output on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) comes no further from DVSI's than 0.01 dB.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "r33-mid-pitch-development": {
+    "description": "The rate-33 mid-frame pitch between two voiced frames of different pitch played at the geometric mean of their pitches times 1 - 3.0e-4, as DVSI's rate-33 decoder plays it (every other mid-frame pitch, and every other codec, unchanged), the P25-pitch change against it, development vectors: the D-STAR and P25 decodes of DVSI's bits are unchanged, every encoder's bits are unchanged, and for rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.003 more (mean, 95% interval above 0) and by no more than 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.05 dB on any vector, loses no more than 0.002 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, and its level against DVSI's moves by at most 0.05 dB.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.003,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "r33",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
+  },
+  "r33-mid-pitch-validation": {
+    "description": "The rate-33 mid-frame pitch between two voiced frames of different pitch played at the geometric mean of their pitches times 1 - 3.0e-4, as DVSI's rate-33 decoder plays it (every other mid-frame pitch, and every other codec, unchanged), the P25-pitch change against it, validation vectors: the D-STAR and P25 decodes of DVSI's bits are unchanged, every encoder's bits are unchanged, and for rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.003 more (mean, 95% interval above 0) and by no more than 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.05 dB on any vector, loses no more than 0.002 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, and its level against DVSI's moves by at most 0.05 dB.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.003,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": "r33",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      }
+    ]
+  },
+  "r33-mid-pitch-tones": {
+    "description": "The rate-33 mid-frame pitch between two voiced frames of different pitch played at the geometric mean of their pitches times 1 - 3.0e-4, as DVSI's rate-33 decoder plays it (every other mid-frame pitch, and every other codec, unchanged), the P25-pitch change against it, on the tone vectors: the D-STAR and P25 decodes of DVSI's bits are unchanged, the speech vectors' as well as the tone vectors', and on no rate-33 vector does our decode lose more than 0.005 of its agreement with DVSI's tone output (the share of steady windows where the detector finds the same tone in both), play a wrong tone more often, or move its tone level further from DVSI's by more than 0.05 dB.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.005
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase"
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      }
+    ]
+  },
+  "r33-mid-pitch-channel": {
+    "description": "The rate-33 mid-frame pitch between two voiced frames of different pitch played at the geometric mean of their pitches times 1 - 3.0e-4, as DVSI's rate-33 decoder plays it (every other mid-frame pitch, and every other codec, unchanged), the P25-pitch change against it, under channel errors (dam at 1.1-10.6% bit errors): the D-STAR and P25 decodes are unchanged, the speech vectors' as well as the channel-error vectors', and for rate 33 the mute decisions agree with DVSI's no less often on any vector, hard or soft, and the hard-decision output on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) comes no further from DVSI's than 0.01 dB.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "decoder-phase-pitch-final": {
+    "description": "The three decoder changes of this change set together (voiced phases regenerated from the decoded log2 amplitudes on every codec path, the P25 pitch DVSI's decoder plays for each pitch code, and the rate-33 mid-frame pitch between two voiced frames of different pitch), main against the change set, final vectors. Built from the development gate sets of the three changes (phase-source-development, p25-pitch-development, r33-mid-pitch-development) with the same metrics and rules; where two changes bound one metric of a mode their limits are added (P25: the phase source and the P25 pitch; rate 33: the phase source and the mid-frame pitch; D-STAR: the phase source only). So: our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.015 (D-STAR), 0.025 (P25) or 0.018 (rate 33) more (mean, 95% interval above 0) and by no more than 0.002 (D-STAR) or 0.004 (P25, rate 33) less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 or 0.02 dB (mean) and 0.05 or 0.1 dB on any vector, loses no more than 0.002 or 0.004 of envelope correlation with DVSI's decode, comes no further from the input than 0.02 or 0.03 dB, its level against DVSI's moves by at most 0.1 or 0.15 dB (D-STAR, then P25 and rate 33), and every encoder's bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.015,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.025,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.018,
+        "every_vector": true
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.004,
+        "every_vector": true
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.1
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.002
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.004
+      },
+      {
+        "mode": "dstar",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.03
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.1
+      },
+      {
+        "mode": [
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.15
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }
