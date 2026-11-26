@@ -70,6 +70,14 @@ w0_of(double hz) {
     return (float)(2.0 * M_PI * hz / 8000.0);
 }
 
+/* Harmonic l's amplitude, decoded as log2Ml and rendered as Ml alike (a model
+ * no enhancement has shaped; 0 for none, whose log2Ml is the initial state's). */
+static void
+set_amplitude(mbe_parms* mp, int l, float amplitude) {
+    mp->Ml[l] = amplitude;
+    mp->log2Ml[l] = (amplitude > 0.0f) ? (float)log2((double)amplitude) : 0.0f;
+}
+
 /* A model of L harmonics at `hz`, the first `voiced` of them voiced. */
 static void
 set_model(mbe_parms* mp, double hz, int L, int voiced, float amplitude) {
@@ -77,9 +85,17 @@ set_model(mbe_parms* mp, double hz, int L, int voiced, float amplitude) {
     mp->L = L;
     for (int l = 1; l <= 56; ++l) {
         mp->Vl[l] = (l <= voiced) ? 1 : 0;
-        mp->Ml[l] = (l <= L) ? amplitude : 0.0f;
+        set_amplitude(mp, l, (l <= L) ? amplitude : 0.0f);
     }
     mbe_set_frame_mark(mp, MBE_FRAME_MARK_NONE);
+}
+
+/* A model's amplitudes, as rendered (Ml) and as decoded (log2Ml, which the
+ * phases are regenerated from). */
+static void
+copy_amplitudes(mbe_parms* dst, const mbe_parms* src) {
+    memcpy(dst->Ml, src->Ml, sizeof(dst->Ml));
+    memcpy(dst->log2Ml, src->log2Ml, sizeof(dst->log2Ml));
 }
 
 /* The next frame of a stream: `last` is the frame before it as synthesized,
@@ -91,7 +107,7 @@ next_frame_from(float out[160], mbe_parms* last, const mbe_parms* model, int fro
     cur.w0 = model->w0;
     cur.L = model->L;
     memcpy(cur.Vl, model->Vl, sizeof(cur.Vl));
-    memcpy(cur.Ml, model->Ml, sizeof(cur.Ml));
+    copy_amplitudes(&cur, model);
     mbe_set_frame_mark(&cur, mbe_frame_mark(model));
     memset(out, 0, 160 * sizeof(float));
     mbe_synthesize_subframes(out, &cur, last, NULL, 1.0f, from_silence);
@@ -177,6 +193,15 @@ same_bits(const float* a, const float* b, int n) {
     return 1;
 }
 
+/* P25 parameter bits with pitch code b0. */
+static void
+set_imbe_b0(char imbe_d[88], int b0) {
+    static const int index[8] = {0, 1, 2, 3, 4, 5, 85, 86};
+    for (int i = 0; i < 8; ++i) {
+        imbe_d[index[i]] = (char)((b0 >> (7 - i)) & 1);
+    }
+}
+
 /* The frame marks: only an exact stored value counts, and one replaces another. */
 static void
 test_frame_marks(void) {
@@ -216,7 +241,7 @@ test_steady_model_is_its_harmonics(void) {
     fresh_stream(&last);
     set_model(&model, 187.5, 18, 18, 0.0f);
     for (int l = 1; l <= model.L; ++l) {
-        model.Ml[l] = 8.0f + (float)((l * 7) % 5);
+        set_amplitude(&model, l, 8.0f + (float)((l * 7) % 5));
     }
     for (int f = 0; f < 10; ++f) {
         next_frame(out + ((size_t)f * 160u), &last, &model);
@@ -356,7 +381,9 @@ test_pitch_step_keeps_the_train(void) {
  * bisection), and what each plays (both models of the subframe under the
  * linear crossfade, each through a window that rises over 16 samples, stays
  * whole until one pitch period after the pulse and falls over the 16 after).
- * The models are the library's, which test_mid_model checks on their own.
+ * The models' pitch, voicing and magnitudes are the library's, which
+ * test_mid_model checks on their own; their phases are regenerated here from
+ * the frames' log2Ml (reference_phases()).
  */
 struct reference_train {
     double phase;    /* cycles since the last pulse */
@@ -375,9 +402,75 @@ reference_window(double t, double period) {
     return (t < period) ? 1.0 : 0.5 * (1.0 + cos(M_PI * (t - period) / 16.0));
 }
 
-/* What a model plays t samples after a pulse. */
+/*
+ * The phases US 5,701,390's edge-detection kernel regenerates from log2
+ * amplitudes envelope[1..L], in double: 0 at l = 0, each value below log2(1e-6)
+ * taken as that, falling by 0.72 per harmonic past L, mirrored below l = 1;
+ * phase l is 0.44 times the sum over odd m up to 19 of (B[l + m] - B[l - m]) / m.
+ */
+static void
+reference_phases(const double envelope[57], int L, double phase[57]) {
+    double B[1 + 56 + 2 * 19]; /* B[19 + l], l from -19 to 75 */
+    B[19] = 0.0;
+    for (int l = 1; l <= L; ++l) {
+        B[19 + l] = fmax(envelope[l], log2(1e-6));
+    }
+    for (int l = L + 1; l <= 75; ++l) {
+        B[19 + l] = B[19 + L] - (0.72 * (double)(l - L));
+    }
+    for (int l = 1; l <= 19; ++l) {
+        B[19 - l] = B[19 + l];
+    }
+    phase[0] = 0.0;
+    for (int l = 1; l <= 56; ++l) {
+        double sum = 0.0;
+        for (int m = 1; m <= 19; m += 2) {
+            sum += (B[19 + l + m] - B[19 + l - m]) / (double)m;
+        }
+        phase[l] = 0.44 * sum;
+    }
+}
+
+/* A frame's log2Ml at angular frequency w: linear between the two harmonics
+ * around it, the end harmonic's beyond either end. */
 static double
-reference_response(const struct mbe_subframe_model* model, double t) {
+reference_log2_at(const mbe_parms* mp, double w) {
+    const double position = w / (double)mp->w0;
+    if (position < 1.0) {
+        return (double)mp->log2Ml[1];
+    }
+    if (position >= (double)mp->L) {
+        return (double)mp->log2Ml[mp->L];
+    }
+    const int below = (int)position;
+    return (double)mp->log2Ml[below]
+           + ((position - below) * ((double)mp->log2Ml[below + 1] - (double)mp->log2Ml[below]));
+}
+
+/* The phases of a frame's own model, from its log2Ml as stored. */
+static void
+reference_own_phases(const mbe_parms* mp, double phase[57]) {
+    double envelope[57] = {0.0};
+    for (int l = 1; l <= mp->L; ++l) {
+        envelope[l] = (double)mp->log2Ml[l];
+    }
+    reference_phases(envelope, mp->L, phase);
+}
+
+/* The phases of the mid-frame model of pitch w0 and L harmonics between two
+ * frames: from the mean of the two frames' log2Ml at each harmonic's frequency. */
+static void
+reference_mid_phases(const mbe_parms* prev, const mbe_parms* cur, double w0, int L, double phase[57]) {
+    double envelope[57] = {0.0};
+    for (int l = 1; l <= L; ++l) {
+        envelope[l] = 0.5 * (reference_log2_at(prev, w0 * l) + reference_log2_at(cur, w0 * l));
+    }
+    reference_phases(envelope, L, phase);
+}
+
+/* What a model plays t samples after a pulse, its harmonics at `phase`. */
+static double
+reference_response(const struct mbe_subframe_model* model, const double phase[57], double t) {
     double sum = 0.0;
     if (!model->any_voiced) {
         return 0.0;
@@ -389,7 +482,7 @@ reference_response(const struct mbe_subframe_model* model, double t) {
             continue;
         }
         sum += 2.0 * (double)model->magnitude[l] * (double)mbe_low_band_gain((float)hz)
-               * cos((w * (t - 16.0)) + (double)model->phase[l] + (double)mbe_low_band_phase((float)hz));
+               * cos((w * (t - 16.0)) + phase[l] + (double)mbe_low_band_phase((float)hz));
     }
     return reference_window(t, 2.0 * M_PI / (double)model->w0) * sum;
 }
@@ -428,18 +521,31 @@ reference_advance(struct reference_train* train, double start, const struct mbe_
     train->phase = end - floor(end);
 }
 
-/* One subframe from sample `start`: every pulse so far plays model a going out and model b coming in. */
+/* One subframe from sample `start`: every pulse so far plays model a going out
+ * and model b coming in, at their phases. */
 static void
 reference_render(double* out, double start, const struct reference_train* train, const struct mbe_subframe_model* a,
-                 const struct mbe_subframe_model* b) {
+                 const double a_phase[57], const struct mbe_subframe_model* b, const double b_phase[57]) {
     for (int n = 0; n < 80; ++n) {
         const double fade = (double)n / 80.0;
         double sum = 0.0;
         for (int i = 0; i < train->count; ++i) {
             const double t = start + (double)n - train->time[i];
-            sum += ((1.0 - fade) * reference_response(a, t)) + (fade * reference_response(b, t));
+            sum += ((1.0 - fade) * reference_response(a, a_phase, t)) + (fade * reference_response(b, b_phase, t));
         }
         out[n] = sum;
+    }
+}
+
+/* Give frame f's model a decoded spectral shape (log2Ml, which its phases come
+ * from) and render it with a high-band shelf on top (Ml), as enhancement shapes
+ * a decoded model. */
+static void
+shape_model(mbe_parms* mp, size_t f) {
+    for (int l = 1; l <= mp->L; ++l) {
+        const double decoded = (double)mp->Ml[l] * exp2(0.8 * sin((0.7 * l) + (double)f));
+        set_amplitude(mp, l, (float)decoded);
+        mp->Ml[l] = (float)(decoded * ((2 * l > mp->L) ? 1.6 : 1.0));
     }
 }
 
@@ -506,17 +612,29 @@ test_waveform_through_changes(void) {
         const double start = 160.0 * (double)f;
 
         set_model(&model, frames[f].hz, frames[f].L, frames[f].voiced, frames[f].amplitude);
+        shape_model(&model, f);
         mbe_set_frame_mark(&model, frames[f].mark);
         cur = last;
         cur.w0 = model.w0;
         cur.L = model.L;
         memcpy(cur.Vl, model.Vl, sizeof(cur.Vl));
-        memcpy(cur.Ml, model.Ml, sizeof(cur.Ml));
+        copy_amplitudes(&cur, &model);
         mbe_set_frame_mark(&cur, frames[f].mark);
         mbe_subframe_own_model(&last, &models[0]);
         const int late = frames[f].mark == MBE_FRAME_MARK_LATE_ONSET && !models[0].any_voiced;
         mbe_subframe_mid_model(&last, &cur, late, &models[1]);
         mbe_subframe_own_model(&cur, &models[2]);
+        /* The phases: each frame's own from its log2Ml, the mid-frame model's
+         * from the two frames' met at its frequencies, except where it is the
+         * last frame's own model held (and, from silence, this frame's). */
+        double phases[3][57];
+        reference_own_phases(&last, phases[0]);
+        reference_own_phases(&cur, phases[2]);
+        if (frames[f].mark == MBE_FRAME_MARK_PREVIOUS_HELD) {
+            memcpy(phases[1], frames[f].from_silence ? phases[2] : phases[0], sizeof(phases[1]));
+        } else {
+            reference_mid_phases(&last, &cur, (double)models[1].w0, models[1].L, phases[1]);
+        }
 
         /* The train starts afresh after a frame with no voiced band, unless that
          * frame lacked a pitch or held the model before it to mid-frame. A
@@ -546,9 +664,9 @@ test_waveform_through_changes(void) {
         }
         train.count = kept;
         reference_advance(&train, start, &models[0], &models[1]);
-        reference_render(want, start, &train, &models[0], &models[1]);
+        reference_render(want, start, &train, &models[0], phases[0], &models[1], phases[1]);
         reference_advance(&train, start + 80.0, &models[1], &models[2]);
-        reference_render(want + 80, start + 80.0, &train, &models[1], &models[2]);
+        reference_render(want + 80, start + 80.0, &train, &models[1], phases[1], &models[2], phases[2]);
 
         next_frame_from(out, &last, &model, frames[f].from_silence);
         for (int n = 0; n < 160; ++n) {
@@ -722,7 +840,7 @@ test_mid_model(void) {
 
     /* A magnitude is read at the band's frequency, log-linear between harmonics. */
     for (int l = 1; l <= prev.L; ++l) {
-        prev.Ml[l] = 10.0f * (float)l;
+        set_amplitude(&prev, l, 10.0f * (float)l);
     }
     mbe_subframe_mid_model(&prev, &cur, 0, &mid);
     const double position = 3.0 * w0 / (double)prev.w0;
@@ -767,6 +885,195 @@ test_mid_model(void) {
     assert(own.voiced[2] == 1 && own.voiced[3] == 0 && own.voiced[4] > 1 && own.magnitude[2] == 20.0f);
 }
 
+/* The phase of the component at `hz` in the last 256 samples of ten frames,
+ * against the frame's end, as test_steady_model_is_its_harmonics() reads it. */
+static double
+end_phase(const float* frames, double hz) {
+    return component_phase(&frames[1344], 256, hz, 256);
+}
+
+static double
+phase_apart(double a, double b) {
+    return fabs(atan2(sin(a - b), cos(a - b)));
+}
+
+/*
+ * A voiced harmonic's phase comes from the frame's decoded log2 amplitudes
+ * (log2Ml), not from the amplitudes it renders (Ml), as DVSI's decoders
+ * regenerate it: two steady streams with the same log2Ml, one rendered with a
+ * high-band shelf (as enhancement adds one), play every harmonic at the same
+ * phase and at their own amplitudes; two with the same Ml and differently
+ * shaped log2Ml play the same amplitudes at other phases.
+ */
+static void
+test_phases_follow_decoded_amplitudes(void) {
+    static float out[3][10 * 160];
+    mbe_parms model[3], last[3];
+    struct mbe_subframe_model own[3];
+
+    for (int k = 0; k < 3; ++k) {
+        set_model(&model[k], 187.5, 18, 18, 0.0f);
+        for (int l = 1; l <= 18; ++l) {
+            set_amplitude(&model[k], l, (float)(12.0 * exp2(0.9 * sin(0.8 * l))));
+        }
+    }
+    for (int l = 10; l <= 18; ++l) {
+        model[1].Ml[l] *= 2.5f;
+    }
+    for (int l = 1; l <= 18; ++l) {
+        model[2].log2Ml[l] = (float)(log2(12.0) + (0.9 * cos(1.3 * l)));
+    }
+    for (int k = 0; k < 3; ++k) {
+        mbe_subframe_own_model(&model[k], &own[k]);
+        fresh_stream(&last[k]);
+        for (int f = 0; f < 10; ++f) {
+            next_frame(out[k] + ((size_t)f * 160u), &last[k], &model[k]);
+        }
+    }
+    assert(same_bits(own[0].phase, own[1].phase, 57) && !same_bits(own[0].magnitude, own[1].magnitude, 57));
+    assert(same_bits(own[0].magnitude, own[2].magnitude, 57) && !same_bits(own[0].phase, own[2].phase, 57));
+    assert(same_bits(last[0].PHIl, last[1].PHIl, 57));
+
+    double moved = 0.0;
+    for (int l = 1; l <= 18; ++l) {
+        const double hz = 187.5 * l;
+        for (int k = 0; k < 3; ++k) {
+            const double want = 2.0 * (double)model[k].Ml[l] * (double)mbe_low_band_gain((float)hz);
+            assert(fabs(component_amplitude(out[k] + 320, 1280, hz) / want - 1.0) < 2e-3);
+            const double stored = (double)last[k].PHIl[l] + (double)mbe_low_band_phase((float)hz);
+            assert(phase_apart(end_phase(out[k], hz), stored) < 0.02);
+        }
+        assert(phase_apart(end_phase(out[0], hz), end_phase(out[1], hz)) < 0.02);
+        moved = fmax(moved, phase_apart(end_phase(out[0], hz), end_phase(out[2], hz)));
+    }
+    assert(moved > 0.3);
+}
+
+/* The mid-frame model's phases between frames of different pitch and harmonic
+ * count: regenerated from the mean of the two frames' log2Ml, each read at the
+ * band's frequency (linear between the frame's harmonics around it, the end
+ * harmonic's beyond either end), whatever amplitudes the frames render. */
+static void
+test_mid_model_phases(void) {
+    mbe_parms prev, cur, enhanced;
+    struct mbe_subframe_model mid, shelved;
+    double want[57];
+
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    set_model(&prev, 150.0, 24, 24, 0.0f);
+    set_model(&cur, 180.0, 20, 10, 0.0f);
+    for (int l = 1; l <= 24; ++l) {
+        set_amplitude(&prev, l, (float)(10.0 * exp2(sin(0.5 * l))));
+    }
+    for (int l = 1; l <= 20; ++l) {
+        set_amplitude(&cur, l, (float)(20.0 * exp2(0.7 * cos(0.9 * l))));
+    }
+    mbe_subframe_mid_model(&prev, &cur, 0, &mid);
+    assert(mid.L == 22 && fabs((double)mid.w0 - sqrt((double)prev.w0 * (double)cur.w0)) < 1e-6);
+    reference_mid_phases(&prev, &cur, (double)mid.w0, mid.L, want);
+    for (int l = 1; l <= 56; ++l) {
+        assert(fabs((double)mid.phase[l] - want[l]) < 1e-4);
+    }
+    /* Harmonic 1 lies below the current frame's first and harmonic 22 above
+     * its last: its end harmonics' values hold there. */
+    assert(mid.w0 < cur.w0 && 22.0f * mid.w0 > 20.0f * cur.w0);
+
+    /* A shelf on what both frames render moves the magnitudes, not the phases. */
+    for (int l = 12; l <= 24; ++l) {
+        prev.Ml[l] *= 3.0f;
+        cur.Ml[l] *= 3.0f;
+    }
+    mbe_subframe_mid_model(&prev, &cur, 0, &shelved);
+    assert(same_bits(mid.phase, shelved.phase, 57) && !same_bits(mid.magnitude, shelved.magnitude, 57));
+}
+
+/* Whether a frame's models, its output and the phases it leaves are finite. */
+static int
+frame_is_finite(const float* out, const mbe_parms* cur, const mbe_parms* prev) {
+    struct mbe_subframe_model model;
+    mbe_subframe_own_model(cur, &model);
+    int finite = all_finite(&model.phase[1], 56);
+    mbe_subframe_mid_model(prev, cur, 0, &model);
+    finite &= all_finite(&model.phase[1], 56);
+    return finite && all_finite(out, 160) && all_finite(&cur->PSIl[1], 56) && all_finite(&cur->PHIl[1], 56)
+           && all_finite(cur->noiseOverlap, 96) && all_finite(cur->previousUw, 256);
+}
+
+/*
+ * log2Ml is a caller's state too: values no decoder produces (not numbers,
+ * infinities, finite values far past any codec's) in either frame or both
+ * render finite samples, models and phases, from silence or not, and leave a
+ * state the next frame plays from; a value that is not a number counts as the
+ * kernel's floor. Through the P25 data path too.
+ */
+static void
+test_untrusted_log2_amplitudes(void) {
+    static const uint32_t bits[] = {
+        0x7FC00000u, 0xFFC00000u,           0x7F800000u, 0xFF800000u, 0x7F7FFFFFu, 0xFF7FFFFFu, 0x7149F2CAu /* 1e30 */,
+        0xF149F2CAu, 0x49742400u /* 1e6 */, 0xC9742400u, 0x00000001u};
+    mbe_fft_plan* plan = mbe_fft_plan_alloc();
+    assert(plan != NULL);
+    mbe_parms good;
+    set_model(&good, 200.0, 18, 12, 16.0f);
+
+    for (size_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
+        mbe_parms bad = good;
+        for (int l = 1; l <= 56; l += (i & 1u) ? 1 : 2) {
+            memcpy(&bad.log2Ml[l], &bits[i], sizeof(bad.log2Ml[l]));
+        }
+        for (int which = 0; which < 3; ++which) {
+            for (int from_silence = 0; from_silence < 2; ++from_silence) {
+                mbe_parms last, cur;
+                float out[160];
+                fresh_stream(&last);
+                next_frame(out, &last, &good);
+                if (which != 1) {
+                    memcpy(last.log2Ml, bad.log2Ml, sizeof(last.log2Ml));
+                }
+                cur = last;
+                copy_amplitudes(&cur, (which != 0) ? &bad : &good);
+                memset(out, 0, sizeof(out));
+                mbe_synthesize_subframes(out, &cur, &last, plan, 1.0f, from_silence);
+                assert(frame_is_finite(out, &cur, &last));
+                last = cur;
+                cur = last;
+                copy_amplitudes(&cur, &good);
+                memset(out, 0, sizeof(out));
+                mbe_synthesize_subframes(out, &cur, &last, plan, 1.0f, 0);
+                assert(frame_is_finite(out, &cur, &last));
+            }
+        }
+
+        /* The last synthesized frame of a P25 stream, as a caller's state can hold it. */
+        mbe_parms cur, prev, enhanced;
+        char imbe_d[88];
+        float out[160];
+        mbe_initMbeParms(&cur, &prev, &enhanced);
+        memset(imbe_d, 1, sizeof(imbe_d));
+        set_imbe_b0(imbe_d, 100);
+        memcpy(enhanced.log2Ml, bad.log2Ml, sizeof(enhanced.log2Ml));
+        for (int f = 0; f < 2; ++f) {
+            const int rc = mbe_processImbe4400Dataf(out, NULL, imbe_d, &cur, &prev, &enhanced);
+            assert(rc >= 0);
+            (void)rc;
+            assert(all_finite(out, 160));
+        }
+    }
+    mbe_fft_plan_free(plan);
+
+    /* Not a number: the floor, as a value below it is. */
+    static const uint32_t nan_bits = 0x7FC00000u;
+    struct mbe_subframe_model a, b, c;
+    mbe_parms nan_state = good, floor_state = good, below = good;
+    memcpy(&nan_state.log2Ml[5], &nan_bits, sizeof(nan_bits));
+    floor_state.log2Ml[5] = MBE_PHASE_LOG2_FLOOR;
+    below.log2Ml[5] = -40.0f;
+    mbe_subframe_own_model(&nan_state, &a);
+    mbe_subframe_own_model(&floor_state, &b);
+    mbe_subframe_own_model(&below, &c);
+    assert(same_bits(a.phase, b.phase, 57) && same_bits(b.phase, c.phase, 57));
+}
+
 static int
 same_model(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
     return same_bits(&a->w0, &b->w0, 1) && a->L == b->L && a->any_voiced == b->any_voiced
@@ -791,7 +1098,7 @@ test_previous_model_held(void) {
     for (int k = 0; k < 3; ++k) {
         set_model(&prev, 150.0, 24, voiced_before[k], 10.0f);
         for (int l = 1; l <= 24; ++l) {
-            prev.Ml[l] = 4.0f + (float)l;
+            set_amplitude(&prev, l, 4.0f + (float)l);
         }
         mbe_subframe_own_model(&prev, &own);
         for (int cur_voiced = 0; cur_voiced <= 15; cur_voiced += 15) {
@@ -826,8 +1133,8 @@ test_previous_model_held(void) {
     rendered.L = advanced.L = held.L;
     memcpy(rendered.Vl, held.Vl, sizeof(held.Vl));
     memcpy(advanced.Vl, held.Vl, sizeof(held.Vl));
-    memcpy(rendered.Ml, held.Ml, sizeof(held.Ml));
-    memcpy(advanced.Ml, held.Ml, sizeof(held.Ml));
+    copy_amplitudes(&rendered, &held);
+    copy_amplitudes(&advanced, &held);
     mbe_set_frame_mark(&rendered, MBE_FRAME_MARK_PREVIOUS_HELD);
     mbe_set_frame_mark(&advanced, MBE_FRAME_MARK_PREVIOUS_HELD);
     memset(out, 0, sizeof(out));
@@ -899,8 +1206,8 @@ test_muted_frame_advances(void) {
     rendered.L = advanced.L = model.L;
     memcpy(rendered.Vl, model.Vl, sizeof(model.Vl));
     memcpy(advanced.Vl, model.Vl, sizeof(model.Vl));
-    memcpy(rendered.Ml, model.Ml, sizeof(model.Ml));
-    memcpy(advanced.Ml, model.Ml, sizeof(model.Ml));
+    copy_amplitudes(&rendered, &model);
+    copy_amplitudes(&advanced, &model);
     memset(out, 0, sizeof(out));
     mbe_synthesize_subframes(out, &rendered, &last, NULL, 1.0f, 0);
     mbe_advance_subframes(&advanced, &last, 0);
@@ -918,7 +1225,7 @@ test_muted_frame_advances(void) {
     muted.w0 = model.w0;
     muted.L = model.L;
     memcpy(muted.Vl, model.Vl, sizeof(model.Vl));
-    memcpy(muted.Ml, model.Ml, sizeof(model.Ml));
+    copy_amplitudes(&muted, &model);
     mbe_parms heard = muted;
     muted.errorRate = 1.0f;
     muted.mutingThreshold = 0.0875f;
@@ -938,7 +1245,7 @@ take_model(mbe_parms* mp, const mbe_parms* model, enum mbe_frame_mark mark) {
     mp->w0 = model->w0;
     mp->L = model->L;
     memcpy(mp->Vl, model->Vl, sizeof(mp->Vl));
-    memcpy(mp->Ml, model->Ml, sizeof(mp->Ml));
+    copy_amplitudes(mp, model);
     mbe_set_frame_mark(mp, mark);
 }
 
@@ -1094,8 +1401,8 @@ test_from_silence(void) {
     rendered.L = advanced.L = model.L;
     memcpy(rendered.Vl, model.Vl, sizeof(model.Vl));
     memcpy(advanced.Vl, model.Vl, sizeof(model.Vl));
-    memcpy(rendered.Ml, model.Ml, sizeof(model.Ml));
-    memcpy(advanced.Ml, model.Ml, sizeof(model.Ml));
+    copy_amplitudes(&rendered, &model);
+    copy_amplitudes(&advanced, &model);
     mbe_parms continued = advanced;
     memset(out_scratch, 0, sizeof(out_scratch));
     mbe_synthesize_subframes(out_scratch, &rendered, &carried, NULL, 1.0f, 1);
@@ -1113,8 +1420,8 @@ test_from_silence(void) {
     muted.L = heard.L = model.L;
     memcpy(muted.Vl, model.Vl, sizeof(model.Vl));
     memcpy(heard.Vl, model.Vl, sizeof(model.Vl));
-    memcpy(muted.Ml, model.Ml, sizeof(model.Ml));
-    memcpy(heard.Ml, model.Ml, sizeof(model.Ml));
+    copy_amplitudes(&muted, &model);
+    copy_amplitudes(&heard, &model);
     muted.errorRate = 1.0f;
     muted.mutingThreshold = 0.0875f;
     heard.errorRate = 0.0f;
@@ -1311,7 +1618,7 @@ test_invalid_models(void) {
             cur.w0 = next->w0;
             cur.L = next->L;
             memcpy(cur.Vl, next->Vl, sizeof(cur.Vl));
-            memcpy(cur.Ml, next->Ml, sizeof(cur.Ml));
+            copy_amplitudes(&cur, next);
             memset(guarded + 16, 0, 160 * sizeof(float));
             mbe_synthesize_subframes(guarded + 16, &cur, &last, NULL, 1.0f, 0);
             for (int n = 0; n < 16; ++n) {
@@ -1410,14 +1717,6 @@ test_invalid_models(void) {
         next_frame(guarded + 16, &last, &good);
         assert(all_finite(guarded + 16, 160));
         assert(last.noiseOverlap[0] <= (float)MBE_PULSE_HISTORY);
-    }
-}
-
-static void
-set_imbe_b0(char imbe_d[88], int b0) {
-    static const int index[8] = {0, 1, 2, 3, 4, 5, 85, 86};
-    for (int i = 0; i < 8; ++i) {
-        imbe_d[index[i]] = (char)((b0 >> (7 - i)) & 1);
     }
 }
 
@@ -1729,6 +2028,9 @@ main(void) {
     test_unvoiced_pitch_carries();
     test_voicing_persists_without_a_pitch();
     test_mid_model();
+    test_phases_follow_decoded_amplitudes();
+    test_mid_model_phases();
+    test_untrusted_log2_amplitudes();
     test_previous_model_held();
     test_subframes_crossfade_linearly();
     test_muted_frame_advances();

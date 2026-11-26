@@ -38,6 +38,10 @@
 #define MAGNITUDE_LIMIT 1.0e30f
 /* Where noiseOverlap holds the pulse phase, after the count and the pulses. */
 #define PHASE_SLOT      (1 + MBE_PULSE_HISTORY)
+/* The bound on a log2 amplitude the phases are regenerated from: far past
+ * any codec's (D-STAR's decoder reaches about 49), where a caller's state can
+ * put anything. */
+#define PHASE_LOG2_MAX  1000.0f
 
 /* A positive, finite float that is not subnormal, read from its bit pattern
  * so that fast-math cannot fold the test into accepting NaN (see
@@ -89,9 +93,43 @@ note_voiced(struct mbe_subframe_model* model) {
     }
 }
 
+/* A frame's decoded log2 amplitude (log2Ml), which its harmonic phases are
+ * regenerated from: not a finite number, the phase kernel's floor; finite,
+ * kept within +-PHASE_LOG2_MAX. Read from the bit pattern (see
+ * positive_normal()). */
+static double
+phase_log2_amplitude(const float* x) {
+    const float limit = PHASE_LOG2_MAX;
+    uint32_t bits, limit_bits;
+    memcpy(&bits, x, sizeof(bits));
+    memcpy(&limit_bits, &limit, sizeof(limit_bits));
+    const uint32_t magnitude = bits & UINT32_C(0x7FFFFFFF);
+    if (magnitude >= UINT32_C(0x7F800000)) {
+        return (double)MBE_PHASE_LOG2_FLOOR;
+    }
+    if (magnitude > limit_bits) {
+        return (bits >> 31) ? -(double)limit : (double)limit;
+    }
+    return (double)*x;
+}
+
+/* The log2 amplitudes a frame's phases come from, [1..L]. DVSI's decoders
+ * regenerate the phase of a voiced harmonic from the frame's decoded log2
+ * spectral amplitudes, before spectral enhancement, the high-band shelf and
+ * any scaling, whatever each band's voicing, not from the amplitudes they
+ * render (as US 5,701,390 applies its kernel to the decoded magnitudes;
+ * docs/dvsi-parity.md, "Phase regeneration"). */
+static void
+phase_log2_amplitudes(const mbe_parms* mp, double out[57]) {
+    for (int l = 1; l <= mp->L; l++) {
+        out[l] = phase_log2_amplitude(&mp->log2Ml[l]);
+    }
+}
+
 void
 mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
-    float magnitudes[57] = {0};
+    double log2_amplitudes[57];
+    float envelope[57] = {0};
 
     memset(model, 0, sizeof(*model));
     if (!mbe_harmonic_count_is_valid(mp->L)) {
@@ -108,10 +146,13 @@ mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
     for (int l = 1; l <= mp->L; l++) {
         model->voiced[l] = (unsigned char)band_state(mp, l);
         model->magnitude[l] = positive_normal(&mp->Ml[l]) ? limited_magnitude(mp->Ml[l]) : 0.0f;
-        magnitudes[l] = model->magnitude[l];
     }
     note_voiced(model);
-    mbe_regenerate_phases(magnitudes, model->L, model->phase);
+    phase_log2_amplitudes(mp, log2_amplitudes);
+    for (int l = 1; l <= mp->L; l++) {
+        envelope[l] = (float)log2_amplitudes[l];
+    }
+    mbe_regenerate_phases_log2(envelope, model->L, model->phase);
 }
 
 /* log2 of each band's magnitude with the unvoiced factor taken out. */
@@ -213,16 +254,20 @@ voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
 /* The mid-frame model's voicing, magnitudes and phases, its pitch and harmonic
  * count being set: each band's state from the frame whose voicing holds at
  * mid-frame, and the two frames' magnitudes at the band's frequency, met in
- * the log domain. */
+ * the log domain. Its phases come from the mean of the two frames' decoded
+ * log2 amplitudes (phase_log2_amplitudes(), the unvoiced factor left in),
+ * each read at the band's frequency as the magnitudes are. */
 static void
 fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, struct mbe_subframe_model* model) {
     const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
     const mbe_parms* voicing = voicing_persists(prev_mp, cur_mp) ? prev_mp : cur_mp;
-    double prev_log2[57], cur_log2[57];
-    float magnitudes[57] = {0};
+    double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
+    float envelope[57] = {0};
 
     common_log2_magnitudes(prev_mp, prev_log2);
     common_log2_magnitudes(cur_mp, cur_log2);
+    phase_log2_amplitudes(prev_mp, prev_phase_log2);
+    phase_log2_amplitudes(cur_mp, cur_phase_log2);
     for (int l = 1; l <= model->L; l++) {
         const float w = model->w0 * (float)l;
         int state = band_state(voicing, harmonic_at(voicing, w));
@@ -235,11 +280,13 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset
             /* Limited before it narrows: a caller's state can put it past what a float holds. */
             const double magnitude = exp2(mean + ((state == BAND_UNVOICED) ? unvoiced : 0.0));
             model->magnitude[l] = (magnitude < (double)MAGNITUDE_LIMIT) ? (float)magnitude : MAGNITUDE_LIMIT;
-            magnitudes[l] = model->magnitude[l];
         }
+        envelope[l] =
+            (float)(0.5
+                    * (log2_magnitude_at(prev_mp, prev_phase_log2, w) + log2_magnitude_at(cur_mp, cur_phase_log2, w)));
     }
     note_voiced(model);
-    mbe_regenerate_phases(magnitudes, model->L, model->phase);
+    mbe_regenerate_phases_log2(envelope, model->L, model->phase);
 }
 
 void

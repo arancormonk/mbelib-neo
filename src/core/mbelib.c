@@ -1143,7 +1143,10 @@ mbe_synthesizeSilence(short* aout_buf) {
 }
 
 /* Regenerated voiced phase (US 5,701,390 Eqs. 7-9): odd 1/m edge-detection
- * kernel over the enhanced, smoothed log2 magnitudes rendered by synthesis. */
+ * kernel over log2 magnitudes. The TIA-102.BABA rendering applies it to the
+ * enhanced, smoothed magnitudes it renders (mbe_regenerate_phases()); the
+ * codec paths, as DVSI's decoders do, to the frame's decoded log2 amplitudes
+ * (mbe_regenerate_phases_log2(); docs/dvsi-parity.md, "Phase regeneration"). */
 #define MBE_PHASE_KERNEL_HALF_LEN 19
 #define MBE_PHASE_KERNEL_SCALE    0.44f
 #define MBE_PHASE_EXTRAP_SLOPE    0.72f
@@ -1207,6 +1210,37 @@ mbe_regenerate_phases(const float Ml[57], int L, float phi[57]) {
         phi[l] = MBE_PHASE_KERNEL_SCALE * acc;
     }
 #endif
+}
+
+/* The kernel of mbe_regenerate_phases() over log2 amplitudes given directly,
+ * with its floor (MBE_PHASE_LOG2_FLOOR is log2(MBE_PHASE_MIN_MAGNITUDE)), its
+ * tail and its mirror. A loop of its own, so that the TIA-102.BABA rendering's
+ * code stays as it is; it adds each phase's taps in the same order. */
+void
+mbe_regenerate_phases_log2(const float log2_amplitude[57], int L, float phi[57]) {
+    const int D = MBE_PHASE_KERNEL_HALF_LEN;
+    static const float inv_odd[10] = {
+        1.0f, 1.0f / 3, 1.0f / 5, 1.0f / 7, 1.0f / 9, 1.0f / 11, 1.0f / 13, 1.0f / 15, 1.0f / 17, 1.0f / 19,
+    };
+    float B[56 + 2 * MBE_PHASE_KERNEL_HALF_LEN + 1];
+    B[D] = 0.0f;
+    for (int l = 1; l <= L; ++l) {
+        B[D + l] = fmaxf(log2_amplitude[l], MBE_PHASE_LOG2_FLOOR);
+    }
+    for (int l = L + 1; l <= 56 + D; ++l) {
+        B[D + l] = B[D + L] - MBE_PHASE_EXTRAP_SLOPE * (float)(l - L);
+    }
+    for (int l = 1; l <= D; ++l) {
+        B[D - l] = B[D + l];
+    }
+    for (int l = 1; l <= 56; ++l) {
+        float acc = 0.0f;
+        for (int k = 0; k < 10; ++k) {
+            int m = 2 * k + 1;
+            acc += (B[D + l + m] - B[D + l - m]) * inv_odd[k];
+        }
+        phi[l] = MBE_PHASE_KERNEL_SCALE * acc;
+    }
 }
 
 static int

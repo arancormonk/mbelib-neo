@@ -234,6 +234,24 @@ enum mbe_frame_mark mbe_frame_mark(const mbe_parms* mp);
  */
 void mbe_regenerate_phases(const float Ml[57], int L, float phi[57]);
 
+/** log2 of the smallest amplitude the phase kernel tells apart (1e-6). */
+#define MBE_PHASE_LOG2_FLOOR (-19.931568f)
+
+/**
+ * @brief Regenerate harmonic phases from log2 amplitudes (US 5,701,390).
+ *
+ * The kernel of mbe_regenerate_phases() applied to log2 amplitudes given
+ * directly, as the codec paths apply it to a frame's decoded log2Ml
+ * (docs/dvsi-parity.md, "Phase regeneration"); a value below
+ * MBE_PHASE_LOG2_FLOOR counts as that floor.
+ * @param log2_amplitude Finite log2 amplitudes, [1..L] read.
+ * @param L              Harmonic count, 1..56.
+ * @param phi            Receives the phases of harmonics 1..56 (those past L
+ *                       from the envelope's extrapolation); element 0 is not
+ *                       written.
+ */
+void mbe_regenerate_phases_log2(const float log2_amplitude[57], int L, float phi[57]);
+
 /**
  * @brief Synthesize speech using a captured pre-enhancement RM0 value.
  * @param aout_buf Output buffer of 160 float samples.

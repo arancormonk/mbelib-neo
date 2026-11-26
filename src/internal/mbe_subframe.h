@@ -54,11 +54,16 @@ struct mbe_subframe_model {
     int any_voiced;           /**< Whether a band is voiced. */
     unsigned char voiced[57]; /**< [1..L]: the band is voiced (and below Nyquist). */
     float magnitude[57];      /**< [1..L]: the band's amplitude, as mbe_parms.Ml holds it. */
-    float phase[57];          /**< [1..L]: regenerated phase of a voiced band. */
+    float phase[57];          /**< [1..L]: regenerated phase of a voiced band (from log2Ml). */
 };
 
 /**
  * @brief The model a frame's parameters give at its end.
+ *
+ * Its phases are regenerated from the frame's decoded log2 amplitudes
+ * (log2Ml), not from the amplitudes it renders, as DVSI's decoders regenerate
+ * them (docs/dvsi-parity.md, "Phase regeneration"); a log2Ml that is not a
+ * finite number counts as the kernel's floor.
  * @param mp    Frame parameters.
  * @param model Receives the model; it has no band when w0 is not a pitch
  *              (positive, finite and not subnormal: a subnormal value is zero
@@ -79,8 +84,10 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no band is
  * voiced (the voiced bands of a frame so marked start in its own subframe).
  * Its magnitudes are the two frames' at its frequency, interpolated in the log
- * domain. A current frame marked MBE_FRAME_MARK_PREVIOUS_HELD (a rate-33
- * silence frame) instead gets the previous frame's own model
+ * domain. Its phases are regenerated from the mean of the two frames' log2Ml
+ * (as stored, the unvoiced factor left in), each read at the band's frequency
+ * as the magnitudes are. A current frame marked MBE_FRAME_MARK_PREVIOUS_HELD
+ * (a rate-33 silence frame) instead gets the previous frame's own model
  * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
  * decoder plays it through the silence frame's first 10 ms and crossfades to
  * the silence model over the second. Harmonic counts outside 1..56 give a

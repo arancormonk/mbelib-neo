@@ -426,6 +426,46 @@ test_lost_plays_as_repeat(void) {
     puts("lost frames: b0 125, unused tone index, b0 127 play as error repeats; the 4th mutes");
 }
 
+/*
+ * A frame whose C0 word is uncorrectable plays as a lost frame does, whatever
+ * history it holds: a run of three such frames, or of lost frames after one,
+ * plays sample for sample as three lost frames (all without corrections, so
+ * the adaptive smoothing reads the same counts). Each repeat renders the
+ * repeated model with its own log2 amplitudes, which its phases come from,
+ * not with the held history's (docs/dvsi-parity.md, "Phase regeneration").
+ */
+static void
+test_held_history_plays_the_repeated_model(void) {
+    static const char patterns[4][3] = {{0, 0, 0}, {1, 1, 1}, {1, 0, 0}, {0, 1, 0}}; /* 1: uncorrectable C0 */
+    char voice[NVOICE][49], b125[49];
+    float pcm[4][160 * 7];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    for (int k = 0; k < 4; ++k) {
+        const int held_from = (k == 0) ? 7 : (k == 3) ? 5 : 4;
+        mbe_parms cur, prev, enh;
+        mbe_process_result r;
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int f = 0; f < 7; ++f) {
+            const int lost = f >= 4;
+            const int uncorrectable = lost && patterns[k][f - 4];
+            if (uncorrectable) {
+                make_uncorrectable_result(&r, 0);
+            } else {
+                make_result(&r, 0);
+            }
+            const char* bits = !lost ? voice[f] : (uncorrectable ? voice[(f == 4) ? 4 : 5] : b125);
+            assert(mbe_processAmbe2400Dataf(pcm[k] + ((size_t)160 * (size_t)f), &r, bits, &cur, &prev, &enh) >= 0);
+            assert(((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == lost);
+            assert(((prev.Vl[0] & MBE_AMBE2400_HISTORY_HELD) != 0) == (f >= held_from));
+        }
+        assert_same_pcm(pcm[k], pcm[0], (size_t)160 * 7u, "uncorrectable C0 frames vs lost frames");
+    }
+    puts("held history: frames with an uncorrectable C0 word repeat the model with its own amplitudes");
+}
+
 /* Lost frames and frames repeated for errors share one repeat count. */
 static void
 test_mixed_repeat_count(void) {
@@ -2052,6 +2092,7 @@ main(void) {
     test_null_frame_is_voice();
     test_b0_124_silence_frame();
     test_lost_plays_as_repeat();
+    test_held_history_plays_the_repeated_model();
     test_mixed_repeat_count();
     test_frame_apis_agree();
     test_zero_volume_tone();
