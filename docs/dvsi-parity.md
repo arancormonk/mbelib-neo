@@ -80,9 +80,9 @@ appear here.
   alone; the study's scratch build had been measured on the development and validation vectors
   before the gate sets were declared, in the branch's first commit, `8942924`, before any build of
   the branch was scored, so those partitions are not out-of-sample for it. The change was measured
-  and gated on the development, validation, tone and channel partitions, and the final partition is
-  to be scored once, after the review, against the gate set `r33-pitch-wave-final`
-  ([November 2026: rate 33's mid-frame pitch wave](#november-2026-rate-33s-mid-frame-pitch-wave)).
+  and gated on the development, validation, tone and channel partitions, and the final partition
+  was scored once for it, after the review, against the gate set `r33-pitch-wave-final`, which it
+  passed ([November 2026: rate 33's mid-frame pitch wave](#november-2026-rate-33s-mid-frame-pitch-wave)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -4157,8 +4157,8 @@ constants were fitted on the development vectors alone) and, for the checks of t
 rate-33 tone vectors, never `irstia` or `mark`. Its scratch build of the change was measured on the
 development and validation vectors (the whole-file figures, the accounting and PESQ below) before
 the gate sets were declared, and their limits were chosen knowing those results, so the development
-and validation partitions are not out-of-sample here; the final partition is held out and is to be
-scored once, after the review (below). The candidate is the change set's code at `d08ea39` (the
+and validation partitions are not out-of-sample here; the final partition was held out and scored
+once, after the review (below). The candidate is the change set's code at `d08ea39` (the
 commits after it change tests, comments and documents only). Both builds aligned freely first and
 were then scored at their joint lags, both runs' encodings decoded by the candidate's decoder.
 
@@ -4275,6 +4275,7 @@ partitions, `dac6d14` against `d08ea39`:
 | `r33-pitch-wave-validation` | passes every check | the same on vectors held out from the fit of the constants (read in the study) |
 | `r33-pitch-wave-tones` | passes every check | rate 33's tone measures within their limits, D-STAR's and P25's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics unchanged |
 | `r33-pitch-wave-channel` | passes every check | the per-vector mute statistics unchanged in every mode, rate 33's mean distance from DVSI's decode on the loud frames rising by no more than 0.01 dB, D-STAR's and P25's decodes and every encoder's rows unchanged |
+| `r33-pitch-wave-final` | passes all 12 checks (scored once, after the review; below) | on `irstia` and `mark`, held out: nothing moves the wrong way past its limit (below) |
 
 Notes on the declarations. A check that the mean rises by at least a value is the scoreboard's
 `increase` rule, which also requires the 95% interval above 0. D-STAR's and P25's unchanged decodes
@@ -4289,8 +4290,8 @@ separate comparison of the 285 encodings above. The channel set's mute checks ar
 vector, and the frame-level comparison above, beside them, finds no mute decision changed. The
 per-vector checks of the distance from DVSI's decode (`vs_dvsi.lsd_db`, `all_no_increase`) do not
 require every vector, so they would pass a vector that neither run measures; in the recorded run all
-20 development and all 5 validation vectors were measured, and the coverage of the final partition's
-run is to be checked when it is scored. The tones set's description records, from the baseline's own
+20 development and all 5 validation vectors were measured, and in the final partition's run both
+vectors were measured in both runs for every gated rate-33 measure (below). The tones set's description records, from the baseline's own
 scoreboard of the tone partition before the set was declared, which tone measures each vector can be
 measured on in rate 33: the detector agreement and the extra-tone rate on all 52; the frequency,
 level and wrong-tone figures on all but `cp1`, `cpvbad` and `dtmfvbad`; the balance on all but those
@@ -4302,8 +4303,37 @@ decodes of DVSI's bits unchanged, every encoder's bits unchanged, and for rate 3
 correlation with DVSI's decode falling by no more than 0.0005 on the mean and 0.002 on any vector,
 the distance from DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any
 vector, the envelope correlation falling by no more than 0.001, the distance from the input rising
-by no more than 0.01 dB, and the level against DVSI's moving by at most 0.05 dB. It is to be scored
-once, after the review; it has not been scored.
+by no more than 0.01 dB, and the level against DVSI's moving by at most 0.05 dB. The final
+partition was scored once for this change set, on 2026-11-27, after its review: `dac6d14` against
+the head's code (the build of `d08ea39`, whose code the head shares apart from comments), on
+`irstia` and `mark`, both builds aligned freely first and then scored at their joint lags, both
+runs' encodings decoded by the candidate's decoder. It passes all 12 checks of
+`r33-pitch-wave-final` (none fails). The library's decode of DVSI's bits, partition means over the
+two vectors and the waveform correlation of each:
+
+| Codec | Waveform corr. vs DVSI, sample for sample, mean | `irstia` | `mark` | LSD vs DVSI (dB), mean | LSD vs input (dB), mean |
+|---|---|---|---|---|---|
+| Rate 33 | 0.9783 → 0.9860 | 0.9715 → 0.9828 | 0.9850 → 0.9891 | 1.5328 → 1.5074 | 5.5211 → 5.5216 |
+| P25 | 0.9837 → 0.9837 | 0.9795 → 0.9795 | 0.9880 → 0.9880 | 1.5248 → 1.5248 | 5.3690 → 5.3690 |
+| D-STAR | 0.9830 → 0.9830 | 0.9774 → 0.9774 | 0.9886 → 0.9886 | 1.7794 → 1.7794 | 5.5432 → 5.5432 |
+
+The gate's paired deltas for rate 33: the waveform correlation +0.007689 on the mean (`irstia`
++0.011249, `mark` +0.004128); the distance from DVSI's decode -0.02537 dB (`irstia` 1.7053 → 1.6848,
+`mark` 1.3603 → 1.3301 dB); the envelope correlation +0.00002 (0.9783 → 0.9783); the distance from
+the input +0.0005 dB (`irstia` 5.5614 → 5.5624, `mark` 5.4807 → 5.4808 dB); the level against DVSI's
+-0.0004 dB (-0.0727 → -0.0731); D-STAR's and P25's decodes unchanged (no vector with changed PCM in
+either), and every encoder's bits unchanged (no vector with changed rows in any mode). Both vectors
+were measured in both runs for every gated rate-33 measure, so the per-vector check of the distance
+from DVSI's decode, which does not itself require every vector, compared both.
+
+What this shows: it is the out-of-sample check of the change, since the constants were fitted on the
+development vectors and the validation vectors were read in the study; on the two held-out vectors
+the waveform correlation with DVSI's decode rises on both, more on `irstia` than on `mark`, by
++0.0077 on the mean, a little under the development and validation partitions' +0.0087 each, and the
+distance from DVSI's decode falls on both. What it does not show: it is two vectors, a check that
+nothing moves the wrong way past its limit rather than a measure of the change's size; and the
+distance from the input rises on both vectors, by 0.0001 dB (`mark`) to 0.0010 dB (`irstia`), within
+the gate's limit but not an improvement.
 
 ### Scoring history
 
@@ -4407,5 +4437,6 @@ Before that declaration the study's scratch build had been measured on the devel
 validation vectors, and the baseline alone was scored on the tone partition, to record each tone
 measure's coverage in the tones set's description. The identity counters of the four sets were
 evaluated on the combined run: a tone or channel partition scored alone leaves some of them without
-a value. The final partition has not been scored for it; it is to be scored once,
-after the review, against `r33-pitch-wave-final`.
+a value. The final partition was scored once for it, on 2026-11-27, after the review: `dac6d14`
+against the head's code, against `r33-pitch-wave-final`, declared in `8942924`. It passes all 12
+checks ([November 2026: rate 33's mid-frame pitch wave](#november-2026-rate-33s-mid-frame-pitch-wave)).
