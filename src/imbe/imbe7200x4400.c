@@ -646,6 +646,7 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
  * 3). Left out: three single tones whose harmonic lies past the frame's L
  * (120..122 at b0 2 and 3, harmonic 10 of 9), and the call-progress tones
  * (160..163), whose frames DVSI's decoder plays as their decoded harmonics.
+ * The rows are sorted by b0, and imbe_tone_first_row indexes them by it.
  */
 struct imbe_tone_row {
     unsigned char b0;
@@ -679,6 +680,23 @@ static const struct imbe_tone_row imbe_tone_rows[] = {
     {151, 0x7E4, 8, 17},  {164, 0x0F4, 12, 17}, {175, 0x7F8, 10, 14}, {186, 0x331, 12, 23}, {186, 0x3F4, 12, 17},
     {189, 0x332, 11, 21}, {189, 0x3F2, 10, 19}, {195, 0x3F4, 12, 17}, {196, 0x312, 11, 21}, {196, 0x3E4, 9, 17},
     {197, 0x3F2, 10, 19},
+};
+
+/* The rows of pitch code b0 are imbe_tone_rows[imbe_tone_first_row[b0]] up to
+ * imbe_tone_first_row[b0 + 1] (the rows above are sorted by b0): the first row
+ * of each code 0..197 and the end; a code past 197 has none. Derived from the
+ * rows: adding or removing a row moves every entry after its code. */
+#define IMBE_TONE_LAST_CODE 197
+static const unsigned char imbe_tone_first_row[IMBE_TONE_LAST_CODE + 2] = {
+    0,   0,   8,   15,  24,  32,  40,  46,  53,  56,  60,  63,  63,  67,  69,  70,  71,  71,  74,  74,  74,  75,  76,
+    76,  76,  76,  78,  78,  78,  78,  80,  80,  80,  80,  80,  82,  82,  83,  83,  83,  84,  84,  84,  84,  84,  85,
+    85,  86,  86,  86,  86,  86,  86,  86,  87,  87,  87,  88,  88,  88,  88,  88,  88,  88,  89,  89,  89,  89,  90,
+    90,  90,  90,  90,  90,  90,  90,  90,  90,  90,  90,  90,  92,  92,  92,  92,  92,  92,  92,  92,  92,  92,  92,
+    92,  93,  93,  93,  93,  93,  95,  96,  96,  96,  96,  96,  96,  96,  96,  97,  97,  97,  97,  97,  97,  98,  98,
+    98,  98,  98,  99,  100, 100, 100, 100, 100, 100, 100, 100, 100, 101, 102, 102, 102, 102, 102, 103, 103, 103, 103,
+    103, 103, 103, 103, 103, 103, 103, 104, 104, 105, 105, 105, 105, 105, 106, 106, 106, 106, 106, 106, 106, 106, 106,
+    106, 106, 106, 106, 107, 107, 107, 107, 107, 107, 107, 107, 107, 107, 107, 108, 108, 108, 108, 108, 108, 108, 108,
+    108, 108, 108, 110, 110, 110, 112, 112, 112, 112, 112, 112, 113, 115, 116,
 };
 
 /* Others over tone: a frame passes a row when the rms of its other decoded
@@ -752,16 +770,21 @@ imbe_tone_share2(const mbe_parms* mp, int l1, int l2) {
  * are within L, the one whose tone harmonics dominate most, if the others'
  * rms is under the row's share of the tone's (IMBE_TONE_SHARE_DUAL,
  * IMBE_TONE_SHARE_SINGLE; decoded magnitudes, before enhancement). The rows of
- * one pair are all dual or all single tones.
+ * one pair are all dual or all single tones. Every voice frame passes here, so
+ * a code with no row returns after one lookup and the scan covers only the
+ * rows of the frame's code.
  */
 static int
 imbe_tone_word(const mbe_parms* mp, int b0) {
+    if (b0 < 0 || b0 > IMBE_TONE_LAST_CODE || imbe_tone_first_row[b0] == imbe_tone_first_row[b0 + 1]) {
+        return 0;
+    }
     const unsigned word = imbe_voicing_word(mp);
     double best = -1.0;
     int found = 0;
-    for (size_t i = 0; i < sizeof(imbe_tone_rows) / sizeof(imbe_tone_rows[0]); i++) {
+    for (unsigned i = imbe_tone_first_row[b0]; i < imbe_tone_first_row[b0 + 1]; i++) {
         const struct imbe_tone_row* row = &imbe_tone_rows[i];
-        if (row->b0 != b0 || row->b1 != word || row->l2 > mp->L) {
+        if (row->b1 != word || row->l2 > mp->L) {
             continue;
         }
         const double limit = (row->l1 == row->l2) ? IMBE_TONE_SHARE_SINGLE : IMBE_TONE_SHARE_DUAL;
