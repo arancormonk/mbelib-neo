@@ -174,8 +174,6 @@ soft_search_group(const struct mbe_soft_input* s, const struct mbe_soft_code* co
  * then the first enumerated candidate. Do not reorder the codebooks. */
 uint32_t
 MBE_KFN(mbe_ecc_soft_search)(const struct mbe_soft_input* s, const struct mbe_soft_code* code) {
-    struct soft_tables t;
-    soft_tables_init(&t, s, code);
     /* A codeword costing more than another codeword can never win, so the
      * codeword with the hard decision's data bits bounds the search. Skipping
      * only costlier codewords leaves the result exactly that of a full scan. */
@@ -183,6 +181,17 @@ MBE_KFN(mbe_ecc_soft_search)(const struct mbe_soft_input* s, const struct mbe_so
     for (unsigned b = 0; b < code->index_bits; ++b) {
         seed |= ((s->hard >> code->data[b]) & 1u) << b;
     }
+    /* A received word that is that codeword needs no search. It costs
+     * nothing, and among the codewords that cost nothing (those that differ
+     * from it only in bits of zero weight) it ranks first: it changes no data
+     * bit of the received word where every other codeword changes at least
+     * one, and only it has the hard decision's data bits (data_mask covers
+     * them in every code). So the scan below would return it. */
+    if (code->words[seed] == s->received) {
+        return s->received;
+    }
+    struct soft_tables t;
+    soft_tables_init(&t, s, code);
     unsigned bound =
         t.high[seed >> GROUP_BITS] + t.low[seed % GROUP_SIZE] + t.parity[code->words[seed] & t.parity_mask];
     struct soft_match best = {bound, 5866u, 64u, 0};
