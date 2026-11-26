@@ -4304,7 +4304,7 @@ correlation with DVSI's decode falling by no more than 0.0005 on the mean and 0.
 the distance from DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any
 vector, the envelope correlation falling by no more than 0.001, the distance from the input rising
 by no more than 0.01 dB, and the level against DVSI's moving by at most 0.05 dB. The final
-partition was scored once for this change set, on 2026-11-27, after its review: `dac6d14` against
+partition was scored once for this change set, on 2026-11-26, after its review: `dac6d14` against
 the head's code (the build of `d08ea39`, whose code the head shares apart from comments), on
 `irstia` and `mark`, both builds aligned freely first and then scored at their joint lags, both
 runs' encodings decoded by the candidate's decoder. It passes all 12 checks of
@@ -4437,6 +4437,6 @@ Before that declaration the study's scratch build had been measured on the devel
 validation vectors, and the baseline alone was scored on the tone partition, to record each tone
 measure's coverage in the tones set's description. The identity counters of the four sets were
 evaluated on the combined run: a tone or channel partition scored alone leaves some of them without
-a value. The final partition was scored once for it, on 2026-11-27, after the review: `dac6d14`
+a value. The final partition was scored once for it, on 2026-11-26, after the review: `dac6d14`
 against the head's code, against `r33-pitch-wave-final`, declared in `8942924`. It passes all 12
 checks ([November 2026: rate 33's mid-frame pitch wave](#november-2026-rate-33s-mid-frame-pitch-wave)).
