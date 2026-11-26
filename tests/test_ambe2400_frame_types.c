@@ -42,6 +42,18 @@ to_int16(const float* pcm, short* out) {
     mbe_floattoshort_nearest(pcm, out);
 }
 
+/* A call's status: the call is made by the caller, outside assert(). */
+static void
+assert_status(int got, int want) {
+    assert(got == want);
+}
+
+/* A call's status, at least 0: the call is made by the caller, outside assert(). */
+static void
+assert_status_ok(int got) {
+    assert(got >= 0);
+}
+
 static void
 put_b0(char d[49], int b0) {
     for (int i = 0; i < 6; ++i) {
@@ -86,7 +98,7 @@ make_voice(char voice[NVOICE][49]) {
 
 static void
 air_frame(const char d[49], char fr[4][24]) {
-    assert(mbe_encodeAmbe3600x2400Frame(d, fr) == 0);
+    assert_status(mbe_encodeAmbe3600x2400Frame(d, fr), 0);
 }
 
 static void
@@ -142,12 +154,6 @@ make_uncorrectable_result(mbe_process_result* r, int errors) {
     r->flags |= MBE_PROCESS_FLAG_C0_UNCORRECTABLE;
 }
 
-/* A call's status: the call is made by the caller, outside assert(). */
-static void
-assert_status(int got, int want) {
-    assert(got == want);
-}
-
 /* A frame result with `c0` Golay corrections in C0 and `protected` elsewhere. */
 static void
 make_result_c0(mbe_process_result* r, int c0, int protected_errors) {
@@ -179,7 +185,7 @@ test_voicing_bands(void) {
                 d[38 + i] = (char)((b1 >> (3 - i)) & 1);
             }
             mbe_initMbeParms(&cur, &prev, &enh);
-            assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == 0);
+            assert_status(mbe_decodeAmbe2400Parms(d, &cur, &prev), 0);
             for (int l = 1; l <= cur.L; ++l) {
                 const double hz = (double)l * (double)cur.w0 / (2.0 * M_PI) * 8000.0;
                 int voiced = 0;
@@ -217,10 +223,10 @@ test_classes(void) {
         for (size_t v = 0; v < sizeof(volumes) / sizeof(volumes[0]); ++v) {
             pack_tone(d, 126, index, volumes[v]);
             mbe_initMbeParms(&cur, &prev, &enh);
-            assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == (playable ? index : MBE_AMBE2400_FRAME_LOST));
+            assert_status(mbe_decodeAmbe2400Parms(d, &cur, &prev), (playable ? index : MBE_AMBE2400_FRAME_LOST));
             pack_tone(d, 127, index, volumes[v]);
             mbe_initMbeParms(&cur, &prev, &enh);
-            assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == MBE_AMBE2400_FRAME_LOST);
+            assert_status(mbe_decodeAmbe2400Parms(d, &cur, &prev), MBE_AMBE2400_FRAME_LOST);
         }
     }
     puts("classes: b0 0..124 voice, 125 lost, 126 tone or lost by index at any volume, 127 lost");
@@ -235,10 +241,10 @@ test_null_frame_is_voice(void) {
     mbe_process_result r;
     mbe_parms cur, prev, enh;
     float out[160];
-    assert(mbe_decodeDStarDVData(null_frame, fr) == 0);
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 0);
+    assert_status(mbe_decodeDStarDVData(null_frame, fr), 0);
+    assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r), 0);
     mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh), 0);
     assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT)) == 0u);
     assert(cur.L == 14 && fabsf(cur.w0 / (2.0f * (float)M_PI / 32.0f) - 1.0f) < 1e-6f);
     for (int l = 1; l <= cur.L; ++l) {
@@ -262,7 +268,7 @@ run_stream(const char voice[NVOICE][49], const char* special, int count, int err
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 4; ++i, ++f) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh), 0);
     }
     for (int i = 0; i < count; ++i, ++f) {
         if (special) {
@@ -270,15 +276,14 @@ run_stream(const char voice[NVOICE][49], const char* special, int count, int err
         } else {
             make_uncorrectable_result(&r, errors);
         }
-        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, special ? special : voice[3], &cur, &prev,
-                                        &enh)
-               >= 0);
+        assert_status_ok(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, special ? special : voice[3],
+                                                  &cur, &prev, &enh));
         flags[i] = r.flags;
         assert(r.total_errors == (special ? 0 : errors));
     }
     for (int i = 4; i < NVOICE; ++i, ++f) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh), 0);
     }
 }
 
@@ -295,7 +300,7 @@ run_silence_stream(const char voice[NVOICE][49], const char special[49], int pat
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 4; ++i, ++f) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh), 0);
     }
     char fr[4][24], d[49];
     mbe_soft_bit soft[4][24];
@@ -304,20 +309,21 @@ run_silence_stream(const char voice[NVOICE][49], const char special[49], int pat
     float* out = pcm + ((size_t)160 * (size_t)f++);
     *before = prev;
     if (path == 0) {
-        assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 0);
+        assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh), 0);
     } else if (path == 1) {
-        assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh), 0);
     } else {
-        assert(mbe_processAmbe3600x2400SoftFramef(out, &r, (const mbe_soft_bit(*)[24])soft, d, &cur, &prev, &enh) == 0);
+        assert_status(
+            mbe_processAmbe3600x2400SoftFramef(out, &r, (const mbe_soft_bit(*)[24])soft, d, &cur, &prev, &enh), 0);
     }
     assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT)) == 0u);
     *history = prev;
     for (int i = 4; i < NVOICE; ++i, ++f) {
         make_result(&r, 0);
         r.flags |= (path == 2) ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u;
-        assert(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(pcm + ((size_t)160 * (size_t)f), &r, voice[i], &cur, &prev, &enh), 0);
     }
 }
 
@@ -347,7 +353,7 @@ test_b0_124_silence_frame(void) {
             /* The committed history is the silence frame's own decode from the
              * history before it: its amplitudes and gain, not the last voice's. */
             mbe_parms decoded = before, last = before;
-            assert(mbe_decodeAmbe2400Parms(silence, &decoded, &last) == 0);
+            assert_status(mbe_decodeAmbe2400Parms(silence, &decoded, &last), 0);
             assert(history.L == 14 && decoded.L == 14);
             for (int l = 1; l <= 14; ++l) {
                 assert(history.Vl[l] == 0);
@@ -552,7 +558,7 @@ test_mixed_repeat_count(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
     }
     for (int i = 0; i < 4; ++i) {
         int errored = (i & 1) != 0;
@@ -561,7 +567,7 @@ test_mixed_repeat_count(void) {
         } else {
             make_result(&r, 0);
         }
-        assert(mbe_processAmbe2400Dataf(out, &r, errored ? voice[3] : b125, &cur, &prev, &enh) >= 0);
+        assert_status_ok(mbe_processAmbe2400Dataf(out, &r, errored ? voice[3] : b125, &cur, &prev, &enh));
         assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
         assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i == 3));
     }
@@ -591,17 +597,17 @@ test_frame_apis_agree(void) {
         air_frame(seq[i], fr);
         soft_frame((const char (*)[24])fr, soft);
         /* The frame encoder rewrites bit 24 (a parity bit), so decode the bits back. */
-        assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r[0]) == 0);
+        assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r[0]), 0);
         /* Mute noise comes from a per-thread RNG: give each path the same draws. */
         make_result(&r[0], 0);
         mbe_setThreadRngSeed((uint32_t)i + 1u);
-        assert(mbe_processAmbe2400Dataf(out[0], &r[0], d, &c[0], &p[0], &e[0]) >= 0);
+        assert_status_ok(mbe_processAmbe2400Dataf(out[0], &r[0], d, &c[0], &p[0], &e[0]));
         mbe_setThreadRngSeed((uint32_t)i + 1u);
-        assert(mbe_processAmbe3600x2400Framef(out[1], &r[1], (const char (*)[24])fr, dh, &c[1], &p[1], &e[1]) >= 0);
+        assert_status_ok(
+            mbe_processAmbe3600x2400Framef(out[1], &r[1], (const char (*)[24])fr, dh, &c[1], &p[1], &e[1]));
         mbe_setThreadRngSeed((uint32_t)i + 1u);
-        assert(
-            mbe_processAmbe3600x2400SoftFramef(out[2], &r[2], (const mbe_soft_bit(*)[24])soft, ds, &c[2], &p[2], &e[2])
-            >= 0);
+        assert_status_ok(mbe_processAmbe3600x2400SoftFramef(out[2], &r[2], (const mbe_soft_bit(*)[24])soft, ds, &c[2],
+                                                            &p[2], &e[2]));
         assert(memcmp(dh, d, sizeof(d)) == 0 && memcmp(ds, d, sizeof(d)) == 0);
         assert(r[1].flags == r[0].flags);
         assert(r[2].flags == (r[0].flags | MBE_PROCESS_FLAG_SOFT_INPUT));
@@ -623,9 +629,9 @@ test_zero_volume_tone(void) {
         pack_tone(tone, 126, index, 0);
         mbe_initMbeParms(&cur, &prev, &enh);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
         assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
         assert(prev.repeatCount == 0);
     }
@@ -650,18 +656,18 @@ test_tone_ends_repeat_run(void) {
             pack_tone(tone, 126, tones[t][0], tones[t][1]);
             mbe_initMbeParms(&cur, &prev, &enh);
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh), 0);
             for (int i = 0; i < 3; ++i) {
                 if (errored) {
                     make_uncorrectable_result(&r, 4);
                 } else {
                     make_result(&r, 0);
                 }
-                assert(mbe_processAmbe2400Dataf(out, &r, errored ? voice[1] : b125, &cur, &prev, &enh) >= 0);
+                assert_status_ok(mbe_processAmbe2400Dataf(out, &r, errored ? voice[1] : b125, &cur, &prev, &enh));
                 assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
             }
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
             assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
             assert(prev.repeatCount == 0);
             if (errored) {
@@ -669,7 +675,7 @@ test_tone_ends_repeat_run(void) {
             } else {
                 make_result(&r, 0);
             }
-            assert(mbe_processAmbe2400Dataf(out, &r, errored ? voice[1] : b125, &cur, &prev, &enh) >= 0);
+            assert_status_ok(mbe_processAmbe2400Dataf(out, &r, errored ? voice[1] : b125, &cur, &prev, &enh));
             assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE)) == MBE_PROCESS_FLAG_REPEAT);
             assert(prev.repeatCount == 1);
         }
@@ -696,14 +702,14 @@ test_all_ones_frame(void) {
     short pcm[160];
     memset(ones, 0xFF, sizeof(ones));
     make_voice(voice);
-    assert(mbe_decodeDStarDVData(ones, fr) == 0);
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r) == 3);
+    assert_status(mbe_decodeDStarDVData(ones, fr), 0);
+    assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, d, &r), 3);
     for (int i = 0; i < 6; ++i) {
         assert(d[i] == 1);
     }
     assert(d[48] == 1); /* b0 127 */
     mbe_initMbeParms(&cur, &prev, &enh);
-    assert(mbe_decodeAmbe2400Parms(d, &cur, &prev) == MBE_AMBE2400_FRAME_LOST);
+    assert_status(mbe_decodeAmbe2400Parms(d, &cur, &prev), MBE_AMBE2400_FRAME_LOST);
     run_stream((const char (*)[49])voice, NULL, 1, 4, want, want_flags);
     static const int runs[] = {1, 3, 20};
     for (size_t k = 0; k < sizeof(runs) / sizeof(runs[0]); ++k) {
@@ -711,10 +717,10 @@ test_all_ones_frame(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int i = 0; i < 4; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         }
         for (int i = 0; i < runs[k]; ++i) {
-            assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 3);
+            assert_status(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh), 3);
             const unsigned mute = (i >= 3) ? MBE_PROCESS_FLAG_MUTE : 0u;
             assert(r.flags
                    == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
@@ -730,12 +736,12 @@ test_all_ones_frame(void) {
             }
         }
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh), 0);
         /* The same voice with no all-ones frames in between. */
         mbe_initMbeParms(&rcur, &rprev, &renh);
         for (int i = 0; i < 5; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &rcur, &rprev, &renh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &rcur, &rprev, &renh), 0);
         }
         assert_same_pcm(prev.log2Ml, rprev.log2Ml, sizeof(prev.log2Ml) / sizeof(prev.log2Ml[0]),
                         "log2Ml after the all-ones run");
@@ -757,11 +763,11 @@ test_tone_muted_by_error_rate(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 100; ++i) {
         make_result(&r, 7);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 7);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_MUTE));
     float peak = 0.0f;
     for (int i = 0; i < 160; ++i) {
@@ -785,14 +791,15 @@ test_tone_muted_by_error_rate(void) {
     pp.PSIl[0] = 0.0f;
     float muted[160], played[160], after_muted[160], after_played[160];
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(muted, &r, tone, &mc, &mp, &me) == 0);
+    assert_status(mbe_processAmbe2400Dataf(muted, &r, tone, &mc, &mp, &me), 0);
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(played, &r, tone, &pc, &pp, &pe) == 0);
+    assert_status(mbe_processAmbe2400Dataf(played, &r, tone, &pc, &pp, &pe), 0);
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
-    assert(mbe_processAmbe3600x2400SoftFramef(after_muted, &r, (const mbe_soft_bit(*)[24])soft, d, &mc, &mp, &me) == 0);
-    assert(mbe_processAmbe3600x2400SoftFramef(after_played, &r, (const mbe_soft_bit(*)[24])soft, d, &pc, &pp, &pe)
-           == 0);
+    assert_status(
+        mbe_processAmbe3600x2400SoftFramef(after_muted, &r, (const mbe_soft_bit(*)[24])soft, d, &mc, &mp, &me), 0);
+    assert_status(
+        mbe_processAmbe3600x2400SoftFramef(after_played, &r, (const mbe_soft_bit(*)[24])soft, d, &pc, &pp, &pe), 0);
     assert_same_pcm(after_muted, after_played, 160, "tone after a muted tone vs after a played tone");
     puts("tones: muted with the error rate on hard decisions, tone state still advancing");
 }
@@ -822,9 +829,9 @@ test_noise_overlap_across_a_tone(void) {
     mbe_initMbeParms(&ucur, &uprev, &uenh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(unbroken, &r, voice[i], &ucur, &uprev, &uenh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(unbroken, &r, voice[i], &ucur, &uprev, &uenh), 0);
     }
     float energy = 0.0f;
     for (int n = 0; n < 160; ++n) {
@@ -835,7 +842,7 @@ test_noise_overlap_across_a_tone(void) {
     mbe_startToneDstar(&tone_state, 130); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(tail, tone, &tone_state, 130);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     assert((r.flags & MBE_PROCESS_FLAG_TONE) != 0u);
     assert_same_pcm(&cur.noiseSeed, &ucur.noiseSeed, 1, "noise seed through a tone frame");
     assert_same_pcm(enh.previousUw, uenh.previousUw, 256, "unvoiced overlap through a tone frame");
@@ -843,9 +850,9 @@ test_noise_overlap_across_a_tone(void) {
     mbe_synthesizeTonefdstar(tail, tone, &tone_state, 130);
     for (int i = 4; i < 6; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(unbroken, &r, voice[i], &ucur, &uprev, &uenh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(unbroken, &r, voice[i], &ucur, &uprev, &uenh), 0);
         for (int n = 0; n < 160; ++n) {
             const float gain = (i > 4 || n >= 80) ? 1.0f : (float)n / 80.0f;
             const float want = (gain * unbroken[n]) + ((1.0f - gain) * tail[n]);
@@ -860,7 +867,7 @@ test_noise_overlap_across_a_tone(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int i = 0; i < 4; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         }
         mbe_parms model = enh;
         mbe_synthesizeSpeechf(out, &model, &enh);
@@ -871,9 +878,9 @@ test_noise_overlap_across_a_tone(void) {
             memset(enh.previousUw, 0, sizeof(enh.previousUw));
         }
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(with_overlap ? kept : plain, &r, voice[4], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(with_overlap ? kept : plain, &r, voice[4], &cur, &prev, &enh), 0);
     }
     assert_same_pcm(kept, plain, 160, "voice after a tone after the other rendering");
     puts("tones: the unvoiced noise goes on after a tone where it stopped before it");
@@ -905,7 +912,7 @@ test_one_state_as_current_and_last(void) {
         mbe_initMbeParms(&cur, &prev, &unused);
         for (int i = 0; i < 3; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out[foreign], &r, voice[i], &cur, &prev, &cur) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out[foreign], &r, voice[i], &cur, &prev, &cur), 0);
         }
         if (foreign) {
             /* As a caller's own mbe_synthesizeSpeechf() on the history state leaves them. */
@@ -917,7 +924,7 @@ test_one_state_as_current_and_last(void) {
             }
         }
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out[foreign], &r, lost, &cur, &prev, &cur) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out[foreign], &r, lost, &cur, &prev, &cur), 0);
         assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
     }
     assert_same_pcm(out[0], out[1], 160, "lost frame with one state as current and last");
@@ -926,11 +933,11 @@ test_one_state_as_current_and_last(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 3; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out[0], &r, voice[i], &cur, &prev, &cur) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out[0], &r, voice[i], &cur, &prev, &cur), 0);
     }
     const float seed_before_tone = cur.noiseSeed;
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out[0], &r, tone, &cur, &prev, &cur) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out[0], &r, tone, &cur, &prev, &cur), 0);
     assert((r.flags & MBE_PROCESS_FLAG_TONE) != 0u);
     assert_same_pcm(&cur.noiseSeed, &seed_before_tone, 1,
                     "noise seed through a tone with one state as current and last");
@@ -938,7 +945,7 @@ test_one_state_as_current_and_last(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 3; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out[0], &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out[0], &r, voice[i], &cur, &prev, &enh), 0);
     }
     for (int i = 0; i < 4; ++i) {
         if (i == 3) {
@@ -947,7 +954,7 @@ test_one_state_as_current_and_last(void) {
             }
         }
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out[0], &r, lost, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out[0], &r, lost, &cur, &prev, &enh), 0);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     assert(mbe_subframe_state_is_marked(&cur));
@@ -1157,20 +1164,20 @@ test_tone_transitions(void) {
     mbe_initMbeParms(&lcur, &lprev, &lenh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &lcur, &lprev, &lenh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &lcur, &lprev, &lenh), 0);
     }
     /* The tone frame: the lost frame's speech fading out, the tone fading in. */
     mbe_parms tone_state = cur;
     mbe_startToneDstar(&tone_state, 130); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE));
     const float seed_before_lost = lcur.noiseSeed;
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(ref, &r, lost, &lcur, &lprev, &lenh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(ref, &r, lost, &lcur, &lprev, &lenh), 0);
     for (int n = 0; n < 160; ++n) {
         const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
         const float want = (gain * plain[n]) + ((1.0f - gain) * ref[n]);
@@ -1187,10 +1194,10 @@ test_tone_transitions(void) {
     /* The voice after it: the tone going on and fading out, the voice fading in. */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh), 0);
     assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_MUTE)) == 0u);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(ref, &r, voice[4], &lcur, &lprev, &lenh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(ref, &r, voice[4], &lcur, &lprev, &lenh), 0);
     for (int n = 0; n < 160; ++n) {
         const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
         const float want = (gain * ref[n]) + ((1.0f - gain) * plain[n]);
@@ -1198,22 +1205,22 @@ test_tone_transitions(void) {
     }
     /* And the voice after that plays as after the lost frame. */
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[5], &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[5], &cur, &prev, &enh), 0);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(ref, &r, voice[5], &lcur, &lprev, &lenh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(ref, &r, voice[5], &lcur, &lprev, &lenh), 0);
     assert_same_pcm(out, ref, 160, "second voice frame after the tone");
     /* After the repeat limit's mute the last frame is silent: the tone fades
      * in with no speech under it. */
     for (int i = 0; i < 5; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, lost, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, lost, &cur, &prev, &enh), 0);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     tone_state = cur;
     mbe_startToneDstar(&tone_state, 130); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     for (int n = 0; n < 160; ++n) {
         const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
         const float want = (gain * plain[n]) + ((1.0f - gain) * 0.0f);
@@ -1241,7 +1248,7 @@ test_tone_transitions_after_mute(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 100; ++i) {
         make_result(&r, 7);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 7);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     mbe_parms tone_state = cur;
@@ -1249,7 +1256,7 @@ test_tone_transitions_after_mute(void) {
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 32);
     make_result(&r, 0);
     r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
-    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
     for (int n = 0; n < 160; ++n) {
         const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
@@ -1259,20 +1266,20 @@ test_tone_transitions_after_mute(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 100; ++i) {
         make_result(&r, 7);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 7);
     }
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     mbe_parms rc = cur, rp = prev, re = enh;
     rp.Vl[0] = 0; /* the same state with no tone held */
     make_result(&r, 0);
     r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh), 0);
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
     make_result(&r, 0);
     r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
-    assert(mbe_processAmbe2400Dataf(ref, &r, voice[0], &rc, &rp, &re) == 0);
+    assert_status(mbe_processAmbe2400Dataf(ref, &r, voice[0], &rc, &rp, &re), 0);
     for (int n = 0; n < 160; ++n) {
         const float gain = (n >= 80) ? 1.0f : (float)n / 80.0f;
         assert_close_sample(out[n], gain * ref[n], "soft voice after a muted hard tone", n);
@@ -1301,13 +1308,13 @@ test_repeat_limit_mute(void) {
     mbe_initMbeParms(&rcur, &rprev, &renh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &rcur, &rprev, &renh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &rcur, &rprev, &renh), 0);
     }
     for (int i = 0; i < 5; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh), 0);
         assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i >= 3));
         to_int16(out, pcm);
         double head = 0.0, tail = 0.0;
@@ -1325,9 +1332,9 @@ test_repeat_limit_mute(void) {
         }
     }
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh), 0);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &rcur, &rprev, &renh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[4], &rcur, &rprev, &renh), 0);
     assert_same_pcm(prev.log2Ml, rprev.log2Ml, sizeof(prev.log2Ml) / sizeof(prev.log2Ml[0]), "log2Ml after the mute");
     assert_same_pcm(&prev.gamma, &rprev.gamma, 1, "gamma after the mute");
     puts("repeat limit: fades out, mutes at DVSI's level, keeps the prediction history");
@@ -1401,12 +1408,12 @@ test_repeat_limit_under_error_mute(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 100; ++i) {
         make_result(&r, 7);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 7);
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     for (int i = 0; i < 6; ++i) {
         make_uncorrectable_result(&r, 4);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 4);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 4);
         assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE))
                == (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE));
         to_int16(out, pcm);
@@ -1434,9 +1441,9 @@ test_repeat_limit_noise_continuity(void) {
     for (int i = 0; i < 13; ++i) {
         const char* d = (i < 4 || i == 12) ? voice[i % NVOICE] : b125;
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &rcur, &rprev, &renh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &rcur, &rprev, &renh), 0);
     }
     assert_same_pcm(&cur.noiseSeed, &rcur.noiseSeed, 1, "noise seed after the mute");
     puts("repeat limit: the noise generator advances on every frame");
@@ -1459,11 +1466,11 @@ test_tone_frames_hold_noise_generator(void) {
     for (int i = 0; i < 9; ++i) {
         const int is_tone = (i >= 3 && i < 6);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, is_tone ? tone : voice[i % NVOICE], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, is_tone ? tone : voice[i % NVOICE], &cur, &prev, &enh), 0);
         assert(((r.flags & MBE_PROCESS_FLAG_TONE) != 0u) == is_tone);
         if (!is_tone) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &rcur, &rprev, &renh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &rcur, &rprev, &renh), 0);
         }
         assert_same_pcm(&cur.noiseSeed, &rcur.noiseSeed, 1, "noise seed across a tone");
         assert_same_pcm(&enh.noiseSeed, &cur.noiseSeed, 1, "noise seed of the last synthesized frame");
@@ -1521,7 +1528,7 @@ resume_frame(float* out, const char d[49], int uncorrectable, mbe_parms* cur, mb
     if (uncorrectable) {
         r.flags |= MBE_PROCESS_FLAG_C0_UNCORRECTABLE;
     }
-    assert(mbe_processAmbe2400Dataf(out, &r, d, cur, prev, enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, d, cur, prev, enh), 0);
 }
 
 /* What the first voice frame after the lost run should do. */
@@ -1779,14 +1786,14 @@ test_resume_edge_frames(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 100; ++i) {
         make_result(&r, 7);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 7);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 7);
     }
     for (int i = 0; i < 5; ++i) {
         make_result(&r, 7);
-        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 7);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh), 7);
     }
     make_result(&r, 7);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 7);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh), 7);
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     to_int16(out, pcm);
     for (int n = 0; n < 160; ++n) {
@@ -1809,8 +1816,8 @@ test_loud_held_frame_plays(void) {
     float out[160];
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int f = 0; f < 50; ++f) {
-        assert(mbe_decodeDStarDVData(dv, fr) == 0);
-        assert(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh) == 0);
+        assert_status(mbe_decodeDStarDVData(dv, fr), 0);
+        assert_status(mbe_processAmbe3600x2400Framef(out, &r, (const char (*)[24])fr, d, &cur, &prev, &enh), 0);
         assert((r.flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE)) == 0u);
         double energy = 0.0;
         for (int n = 0; n < 160; ++n) {
@@ -1855,7 +1862,7 @@ test_c0_uncorrectable_detection(void) {
     make_voice(voice);
     air_frame(voice[2], fr);
     mbe_process_result r;
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, clean_d, &r) == 0);
+    assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])fr, clean_d, &r), 0);
     int flagged[5] = {0, 0, 0, 0, 0}, patterns[5] = {0, 0, 0, 0, 0};
     for (int w = 1; w <= 4; ++w) {
         int idx[4] = {0, 1, 2, 3};
@@ -1865,7 +1872,7 @@ test_c0_uncorrectable_detection(void) {
             for (int i = 0; i < w; ++i) {
                 bad[0][idx[i]] ^= 1;
             }
-            assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) >= 0);
+            assert_status_ok(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r));
             const int is_flagged = (r.flags & MBE_PROCESS_FLAG_C0_UNCORRECTABLE) != 0u;
             assert(is_flagged == (w == 4));
             assert(r.c0_errors == w); /* every flipped bit counts, parity bits included */
@@ -1874,7 +1881,7 @@ test_c0_uncorrectable_detection(void) {
             }
             mbe_soft_bit soft[4][24];
             soft_frame((const char (*)[24])bad, soft);
-            assert(mbe_decodeAmbe3600x2400SoftFrame((const mbe_soft_bit(*)[24])soft, d, &r) >= 0);
+            assert_status_ok(mbe_decodeAmbe3600x2400SoftFrame((const mbe_soft_bit(*)[24])soft, d, &r));
             assert(((r.flags & MBE_PROCESS_FLAG_C0_UNCORRECTABLE) != 0u) == is_flagged);
             flagged[w] += is_flagged;
             ++patterns[w];
@@ -1935,10 +1942,10 @@ test_c0_uncorrectable_plays_lost(void) {
             }
             if (run == 2) {
                 /* Staged: decode, then process the bits with the decode's result. */
-                assert(mbe_decodeAmbe3600x2400Frame(fr, d, &r) >= 0);
-                assert(mbe_processAmbe2400Dataf(pcm[run][f], &r, d, &s3[0], &s3[1], &s3[2]) >= 0);
+                assert_status_ok(mbe_decodeAmbe3600x2400Frame(fr, d, &r));
+                assert_status_ok(mbe_processAmbe2400Dataf(pcm[run][f], &r, d, &s3[0], &s3[1], &s3[2]));
             } else {
-                assert(mbe_processAmbe3600x2400Framef(pcm[run][f], &r, fr, d, &s3[0], &s3[1], &s3[2]) >= 0);
+                assert_status_ok(mbe_processAmbe3600x2400Framef(pcm[run][f], &r, fr, d, &s3[0], &s3[1], &s3[2]));
             }
             if (run != 1 && f == 3) {
                 assert(r.flags
@@ -1954,15 +1961,15 @@ test_c0_uncorrectable_plays_lost(void) {
     assert_same_pcm(pcm[0][0], pcm[1][0], (size_t)160 * 4, "uncorrectable C0 vs lost frame");
     /* The history it commits is its own decode from the history before it. */
     mbe_parms decoded = before, history = before;
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) >= 0);
-    assert(mbe_decodeAmbe2400Parms(d, &decoded, &history) == 0);
+    assert_status_ok(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r));
+    assert_status(mbe_decodeAmbe2400Parms(d, &decoded, &history), 0);
     assert_same_pcm(&after.log2Ml[1], &decoded.log2Ml[1], (size_t)decoded.L, "history after the frame");
     assert(after.L == before.L); /* the repeated model */
     /* The next frame predicts from it, so it is not the frame after a lost frame. */
     mbe_parms next = decoded, next_prev = decoded;
     air_frame(voice[4], bad);
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r) == 0);
-    assert(mbe_decodeAmbe2400Parms(d, &next, &next_prev) == 0);
+    assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])bad, d, &r), 0);
+    assert_status(mbe_decodeAmbe2400Parms(d, &next, &next_prev), 0);
     int differs = 0;
     for (int n = 0; n < 160; ++n) {
         uint32_t x, y;
@@ -1972,7 +1979,7 @@ test_c0_uncorrectable_plays_lost(void) {
     }
     assert(differs);
     mbe_parms replay = after, replay_cur = before;
-    assert(mbe_decodeAmbe2400Parms(d, &replay_cur, &replay) == 0);
+    assert_status(mbe_decodeAmbe2400Parms(d, &replay_cur, &replay), 0);
     assert_same_pcm(&replay_cur.log2Ml[1], &next.log2Ml[1], (size_t)next.L, "the next frame's prediction");
     mbe_soft_bit soft[4][24];
     mbe_parms c, p, e;
@@ -1981,7 +1988,8 @@ test_c0_uncorrectable_plays_lost(void) {
     mbe_initMbeParms(&c, &p, &e);
     for (int f = 0; f < NVOICE; ++f) {
         soft_frame((const char (*)[24])frames[0][f], soft);
-        assert(mbe_processAmbe3600x2400SoftFramef(out[f], &r, (const mbe_soft_bit(*)[24])soft, d, &c, &p, &e) >= 0);
+        assert_status_ok(
+            mbe_processAmbe3600x2400SoftFramef(out[f], &r, (const mbe_soft_bit(*)[24])soft, d, &c, &p, &e));
     }
     assert_same_pcm(out[0], pcm[0][0], (size_t)160 * NVOICE, "soft vs hard frames");
     puts("uncorrectable C0: plays as a lost frame, the next frame predicts from its decode");
@@ -2080,23 +2088,23 @@ test_c0_uncorrectable_history_entry_points(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 3; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
     }
     make_uncorrectable_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh), 0);
     assert((prev.Vl[0] & ~0x3FFFF) != 0);
     /* Direct decoding, as a caller of the staged API would chain it. */
     mbe_parms dcur = cur, dprev = prev, pcur = cur, pprev = prev, penh = enh;
-    assert(mbe_decodeAmbe2400Parms(voice[4], &dcur, &dprev) == 0);
+    assert_status(mbe_decodeAmbe2400Parms(voice[4], &dcur, &dprev), 0);
     assert((dcur.Vl[0] & ~0x3FFFF) == 0);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &pcur, &pprev, &penh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[4], &pcur, &pprev, &penh), 0);
     assert(dcur.L == pprev.L);
     assert_same_pcm(&dcur.log2Ml[1], &pprev.log2Ml[1], (size_t)dcur.L, "direct decode after the frame");
     mbe_moveMbeParms(&dcur, &dprev);
     mbe_moveMbeParms(&pprev, &pcur);
-    assert(mbe_decodeAmbe2400Parms(voice[5], &dcur, &dprev) == 0);
-    assert(mbe_decodeAmbe2400Parms(voice[5], &pcur, &pprev) == 0);
+    assert_status(mbe_decodeAmbe2400Parms(voice[5], &dcur, &dprev), 0);
+    assert_status(mbe_decodeAmbe2400Parms(voice[5], &pcur, &pprev), 0);
     assert_same_pcm(&dcur.log2Ml[1], &pcur.log2Ml[1], (size_t)dcur.L, "direct decode, the frame after");
     /* The encoder, given the same state. */
     mbe_ambe2400_encoder* enc = mbe_ambe2400EncoderAlloc();
@@ -2110,7 +2118,7 @@ test_c0_uncorrectable_history_entry_points(void) {
         }
         char d[49];
         mbe_parms ecur = cur, eprev = prev;
-        assert(mbe_encodeAmbe2400Parms(enc, pcm, d, &ecur, &eprev) == 0);
+        assert_status(mbe_encodeAmbe2400Parms(enc, pcm, d, &ecur, &eprev), 0);
         mbe_parms check = cur, check_prev = prev;
         if (mbe_decodeAmbe2400Parms(d, &check, &check_prev) != 0) {
             continue;
@@ -2141,14 +2149,14 @@ test_corrected_errors_play(void) {
             mbe_initMbeParms(&cur, &prev, &enh);
             for (int i = 0; i < 3; ++i) {
                 make_result(&r, 0);
-                assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+                assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
             }
             rcur = cur;
             rprev = prev;
-            assert(mbe_decodeAmbe2400Parms(voice[3], &rcur, &rprev) == 0);
+            assert_status(mbe_decodeAmbe2400Parms(voice[3], &rcur, &rprev), 0);
             make_result_c0(&r, 3, errors - 3);
             r.flags |= soft ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u;
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == errors);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh), errors);
             assert((r.flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
             assert_same_pcm(&prev.log2Ml[1], &rcur.log2Ml[1], (size_t)rcur.L, "corrected frame's model");
         }
@@ -2179,13 +2187,13 @@ test_hard_tone_with_corrections(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int i = 0; i < 4; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+            assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
         }
         for (int t = 0; t < 2; ++t) {
             const unsigned soft = errors[k][2] ? MBE_PROCESS_FLAG_SOFT_INPUT : 0u;
             make_result_c0(&r, errors[k][0], errors[k][1]);
             r.flags |= soft;
-            assert(mbe_processAmbe2400Dataf(k == 0 ? want[t] : got[t], &r, tone, &cur, &prev, &enh) >= 0);
+            assert_status_ok(mbe_processAmbe2400Dataf(k == 0 ? want[t] : got[t], &r, tone, &cur, &prev, &enh));
             assert(r.flags == (MBE_PROCESS_FLAG_C0_VALID | MBE_PROCESS_FLAG_TONE | soft));
         }
         if (k > 0) {
@@ -2205,7 +2213,7 @@ test_hard_tone_with_corrections(void) {
             assert_same_pcm(got[1], want[1], 160, "second tone frame with corrections");
         }
         make_uncorrectable_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
         assert((r.flags & (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT))
                == (MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT));
     }
@@ -2245,7 +2253,7 @@ lost_after_tone_run(int unvoiced) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
     }
     before = prev;
     tone_state = cur;
@@ -2253,12 +2261,12 @@ lost_after_tone_run(int unvoiced) {
     for (int i = 0; i < 2; ++i) {
         mbe_synthesizeTonefdstar(plain, tone, &tone_state, 32);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     }
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 32);
     for (int i = 0; i < 6; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh), 0);
         assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
         assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i >= 3));
         if (i == 0) {
@@ -2312,7 +2320,7 @@ lost_after_dual_tone_run(int index) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
     }
     before = prev;
     tone_state = cur;
@@ -2320,12 +2328,12 @@ lost_after_dual_tone_run(int index) {
     for (int i = 0; i < 2; ++i) {
         mbe_synthesizeTonefdstar(plain, tone, &tone_state, index);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
     }
     for (int i = 0; i < 6; ++i) {
         mbe_synthesizeTonefdstar(plain, tone, &tone_state, index);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, b125, &cur, &prev, &enh), 0);
         assert((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
         assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (i >= 3));
         if (i < 3) {
@@ -2379,20 +2387,20 @@ test_tone_volume_step(void) {
         float out[160], plain[160];
         mbe_initMbeParms(&cur, &prev, &enh);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh), 0);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone_from, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone_from, &cur, &prev, &enh), 0);
         tone_state = cur;
         mbe_synthesizeTonefdstar(plain, tone_to, &tone_state, index);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone_to, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone_to, &cur, &prev, &enh), 0);
         for (int n = 0; n < 160; ++n) {
             assert_close_sample(out[n], volume_ramp_sample(plain[n], from, to, n), "tone volume step", n);
         }
         /* Held at the new volume, the next frame is the plain tone. */
         mbe_synthesizeTonefdstar(plain, tone_to, &tone_state, index);
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone_to, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone_to, &cur, &prev, &enh), 0);
         for (int n = 0; n < 160; ++n) {
             assert_close_sample(out[n], plain[n], "tone held after the step", n);
         }
@@ -2407,13 +2415,13 @@ test_tone_volume_step(void) {
     float out[160], plain[160];
     mbe_initMbeParms(&cur, &prev, &enh);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, voice[0], &cur, &prev, &enh), 0);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, a, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, a, &cur, &prev, &enh), 0);
     tone_state = cur;
     mbe_synthesizeTonefdstar(plain, b, &tone_state, 40);
     make_result(&r, 0);
-    assert(mbe_processAmbe2400Dataf(out, &r, b, &cur, &prev, &enh) == 0);
+    assert_status(mbe_processAmbe2400Dataf(out, &r, b, &cur, &prev, &enh), 0);
     for (int n = 0; n < 160; ++n) {
         assert_close_sample(out[n], plain[n], "new tone index", n);
     }
@@ -2434,7 +2442,7 @@ test_error_rate_mute_level(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 200; ++i) {
         make_result(&r, 6);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh) == 6);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i % NVOICE], &cur, &prev, &enh), 6);
         if ((r.flags & MBE_PROCESS_FLAG_MUTE) == 0u) {
             continue;
         }
@@ -2466,22 +2474,37 @@ test_error_rate_mute_level(void) {
  */
 static void
 test_tone_played_frequencies(void) {
+    static const struct {
+        int index;
+        int has;
+        unsigned first;
+        unsigned second;
+    } played[] = {
+        {134, 1, 7u * 7968u, 11u * 7968u},
+        {145, 1, 7u * 4642u, 6u * 4642u},
+        {30, 1, 61440u, 61440u},
+        {148, 0, 0u, 0u},
+        {123, 0, 0u, 0u},
+    };
+
     unsigned first, second;
-    assert(mbe_tone_dstar_played_steps(134, &first, &second) && first == 7u * 7968u && second == 11u * 7968u);
-    assert(mbe_tone_dstar_played_steps(145, &first, &second) && first == 7u * 4642u && second == 6u * 4642u);
-    assert(mbe_tone_dstar_played_steps(30, &first, &second) && first == 61440u && second == 61440u);
-    assert(!mbe_tone_dstar_played_steps(148, &first, &second) && !mbe_tone_dstar_played_steps(123, &first, &second));
+    for (size_t i = 0; i < sizeof(played) / sizeof(played[0]); ++i) {
+        const int has = mbe_tone_dstar_played_steps(played[i].index, &first, &second);
+        assert(has == played[i].has && first == played[i].first && second == played[i].second);
+    }
     for (int index = 0; index < 256; ++index) {
         float f1, f2;
         const int has = mbe_tone_dstar_played_steps(index, &first, &second);
-        assert(has == mbe_tone_lookup_dstar_freqs(index, &f1, &f2));
+        const int nominal = mbe_tone_lookup_dstar_freqs(index, &f1, &f2);
+        assert(has == nominal);
         if (has) {
             assert(fabs((double)first * 8000.0 / 524288.0 - (double)f1) < 20.0);
             assert(fabs((double)second * 8000.0 / 524288.0 - (double)f2) < 20.0);
         }
     }
     float f1, f2;
-    assert(mbe_tone_lookup_dstar_freqs(134, &f1, &f2) && fabsf(f1 - 852.0f) == 0.0f && fabsf(f2 - 1336.0f) == 0.0f);
+    const int nominal = mbe_tone_lookup_dstar_freqs(134, &f1, &f2);
+    assert(nominal && fabsf(f1 - 852.0f) == 0.0f && fabsf(f2 - 1336.0f) == 0.0f);
 
     char voice[NVOICE][49], tone[49];
     make_voice(voice);
@@ -2501,12 +2524,12 @@ test_tone_played_frequencies(void) {
     mbe_initMbeParms(&cur, &prev, &enh);
     for (int i = 0; i < 4; ++i) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh), 0);
     }
     const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, mbe_tone_dstar_level_db(volume) / 20.0) / 7.0;
     for (int f = 0; f < 2; ++f) {
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh), 0);
         assert((r.flags & MBE_PROCESS_FLAG_TONE) != 0u);
         for (int n = (f == 0) ? 80 : 0; n < 160; ++n) {
             const double t = (double)(160 * f + n);

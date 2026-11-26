@@ -711,6 +711,31 @@ static const unsigned char imbe_tone_first_row[IMBE_TONE_LAST_CODE + 2] = {
     108, 108, 108, 110, 110, 110, 112, 112, 112, 112, 112, 112, 113, 115, 116,
 };
 
+static void
+imbe_tone_set_field(int* field, int value) {
+    if (field != NULL) {
+        *field = value;
+    }
+}
+
+int
+mbe_imbe4400_tone_row(int i, int* b0, int* b1, int* l1, int* l2) {
+    if (i < 0 || (size_t)i >= sizeof(imbe_tone_rows) / sizeof(imbe_tone_rows[0])) {
+        return 0;
+    }
+    const struct imbe_tone_row* row = &imbe_tone_rows[i];
+    imbe_tone_set_field(b0, row->b0);
+    imbe_tone_set_field(b1, row->b1);
+    imbe_tone_set_field(l1, row->l1);
+    imbe_tone_set_field(l2, row->l2);
+    return 1;
+}
+
+int
+mbe_imbe4400_tone_first_row(int b0) {
+    return (b0 >= 0 && b0 <= IMBE_TONE_LAST_CODE + 1) ? imbe_tone_first_row[b0] : -1;
+}
+
 /* Others over tone: a frame passes a row when the rms of its other decoded
  * magnitudes is under a share of the rms of the tone's. For a dual tone: DVSI's
  * tone frames reach at most 0.296 (99.9% under 0.242) and the frames of the

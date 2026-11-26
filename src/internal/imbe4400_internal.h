@@ -20,4 +20,15 @@ int mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* resul
 void mbe_imbe4400_quantize_amplitudes(int b0, const unsigned char bands[12], const float logm[57],
                                       const mbe_parms* prev_mp, int sync, char imbe_d[88]);
 
+/*
+ * The P25 tone table (imbe7200x4400.c, imbe_tone_rows and imbe_tone_first_row),
+ * exposed for the tests that pin it. mbe_imbe4400_tone_row() gives row i's
+ * pitch code, voicing word (band 1 the most significant bit) and harmonics
+ * and returns 1 for a row, 0 past the last (any field pointer may be NULL).
+ * mbe_imbe4400_tone_first_row() gives the index entry of pitch code b0: the
+ * first row of b0 for 0..197, the number of rows for 198, -1 otherwise.
+ */
+int mbe_imbe4400_tone_row(int i, int* b0, int* b1, int* l1, int* l2);
+int mbe_imbe4400_tone_first_row(int b0);
+
 #endif /* MBELIB_NEO_INTERNAL_IMBE4400_INTERNAL_H */

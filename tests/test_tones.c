@@ -27,6 +27,12 @@
 
 #define FRAMES 12
 
+/* A call's status, at least 0: the call is made by the caller, outside assert(). */
+static void
+assert_status_ok(int got) {
+    assert(got >= 0);
+}
+
 static void
 put_bits(char* d, int start, int value, int count) {
     for (int i = 0; i < count; ++i) {
@@ -140,7 +146,7 @@ play(process_fn process, const char d[49], float* out, unsigned* flags) {
     for (int f = 0; f < FRAMES; ++f) {
         mbe_process_result result;
         mbe_initProcessResult(&result);
-        assert(process(frame, &result, d, &cur, &prev, &enhanced) >= 0);
+        assert_status_ok(process(frame, &result, d, &cur, &prev, &enhanced));
         *flags |= result.flags;
         if (f > 0) {
             memcpy(out + ((size_t)(f - 1) * 160u), frame, sizeof(frame));

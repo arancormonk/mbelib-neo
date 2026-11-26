@@ -2604,14 +2604,15 @@ test_tone_played_steps(void) {
 
     for (size_t i = 0; i < sizeof(played) / sizeof(played[0]); ++i) {
         unsigned upper = 0u, lower = 0u;
-        assert(mbe_tone_played_steps(played[i].id, &upper, &lower));
-        assert(upper == played[i].upper && lower == played[i].lower);
+        const int has = mbe_tone_played_steps(played[i].id, &upper, &lower);
+        assert(has && upper == played[i].upper && lower == played[i].lower);
     }
     unsigned upper = 1u, lower = 1u;
     for (int id = 0; id < 256; ++id) {
         float f1, f2;
         const int has = mbe_tone_played_steps(id, &upper, &lower);
-        assert(has == mbe_tone_lookup_freqs(id, &f1, &f2));
+        const int nominal = mbe_tone_lookup_freqs(id, &f1, &f2);
+        assert(has == nominal);
         /* Within 0.1 Hz of the nominal single tones, and 20 Hz of the dual ones. */
         if (has) {
             const double hz_upper = (double)upper * 8000.0 / 524288.0;
@@ -2622,13 +2623,23 @@ test_tone_played_steps(void) {
             assert(upper == 0u && lower == 0u);
         }
     }
+
     /* The nominal lookup is Table 9's. */
+    static const struct {
+        int id;
+        int has;
+        float f1;
+        float f2;
+    } nominal[] = {
+        {129, 1, 1209.0f, 697.0f}, {161, 1, 480.0f, 440.0f}, {46, 1, 1437.5f, 1437.5f},
+        {5, 1, 156.25f, 156.25f},  {123, 0, 0.0f, 0.0f},     {164, 0, 0.0f, 0.0f},
+    };
+
     float f1, f2;
-    assert(mbe_tone_lookup_freqs(129, &f1, &f2) && float_bits_equal(f1, 1209.0f) && float_bits_equal(f2, 697.0f));
-    assert(mbe_tone_lookup_freqs(161, &f1, &f2) && float_bits_equal(f1, 480.0f) && float_bits_equal(f2, 440.0f));
-    assert(mbe_tone_lookup_freqs(46, &f1, &f2) && float_bits_equal(f1, 1437.5f) && float_bits_equal(f2, 1437.5f));
-    assert(mbe_tone_lookup_freqs(5, &f1, &f2) && float_bits_equal(f1, 156.25f));
-    assert(!mbe_tone_lookup_freqs(123, &f1, &f2) && !mbe_tone_lookup_freqs(164, &f1, &f2));
+    for (size_t i = 0; i < sizeof(nominal) / sizeof(nominal[0]); ++i) {
+        const int has = mbe_tone_lookup_freqs(nominal[i].id, &f1, &f2);
+        assert(has == nominal[i].has && float_bits_equal(f1, nominal[i].f1) && float_bits_equal(f2, nominal[i].f2));
+    }
 }
 
 /*
@@ -2682,7 +2693,8 @@ test_tone_start_phase(void) {
         const double db = -2.523 + (((3.17 + 87.13) / 127.0) * (double)(ad - 127));
         const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
         pack_tone_ad(tone, ids[i], ad);
-        assert(mbe_tone_played_steps(ids[i], &upper, &lower));
+        const int played = mbe_tone_played_steps(ids[i], &upper, &lower);
+        assert(played);
         stream_settled(&s, k_voice_next);
         /* Phases a voice frame could not have left the oscillators: they do not count. */
         s.cur.swn = 0x5A5A5A5A;
@@ -2865,6 +2877,45 @@ test_noise_generator_through_frame_kinds(void) {
     assert(frames == 12);
 }
 
+/* FNV-1a over 32-bit values, each as four bytes from the least significant:
+ * a step is a bijection of the state, so a change of any one value changes
+ * the result. */
+static uint32_t
+fnv1a_add(uint32_t hash, uint32_t value) {
+    for (int byte = 0; byte < 4; ++byte) {
+        hash ^= (value >> (8 * byte)) & 0xFFu;
+        hash *= UINT32_C(16777619);
+    }
+    return hash;
+}
+
+/*
+ * The played tone table pinned: an FNV-1a hash of (found, upper, lower) of
+ * mbe_tone_played_steps() for every ID 0..255, then of (found, first, second)
+ * of mbe_tone_dstar_played_steps() for every index 0..255, 0xE538DD77. A
+ * one-unit change of any of the 36 dual-tone rows' fundamental n or harmonics
+ * l1, l2 moves a component (upper = l2 n, lower = l1 n), and so the hash, as
+ * does a change of the single-tone rule or of D-STAR's DTMF mapping.
+ */
+#define PLAYED_TONE_TABLE_HASH UINT32_C(0xE538DD77)
+
+static void
+test_played_tone_table_pinned(void) {
+    uint32_t hash = UINT32_C(2166136261);
+    for (int id = 0; id < 256; ++id) {
+        unsigned upper, lower;
+        const int found = mbe_tone_played_steps(id, &upper, &lower);
+        hash = fnv1a_add(fnv1a_add(fnv1a_add(hash, (uint32_t)found), upper), lower);
+    }
+    for (int index = 0; index < 256; ++index) {
+        unsigned first, second;
+        const int found = mbe_tone_dstar_played_steps(index, &first, &second);
+        hash = fnv1a_add(fnv1a_add(fnv1a_add(hash, (uint32_t)found), first), second);
+    }
+    printf("played tones: the table pinned (hash 0x%08X)\n", (unsigned)hash);
+    assert(hash == PLAYED_TONE_TABLE_HASH);
+}
+
 /*
  * A held-tone word counts only with a tone ID rate 33 plays (the ID test the
  * decoder applies to a tone frame, mbe_tone_id_is_valid()): a word in the
@@ -2955,6 +3006,7 @@ main(void) {
     test_loud_tone_tail();
     test_loud_tone_first_frame();
     test_invalid_held_tone();
+    test_played_tone_table_pinned();
     printf("test_ambe2450_frame_types: OK\n");
     return 0;
 }

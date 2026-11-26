@@ -1519,6 +1519,14 @@ if(MBELIB_BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/src/internal"
             "${PROJECT_SOURCE_DIR}/tools/quality"
     )
+    # It compares library output with references it renders through the
+    # library, exactly in an IEEE build only (see the private tests above).
+    if(MBELIB_ENABLE_FAST_MATH)
+        target_compile_definitions(
+            test_frame_paths
+            PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
+        )
+    endif()
     if(_SAN_CFLAGS)
         target_compile_options(test_frame_paths PRIVATE ${_SAN_CFLAGS})
     endif()

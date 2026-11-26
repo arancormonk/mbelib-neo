@@ -321,13 +321,27 @@ test_tone_model(void) {
     }
     assert(same_float(rendered.noiseSeed, advanced.noiseSeed));
 
-    /* A lost frame repeats it: the tone model again. */
+    /* A frame the repeat criteria reject repeats it: the history's tone model
+     * again, not the rejected frame's, itself a valid tone frame of another
+     * tone (KNOX: b0 56, word 01100000, harmonics 4 and 7). */
+    const int other_L = harmonics_of(56, &K);
+    tone_amplitudes(logm, other_L, 4, 7, 11.0f, 2.0f);
+    char rejected[88];
+    build_frame(rejected, 56, 0x60u, logm, &s.prev);
+    const mbe_parms rejected_model = decode(rejected, &s.prev);
+    assert(rejected_model.Vl[0] == tone_word(56, 4, 7) && rejected_model.L != decoded.L);
     mbe_process_result result;
     mbe_initProcessResult(&result);
     result.total_errors = 6; /* past the parameter-bit API's repeat criterion */
-    assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &s.cur, &s.prev, &s.enhanced) >= 0);
+    const int rc = mbe_processImbe4400Dataf(out, &result, rejected, &s.cur, &s.prev, &s.enhanced);
+    assert(rc >= 0);
+    (void)rc;
     assert((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
     assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_TONE && same_float(s.enhanced.w0, tone_pitch(53)));
+    assert(s.enhanced.L == decoded.L && s.enhanced.Vl[0] == tone_word(53, 4, 7));
+    for (int l = 1; l <= s.enhanced.L; ++l) {
+        assert(s.enhanced.Vl[l] == ((l == 4) || (l == 7)));
+    }
 
     /* ProVoice: the decoded model, at the nominal pitch. */
     struct stream pv;
@@ -669,6 +683,105 @@ test_provoice_keeps_no_word(void) {
     puts("p25 tones: ProVoice keeps no word");
 }
 
+/*
+ * A tone across the repeat limit: three repeats of a tone frame play the tone
+ * model (marked, at the tone pitch, not muted), the fourth mutes (the noise
+ * generator still runs), and the fifth resets the model, which clears the word
+ * and the mark.
+ */
+static void
+test_tone_repeat_limit(void) {
+    struct stream s;
+    char imbe_d[88];
+    float out[160];
+    mbe_process_result result;
+    stream_after_tone(&s);
+    special_frame(imbe_d);
+    for (int r = 1; r <= 5; ++r) {
+        const float seed = s.enhanced.noiseSeed;
+        mbe_initProcessResult(&result);
+        const int rc = mbe_processImbe4400Dataf(out, &result, imbe_d, &s.cur, &s.prev, &s.enhanced);
+        assert(rc >= 0);
+        (void)rc;
+        assert((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+        const int muted = (result.flags & MBE_PROCESS_FLAG_MUTE) != 0u;
+        if (r <= 3) {
+            assert(!muted && s.enhanced.Vl[0] == tone_word(53, 4, 7));
+            assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_TONE && same_float(s.enhanced.w0, tone_pitch(53)));
+        } else if (r == 4) {
+            assert(muted && s.enhanced.repeatCount == 4);
+            assert(!same_float(s.enhanced.noiseSeed, seed));
+        } else {
+            assert(s.cur.Vl[0] == 0 && s.prev.Vl[0] == 0 && s.enhanced.Vl[0] == 0);
+            assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_NONE);
+        }
+    }
+    puts("p25 tones: three repeats play the tone, the fourth mutes, the reset clears the word and the mark");
+}
+
+/* FNV-1a over 32-bit values, each as four bytes from the least significant:
+ * a step is a bijection of the state, so a change of any one value changes
+ * the result. */
+static uint32_t
+fnv1a_add(uint32_t hash, uint32_t value) {
+    for (int byte = 0; byte < 4; ++byte) {
+        hash ^= (value >> (8 * byte)) & 0xFFu;
+        hash *= UINT32_C(16777619);
+    }
+    return hash;
+}
+
+/*
+ * The P25 tone table pinned: its 116 rows (b0, b1, l1, l2), sorted by b0, each
+ * with 1 <= l1 <= l2 <= L of b0 and a voicing word of b0's K bits, the rows of
+ * one (b0, b1) pair all dual or all single tones; the index derived from the
+ * rows (the first row of each code 0..197 and the end); and an FNV-1a hash of
+ * the rows' fields in order and then of the 199 index entries (0x93A8CEBD),
+ * which any one-unit change of a field or an entry moves.
+ */
+#define P25_TONE_TABLE_HASH UINT32_C(0x93A8CEBD)
+
+static void
+test_tone_table_pinned(void) {
+    uint32_t hash = UINT32_C(2166136261);
+    int rows = 0, last_b0 = -1;
+    int b0, b1, l1, l2;
+    while (mbe_imbe4400_tone_row(rows, &b0, &b1, &l1, &l2)) {
+        int K;
+        const int L = harmonics_of(b0, &K);
+        assert(b0 >= last_b0 && b0 <= 197);
+        assert(l1 >= 1 && l1 <= l2 && l2 <= L && b1 > 0 && b1 < (1 << K));
+        for (int other = 0; other < rows; ++other) {
+            int ob0, ob1, ol1, ol2;
+            const int found = mbe_imbe4400_tone_row(other, &ob0, &ob1, &ol1, &ol2);
+            assert(found);
+            assert(ob0 != b0 || ob1 != b1 || ((ol1 == ol2) == (l1 == l2)));
+            assert(ob0 != b0 || ob1 != b1 || ol1 != l1 || ol2 != l2);
+        }
+        hash = fnv1a_add(hash, (uint32_t)b0);
+        hash = fnv1a_add(hash, (uint32_t)b1);
+        hash = fnv1a_add(hash, (uint32_t)l1);
+        hash = fnv1a_add(hash, (uint32_t)l2);
+        last_b0 = b0;
+        ++rows;
+    }
+    assert(rows == 116);
+    for (int code = 0; code <= 198; ++code) {
+        int below = 0;
+        for (int i = 0; i < rows; ++i) {
+            const int found = mbe_imbe4400_tone_row(i, &b0, NULL, NULL, NULL);
+            assert(found);
+            below += (b0 < code) ? 1 : 0;
+        }
+        const int entry = mbe_imbe4400_tone_first_row(code);
+        assert(entry == below);
+        hash = fnv1a_add(hash, (uint32_t)entry);
+    }
+    assert(mbe_imbe4400_tone_first_row(-1) == -1 && mbe_imbe4400_tone_first_row(199) == -1);
+    printf("p25 tones: the table's 116 rows and index pinned (hash 0x%08X)\n", (unsigned)hash);
+    assert(hash == P25_TONE_TABLE_HASH);
+}
+
 int
 main(void) {
     test_tone_test();
@@ -678,5 +791,7 @@ main(void) {
     test_forged_tone_mark();
     test_public_decoder_clears_the_word();
     test_provoice_keeps_no_word();
+    test_tone_repeat_limit();
+    test_tone_table_pinned();
     return 0;
 }
