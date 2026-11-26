@@ -2794,6 +2794,67 @@ test_p25_muted_onset_advances(void) {
     }
 }
 
+/*
+ * The marks that shape the mid-frame voicing on a caller's state: any pitch
+ * bit pattern in either frame (none, subnormal, the largest float, just under
+ * and past Nyquist), harmonic counts 1 and 56, and voicing values no decoder
+ * gives, render finite samples and state, rendered or advanced, from silence
+ * or not, and memory-safely (the sanitizer build runs this).
+ */
+static void
+test_untrusted_mid_voicing_marks(void) {
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_ONSET_COLUMNS, MBE_FRAME_MARK_MID_COLUMN_0,
+                                                MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET};
+
+    static const uint32_t w0_bits[] = {0x00800000u, 0x00000001u, 0x7F7FFFFFu, 0x40490FDAu, 0x40490FDCu,
+                                       0x3C000000u, 0x7FC00000u, 0x7F800000u, 0x3E800000u};
+    static const int counts[] = {1, 56, 9};
+    static const int votes[] = {0, 1, 2, -1, 1000000};
+    for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
+        for (size_t i = 0; i < sizeof(w0_bits) / sizeof(w0_bits[0]); ++i) {
+            for (size_t c = 0; c < sizeof(counts) / sizeof(counts[0]); ++c) {
+                for (int v = 0; v < 5; ++v) {
+                    mbe_parms last, model;
+                    float out[160];
+                    fresh_stream(&last);
+                    set_model(&model, 110.0, 30, 0, 8.0f);
+                    next_frame(out, &last, &model);
+                    set_model(&model, 200.0, counts[c], counts[c], 16.0f);
+                    memcpy(&model.w0, &w0_bits[i], sizeof(model.w0));
+                    for (int l = 1; l <= 56; ++l) {
+                        model.Vl[l] = ((l + v) % 3 == 0) ? votes[v] : votes[(v + l) % 5];
+                    }
+                    mbe_set_frame_mark(&model, marks[m]);
+                    for (int start = 0; start < 2; ++start) {
+                        for (int rendering = 0; rendering < 2; ++rendering) {
+                            const enum mbe_voiced_synthesis kind =
+                                rendering ? MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 : MBE_VOICED_SYNTHESIS_DVSI;
+                            mbe_parms rendered = last, advanced = with_model(&last, &model);
+                            mbe_set_frame_mark(&advanced, marks[m]);
+                            next_frame_as(out, &rendered, &model, start, kind);
+                            assert(all_finite(out, 160) && all_finite(rendered.noiseOverlap, 96));
+                            assert(all_finite(&rendered.PSIl[1], 56) && all_finite(&rendered.PHIl[1], 56));
+                            mbe_advance_subframes(&advanced, &last, start, kind);
+                            assert(same_bits(rendered.noiseOverlap, advanced.noiseOverlap, 96));
+                            /* And a frame on from it, the marked frame now the one before. */
+                            set_model(&model, 150.0, 24, 12, 16.0f);
+                            mbe_set_frame_mark(&model, marks[m]);
+                            next_frame_as(out, &rendered, &model, 0, kind);
+                            assert(all_finite(out, 160));
+                            set_model(&model, 200.0, counts[c], counts[c], 16.0f);
+                            memcpy(&model.w0, &w0_bits[i], sizeof(model.w0));
+                            for (int l = 1; l <= 56; ++l) {
+                                model.Vl[l] = ((l + v) % 3 == 0) ? votes[v] : votes[(v + l) % 5];
+                            }
+                            mbe_set_frame_mark(&model, marks[m]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* The P25 and D-STAR decoders mark a frame with no voiced band by its pitch
  * code, and P25 a voiced frame for the onset columns, replacing whatever mark
  * the caller's state held. */
@@ -2973,6 +3034,7 @@ main(void) {
     test_p25_onset_columns_only_at_onsets();
     test_p25_onset_edges();
     test_p25_muted_onset_advances();
+    test_untrusted_mid_voicing_marks();
     test_p25_voicing_persists();
     test_p25_reset_drops_the_mark();
     return 0;
