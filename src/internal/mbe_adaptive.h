@@ -140,19 +140,30 @@ enum mbe_voiced_synthesis {
     /** The codec paths, as DVSI's AMBE-3000 decoders: two 10 ms subframes
      * per frame, the voiced part a train of pitch pulses and the unvoiced
      * part DVSI's noise (mbe_subframe.h; docs/dvsi-parity.md, "Synthesis in
-     * subframes"). D-STAR, P25 and ProVoice. */
+     * subframes"). D-STAR, and with the two below the base of every codec
+     * path's rendering. */
     MBE_VOICED_SYNTHESIS_DVSI,
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's rate-33 (AMBE 3600x2450) decoder
      * renders it, whose mid-frame pitch between two voiced frames of
      * different pitch lies a little below their geometric mean
      * (mbe_subframe_mid_model(); docs/dvsi-parity.md, "Rate 33: mid-frame
-     * pitch"). Every rate-33 synthesis call. */
+     * pitch"), and which honours the marks of the rate-33 rows 13, 15 and 17
+     * (MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET whatever the
+     * frame before, MBE_FRAME_MARK_MID_COLUMN_0). Every rate-33 synthesis call. */
     MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+    /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's P25 (IMBE 7200x4400) decoder
+     * renders it: a voiced frame after one with no voiced band starts only
+     * the bands of its covered 500 Hz columns with the frame
+     * (MBE_FRAME_MARK_ONSET_COLUMNS, which the rendering gives the model it
+     * renders, after adaptive smoothing: mbe_synthesize_subframes(),
+     * mbe_advance_subframes()). The P25 and ProVoice data path. */
+    MBE_VOICED_SYNTHESIS_DVSI_IMBE,
 };
 
 /** How a frame's rendering starts; chosen per call, it has a meaning for
- * the subframe renderings (MBE_VOICED_SYNTHESIS_DVSI and
- * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) only. */
+ * the subframe renderings (MBE_VOICED_SYNTHESIS_DVSI,
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 and MBE_VOICED_SYNTHESIS_DVSI_IMBE)
+ * only. */
 enum mbe_synthesis_start {
     /** From the previous frame as it was synthesized: its model, the pulse
      * train it carries and its unvoiced overlap. */
@@ -181,11 +192,13 @@ enum mbe_output_limit {
 };
 
 /* The onset delay mbe_set_voicing_onset_delay() can give a model (samples):
- * its voiced bands then start in the frame's second subframe. */
+ * its voiced bands then start in the frame's second subframe
+ * (MBE_FRAME_MARK_LATE_ONSET: in the rate-33 rendering whatever the frame
+ * before, in the others after a frame with no voiced band). */
 #define MBE_VOICING_ONSET_LATE 80
 
 /**
- * @brief Mark a decoded model whose voiced harmonics start late at an onset:
+ * @brief Mark a decoded model whose voiced harmonics start late:
  * @p late nonzero gives it MBE_VOICING_ONSET_LATE samples, zero none. The
  * mark lives in the otherwise unused element 0 of PHIl.
  */
@@ -196,17 +209,31 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
 
 /* Where a frame's voicing must reach for it to hold at a subframe the frame
  * does not own: DVSI's decoders keep the voicing of the frame before a frame
- * marked MBE_FRAME_MARK_PITCH_ABSENT through that frame's first half, and
- * start a P25 onset at once, only when a voiced harmonic lies at or above this
- * frequency. On DVSI's P25 decodes three voiced harmonics reaching 502.6 Hz
- * (pitch code 56) do not count and three reaching 507.9 Hz (code 55) do. */
+ * marked MBE_FRAME_MARK_PITCH_ABSENT through that frame's first half only when
+ * a voiced harmonic lies at or above this frequency. It is also the first
+ * edge of the columns a P25 onset is read in (MBE_FRAME_MARK_ONSET_COLUMNS):
+ * on DVSI's P25 decodes a first band of three voiced harmonics reaching
+ * 502.8 Hz at the pitch played (pitch code 56; 502.6 Hz at eq 46's nominal
+ * pitch) covers no column and starts at mid-frame, one reaching 508.1 Hz
+ * (code 55; 507.9 Hz nominal) covers the first and starts with the frame. */
 #define MBE_VOICING_REACH_HZ 505.0f
 
 /**
  * What a codec's decoder tells the synthesizer about a frame beyond its model
  * (docs/dvsi-parity.md, "Voiced onsets and offsets"). A model carries one mark
  * at most, in the otherwise unused element 0 of PHIl, stored as the mark's
- * value in float.
+ * value in float. The marks of the mid-frame voicing (ONSET_COLUMNS,
+ * MID_COLUMN_0, MID_COLUMNS_0_1, and LATE_ONSET's reading whatever the frame
+ * before) act only in the rendering of the codec whose decoder writes them, so
+ * that a mark a caller's state holds changes no other codec's stream: in
+ * D-STAR's rendering 5, 6 and 7 play as none and LATE_ONSET acts as it did
+ * before them, only after a frame with no voiced band; in rate 33's 5 plays as
+ * none. P25's rendering gives the model it renders a mark of its own
+ * (MBE_FRAME_MARK_ONSET_COLUMNS on any model with a voiced band that is not
+ * a tone model), so there a caller's mark on a voiced model, LATE_ONSET and
+ * PREVIOUS_HELD included, is overwritten and has no effect; on a model with
+ * no voiced band PITCH_ABSENT, PREVIOUS_HELD and PITCH_CARRIES still act,
+ * and LATE_ONSET, 6 and 7 change nothing.
  */
 enum mbe_frame_mark {
     MBE_FRAME_MARK_NONE = 0,
@@ -229,7 +256,49 @@ enum mbe_frame_mark {
      * imbe4400_play_tone() sets it, on the frame it plays; no decoder does,
      * and the P25 and ProVoice data path clears it on any other frame. */
     MBE_FRAME_MARK_TONE = 4,
-    /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
+    /* A P25 or ProVoice voice frame with a voiced band, as decoded
+     * (imbe7200x4400.c) and as rendered: P25's rendering marks the model it
+     * renders so whenever, after adaptive smoothing, it has a voiced band and
+     * is not a tone model, whatever its decoded mark (smoothing can voice
+     * harmonics of a frame decoded with none), and clears the mark from one
+     * with no voiced band. After a frame with no voiced band, the voiced
+     * harmonics that lie in a covered 500 Hz column or within 250 Hz below one
+     * sound at mid-frame and the others start with the frame's second half: a
+     * rule fitted to DVSI's P25 decodes (its whole-frame form agrees with
+     * 1,838 of 1,843 decisively labelled onsets; docs/dvsi-parity.md, "P25:
+     * the bands that start with the frame"). The columns are [0, 505), [505, 1005), ... [3005, 3505) Hz,
+     * none above; one is covered when the frame's voicing is voiced at both
+     * its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next
+     * above each other edge (unvoiced past L), all at the pitch the frame
+     * plays. A frame voiced only below 505 Hz covers none: its voiced bands,
+     * and its pulse train, start at mid-frame. After a voiced frame the mark
+     * changes nothing. Read only in P25's rendering
+     * (MBE_VOICED_SYNTHESIS_DVSI_IMBE). */
+    MBE_FRAME_MARK_ONSET_COLUMNS = 5,
+    /* A rate-33 voice frame of V/UV row 17: the mid-frame model voices the
+     * 500 Hz column 0 (through mbe_ambe2450_harmonic_voiced(), at its own
+     * harmonics) and no other, whatever the two frames' voicing; the frame's
+     * own voicing is Annex B's row 17, all unvoiced. Read only in the
+     * rate-33 rendering (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450). */
+    MBE_FRAME_MARK_MID_COLUMN_0 = 6,
+    /* A rate-33 voice frame of V/UV row 13: the mid-frame model voices the
+     * 500 Hz columns 0 and 1 (as MBE_FRAME_MARK_MID_COLUMN_0 does column 0)
+     * and no other; the frame's own voicing is row 13's, columns 0 to 2.
+     * Read only in the rate-33 rendering. */
+    MBE_FRAME_MARK_MID_COLUMNS_0_1 = 7,
+    /* In the rate-33 rendering, the mid-frame model voices no band, whatever
+     * the frame before: the voiced bands start MBE_VOICING_ONSET_LATE samples
+     * late (V/UV row 15; after a voiced frame the pulse train runs on through
+     * the unvoiced mid-frame, at the previous frame's pitch into it and this
+     * frame's out of it). The rate-33 rows 13, 15 and 17 give each half of
+     * the frame its own voicing (docs/dvsi-parity.md, "Rate 33: rows 13, 15
+     * and 17"); a lost frame that repeats such a frame plays the repeated
+     * model's own voicing through (the rate-33 path clears these marks on a
+     * repeat). In D-STAR's rendering the mark keeps its earlier meaning: no
+     * band voiced at mid-frame only after a frame with no voiced band (no
+     * decoder of D-STAR writes it). In P25's rendering it is overwritten on a
+     * voiced model (MBE_FRAME_MARK_ONSET_COLUMNS) and changes nothing on one
+     * with no voiced band. */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };
 

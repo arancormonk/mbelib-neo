@@ -252,19 +252,27 @@ mbe_ambe2450_harmonic_voiced(const int row[8], int l, float f0) {
     return row[own] | row[above];
 }
 
+/* The mark of a voice frame of V/UV row b1: the mid-frame voicing of rows 13,
+ * 15 and 17 (ambe3600x2450_internal.h), none for any other row. */
+static enum mbe_frame_mark
+ambe2450_vuv_mark(int b1) {
+    switch (b1) {
+        case MBE_AMBE2450_VUV_LATE_ONSET: return MBE_FRAME_MARK_LATE_ONSET;
+        case MBE_AMBE2450_VUV_MID_COLUMNS_0_1: return MBE_FRAME_MARK_MID_COLUMNS_0_1;
+        case MBE_AMBE2450_VUV_MID_COLUMN_0: return MBE_FRAME_MARK_MID_COLUMN_0;
+        default: return MBE_FRAME_MARK_NONE;
+    }
+}
+
 /* The frame's voicing, and its mark: a silence frame is marked
  * MBE_FRAME_MARK_PREVIOUS_HELD (ambe2450_set_silence_model()), a voice frame
- * of row MBE_AMBE2450_VUV_LATE_ONSET a late onset, any other none. */
+ * by its row (ambe2450_vuv_mark()). */
 static void
 ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
     (void)b0;
     int b1 = ambe2450_field(ambe_d, 1);
 
-    if (silence) {
-        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_PREVIOUS_HELD);
-    } else {
-        mbe_set_voicing_onset_delay(cur_mp, b1 == MBE_AMBE2450_VUV_LATE_ONSET);
-    }
+    mbe_set_frame_mark(cur_mp, silence ? MBE_FRAME_MARK_PREVIOUS_HELD : ambe2450_vuv_mark(b1));
     for (int l = 1; l <= L; l++) {
         if (silence == 0) {
             cur_mp->Vl[l] = mbe_ambe2450_harmonic_voiced(AmbeVuv[b1], l, f0);
@@ -970,7 +978,11 @@ ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
  * itself is not played (the first subframe rises from silence to the
  * mid-frame model, which is the ordinary one between the kept model and the
  * frame's own; no unvoiced overlap comes from before), and the pulse train
- * starts anew at the frame's start (MBE_SYNTHESIS_FROM_SILENCE). A silence
+ * starts anew at the frame's start (MBE_SYNTHESIS_FROM_SILENCE): its first
+ * pulse sounds there when the mid-frame model has a voiced band, and a V/UV
+ * row 15 frame, whose first half voices none, launches its first at sample
+ * 80 (what DVSI's decoder plays for rows 13, 15 and 17 here was not
+ * measured; docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17"). A silence
  * frame, whose hold continues what was heard, does not hold the kept model,
  * which was not: it rises from silence to its own model. On DVSI's
  * dam_e10_hd the frames leaving a mute follow DVSI's decode at a median
@@ -1094,6 +1106,24 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
     return AMBE2450_STARTS_AFRESH;
 }
 
+/*
+ * A repeat of the last synthesized model (5.6 step 2). The mid-frame voicing
+ * of V/UV rows 13, 15 and 17 belongs to a decoded frame, between the frame
+ * before it and its own model: a frame that repeats one plays the repeated
+ * model's own voicing through, from that model to itself, so the row's mark
+ * does not go with the repeated model (any other mark does). Not in
+ * TIA-102.BABA-1, which knows no mid-frame model.
+ */
+static void
+ambe2450_load_repeat(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
+    mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
+    const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
+    if (mark == MBE_FRAME_MARK_LATE_ONSET || mark == MBE_FRAME_MARK_MID_COLUMNS_0_1
+        || mark == MBE_FRAME_MARK_MID_COLUMN_0) {
+        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
+    }
+}
+
 /**
  * 5.6 steps 2-3: synthesize the repeated model as-is (no re-enhancement and
  * no adaptive smoothing, which could change its voicing and amplitudes).
@@ -1104,7 +1134,7 @@ static int
 ambe2450_repeat(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced) {
     /* Step 2 repeats the previous frame's model, enhanced amplitudes included
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
-    mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
+    ambe2450_load_repeat(cur_mp, prev_mp_enhanced);
     mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
                                        ambe2450_start(in->afresh), MBE_OUTPUT_LIMITED);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
@@ -1223,7 +1253,7 @@ static void
 ambe2450_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
     mbe_parms repeated = *cur_mp;
     mbe_parms last = *prev_mp_enhanced;
-    mbe_repeat_load_model(&repeated, &last);
+    ambe2450_load_repeat(&repeated, &last);
     repeated.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechStartf(speech, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
                                        MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);

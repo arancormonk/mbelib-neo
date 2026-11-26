@@ -27,6 +27,18 @@
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
+/* A call's status, at least 0: the call is made by the caller, outside assert(). */
+static void
+expect_ok(int status) {
+    assert(status >= 0);
+}
+
+/* A call's status, `want`: the call is made by the caller, outside assert(). */
+static void
+expect_status(int status, int want) {
+    assert(status == want);
+}
+
 /**
  * @brief Zero-initialize a bit array of length n.
  * @param bits Pointer to bit array (0/1 chars) to clear.
@@ -700,7 +712,7 @@ expect_codec_shelf(process_fn process, const char* data, float gain) {
     mbe_parms cur, prev, enhanced;
     float out[160];
     mbe_initMbeParms(&cur, &prev, &enhanced);
-    assert(process(out, NULL, data, &cur, &prev, &enhanced) >= 0);
+    expect_ok(process(out, NULL, data, &cur, &prev, &enhanced));
     mbe_parms model = prev;
     (void)mbe_spectralAmpEnhanceWithRm0(&model, gain);
     assert(model.L == enhanced.L);
@@ -937,14 +949,14 @@ test_ambe2450_prba_reconstruction(void) {
         }
         mbe_parms cur, prev, dummy;
         mbe_initMbeParms(&cur, &prev, &dummy);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
+        expect_status(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev), 0);
         /* A second frame against the first's committed, flat-free history would
          * mix in prediction; decode once more from a flat history instead. */
         mbe_initMbeParms(&cur, &prev, &dummy);
         for (int l = 0; l <= 56; ++l) {
             prev.log2Ml[l] = 0.0f;
         }
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
+        expect_status(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev), 0);
         double want[57], mean = 0.0;
         ambe2450_reference_shape(b, cur.L, want);
         for (int l = 1; l <= cur.L; ++l) {
@@ -975,7 +987,7 @@ test_ambe2450_pitch_law(void) {
         mbe_initMbeParms(&cur, &prev, &dummy);
         set_bits_zero(ambe_d, 49);
         set_ambe2450_b0(ambe_d, b0);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
+        expect_status(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev), 0);
         double f0 = pow(2.0, -4.322605 - (0.0220427 * b0));
         assert(fabs(((double)cur.w0 / (2.0 * M_PI * f0)) - 1.0) < 2e-6);
         assert(cur.L == (b0 == 17 ? 12 : annex_a_L[b0]));
@@ -1114,7 +1126,7 @@ test_ambe2400_absolute_gain(void) {
             mbe_parms cur, prev, dummy;
             mbe_initMbeParms(&cur, &prev, &dummy);
             prev.gamma = history ? 10.6f : -2.0f;
-            assert(mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev) == 0);
+            expect_status(mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev), 0);
             assert(approx_equal(cur.gamma, (2.0f * AmbePlusDg[b2]) - 0.09f, 1e-5f));
         }
     }
@@ -1132,7 +1144,7 @@ test_ambe2450_differential_gain(void) {
             mbe_parms cur, prev, dummy;
             mbe_initMbeParms(&cur, &prev, &dummy);
             prev.gamma = prior[h];
-            assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == 0);
+            expect_status(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev), 0);
             assert(approx_equal(cur.gamma, AmbeDg[b2] + (0.5f * prior[h]), 1e-5f));
         }
     }
@@ -1148,7 +1160,7 @@ dstar_frame_with_errors(const char ambe_d[49], int errors, int soft, mbe_parms* 
     if (soft) {
         result.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
     }
-    assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, cur, prev, enh) >= 0);
+    expect_ok(mbe_processAmbe2400Dataf(out, &result, ambe_d, cur, prev, enh));
     return result.flags;
 }
 
@@ -1322,8 +1334,9 @@ same_frame_bits(const float a[160], const float b[160]) {
 }
 
 /* Rate-33 voicing as DVSI's decoders render it: each voiced 500 Hz column
- * reaches 250 Hz into an unvoiced column below it, row 17 voices column 0, and
- * b1 15 marks a late onset. */
+ * reaches 250 Hz into an unvoiced column below it; row 17's own voicing is
+ * Annex B's, all unvoiced; and rows 13, 15 and 17 carry the marks that give
+ * their first half its voicing (columns 0-1, none, column 0). */
 static void
 test_ambe2450_vuv_rendering(void) {
     /* Row 7 leaves column 5 (2500-3000 Hz) unvoiced and voices column 6. */
@@ -1333,9 +1346,7 @@ test_ambe2450_vuv_rendering(void) {
     assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[7], 27, f0) == 0); /* 2727 Hz */
     assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[7], 28, f0) == 1); /* 2828 Hz: within 250 Hz of column 6 */
     assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[16], 1, f0) == 0);
-    assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[17], 4, f0) == 1); /* 404 Hz, column 0 */
-    assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[17], 5, f0) == 0); /* 505 Hz */
-    for (int row = 18; row < 32; ++row) {
+    for (int row = 17; row < 32; ++row) {
         for (int l = 1; l <= 56; ++l) {
             assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[row], l, 0.012f) == 0);
         }
@@ -1347,13 +1358,30 @@ test_ambe2450_vuv_rendering(void) {
         mbe_parms cur, prev, enhanced;
         mbe_initMbeParms(&cur, &prev, &enhanced);
         mbe_ambe2450_pack(b, ambe_d);
-        assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
+        expect_status(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev), MBE_AMBE2450_FRAME_VOICE);
         assert(mbe_voicing_onset_delay(&cur) == ((b1 == MBE_AMBE2450_VUV_LATE_ONSET) ? MBE_VOICING_ONSET_LATE : 0));
+        enum mbe_frame_mark mark = MBE_FRAME_MARK_NONE;
+        if (b1 == 13) {
+            mark = MBE_FRAME_MARK_MID_COLUMNS_0_1;
+        } else if (b1 == 15) {
+            mark = MBE_FRAME_MARK_LATE_ONSET;
+        } else if (b1 == 17) {
+            mark = MBE_FRAME_MARK_MID_COLUMN_0;
+        }
+        assert(mbe_frame_mark(&cur) == mark);
         int voiced = 0;
         for (int l = 1; l <= cur.L; ++l) {
             voiced += cur.Vl[l];
         }
-        assert((voiced > 0) == (b1 <= 15 || b1 == 17));
+        assert((voiced > 0) == (b1 <= 15));
+        if (b1 == 17) {
+            /* Every band unvoiced, its amplitude at the unvoiced scale. */
+            const double unvoiced = 0.2046 / sqrt((double)cur.w0);
+            for (int l = 1; l <= cur.L; ++l) {
+                const double want = unvoiced * exp2((double)cur.log2Ml[l]);
+                assert(fabs((double)cur.Ml[l] / want - 1.0) < 1e-5);
+            }
+        }
     }
 }
 
@@ -1508,13 +1536,13 @@ muted_onset_then_voice(float out[160], float history) {
     }
     cur.errorRate = 1.0f; /* past any muting threshold */
     mbe_parms voiced = cur;
-    mbe_synthesizeSpeechWithPreEnhRm0f(muted, &cur, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+    mbe_synthesizeSpeechWithPreEnhRm0f(muted, &cur, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI_IMBE,
                                        MBE_AMPLITUDE_LIMIT_NONE);
     enh = cur;
     voiced.errorRate = 0.0f;
     voiced.noiseSeed = cur.noiseSeed;
     memcpy(voiced.noiseOverlap, cur.noiseOverlap, sizeof(voiced.noiseOverlap));
-    mbe_synthesizeSpeechWithPreEnhRm0f(out, &voiced, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+    mbe_synthesizeSpeechWithPreEnhRm0f(out, &voiced, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI_IMBE,
                                        MBE_AMPLITUDE_LIMIT_NONE);
 }
 
@@ -1545,7 +1573,7 @@ test_amplitude_safety_limit(void) {
         float pcm[160];
         mbe_process_result result;
         memset(&result, 0, sizeof(result));
-        assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh));
         for (int n = 0; n < 160; ++n) {
             uint32_t bits;
             memcpy(&bits, &pcm[n], sizeof(bits));
@@ -1562,12 +1590,12 @@ test_onset_mark_cleared(void) {
     char ambe_d[49] = {0};
     mbe_initMbeParms(&cur, &prev, &enh);
     mbe_set_voicing_onset_delay(&cur, 1);
-    assert(mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev) == 0);
+    expect_status(mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev), 0);
     assert(mbe_voicing_onset_delay(&cur) == 0);
     char imbe_d[88] = {0};
     mbe_initMbeParms(&cur, &prev, &enh);
     mbe_set_voicing_onset_delay(&cur, 1);
-    assert(mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) == 0);
+    expect_status(mbe_decodeImbe4400Parms(imbe_d, &cur, &prev), 0);
     assert(mbe_voicing_onset_delay(&cur) == 0);
 }
 
@@ -1587,18 +1615,18 @@ test_ambe2450_muted_onset(void) {
             int b[9] = {history ? 70 : 40, (f < 8) ? 0 : 16, 20, 100, 30, 10, 5, 5, 3};
             mbe_ambe2450_pack(b, ambe_d);
             memset(&result, 0, sizeof(result));
-            assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+            expect_ok(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh));
         }
         prev.errorRate = 0.102f; /* this frame's rate 0.0969 mutes; the next, 0.0921, does not */
         int onset[9] = {60, 15, 20, 100, 30, 10, 5, 5, 3};
         mbe_ambe2450_pack(onset, ambe_d);
         memset(&result, 0, sizeof(result));
-        assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh));
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
         int voiced[9] = {60, 0, 20, 100, 30, 10, 5, 5, 3};
         mbe_ambe2450_pack(voiced, ambe_d);
         memset(&result, 0, sizeof(result));
-        assert(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(pcm, &result, ambe_d, &cur, &prev, &enh));
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) == 0u);
         /* The pulse train started with this frame: harmonic l's phase at its
          * end is l w0 (160 - MBE_PULSE_PEAK), to whole turns. */
@@ -1697,7 +1725,7 @@ main(void) {
             set_bits_zero(ambe_d, 49);
             set_ambe2450_b0(ambe_d, b0);
             assert(mbe_classifyAmbe2450Frame(ambe_d) == MBE_AMBE2450_FRAME_SILENCE);
-            assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
+            expect_status(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev), MBE_AMBE2450_FRAME_VOICE);
             assert(cur.L == 15);
             assert(approx_equal(cur.w0, w0_silence, 1e-6f));
             assert((float)cur.L * cur.w0 < (float)M_PI);
@@ -1729,7 +1757,7 @@ main(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         set_bits_zero(ambe_d, 49);
         set_ambe2450_b0(ambe_d, 120);
-        assert(mbe_processAmbe2450Dataf(out, NULL, ambe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, NULL, ambe_d, &cur, &prev, &enh));
         assert(harmonics_below_nyquist(&cur));
         assert(harmonics_below_nyquist(&prev));
 
@@ -1752,7 +1780,7 @@ main(void) {
             ambe_d[i] = 1;
         }
         ambe_d[48] = 1;
-        assert(mbe_processAmbe2400Dataf(out, NULL, ambe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processAmbe2400Dataf(out, NULL, ambe_d, &cur, &prev, &enh));
         assert(harmonics_below_nyquist(&prev));
         assert(harmonics_below_nyquist(&enh));
 
@@ -1804,13 +1832,13 @@ main(void) {
         mbe_initMbeParms(&cur_a, &prev_a, &prev_enh_a);
         init_result_total(&result_a, 5);
         result_a.c0_errors = 0;
-        assert(mbe_processAmbe2450Dataf(out, &result_a, ambe_d, &cur_a, &prev_a, &prev_enh_a) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result_a, ambe_d, &cur_a, &prev_a, &prev_enh_a));
 
         mbe_initMbeParms(&cur_b, &prev_b, &prev_enh_b);
         init_result_total(&result_b, 5);
         result_b.c0_errors = 4;
         result_b.protected_errors = 1;
-        assert(mbe_processAmbe2450Dataf(out, &result_b, ambe_d, &cur_b, &prev_b, &prev_enh_b) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result_b, ambe_d, &cur_b, &prev_b, &prev_enh_b));
 
         assert(cur_a.repeatCount == cur_b.repeatCount);
         assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
@@ -1831,13 +1859,13 @@ main(void) {
         mbe_initMbeParms(&cur_a, &prev_a, &prev_enh_a);
         init_result_total(&result_a, 11);
         result_a.c0_errors = 0;
-        assert(mbe_processImbe4400Dataf(out, &result_a, imbe_d, &cur_a, &prev_a, &prev_enh_a) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result_a, imbe_d, &cur_a, &prev_a, &prev_enh_a));
 
         mbe_initMbeParms(&cur_b, &prev_b, &prev_enh_b);
         init_result_total(&result_b, 11);
         result_b.c0_errors = 2;
         result_b.protected_errors = 9;
-        assert(mbe_processImbe4400Dataf(out, &result_b, imbe_d, &cur_b, &prev_b, &prev_enh_b) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result_b, imbe_d, &cur_b, &prev_b, &prev_enh_b));
 
         assert(cur_a.repeatCount == cur_b.repeatCount);
         assert(result_has_marker(&result_a, 'R') == result_has_marker(&result_b, 'R'));
@@ -1857,12 +1885,12 @@ main(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int n = 0; n < 2; ++n) {
             init_result_total(&result, 1);
-            assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+            expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh));
         }
         float er_before = prev.errorRate;
         float seed_before = enh.noiseSeed;
         init_result_total(&result, 7); /* Dataf fallback: total > 5 repeats */
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh));
         assert(result_has_marker(&result, 'R'));
         assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.000365f * 7.0f))) < 1e-7f);
         assert(cur.errorCountTotal == 7);
@@ -1872,12 +1900,12 @@ main(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int n = 0; n < 2; ++n) {
             init_result_total(&result, 1);
-            assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
+            expect_ok(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh));
         }
         er_before = prev.errorRate;
         seed_before = enh.noiseSeed;
         init_result_total(&result, 4); /* D-STAR repeats no frame for its corrections */
-        assert(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processAmbe2400Dataf(out, &result, ambe_d, &cur, &prev, &enh));
         assert(!result_has_marker(&result, 'R'));
         assert(fabsf(prev.errorRate - ((0.95f * er_before) + (0.001064f * 4.0f))) < 1e-7f);
         assert(cur.errorCountTotal == 4);
@@ -1910,8 +1938,8 @@ main(void) {
         typedef const char hard_ambe_frame[24];
         hard_ambe_frame* hard_fr = (hard_ambe_frame*)ambe_fr;
         int hard_ret = mbe_decodeAmbe3600x2450Frame(hard_fr, hard_d, &hard_result);
-        assert(mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u)
-               == 0);
+        expect_status(
+            mbe_softBitsFromHard(&ambe_fr[0][0], &soft_fr[0][0], sizeof(soft_fr) / sizeof(soft_fr[0][0]), 255u), 0);
         typedef const mbe_soft_bit soft_ambe_frame[24];
         soft_ambe_frame* soft_fr_const = (soft_ambe_frame*)soft_fr;
         int soft_ret = mbe_decodeAmbe3600x2450SoftFrame(soft_fr_const, soft_d, &soft_result);
@@ -1938,7 +1966,7 @@ main(void) {
 
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         init_result_total(&result, 3);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh));
         assert(result_has_marker(&result, 'T'));
         assert(!result_has_marker(&result, 'R'));
 
@@ -1947,7 +1975,7 @@ main(void) {
         for (int total = 4; total <= 6; ++total) {
             mbe_initMbeParms(&cur, &prev, &prev_enh);
             init_result_total(&result, total);
-            assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
+            expect_ok(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh));
             assert(result_has_marker(&result, 'T') == (total < 6));
             assert(result_has_marker(&result, 'R') == (total >= 6));
         }
@@ -1955,14 +1983,14 @@ main(void) {
         set_ambe2450_b0(ambe_d, 10);
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         init_result_total(&result, 4);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh));
         assert(result_has_marker(&result, 'R'));
 
         set_bits_zero(ambe_d, 49);
         set_ambe2450_b0(ambe_d, 120);
         mbe_initMbeParms(&cur, &prev, &prev_enh);
         init_result_total(&result, 0);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result, ambe_d, &cur, &prev, &prev_enh));
         assert(result_has_marker(&result, 'E'));
         assert(result_has_marker(&result, 'R'));
         assert(!result_has_marker(&result, 'M'));
@@ -2003,7 +2031,7 @@ main(void) {
         prev_a.repeatCount = MBE_MAX_FRAME_REPEATS;
 
         init_result_total(&result, 0);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_a, &cur_a, &prev_a, &prev_enh_a) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result, ambe_d_a, &cur_a, &prev_a, &prev_enh_a));
         assert(result_has_marker(&result, 'T'));
         assert(approx_equal(cur_a.w0, custom_w0, 1e-6f));
         assert(cur_a.L == custom_L);
@@ -2020,7 +2048,7 @@ main(void) {
         prev_b.repeatCount = MBE_MAX_FRAME_REPEATS;
 
         init_result_total(&result, 0);
-        assert(mbe_processAmbe2450Dataf(out, &result, ambe_d_b, &cur_b, &prev_b, &prev_enh_b) >= 0);
+        expect_ok(mbe_processAmbe2450Dataf(out, &result, ambe_d_b, &cur_b, &prev_b, &prev_enh_b));
         assert(result_has_marker(&result, 'T'));
         assert(approx_equal(cur_b.w0, custom_w0, 1e-6f));
         assert(cur_b.L == custom_L);
@@ -2082,7 +2110,7 @@ main(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         prev.errorRate = 1.0f;
         mbe_initProcessResult(&result);
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh));
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
         /* TIA-102.BABA 7.8: [-5, 5] on the 16-bit output scale (float x 7). */
         double sumsq = 0.0;
@@ -2097,7 +2125,7 @@ main(void) {
         mbe_initMbeParms(&cur, &prev, &enh);
         prev.errorRate = 1.0f;
         mbe_initProcessResult(&result);
-        assert(mbe_processImbe7100x4400Framef(out, &result, provoice_fr, imbe_d, &cur, &prev, &enh) >= 0);
+        expect_ok(mbe_processImbe7100x4400Framef(out, &result, provoice_fr, imbe_d, &cur, &prev, &enh));
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
         float peak = 0.0f;
         for (int i = 0; i < 160; ++i) {
@@ -2110,27 +2138,26 @@ main(void) {
         /* Staged ProVoice decoding (hard and soft) carries the ProVoice
          * context into the IMBE 4400 data API and mutes bit-identically. */
         mbe_soft_bit provoice_soft[7][24];
-        assert(mbe_softBitsFromHard(&provoice_fr[0][0], &provoice_soft[0][0], sizeof(provoice_fr), 255u) == 0);
+        expect_status(mbe_softBitsFromHard(&provoice_fr[0][0], &provoice_soft[0][0], sizeof(provoice_fr), 255u), 0);
         for (int soft = 0; soft < 2; ++soft) {
             float direct[160];
             mbe_process_result direct_result;
             mbe_initMbeParms(&cur, &prev, &enh);
             prev.errorRate = 1.0f;
             mbe_setThreadRngSeed(0x1234u);
-            assert(
-                (soft ? mbe_processImbe7100x4400SoftFramef(
-                            direct, &direct_result, (const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &cur, &prev, &enh)
-                      : mbe_processImbe7100x4400Framef(direct, &direct_result, provoice_fr, imbe_d, &cur, &prev, &enh))
-                >= 0);
+            expect_ok((
+                soft ? mbe_processImbe7100x4400SoftFramef(
+                           direct, &direct_result, (const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &cur, &prev, &enh)
+                     : mbe_processImbe7100x4400Framef(direct, &direct_result, provoice_fr, imbe_d, &cur, &prev, &enh)));
 
             mbe_initMbeParms(&cur, &prev, &enh);
             prev.errorRate = 1.0f;
             mbe_setThreadRngSeed(0x1234u);
-            assert((soft ? mbe_decodeImbe7100x4400SoftFrame((const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &result)
-                         : mbe_decodeImbe7100x4400Frame(provoice_fr, imbe_d, &result))
-                   >= 0);
+            expect_ok((soft
+                           ? mbe_decodeImbe7100x4400SoftFrame((const mbe_soft_bit(*)[24])provoice_soft, imbe_d, &result)
+                           : mbe_decodeImbe7100x4400Frame(provoice_fr, imbe_d, &result)));
             assert((result.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
-            assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh) >= 0);
+            expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enh));
             assert(result.flags == direct_result.flags);
             assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
             for (int i = 0; i < 160; ++i) {
@@ -2380,7 +2407,7 @@ main(void) {
                 mode == 0 ? mbe_processAmbe2400Dataf : mbe_processAmbe2450Dataf;
             // Establish AMBE defaults before constructing the previous frame.
             mbe_initProcessResult(&result);
-            assert(process(out, &result, data, &cur, &prev, &prev_enh) >= 0);
+            expect_ok(process(out, &result, data, &cur, &prev, &prev_enh));
             prev.L = prev_enh.L = 56;
             prev.w0 = prev_enh.w0 = 0.05f;
             mbe_initProcessResult(&result);
@@ -2411,7 +2438,7 @@ main(void) {
         cur.errorCount4 = 7;
         prev.errorCount4 = 3;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh));
         assert(cur.errorCount4 == 0);
     }
 
@@ -2433,7 +2460,7 @@ main(void) {
         result.protected_errors = 3;
         result.total_errors = 3;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh));
         assert(cur.errorCount4 == 3);
     }
 
@@ -2453,7 +2480,7 @@ main(void) {
         result.c0_errors = 1;
         result.total_errors = 1;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh));
         assert(cur.errorCount4 == 0);
     }
 
@@ -2484,7 +2511,7 @@ main(void) {
         prev.repeatCount = 4;
         cur = prev;
 
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh));
 
         assert(cur.repeatCount == 0);
         assert(cur.L == 39);
@@ -2514,7 +2541,7 @@ main(void) {
         cur.repeatCount = 0;
 
         assert(prev_enh.noiseSeed < 0.0f);
-        assert(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh) >= 0);
+        expect_ok(mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &prev_enh));
         /* Muted: no unvoiced noise is drawn, and the generator moves one
          * frame on from a fresh stream's start, as DVSI's does through a mute. */
         assert((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u);

@@ -438,6 +438,106 @@ test_lost_plays_as_repeat(void) {
     puts("lost frames: b0 125, unused tone index, b0 127 play as error repeats; the 4th mutes");
 }
 
+/* A D-STAR voice frame of pitch code b0 and voicing b1 (b2 and the spectral
+ * bits fixed). */
+static void
+pack_voice(char d[49], int b0, int b1) {
+    memset(d, 0, 49);
+    put_b0(d, b0);
+    put_b2(d, 46);
+    for (int i = 18; i < 38; ++i) {
+        d[i] = (char)((i * 5) % 3 == 0);
+    }
+    for (int i = 0; i < 4; ++i) {
+        d[38 + i] = (char)((b1 >> (3 - i)) & 1);
+    }
+}
+
+/* The marks of the other codecs' decoders and the late onset, which D-STAR's
+ * decoder never writes. */
+static const enum mbe_frame_mark k_foreign_marks[] = {MBE_FRAME_MARK_LATE_ONSET, MBE_FRAME_MARK_MID_COLUMN_0,
+                                                      MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_ONSET_COLUMNS};
+
+/* Three voiced frames (b0 60, b1 15); with `onset`, then a frame with no
+ * voiced band and the voiced frames' history put back, as a caller's state
+ * can hold it: the history voiced, the last frame played unvoiced. */
+static void
+foreign_mark_stream(int onset, mbe_parms* cur, mbe_parms* prev, mbe_parms* enh) {
+    char voice[49], unvoiced[49];
+    float out[160];
+    mbe_process_result r;
+    pack_voice(voice, 60, 15);
+    pack_voice(unvoiced, 60, 0);
+    mbe_initMbeParms(cur, prev, enh);
+    for (int f = 0; f < 3; ++f) {
+        make_result(&r, 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, voice, cur, prev, enh), 0);
+    }
+    if (onset) {
+        const mbe_parms history = *prev;
+        make_result(&r, 0);
+        assert_status(mbe_processAmbe2400Dataf(out, &r, unvoiced, cur, prev, enh), 0);
+        *prev = history;
+    }
+}
+
+/*
+ * A caller's state can hold any frame mark. D-STAR plays each as it did before
+ * the marks of the other codecs' mid-frame voicing existed: P25's onset
+ * columns and rate 33's rows 13 and 17 as none, and the late onset only after
+ * a frame with no voiced band. Three voiced frames, then the history (or the
+ * last frame played, or both) so marked, then a lost frame or a tone's first
+ * frame, which repeat the history, and a voice frame: the output is that of
+ * the same stream with no mark there, through the frame after. With the last frame
+ * played unvoiced and the history voiced, the repeat is an onset, and still
+ * only the late onset acts, as it always has there (test_late_onset() in
+ * test_subframe_synthesis.c).
+ */
+static void
+test_foreign_marks_in_history(void) {
+    char lost[49], tone[49], voice[49];
+    pack_voice(lost, 125, 15);
+    pack_tone(tone, 126, 128, 200);
+    pack_voice(voice, 66, 15);
+    const char* nexts[2] = {lost, tone};
+    for (int onset = 0; onset < 2; ++onset) {
+        for (int n = 0; n < 2; ++n) {
+            for (int target = 0; target < 3; ++target) {
+                for (size_t m = 0; m < sizeof(k_foreign_marks) / sizeof(k_foreign_marks[0]); ++m) {
+                    mbe_parms cur[2], prev[2], enh[2];
+                    float out[2][320];
+                    foreign_mark_stream(onset, &cur[0], &prev[0], &enh[0]);
+                    cur[1] = cur[0];
+                    prev[1] = prev[0];
+                    enh[1] = enh[0];
+                    /* Stream 0 holds no mark where stream 1 holds the foreign one. */
+                    for (int s = 0; s < 2; ++s) {
+                        const enum mbe_frame_mark mark = (s == 0) ? MBE_FRAME_MARK_NONE : k_foreign_marks[m];
+                        if (target != 1) {
+                            mbe_set_frame_mark(&prev[s], mark);
+                        }
+                        if (target != 0) {
+                            mbe_set_frame_mark(&enh[s], mark);
+                        }
+                    }
+                    for (int s = 0; s < 2; ++s) {
+                        mbe_process_result r;
+                        make_result(&r, 0);
+                        assert_status_ok(mbe_processAmbe2400Dataf(out[s], &r, nexts[n], &cur[s], &prev[s], &enh[s]));
+                        make_result(&r, 0);
+                        assert_status(mbe_processAmbe2400Dataf(out[s] + 160, &r, voice, &cur[s], &prev[s], &enh[s]), 0);
+                    }
+                    const int late_onset_acts = onset && target != 1 && k_foreign_marks[m] == MBE_FRAME_MARK_LATE_ONSET;
+                    if (!late_onset_acts) {
+                        assert_same_pcm(out[1], out[0], 320, "a foreign mark in D-STAR's state");
+                    }
+                }
+            }
+        }
+    }
+    puts("foreign marks: D-STAR plays the other codecs' marks as none");
+}
+
 /* The phases a frame's log2 amplitudes give (the kernel the codec paths
  * regenerate them with, mbe_regenerate_phases_log2()), at harmonic count L. */
 static void
@@ -2617,6 +2717,7 @@ main(void) {
     test_null_frame_is_voice();
     test_b0_124_silence_frame();
     test_lost_plays_as_repeat();
+    test_foreign_marks_in_history();
     test_held_history_plays_the_repeated_model();
     test_mixed_repeat_count();
     test_frame_apis_agree();

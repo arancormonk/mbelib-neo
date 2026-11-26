@@ -147,16 +147,21 @@ imbe_harmonic_count(float nominal) {
  * ProVoice (IMBE 7100x4400), which reaches this decoder converted to the 7200
  * layout, has no DVSI reference and keeps the nominal pitch (`pitch`).
  *
- * The decisions on 505 Hz (MBE_VOICING_REACH_HZ) do not move for any pitch
- * code: neither the late-onset mark imbe_decode_voicing() decodes, whatever
- * harmonic is the top voiced one (the nearest to 505 Hz, b0 119's 5th
- * harmonic, is 0.053% below it and the correction moves it further below),
- * nor the harmonic whose voicing synthesis reads to tell whether a frame's
- * voicing reaches 505 Hz (ceil(505 Hz / f0), voicing_persists() in
- * mbe_subframe.c); checked for all 208 codes. Discrete steps elsewhere in
- * synthesis (a band edge's transform bin, the mid-frame model's harmonic
- * count, the harmonic where the high-band shelf starts) follow the pitch
- * played and do move at some codes.
+ * The harmonic whose voicing synthesis reads to tell whether a frame's
+ * voicing reaches 505 Hz (MBE_VOICING_REACH_HZ; ceil(505 Hz / f0),
+ * voicing_persists() in mbe_subframe.c) does not move for any pitch code (the
+ * nearest harmonic to 505 Hz, b0 119's 5th, is 0.053% below it and the
+ * correction moves it further below); checked for all 208 codes. The 500 Hz
+ * columns a P25 onset is read in (MBE_FRAME_MARK_ONSET_COLUMNS) are read at
+ * the pitch played, and there the correction moves the harmonic at or next
+ * above an edge at 8 of the 208 x 7 pairs of code and edge 505 + 500 k Hz, and
+ * at 6 of the 208 x 7 pairs with the edges 250 Hz lower; no edge lies within
+ * 2.8e-4 of a harmonic of the played pitch, nor (ProVoice) within 1.5e-4 of
+ * one of the nominal pitch, for any code, so float rounding moves none
+ * (test_p25_onset_edges in test_subframe_synthesis.c). Discrete steps
+ * elsewhere in synthesis (a band edge's transform bin, the mid-frame model's
+ * harmonic count, the harmonic where the high-band shelf starts) follow the
+ * pitch played and do move at some codes.
  *
  * imbe_code_pitch() computes them for pitch code b0 (0..207); it returns 1,
  * with the nominal pitch in *w0 and no L or K, for a harmonic count outside
@@ -235,12 +240,20 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
 
 /*
  * Reads the band voicing, and marks what it tells DVSI's decoder beyond the
- * bands themselves (docs/dvsi-parity.md, "Voiced onsets and offsets"):
+ * bands themselves (docs/dvsi-parity.md, "Voiced onsets and offsets" and "P25:
+ * the bands that start with the frame"):
  *  - no voiced band, at a pitch code other than the ones DVSI's encoder sends
  *    only with such frames (IMBE_UNVOICED_CODES_*): the voicing of the frame
  *    before it lasts to mid-frame;
- *  - voiced bands, none reaching MBE_VOICING_REACH_HZ: after a frame with no
- *    voiced band they start in the frame's second half.
+ *  - voiced bands: after a frame with no voiced band, P25's rendering reads
+ *    them in 500 Hz columns at the frame's pitch and starts the voiced
+ *    harmonics that lie neither in a covered column nor within 250 Hz below
+ *    one in the frame's second half (MBE_FRAME_MARK_ONSET_COLUMNS, which
+ *    holds the frames voiced only below MBE_VOICING_REACH_HZ, all of whose
+ *    voiced bands start there). The rendering marks the model it renders
+ *    again, after adaptive smoothing, by that model's voicing; the model
+ *    played for a P25 tone sent as voice frames is marked MBE_FRAME_MARK_TONE
+ *    instead (imbe4400_play_tone()).
  */
 static void
 imbe_decode_voicing(mbe_parms* cur_mp, int b0, char bb[58][12]) {
@@ -269,8 +282,8 @@ imbe_decode_voicing(mbe_parms* cur_mp, int b0, char bb[58][12]) {
         if (b0 < IMBE_UNVOICED_CODES_FIRST || b0 > IMBE_UNVOICED_CODES_LAST) {
             mark = MBE_FRAME_MARK_PITCH_ABSENT;
         }
-    } else if ((float)top * cur_mp->w0 < MBE_VOICING_REACH_HZ * ((float)(2.0 * M_PI) / 8000.0f)) {
-        mark = MBE_FRAME_MARK_LATE_ONSET;
+    } else {
+        mark = MBE_FRAME_MARK_ONSET_COLUMNS;
     }
     mbe_set_frame_mark(cur_mp, mark);
 }
@@ -1299,6 +1312,20 @@ imbe4400_play_tone(mbe_parms* mp, const struct imbe_tone* tone) {
     mbe_set_frame_mark(mp, MBE_FRAME_MARK_TONE);
 }
 
+/* Whether a model has a voiced band; none for a harmonic count outside 1..56. */
+static int
+imbe_has_voiced_band(const mbe_parms* mp) {
+    if (!mbe_harmonic_count_is_valid(mp->L)) {
+        return 0;
+    }
+    for (int l = 1; l <= mp->L; l++) {
+        if (mp->Vl[l] == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void
 imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_mute_noise mute_noise,
                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
@@ -1307,13 +1334,19 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
 
     /* Only imbe4400_play_tone() marks a frame MBE_FRAME_MARK_TONE, on the
      * frame it plays: the decoders never do, and the history never holds the
-     * mark, so one here came from a caller's state and is not the frame's.
+     * mark, so one here came from a caller's state and is not the frame's. It
+     * gives way to the mark a decode leaves a model with a voiced band
+     * (MBE_FRAME_MARK_ONSET_COLUMNS, imbe_decode_voicing()), or to none; the
+     * model rendered is marked again after smoothing, by its own voicing
+     * (MBE_VOICED_SYNTHESIS_DVSI_IMBE, mbe_synthesize_subframes()). A decoded
+     * mark the caller's state overwrote (MBE_FRAME_MARK_PITCH_ABSENT on a frame
+     * with no voiced band) is not recovered.
      * ProVoice keeps no tone word either: Vl[0] reads 0 after its frames, so
      * a P25 repeat after a ProVoice frame (a state moved between the two
      * entry points, outside the stream contract) plays the repeated model as
      * speech. */
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
-        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
+        mbe_set_frame_mark(cur_mp, imbe_has_voiced_band(cur_mp) ? MBE_FRAME_MARK_ONSET_COLUMNS : MBE_FRAME_MARK_NONE);
     }
     if (imbe4400_is_provoice(result)) {
         cur_mp->Vl[0] = 0;
@@ -1329,7 +1362,7 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
     /* As DVSI's P25 decoder, without eq 116's scaling; ProVoice, which plays
      * through the same path, likewise. */
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise,
-                                       MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE);
+                                       MBE_VOICED_SYNTHESIS_DVSI_IMBE, MBE_AMPLITUDE_LIMIT_NONE);
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

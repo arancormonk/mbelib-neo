@@ -51,6 +51,11 @@
  * Voiced phases regenerated from the decoded log2 amplitudes (log2Ml) moved
  * every AMBE hash; D-STAR's scalar int16 hash now differs from the SIMD one
  * too. The public mbe_synthesizeSpeechf() hashes below did not move.
+ * The mid-frame voicing of V/UV rows 13, 15 and 17 (row 17's own voicing all
+ * unvoiced, column 0 voiced at mid-frame), on the AMBE+2 sequence's one row-17
+ * frame (frame 11, of 24; it has no row 13 or 15), moved its float and int16
+ * hashes; the D-STAR and public hashes did not move, and P25's onset columns
+ * reach no golden sequence.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -67,13 +72,13 @@ golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x373A5264u;
-        e.ambe2450_s16 = 0xC7B9EB05u;
+        e.ambe2450_f32 = 0x4BCEBCBEu;
+        e.ambe2450_s16 = 0xCEDD488Eu;
         e.ambe2400_f32 = 0xC89A3643u;
         e.ambe2400_s16 = 0xD93C5851u;
     } else {
-        e.ambe2450_f32 = 0x82E505D2u;
-        e.ambe2450_s16 = 0x01A15166u;
+        e.ambe2450_f32 = 0xDA9F61C4u;
+        e.ambe2450_s16 = 0x38C9638Du;
         e.ambe2400_f32 = 0x25F7B472u;
         e.ambe2400_s16 = 0x71A03C76u;
     }

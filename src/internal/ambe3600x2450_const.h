@@ -29,21 +29,25 @@
  */
 
 /*
- * V/UV Quantization Vectors (TIA-102.BABA-1 Annex B), with row 17 as DVSI's
- * AMBE-3000 decodes it: the 500 Hz column 0 voiced, where Annex B lists 17-31
- * all unvoiced like 16. DVSI's decoders render that column (and parts of rows
- * 1, 3, 13 and 15) partly voiced, a state this table cannot express; voiced is
- * the nearer of the two binary values for each (docs/dvsi-parity.md, "Rate 33:
- * V/UV vectors"). Rows 18-31 decode on a band grid of their own pitch
- * (MBE_AMBE2450_GRID_SPAN in ambe3600x2450.c). The encoder searches rows 0-16
- * only (clause 4.2).
+ * V/UV Quantization Vectors (TIA-102.BABA-1 Annex B): each row is a frame's
+ * own voicing, the voicing at its end. DVSI's AMBE-3000 gives rows 13, 15 and
+ * 17 a voicing of their own in the first half of the frame (the mid-frame
+ * model's): row 13 columns 0-1, row 15 none, row 17 column 0, while row 17's
+ * own voicing is Annex B's, all unvoiced (ambe2450_decode_vuv() marks them;
+ * docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17"). Rows 1 and 3, which
+ * DVSI's decoders were measured to play partly between voiced and unvoiced,
+ * are not resolved, and the table keeps Annex B's rows there (same section).
+ * Rows 18-31 decode on a band grid of their own pitch (MBE_AMBE2450_GRID_SPAN
+ * in ambe3600x2450.c).
+ * The encoder searches rows 0-16 only (clause 4.2), so it reads none of rows
+ * 17-31.
  */
 static const int AmbeVuv[32][8] = {
     {1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 0}, {1, 1, 1, 1, 1, 1, 1, 1},
     {1, 1, 1, 1, 1, 1, 0, 0}, {1, 1, 0, 1, 1, 1, 1, 1}, {1, 1, 1, 0, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 0, 1, 1},
     {1, 1, 1, 1, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 0, 0, 0}, {1, 1, 1, 0, 0, 0, 0, 0}, {1, 1, 1, 0, 0, 0, 0, 1},
     {1, 1, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 0, 0, 0, 0, 0}, {1, 0, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0}, {1, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0},
     {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}};

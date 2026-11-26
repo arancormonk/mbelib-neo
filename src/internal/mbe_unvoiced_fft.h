@@ -202,11 +202,12 @@ void mbe_synthesizeUnvoicedFFTFrom(float* output, mbe_parms* cur_mp, const mbe_p
 
 /*
  * DVSI's unvoiced synthesis (docs/dvsi-parity.md, "Unvoiced synthesis"), which
- * the codec paths render with the subframe renderings, MBE_VOICED_SYNTHESIS_DVSI
- * and, for rate 33, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 (the two differ in the
- * mid-frame model's pitch, which the voiced and the unvoiced part of a
- * subframe both read: the mid-frame model's band frequencies, magnitudes and
- * band edges follow it). DVSI's decoders, in every mode, synthesize a 10 ms
+ * the codec paths render with the subframe renderings, MBE_VOICED_SYNTHESIS_DVSI,
+ * MBE_VOICED_SYNTHESIS_DVSI_IMBE and, for rate 33,
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 (they differ in the mid-frame model's
+ * pitch and voicing, which the voiced and the unvoiced part of a subframe both
+ * read: the mid-frame model's band frequencies, magnitudes and band edges
+ * follow it). DVSI's decoders, in every mode, synthesize a 10 ms
  * subframe at a time: the noise under a
  * square-root triangular window two subframes long, a 256-point transform,
  * each unvoiced band scaled against its own noise power, the inverse

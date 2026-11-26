@@ -7,8 +7,9 @@
  * @file
  * @brief Speech synthesis in 10 ms subframes, as DVSI's decoders render it.
  *
- * The codec paths (MBE_VOICED_SYNTHESIS_DVSI and, for rate 33,
- * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) synthesize a frame as two subframes of
+ * The codec paths (MBE_VOICED_SYNTHESIS_DVSI for D-STAR,
+ * MBE_VOICED_SYNTHESIS_DVSI_IMBE for P25 and ProVoice,
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 for rate 33) synthesize a frame as two subframes of
  * MBE_SUBFRAME samples (docs/dvsi-parity.md, "Synthesis in subframes"):
  *  - the frame's own model stands at its end; a mid-frame model, between the
  *    previous frame's and this one's, stands at sample 80;
@@ -99,7 +100,20 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * voicing at its frequency, or the previous frame's when the current frame has
  * no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT and the previous
  * frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no band is
- * voiced (the voiced bands of a frame so marked start in its own subframe).
+ * voiced (the caller passes it for a frame marked MBE_FRAME_MARK_LATE_ONSET:
+ * in the rate-33 rendering whatever the frame before, in the others after a
+ * frame with no voiced band; mbe_synthesize_subframes()).
+ * In P25's rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE), when the current frame
+ * is marked MBE_FRAME_MARK_ONSET_COLUMNS and the previous frame has no voiced
+ * band, a band voiced so is voiced only if its frequency lies in one of the
+ * current frame's covered 500 Hz columns or within 250 Hz below one (the
+ * mark's rule, mbe_adaptive.h). In the rate-33 rendering a current frame
+ * marked MBE_FRAME_MARK_MID_COLUMN_0 or MBE_FRAME_MARK_MID_COLUMNS_0_1
+ * (V/UV rows 17 and 13) instead voices the bands the 500 Hz column 0, or
+ * columns 0 and 1, voice at the mid-frame model's own pitch
+ * (mbe_ambe2450_harmonic_voiced()), whatever the two frames' voicing, and
+ * leaves the others unvoiced. In any other rendering these marks change
+ * nothing.
  * Its magnitudes are the two frames' at its frequency, interpolated in the log
  * domain. Its phases are regenerated from the mean of the two frames' log2Ml
  * at the band's frequency, read as the magnitudes are, each log2Ml used as
@@ -122,9 +136,11 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  *
  * @param prev_mp    Previous frame parameters.
  * @param cur_mp     Current frame parameters.
- * @param late_onset Nonzero when the frame's voiced bands start late.
- * @param rendering  MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 for rate 33; any other
- *                   value renders as MBE_VOICED_SYNTHESIS_DVSI.
+ * @param late_onset Nonzero when the frame's voiced bands start late (no band
+ *                   voiced at mid-frame).
+ * @param rendering  MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 for rate 33,
+ *                   MBE_VOICED_SYNTHESIS_DVSI_IMBE for P25 and ProVoice; any
+ *                   other value renders as MBE_VOICED_SYNTHESIS_DVSI (D-STAR).
  * @param model      Receives the model.
  */
 void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset,
@@ -156,6 +172,12 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * start with phase 0; no unvoiced overlap comes from the previous state. The
  * noise generator runs as for any frame.
  *
+ * In P25's rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) the frame is first
+ * marked by the voicing it is rendered with (after the adaptive smoothing of
+ * the synthesis core): MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band
+ * and is not a tone model (MBE_FRAME_MARK_TONE), that mark cleared when it
+ * has none; mbe_advance_subframes() marks it alike.
+ *
  * @param aout_buf     160 samples.
  * @param cur_mp       Current frame: enhanced, smoothed amplitudes without render gains.
  * @param prev_mp      Previous frame as synthesized.
@@ -175,7 +197,8 @@ void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parm
  * and no unvoiced overlap is left for it. @p from_silence starts the train as
  * mbe_synthesize_subframes() does, so that the pulse train and the noise
  * generator end where rendering the frame leaves them; so does @p rendering,
- * which must be the one the stream renders with. The state is not the one a
+ * which must be the one the stream renders with (and marks the frame as
+ * rendering it does). The state is not the one a
  * rendering leaves in full: a rendered frame with unvoiced bands leaves its own
  * subframe's second half in previousUw, an advanced one leaves none.
  */
