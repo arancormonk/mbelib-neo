@@ -343,20 +343,27 @@ test_onset_starts_the_train(void) {
 }
 
 /* A frame marked as a late onset (rate 33's V/UV row 15) starts its voiced
- * bands in its second subframe, whatever the frame before: after a frame with
- * no voiced band no pulse comes before sample 80; after a voiced frame the
- * mid-frame model voices nothing too, and the pulse train runs on, not
- * restarted, through the first subframe at the previous frame's pitch and
- * through the second at this frame's. */
+ * bands in its second subframe, in the rate-33 rendering whatever the frame
+ * before: after a frame with no voiced band no pulse comes before sample 80;
+ * after a voiced frame the mid-frame model voices nothing too, and the pulse
+ * train runs on, not restarted, through the first subframe at the previous
+ * frame's pitch and through the second at this frame's. In the other
+ * renderings the mark acts after a frame with no voiced band alone, as before
+ * the rate-33 rows' reading: after a voiced frame it changes nothing. */
 static void
 test_late_onset(void) {
+    const enum mbe_voiced_synthesis rate33 = MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
     float out[160], plain[160];
     mbe_parms last, voiced;
     fresh_stream(&last);
     set_model(&last, 150.0, 20, 0, 4.0f);
     set_model(&voiced, 230.0, 15, 15, 16.0f);
     mbe_set_frame_mark(&voiced, MBE_FRAME_MARK_LATE_ONSET);
-    next_frame(out, &last, &voiced);
+    mbe_parms other = last;
+    float other_out[160];
+    next_frame_as(out, &last, &voiced, 0, rate33);
+    next_frame(other_out, &other, &voiced);
+    assert(same_bits(out, other_out, 160) && same_bits(last.noiseOverlap, other.noiseOverlap, 96));
     assert(fabs(cycles_apart(pulse_phase(&last), cycles_of(230.0, 80.0))) < 1e-5);
     assert(last.noiseOverlap[0] == 3.0f);
     assert(last.noiseOverlap[3] == -80.0f);
@@ -368,17 +375,20 @@ test_late_onset(void) {
     /* After a voiced frame at 200 Hz. */
     mbe_parms before;
     set_model(&before, 200.0, 18, 18, 16.0f);
-    next_frame(out, &last, &before);
+    next_frame_as(out, &last, &before, 0, rate33);
     const double phase = pulse_phase(&last);
-    mbe_parms marked = last, unmarked = last;
-    next_frame(out, &marked, &voiced);
+    mbe_parms marked = last, unmarked = last, other_marked = last, other_unmarked = last;
+    next_frame_as(out, &marked, &voiced, 0, rate33);
     assert(fabs(cycles_apart(pulse_phase(&marked), phase + cycles_of(200.0, 80.0) + cycles_of(230.0, 80.0))) < 1e-5);
     struct mbe_subframe_model mid;
-    mbe_subframe_mid_model(&last, &voiced, 1, MBE_VOICED_SYNTHESIS_DVSI, &mid);
+    mbe_subframe_mid_model(&last, &voiced, 1, rate33, &mid);
     assert(!mid.any_voiced);
+    next_frame(other_out, &other_marked, &voiced);
     mbe_set_frame_mark(&voiced, MBE_FRAME_MARK_NONE);
-    next_frame(plain, &unmarked, &voiced);
+    next_frame_as(plain, &unmarked, &voiced, 0, rate33);
     assert(!same_bits(out, plain, 160));
+    next_frame(plain, &other_unmarked, &voiced);
+    assert(same_bits(other_out, plain, 160) && same_bits(other_marked.noiseOverlap, other_unmarked.noiseOverlap, 96));
 }
 
 /* Through voiced speech the pitch moves linearly from one model's to the
@@ -651,15 +661,19 @@ reference_onset_sounds(const mbe_parms* mp, double hz) {
  * voicing holds at mid-frame (the previous frame's when this one has no voiced
  * band and is marked as lacking a pitch, and the previous one is voiced at its
  * harmonic at or next above 505 Hz; else this frame's); a frame marked as a
- * late onset voices none, whatever the frame before; a frame marked for the
- * onset columns after one with no voiced band voices only the harmonics the
- * P25 onset rule sounds; and a frame of rate 33's V/UV row 17 or 13 voices the
- * harmonics under Nyquist in the 500 Hz columns below 1 or 2 (by the
- * frequency of each, or of 250 Hz above it), whatever the voicing around. */
+ * late onset voices none (reference_late()); in P25's rendering a frame
+ * marked for the onset columns after one with no voiced band voices only the
+ * harmonics the P25 onset rule sounds; and in the rate-33 rendering a frame of
+ * V/UV row 17 or 13 voices the harmonics under Nyquist in the 500 Hz columns
+ * below 1 or 2 (by the frequency of each, or of 250 Hz above it), whatever the
+ * voicing around. Each mark acts in its own codec's rendering alone. */
 static void
-reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, int L, unsigned char voiced[57]) {
+reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, int L,
+                      enum mbe_voiced_synthesis rendering, unsigned char voiced[57]) {
     const enum mbe_frame_mark mark = mbe_frame_mark(cur);
     const int onset = !reference_voiced(prev);
+    const int rate33 = rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
+    const int late = mark == MBE_FRAME_MARK_LATE_ONSET && (rate33 || onset);
     const mbe_parms* source = cur;
     if (mark == MBE_FRAME_MARK_PITCH_ABSENT && !reference_voiced(cur)) {
         const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev->w0);
@@ -669,15 +683,15 @@ reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, in
         const double w = w0 * l;
         const int nearest = (int)fmin(fmax(floor(w / (double)source->w0 + 0.5), 1.0), (double)source->L);
         int state = (source->Vl[nearest] == 0) ? 0 : ((source->Vl[nearest] == 1) ? 1 : 2);
-        if (state == 1 && mark == MBE_FRAME_MARK_LATE_ONSET) {
+        if (state == 1 && late) {
             state = 0;
         }
-        if (state == 1 && onset && mark == MBE_FRAME_MARK_ONSET_COLUMNS
+        if (state == 1 && onset && rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE && mark == MBE_FRAME_MARK_ONSET_COLUMNS
             && !reference_onset_sounds(cur, w * 8000.0 / (2.0 * M_PI))) {
             state = 0;
         }
-        const int columns =
-            (mark == MBE_FRAME_MARK_MID_COLUMN_0) ? 1 : ((mark == MBE_FRAME_MARK_MID_COLUMNS_0_1) ? 2 : 0);
+        int columns = (mark == MBE_FRAME_MARK_MID_COLUMN_0) ? 1 : ((mark == MBE_FRAME_MARK_MID_COLUMNS_0_1) ? 2 : 0);
+        columns = rate33 ? columns : 0;
         if (columns > 0 && state != 2) {
             const double hz = w * 8000.0 / (2.0 * M_PI);
             state = (w < M_PI)
@@ -792,7 +806,10 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         copy_amplitudes(&cur, &model);
         mbe_set_frame_mark(&cur, frames[f].mark);
         mbe_subframe_own_model(&last, &models[0]);
-        const int late = frames[f].mark == MBE_FRAME_MARK_LATE_ONSET;
+        /* A late onset: in the rate-33 rendering whatever the frame before,
+         * in the others after a frame with no voiced band. */
+        const int late = frames[f].mark == MBE_FRAME_MARK_LATE_ONSET
+                         && (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 || !reference_voiced(&last));
         mbe_subframe_mid_model(&last, &cur, late, rendering, &models[1]);
         mbe_subframe_own_model(&cur, &models[2]);
         /* The mid-frame pitch, the library's within float rounding, is then the
@@ -803,7 +820,7 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         /* Its voicing is the reference's own, which the library's must equal. */
         if (frames[f].mark != MBE_FRAME_MARK_PREVIOUS_HELD) {
             unsigned char voiced[57] = {0};
-            reference_mid_voicing(&last, &cur, mid_pitch, models[1].L, voiced);
+            reference_mid_voicing(&last, &cur, mid_pitch, models[1].L, rendering, voiced);
             models[1].any_voiced = 0;
             for (int l = 1; l <= models[1].L; ++l) {
                 assert(models[1].voiced[l] == voiced[l]);
@@ -1576,8 +1593,9 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     other.L = model.L;
     memcpy(other.Vl, model.Vl, sizeof(model.Vl));
     copy_amplitudes(&other, &model);
-    const enum mbe_voiced_synthesis others =
-        (rendering == MBE_VOICED_SYNTHESIS_DVSI) ? MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 : MBE_VOICED_SYNTHESIS_DVSI;
+    const enum mbe_voiced_synthesis others = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450)
+                                                 ? MBE_VOICED_SYNTHESIS_DVSI
+                                                 : MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
     mbe_advance_subframes(&other, &last, 0, others);
     const double lost = 3.0e-4 * cycles_of(sqrt(210.0 * 190.0), 80.0);
     const double offset = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) ? -lost : lost;
@@ -2603,7 +2621,7 @@ check_p25_onset(const char imbe_d[88], const int* sounds) {
     (void)kind;
     (void)kind2;
     assert(mbe_frame_mark(&cur) == MBE_FRAME_MARK_ONSET_COLUMNS);
-    mbe_subframe_mid_model(&unvoiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
+    mbe_subframe_mid_model(&unvoiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
     assert(same_bits(&mid.w0, &cur.w0, 1));
     int listed = 0, any = 0;
     for (int l = 1; l <= mid.L; ++l) {
@@ -2700,8 +2718,8 @@ test_p25_onset_columns_only_at_onsets(void) {
     (void)kind2;
     mbe_parms unmarked = cur;
     mbe_set_frame_mark(&unmarked, MBE_FRAME_MARK_NONE);
-    mbe_subframe_mid_model(&voiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &marked);
-    mbe_subframe_mid_model(&voiced, &unmarked, 0, MBE_VOICED_SYNTHESIS_DVSI, &plain);
+    mbe_subframe_mid_model(&voiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &marked);
+    mbe_subframe_mid_model(&voiced, &unmarked, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &plain);
     assert(same_model(&marked, &plain));
     /* Band 1, which no covered column holds, sounds at mid-frame. */
     assert(marked.voiced[1] == 1);
@@ -2714,7 +2732,7 @@ test_p25_onset_columns_only_at_onsets(void) {
     assert(kind3 == 0);
     (void)kind3;
     mbe_set_frame_mark(&cur, MBE_FRAME_MARK_TONE);
-    mbe_subframe_mid_model(&unvoiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &marked);
+    mbe_subframe_mid_model(&unvoiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &marked);
     mbe_subframe_own_model(&cur, &own);
     assert(same_model(&marked, &own));
 }
@@ -2826,9 +2844,11 @@ test_untrusted_mid_voicing_marks(void) {
                     }
                     mbe_set_frame_mark(&model, marks[m]);
                     for (int start = 0; start < 2; ++start) {
-                        for (int rendering = 0; rendering < 2; ++rendering) {
-                            const enum mbe_voiced_synthesis kind =
-                                rendering ? MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 : MBE_VOICED_SYNTHESIS_DVSI;
+                        for (int rendering = 0; rendering < 3; ++rendering) {
+                            static const enum mbe_voiced_synthesis kinds[3] = {MBE_VOICED_SYNTHESIS_DVSI,
+                                                                               MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+                                                                               MBE_VOICED_SYNTHESIS_DVSI_IMBE};
+                            const enum mbe_voiced_synthesis kind = kinds[rendering];
                             mbe_parms rendered = last, advanced = with_model(&last, &model);
                             mbe_set_frame_mark(&advanced, marks[m]);
                             next_frame_as(out, &rendered, &model, start, kind);
@@ -2998,6 +3018,151 @@ test_p25_reset_drops_the_mark(void) {
     assert(resets > 0);
 }
 
+/* A frame of `model` marked `mark` after `last`, rendered the way `rendering`
+ * says (the voiced part alone): its samples and the state it leaves. */
+static void
+render_marked(float out[160], mbe_parms* state, const mbe_parms* last, const mbe_parms* model, enum mbe_frame_mark mark,
+              enum mbe_voiced_synthesis rendering) {
+    mbe_parms marked = *model;
+    *state = *last;
+    mbe_set_frame_mark(&marked, mark);
+    next_frame_as(out, state, &marked, 0, rendering);
+}
+
+/* Whether two frames rendered the same: their samples, phases and pulse train. */
+static int
+same_rendering(const float a[160], const mbe_parms* a_state, const float b[160], const mbe_parms* b_state) {
+    return same_bits(a, b, 160) && same_bits(&a_state->PSIl[1], &b_state->PSIl[1], 56)
+           && same_bits(&a_state->PHIl[1], &b_state->PHIl[1], 56)
+           && same_bits(a_state->noiseOverlap, b_state->noiseOverlap, 96);
+}
+
+/*
+ * A frame mark acts only in the rendering of the codec whose decoder writes
+ * it. Rate 33's (MBE_FRAME_MARK_MID_COLUMN_0, MBE_FRAME_MARK_MID_COLUMNS_0_1,
+ * and MBE_FRAME_MARK_LATE_ONSET whatever the frame before) in the rate-33
+ * rendering; P25's (MBE_FRAME_MARK_ONSET_COLUMNS) in P25's. In D-STAR's (and
+ * every other) rendering the marks 5, 6 and 7 play as none, and a late onset
+ * acts only after a frame with no voiced band, as before these marks; in P25's
+ * rate 33's marks play as none. A voiced frame (127.5 Hz, 23 of 28 harmonics
+ * voiced, which covers the 500 Hz column 5) after an unvoiced and after a
+ * voiced one.
+ */
+static void
+test_marks_act_in_their_own_rendering(void) {
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_ONSET_COLUMNS, MBE_FRAME_MARK_MID_COLUMN_0,
+                                                MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET};
+
+    static const enum mbe_voiced_synthesis renderings[] = {
+        MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_VOICED_SYNTHESIS_DVSI_IMBE};
+
+    for (int voiced_before = 0; voiced_before < 2; ++voiced_before) {
+        mbe_parms last, model;
+        float out[160];
+        fresh_stream(&last);
+        set_model(&model, 150.0, 24, voiced_before ? 20 : 0, 16.0f);
+        next_frame(out, &last, &model);
+        set_model(&model, 127.5, 28, 23, 16.0f);
+        shape_model(&model, 3);
+        for (size_t r = 0; r < sizeof(renderings) / sizeof(renderings[0]); ++r) {
+            const enum mbe_voiced_synthesis rendering = renderings[r];
+            float plain[160], marked[160];
+            mbe_parms plain_state, marked_state;
+            render_marked(plain, &plain_state, &last, &model, MBE_FRAME_MARK_NONE, rendering);
+            for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
+                const enum mbe_frame_mark mark = marks[m];
+                render_marked(marked, &marked_state, &last, &model, mark, rendering);
+                int acts;
+                if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) {
+                    acts = mark != MBE_FRAME_MARK_ONSET_COLUMNS;
+                } else if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+                    acts =
+                        (mark == MBE_FRAME_MARK_LATE_ONSET || mark == MBE_FRAME_MARK_ONSET_COLUMNS) && !voiced_before;
+                } else {
+                    acts = mark == MBE_FRAME_MARK_LATE_ONSET && !voiced_before;
+                }
+                assert(same_rendering(marked, &marked_state, plain, &plain_state) == !acts);
+                assert(all_finite(marked, 160));
+            }
+        }
+    }
+}
+
+/* Three voiced P25 frames (b0 100, voiced throughout); with `onset`, then a
+ * frame with no voiced band and the voiced frames' history put back, as a
+ * caller's state can hold it: the history voiced, the last frame played
+ * unvoiced. */
+static void
+p25_foreign_mark_stream(int onset, mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced) {
+    char voiced[88], unvoiced[88] = {0};
+    float out[160];
+    memset(voiced, 1, sizeof(voiced));
+    set_imbe_b0(voiced, 100);
+    set_imbe_b0(unvoiced, 150);
+    mbe_initMbeParms(cur, prev, enhanced);
+    for (int f = 0; f < 3; ++f) {
+        const int rc = mbe_processImbe4400Dataf(out, NULL, voiced, cur, prev, enhanced);
+        assert(rc >= 0);
+        (void)rc;
+    }
+    if (onset) {
+        const mbe_parms history = *prev;
+        const int rc = mbe_processImbe4400Dataf(out, NULL, unvoiced, cur, prev, enhanced);
+        assert(rc >= 0);
+        (void)rc;
+        *prev = history;
+    }
+}
+
+/*
+ * A caller's state can hold any frame mark, and P25 plays rate 33's
+ * (MBE_FRAME_MARK_MID_COLUMN_0, MBE_FRAME_MARK_MID_COLUMNS_0_1) as none: the
+ * history, the last frame played or both so marked, then a frame the decoder
+ * rejects (b0 255, which repeats the history over the last frame played) and a
+ * voice frame play as the same stream with no mark there; after voiced frames,
+ * and with the last frame played unvoiced and the history voiced (an onset).
+ */
+static void
+test_p25_foreign_marks_in_state(void) {
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_MID_COLUMN_0, MBE_FRAME_MARK_MID_COLUMNS_0_1};
+
+    char rejected[88] = {0}, voiced[88];
+    set_imbe_b0(rejected, 255);
+    memset(voiced, 1, sizeof(voiced));
+    set_imbe_b0(voiced, 104);
+    for (int onset = 0; onset < 2; ++onset) {
+        for (int target = 0; target < 3; ++target) {
+            for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
+                mbe_parms cur[2], prev[2], enhanced[2];
+                float out[2][320];
+                p25_foreign_mark_stream(onset, &cur[0], &prev[0], &enhanced[0]);
+                cur[1] = cur[0];
+                prev[1] = prev[0];
+                enhanced[1] = enhanced[0];
+                for (int s = 0; s < 2; ++s) {
+                    const enum mbe_frame_mark mark = (s == 0) ? MBE_FRAME_MARK_NONE : marks[m];
+                    if (target != 1) {
+                        mbe_set_frame_mark(&prev[s], mark);
+                    }
+                    if (target != 0) {
+                        mbe_set_frame_mark(&enhanced[s], mark);
+                    }
+                    mbe_process_result result;
+                    mbe_initProcessResult(&result);
+                    const int rc = mbe_processImbe4400Dataf(out[s], &result, rejected, &cur[s], &prev[s], &enhanced[s]);
+                    assert(rc >= 0 && (result.flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+                    const int rc2 =
+                        mbe_processImbe4400Dataf(out[s] + 160, NULL, voiced, &cur[s], &prev[s], &enhanced[s]);
+                    assert(rc2 >= 0);
+                    (void)rc;
+                    (void)rc2;
+                }
+                assert(same_bits(out[0], out[1], 320));
+            }
+        }
+    }
+}
+
 int
 main(void) {
     test_frame_marks();
@@ -3007,6 +3172,7 @@ main(void) {
     test_pitch_step_keeps_the_train();
     test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI);
     test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
     test_octave_steps();
     test_stored_phase_range();
     test_unvoiced_pitch_carries();
@@ -3019,8 +3185,10 @@ main(void) {
     test_subframes_crossfade_linearly();
     test_muted_frame_advances(MBE_VOICED_SYNTHESIS_DVSI);
     test_muted_frame_advances(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_muted_frame_advances(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
     test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI);
     test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
     test_ambe2450_mid_pitch();
     test_from_silence();
     test_output_limit_option();
@@ -3037,5 +3205,7 @@ main(void) {
     test_untrusted_mid_voicing_marks();
     test_p25_voicing_persists();
     test_p25_reset_drops_the_mark();
+    test_p25_foreign_marks_in_state();
+    test_marks_act_in_their_own_rendering();
     return 0;
 }

@@ -308,14 +308,14 @@ test_tone_model(void) {
 
     /* The mid-frame model of a marked frame is its own. */
     struct mbe_subframe_model mid, own;
-    mbe_subframe_mid_model(&last, model, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
+    mbe_subframe_mid_model(&last, model, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
     mbe_subframe_own_model(model, &own);
     assert(same_subframe_model(&mid, &own));
     /* Advancing the marked frame unrendered leaves the train rendering it leaves. */
     mbe_parms rendered = *model, advanced = *model;
     float scratch[160] = {0.0f};
-    mbe_synthesize_subframes(scratch, &rendered, &last, NULL, 1.0f, 0, MBE_VOICED_SYNTHESIS_DVSI);
-    mbe_advance_subframes(&advanced, &last, 0, MBE_VOICED_SYNTHESIS_DVSI);
+    mbe_synthesize_subframes(scratch, &rendered, &last, NULL, 1.0f, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    mbe_advance_subframes(&advanced, &last, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE);
     for (int i = 0; i < 96; ++i) {
         assert(same_float(rendered.noiseOverlap[i], advanced.noiseOverlap[i]));
     }

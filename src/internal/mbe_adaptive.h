@@ -140,19 +140,28 @@ enum mbe_voiced_synthesis {
     /** The codec paths, as DVSI's AMBE-3000 decoders: two 10 ms subframes
      * per frame, the voiced part a train of pitch pulses and the unvoiced
      * part DVSI's noise (mbe_subframe.h; docs/dvsi-parity.md, "Synthesis in
-     * subframes"). D-STAR, P25 and ProVoice. */
+     * subframes"). D-STAR, and with the two below the base of every codec
+     * path's rendering. */
     MBE_VOICED_SYNTHESIS_DVSI,
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's rate-33 (AMBE 3600x2450) decoder
      * renders it, whose mid-frame pitch between two voiced frames of
      * different pitch lies a little below their geometric mean
      * (mbe_subframe_mid_model(); docs/dvsi-parity.md, "Rate 33: mid-frame
-     * pitch"). Every rate-33 synthesis call. */
+     * pitch"), and which honours the marks of the rate-33 rows 13, 15 and 17
+     * (MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET whatever the
+     * frame before, MBE_FRAME_MARK_MID_COLUMN_0). Every rate-33 synthesis call. */
     MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+    /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's P25 (IMBE 7200x4400) decoder
+     * renders it: a voiced frame after one with no voiced band starts only
+     * the bands of its covered 500 Hz columns with the frame
+     * (MBE_FRAME_MARK_ONSET_COLUMNS). The P25 and ProVoice data path. */
+    MBE_VOICED_SYNTHESIS_DVSI_IMBE,
 };
 
 /** How a frame's rendering starts; chosen per call, it has a meaning for
- * the subframe renderings (MBE_VOICED_SYNTHESIS_DVSI and
- * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) only. */
+ * the subframe renderings (MBE_VOICED_SYNTHESIS_DVSI,
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 and MBE_VOICED_SYNTHESIS_DVSI_IMBE)
+ * only. */
 enum mbe_synthesis_start {
     /** From the previous frame as it was synthesized: its model, the pulse
      * train it carries and its unvoiced overlap. */
@@ -181,8 +190,9 @@ enum mbe_output_limit {
 };
 
 /* The onset delay mbe_set_voicing_onset_delay() can give a model (samples):
- * its voiced bands then start in the frame's second subframe, whatever the
- * frame before (MBE_FRAME_MARK_LATE_ONSET). */
+ * its voiced bands then start in the frame's second subframe
+ * (MBE_FRAME_MARK_LATE_ONSET: in the rate-33 rendering whatever the frame
+ * before, in the others after a frame with no voiced band). */
 #define MBE_VOICING_ONSET_LATE 80
 
 /**
@@ -209,7 +219,12 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * What a codec's decoder tells the synthesizer about a frame beyond its model
  * (docs/dvsi-parity.md, "Voiced onsets and offsets"). A model carries one mark
  * at most, in the otherwise unused element 0 of PHIl, stored as the mark's
- * value in float.
+ * value in float. The marks of the mid-frame voicing (ONSET_COLUMNS,
+ * MID_COLUMN_0, MID_COLUMNS_0_1, and LATE_ONSET's reading whatever the frame
+ * before) act only in the rendering of the codec whose decoder writes them, so
+ * that a mark a caller's state holds changes no other codec's stream:
+ * elsewhere 5, 6 and 7 play as none, and LATE_ONSET as it always has there,
+ * only after a frame with no voiced band.
  */
 enum mbe_frame_mark {
     MBE_FRAME_MARK_NONE = 0,
@@ -243,26 +258,31 @@ enum mbe_frame_mark {
      * above each other edge (unvoiced past L), all at the pitch the frame
      * plays. A frame voiced only below 505 Hz covers none: its voiced bands,
      * and its pulse train, start at mid-frame. After a voiced frame the mark
-     * changes nothing. */
+     * changes nothing. Read only in P25's rendering
+     * (MBE_VOICED_SYNTHESIS_DVSI_IMBE). */
     MBE_FRAME_MARK_ONSET_COLUMNS = 5,
     /* A rate-33 voice frame of V/UV row 17: the mid-frame model voices the
      * 500 Hz column 0 (through mbe_ambe2450_harmonic_voiced(), at its own
      * harmonics) and no other, whatever the two frames' voicing; the frame's
-     * own voicing is Annex B's row 17, all unvoiced. */
+     * own voicing is Annex B's row 17, all unvoiced. Read only in the
+     * rate-33 rendering (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450). */
     MBE_FRAME_MARK_MID_COLUMN_0 = 6,
     /* A rate-33 voice frame of V/UV row 13: the mid-frame model voices the
      * 500 Hz columns 0 and 1 (as MBE_FRAME_MARK_MID_COLUMN_0 does column 0)
-     * and no other; the frame's own voicing is row 13's, columns 0 to 2. */
+     * and no other; the frame's own voicing is row 13's, columns 0 to 2.
+     * Read only in the rate-33 rendering. */
     MBE_FRAME_MARK_MID_COLUMNS_0_1 = 7,
-    /* The mid-frame model voices no band, whatever the frame before: the
-     * voiced bands start MBE_VOICING_ONSET_LATE samples late (rate-33 V/UV
-     * row 15; after a voiced frame the pulse train runs on through the
-     * unvoiced mid-frame, at the previous frame's pitch into it and this
+    /* In the rate-33 rendering, the mid-frame model voices no band, whatever
+     * the frame before: the voiced bands start MBE_VOICING_ONSET_LATE samples
+     * late (V/UV row 15; after a voiced frame the pulse train runs on through
+     * the unvoiced mid-frame, at the previous frame's pitch into it and this
      * frame's out of it). The rate-33 rows 13, 15 and 17 give each half of
      * the frame its own voicing (docs/dvsi-parity.md, "Rate 33: rows 13, 15
      * and 17"); a lost frame that repeats such a frame plays the repeated
      * model's own voicing through (the rate-33 path clears these marks on a
-     * repeat). */
+     * repeat). In every other rendering the mark keeps its earlier meaning:
+     * no band voiced at mid-frame only after a frame with no voiced band
+     * (no decoder of those codecs writes it). */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };
 

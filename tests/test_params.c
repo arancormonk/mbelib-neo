@@ -1524,13 +1524,13 @@ muted_onset_then_voice(float out[160], float history) {
     }
     cur.errorRate = 1.0f; /* past any muting threshold */
     mbe_parms voiced = cur;
-    mbe_synthesizeSpeechWithPreEnhRm0f(muted, &cur, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+    mbe_synthesizeSpeechWithPreEnhRm0f(muted, &cur, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI_IMBE,
                                        MBE_AMPLITUDE_LIMIT_NONE);
     enh = cur;
     voiced.errorRate = 0.0f;
     voiced.noiseSeed = cur.noiseSeed;
     memcpy(voiced.noiseOverlap, cur.noiseOverlap, sizeof(voiced.noiseOverlap));
-    mbe_synthesizeSpeechWithPreEnhRm0f(out, &voiced, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
+    mbe_synthesizeSpeechWithPreEnhRm0f(out, &voiced, &enh, 0.0f, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI_IMBE,
                                        MBE_AMPLITUDE_LIMIT_NONE);
 }
 

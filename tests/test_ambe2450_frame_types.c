@@ -1687,6 +1687,44 @@ test_repeat_of_rows_13_15_17(void) {
     }
 }
 
+/*
+ * A caller's state can hold any frame mark, and rate 33 plays P25's
+ * (MBE_FRAME_MARK_ONSET_COLUMNS) as none: settled speech, the last frame
+ * played or the history or both so marked, then a lost frame or a tone's first
+ * frame (each repeats the last frame played) and a voice frame play as the
+ * same stream with no mark there.
+ */
+static void
+test_p25_mark_in_state(void) {
+    char erasure[49], tone[49], voice[49];
+    pack_b(erasure, k_erasure);
+    pack_tone(tone, 7);
+    pack_b(voice, k_voice_next);
+    const char* nexts[2] = {erasure, tone};
+    for (int n = 0; n < 2; ++n) {
+        for (int target = 0; target < 3; ++target) {
+            struct stream s[2];
+            float out[2][320];
+            stream_settled(&s[0], k_voice_loud);
+            s[1] = s[0];
+            for (int k = 0; k < 2; ++k) {
+                const enum mbe_frame_mark mark = (k == 0) ? MBE_FRAME_MARK_NONE : MBE_FRAME_MARK_ONSET_COLUMNS;
+                if (target != 1) {
+                    mbe_set_frame_mark(&s[k].prev_enh, mark);
+                }
+                if (target != 0) {
+                    mbe_set_frame_mark(&s[k].prev, mark);
+                }
+                stream_frame(&s[k], nexts[n], 0, 0);
+                memcpy(out[k], s[k].out, sizeof(s[k].out));
+                stream_frame(&s[k], voice, 0, 0);
+                memcpy(out[k] + 160, s[k].out, sizeof(s[k].out));
+            }
+            assert(float_array_bits_equal(out[0], out[1], 320));
+        }
+    }
+}
+
 /* The output a first muted frame plays over the last synthesized frame
  * `last`: its fade plus the mute noise. */
 static void
@@ -3124,6 +3162,7 @@ main(void) {
     test_rows_13_15_17_mid_voicing();
     test_row15_keeps_the_train();
     test_repeat_of_rows_13_15_17();
+    test_p25_mark_in_state();
     test_mute_fades_a_held_tone();
     test_mute_first_frame();
     test_noise_generator_through_frame_kinds();

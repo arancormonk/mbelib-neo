@@ -351,12 +351,14 @@ sounds_at_onset(const struct onset_columns* columns, double position) {
            || columns->covered[column_of(columns->reach, position)];
 }
 
-/* The columns of the current frame when its onset is read in them (a frame
- * marked MBE_FRAME_MARK_ONSET_COLUMNS after one with no voiced band), else
- * NULL. */
+/* The columns of the current frame when its onset is read in them (in P25's
+ * rendering, a frame marked MBE_FRAME_MARK_ONSET_COLUMNS after one with no
+ * voiced band), else NULL. */
 static const struct onset_columns*
-onset_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, struct onset_columns* columns) {
-    if (mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_ONSET_COLUMNS || model_has_voiced_band(prev_mp)) {
+onset_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering,
+           struct onset_columns* columns) {
+    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE || mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_ONSET_COLUMNS
+        || model_has_voiced_band(prev_mp)) {
         return NULL;
     }
     onset_columns(cur_mp, columns);
@@ -370,11 +372,14 @@ onset_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, struct onset_colum
 static const int mid_column_0[8] = {1, 0, 0, 0, 0, 0, 0, 0};
 static const int mid_columns_0_1[8] = {1, 1, 0, 0, 0, 0, 0, 0};
 
-/* The mid-frame row of the current frame (MBE_FRAME_MARK_MID_COLUMN_0,
- * MBE_FRAME_MARK_MID_COLUMNS_0_1), or NULL for a frame that takes its voicing
- * at mid-frame from the frames around it. */
+/* The mid-frame row of the current frame in the rate-33 rendering
+ * (MBE_FRAME_MARK_MID_COLUMN_0, MBE_FRAME_MARK_MID_COLUMNS_0_1), or NULL for a
+ * frame that takes its voicing at mid-frame from the frames around it. */
 static const int*
-mid_row(const mbe_parms* cur_mp) {
+mid_row(const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
+    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) {
+        return NULL;
+    }
     switch (mbe_frame_mark(cur_mp)) {
         case MBE_FRAME_MARK_MID_COLUMN_0: return mid_column_0;
         case MBE_FRAME_MARK_MID_COLUMNS_0_1: return mid_columns_0_1;
@@ -494,7 +499,8 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     model->w0 = w0;
     model->L = (harmonics < (float)shorter) ? shorter : ((harmonics > (float)longer) ? longer : (int)harmonics);
     struct onset_columns columns;
-    fill_mid_bands(prev_mp, cur_mp, late_onset, onset_rule(prev_mp, cur_mp, &columns), mid_row(cur_mp), model);
+    fill_mid_bands(prev_mp, cur_mp, late_onset, onset_rule(prev_mp, cur_mp, rendering, &columns),
+                   mid_row(cur_mp, rendering), model);
 }
 
 /* ---- the pulse train ---- */
@@ -801,10 +807,15 @@ unvoiced_subframe(const struct mbe_subframe_model* model, struct mbe_unvoiced_su
 }
 
 /* Whether the frame's voiced bands start in its own subframe: a frame so
- * marked (mbe_set_voicing_onset_delay()), whatever the frame before. */
+ * marked (mbe_set_voicing_onset_delay()), in the rate-33 rendering whatever
+ * the frame before (V/UV row 15), in the others only after a frame with no
+ * voiced band (the mark's meaning there before the rate-33 rows' reading). */
 static int
-starts_late(const mbe_parms* cur_mp) {
-    return mbe_voicing_onset_delay(cur_mp) != 0;
+starts_late(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_synthesis rendering) {
+    if (mbe_voicing_onset_delay(cur_mp) == 0) {
+        return 0;
+    }
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 || !model_has_voiced_band(prev_mp);
 }
 
 /* A state with no overlap of this rendering's: what a frame that starts from
@@ -842,7 +853,7 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
         return 0;
     }
     mbe_subframe_own_model(prev_mp, &models[0]);
-    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp), rendering, &models[1]);
+    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp, rendering), rendering, &models[1]);
     mbe_subframe_own_model(cur_mp, &models[2]);
     if (from_silence) {
         silence_model(&models[0]);
