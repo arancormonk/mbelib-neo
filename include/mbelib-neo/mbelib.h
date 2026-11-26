@@ -861,7 +861,14 @@ MBE_API void mbe_dumpImbe7200x4400Frame(const char imbe_fr[8][23]);
 MBE_API int mbe_eccImbe7200x4400C0(char imbe_fr[8][23]);
 /** @brief ECC and parameter packing for IMBE 7200x4400. */
 MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
-/** @brief Decode IMBE 4400 parameters. */
+/**
+ * @brief Decode IMBE 4400 parameters.
+ *
+ * `cur_mp->w0` is the pitch DVSI's P25 decoder plays for the pitch code b0:
+ * TIA-102.BABA's 4 pi / (b0 + 39.5) moved by at most 0.071%; L and K are
+ * TIA-102.BABA's. The ProVoice (7100x4400) process paths keep the nominal
+ * pitch.
+ */
 MBE_API int mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate IMBE 7200x4400 interleaved data. */
 MBE_API int mbe_demodulateImbe7200x4400Data(char imbe[8][23]);

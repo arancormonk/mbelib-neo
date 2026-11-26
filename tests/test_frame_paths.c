@@ -17,6 +17,10 @@
 #include "mbe_quality_frames.h"
 #include "mbelib-neo/mbelib.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static void
 assert_float_pcm_sane(const float* pcm) {
     for (int i = 0; i < 160; ++i) {
@@ -671,6 +675,7 @@ test_imbe_fundamental_roundtrip(void) {
                    == 0);
             assert(memcmp(decoded, data, sizeof(data)) == 0);
             assert(((result7200.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == (b0 > 207));
+            const mbe_parms p25 = prev;
             cur = warm_cur;
             prev = warm_prev;
             enh = warm_enh;
@@ -685,7 +690,22 @@ test_imbe_fundamental_roundtrip(void) {
             assert_same_result(&result7200, &result7100, 0);
             assert_float_pcm_sane(pcm7200);
             assert_float_pcm_sane(pcm7100);
-            assert(float_array_equal_exact(pcm7200, pcm7100, 160));
+            /* The same model but for the pitch: P25 plays DVSI's for b0,
+             * ProVoice the nominal one (L and K are the nominal pitch's for
+             * both); a repeated frame is the same. */
+            assert(p25.L == prev.L && p25.K == prev.K);
+            assert(float_array_equal_exact(p25.log2Ml, prev.log2Ml, 57));
+            if (b0 > 207) {
+                assert(float_array_equal_exact(&p25.w0, &prev.w0, 1));
+                assert(float_array_equal_exact(pcm7200, pcm7100, 160));
+            } else {
+                const float nominal = (float)(4 * M_PI) / (float)((float)b0 + 39.5);
+                /* Relative to eq 46 in float: an ulp for ProVoice (a fast-math
+                 * build may evaluate it otherwise than this test), at most
+                 * 0.071% for P25. */
+                assert(fabs((double)prev.w0 / (double)nominal - 1.0) < 1.2e-7);
+                assert(fabs((double)p25.w0 / (double)nominal - 1.0) < 7.2e-4);
+            }
         }
     }
 }
