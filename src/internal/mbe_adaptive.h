@@ -181,11 +181,12 @@ enum mbe_output_limit {
 };
 
 /* The onset delay mbe_set_voicing_onset_delay() can give a model (samples):
- * its voiced bands then start in the frame's second subframe. */
+ * its voiced bands then start in the frame's second subframe, whatever the
+ * frame before (MBE_FRAME_MARK_LATE_ONSET). */
 #define MBE_VOICING_ONSET_LATE 80
 
 /**
- * @brief Mark a decoded model whose voiced harmonics start late at an onset:
+ * @brief Mark a decoded model whose voiced harmonics start late:
  * @p late nonzero gives it MBE_VOICING_ONSET_LATE samples, zero none. The
  * mark lives in the otherwise unused element 0 of PHIl.
  */
@@ -243,7 +244,24 @@ enum mbe_frame_mark {
      * only below 505 Hz covers none: its voiced bands, and its pulse train,
      * start at mid-frame. After a voiced frame the mark changes nothing. */
     MBE_FRAME_MARK_ONSET_COLUMNS = 5,
-    /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
+    /* A rate-33 voice frame of V/UV row 17: the mid-frame model voices the
+     * 500 Hz column 0 (through mbe_ambe2450_harmonic_voiced(), at its own
+     * harmonics) and no other, whatever the two frames' voicing; the frame's
+     * own voicing is Annex B's row 17, all unvoiced. */
+    MBE_FRAME_MARK_MID_COLUMN_0 = 6,
+    /* A rate-33 voice frame of V/UV row 13: the mid-frame model voices the
+     * 500 Hz columns 0 and 1 (as MBE_FRAME_MARK_MID_COLUMN_0 does column 0)
+     * and no other; the frame's own voicing is row 13's, columns 0 to 2. */
+    MBE_FRAME_MARK_MID_COLUMNS_0_1 = 7,
+    /* The mid-frame model voices no band, whatever the frame before: the
+     * voiced bands start MBE_VOICING_ONSET_LATE samples late (rate-33 V/UV
+     * row 15; after a voiced frame the pulse train runs on through the
+     * unvoiced mid-frame, at the previous frame's pitch into it and this
+     * frame's out of it). The rate-33 rows 13, 15 and 17 give each half of
+     * the frame its own voicing (docs/dvsi-parity.md, "Rate 33: V/UV
+     * vectors"); a lost frame that repeats such a frame plays the repeated
+     * model's own voicing through (the rate-33 path clears these marks on a
+     * repeat). */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };
 

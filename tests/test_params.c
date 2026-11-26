@@ -1322,8 +1322,9 @@ same_frame_bits(const float a[160], const float b[160]) {
 }
 
 /* Rate-33 voicing as DVSI's decoders render it: each voiced 500 Hz column
- * reaches 250 Hz into an unvoiced column below it, row 17 voices column 0, and
- * b1 15 marks a late onset. */
+ * reaches 250 Hz into an unvoiced column below it; row 17's own voicing is
+ * Annex B's, all unvoiced; and rows 13, 15 and 17 carry the marks that give
+ * their first half its voicing (columns 0-1, none, column 0). */
 static void
 test_ambe2450_vuv_rendering(void) {
     /* Row 7 leaves column 5 (2500-3000 Hz) unvoiced and voices column 6. */
@@ -1333,9 +1334,7 @@ test_ambe2450_vuv_rendering(void) {
     assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[7], 27, f0) == 0); /* 2727 Hz */
     assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[7], 28, f0) == 1); /* 2828 Hz: within 250 Hz of column 6 */
     assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[16], 1, f0) == 0);
-    assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[17], 4, f0) == 1); /* 404 Hz, column 0 */
-    assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[17], 5, f0) == 0); /* 505 Hz */
-    for (int row = 18; row < 32; ++row) {
+    for (int row = 17; row < 32; ++row) {
         for (int l = 1; l <= 56; ++l) {
             assert(mbe_ambe2450_harmonic_voiced(AmbeVuv[row], l, 0.012f) == 0);
         }
@@ -1349,11 +1348,28 @@ test_ambe2450_vuv_rendering(void) {
         mbe_ambe2450_pack(b, ambe_d);
         assert(mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev) == MBE_AMBE2450_FRAME_VOICE);
         assert(mbe_voicing_onset_delay(&cur) == ((b1 == MBE_AMBE2450_VUV_LATE_ONSET) ? MBE_VOICING_ONSET_LATE : 0));
+        enum mbe_frame_mark mark = MBE_FRAME_MARK_NONE;
+        if (b1 == 13) {
+            mark = MBE_FRAME_MARK_MID_COLUMNS_0_1;
+        } else if (b1 == 15) {
+            mark = MBE_FRAME_MARK_LATE_ONSET;
+        } else if (b1 == 17) {
+            mark = MBE_FRAME_MARK_MID_COLUMN_0;
+        }
+        assert(mbe_frame_mark(&cur) == mark);
         int voiced = 0;
         for (int l = 1; l <= cur.L; ++l) {
             voiced += cur.Vl[l];
         }
-        assert((voiced > 0) == (b1 <= 15 || b1 == 17));
+        assert((voiced > 0) == (b1 <= 15));
+        if (b1 == 17) {
+            /* Every band unvoiced, its amplitude at the unvoiced scale. */
+            const double unvoiced = 0.2046 / sqrt((double)cur.w0);
+            for (int l = 1; l <= cur.L; ++l) {
+                const double want = unvoiced * exp2((double)cur.log2Ml[l]);
+                assert(fabs((double)cur.Ml[l] / want - 1.0) < 1e-5);
+            }
+        }
     }
 }
 

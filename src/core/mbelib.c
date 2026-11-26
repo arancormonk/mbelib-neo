@@ -1354,12 +1354,14 @@ mbe_frame_mark(const mbe_parms* mp) {
     uint32_t bits;
     memcpy(&bits, &mp->PHIl[0], sizeof(bits));
     switch (bits) {
-        case UINT32_C(0x3F800000): return MBE_FRAME_MARK_PITCH_CARRIES; /* 1.0f */
-        case UINT32_C(0x40000000): return MBE_FRAME_MARK_PITCH_ABSENT;  /* 2.0f */
-        case UINT32_C(0x40400000): return MBE_FRAME_MARK_PREVIOUS_HELD; /* 3.0f */
-        case UINT32_C(0x40800000): return MBE_FRAME_MARK_TONE;          /* 4.0f */
-        case UINT32_C(0x40A00000): return MBE_FRAME_MARK_ONSET_COLUMNS; /* 5.0f */
-        case UINT32_C(0x42A00000): return MBE_FRAME_MARK_LATE_ONSET;    /* 80.0f */
+        case UINT32_C(0x3F800000): return MBE_FRAME_MARK_PITCH_CARRIES;   /* 1.0f */
+        case UINT32_C(0x40000000): return MBE_FRAME_MARK_PITCH_ABSENT;    /* 2.0f */
+        case UINT32_C(0x40400000): return MBE_FRAME_MARK_PREVIOUS_HELD;   /* 3.0f */
+        case UINT32_C(0x40800000): return MBE_FRAME_MARK_TONE;            /* 4.0f */
+        case UINT32_C(0x40A00000): return MBE_FRAME_MARK_ONSET_COLUMNS;   /* 5.0f */
+        case UINT32_C(0x40C00000): return MBE_FRAME_MARK_MID_COLUMN_0;    /* 6.0f */
+        case UINT32_C(0x40E00000): return MBE_FRAME_MARK_MID_COLUMNS_0_1; /* 7.0f */
+        case UINT32_C(0x42A00000): return MBE_FRAME_MARK_LATE_ONSET;      /* 80.0f */
         default: return MBE_FRAME_MARK_NONE;
     }
 }

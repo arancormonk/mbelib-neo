@@ -54,12 +54,16 @@ mbe_ambe2450_harmonic_count(int b0) {
 int mbe_ambe2450_harmonic_voiced(const int row[8], int l, float f0);
 
 /*
- * The voicing-onset delay of a decoded rate-33 model, in samples (see
- * mbe_voicing_onset_delay()): DVSI's decoders start the voiced harmonics of a
- * b1 15 frame that follows an unvoiced one half a frame later than those of
- * any other voiced row.
+ * The V/UV rows whose first half DVSI's decoders voice otherwise than the
+ * frames around it say (docs/dvsi-parity.md, "Rate 33: V/UV vectors"): a b1
+ * 15 frame voices no band in its first half, whatever the frame before
+ * (MBE_FRAME_MARK_LATE_ONSET, mbe_voicing_onset_delay()); b1 13 only the
+ * 500 Hz columns 0 and 1 (MBE_FRAME_MARK_MID_COLUMNS_0_1); b1 17, whose own
+ * voicing is all unvoiced, only column 0 (MBE_FRAME_MARK_MID_COLUMN_0).
  */
-#define MBE_AMBE2450_VUV_LATE_ONSET 15
+#define MBE_AMBE2450_VUV_LATE_ONSET      15
+#define MBE_AMBE2450_VUV_MID_COLUMNS_0_1 13
+#define MBE_AMBE2450_VUV_MID_COLUMN_0    17
 
 /* Voice code nearest to f0 (cycles per sample) in log2, as DVSI's encoder
  * quantizes; clamped to 0..119. */

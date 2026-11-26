@@ -342,9 +342,12 @@ test_onset_starts_the_train(void) {
     assert(early > 0.0 && late > early);
 }
 
-/* A frame marked as a late onset after a frame with no voiced band starts its
- * voiced bands in its second subframe: no pulse before sample 80. After a
- * voiced frame the mark changes nothing. */
+/* A frame marked as a late onset (rate 33's V/UV row 15) starts its voiced
+ * bands in its second subframe, whatever the frame before: after a frame with
+ * no voiced band no pulse comes before sample 80; after a voiced frame the
+ * mid-frame model voices nothing too, and the pulse train runs on, not
+ * restarted, through the first subframe at the previous frame's pitch and
+ * through the second at this frame's. */
 static void
 test_late_onset(void) {
     float out[160], plain[160];
@@ -362,11 +365,20 @@ test_late_onset(void) {
     }
     assert(out[100] != 0.0f);
 
+    /* After a voiced frame at 200 Hz. */
+    mbe_parms before;
+    set_model(&before, 200.0, 18, 18, 16.0f);
+    next_frame(out, &last, &before);
+    const double phase = pulse_phase(&last);
     mbe_parms marked = last, unmarked = last;
     next_frame(out, &marked, &voiced);
+    assert(fabs(cycles_apart(pulse_phase(&marked), phase + cycles_of(200.0, 80.0) + cycles_of(230.0, 80.0))) < 1e-5);
+    struct mbe_subframe_model mid;
+    mbe_subframe_mid_model(&last, &voiced, 1, MBE_VOICED_SYNTHESIS_DVSI, &mid);
+    assert(!mid.any_voiced);
     mbe_set_frame_mark(&voiced, MBE_FRAME_MARK_NONE);
     next_frame(plain, &unmarked, &voiced);
-    assert(same_bits(out, plain, 160));
+    assert(!same_bits(out, plain, 160));
 }
 
 /* Through voiced speech the pitch moves linearly from one model's to the
@@ -639,9 +651,11 @@ reference_onset_sounds(const mbe_parms* mp, double hz) {
  * voicing holds at mid-frame (the previous frame's when this one has no voiced
  * band and is marked as lacking a pitch, and the previous one is voiced at its
  * harmonic at or next above 505 Hz; else this frame's); a frame marked as a
- * late onset after one with no voiced band voices none; a frame marked for the
+ * late onset voices none, whatever the frame before; a frame marked for the
  * onset columns after one with no voiced band voices only the harmonics the
- * P25 onset rule sounds. */
+ * P25 onset rule sounds; and a frame of rate 33's V/UV row 17 or 13 voices the
+ * harmonics under Nyquist in the 500 Hz columns below 1 or 2 (by the
+ * frequency of each, or of 250 Hz above it), whatever the voicing around. */
 static void
 reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, int L, unsigned char voiced[57]) {
     const enum mbe_frame_mark mark = mbe_frame_mark(cur);
@@ -655,12 +669,19 @@ reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, in
         const double w = w0 * l;
         const int nearest = (int)fmin(fmax(floor(w / (double)source->w0 + 0.5), 1.0), (double)source->L);
         int state = (source->Vl[nearest] == 0) ? 0 : ((source->Vl[nearest] == 1) ? 1 : 2);
-        if (state == 1 && onset && mark == MBE_FRAME_MARK_LATE_ONSET) {
+        if (state == 1 && mark == MBE_FRAME_MARK_LATE_ONSET) {
             state = 0;
         }
         if (state == 1 && onset && mark == MBE_FRAME_MARK_ONSET_COLUMNS
             && !reference_onset_sounds(cur, w * 8000.0 / (2.0 * M_PI))) {
             state = 0;
+        }
+        const int columns =
+            (mark == MBE_FRAME_MARK_MID_COLUMN_0) ? 1 : ((mark == MBE_FRAME_MARK_MID_COLUMNS_0_1) ? 2 : 0);
+        if (columns > 0 && state != 2) {
+            const double hz = w * 8000.0 / (2.0 * M_PI);
+            state = (w < M_PI)
+                    && (fmin(floor(hz / 500.0), 7.0) < columns || fmin(floor((hz + 250.0) / 500.0), 7.0) < columns);
         }
         voiced[l] = (unsigned char)state;
     }
@@ -702,7 +723,7 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         {180.0, 20, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* onset at the mean of the two pitches */
         {250.0, 14, 0, 8.0f, MBE_FRAME_MARK_PITCH_ABSENT, 0},    /* the voicing before lasts to mid-frame */
         {150.0, 24, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* and the train goes on */
-        {150.0, 24, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0},     /* a mark that needs an unvoiced frame before it */
+        {150.0, 24, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0},     /* after a voiced frame too: the train runs on */
         {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},             /* voicing ends with the frame's start */
         {127.5, 28, 23, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* a P25 onset: harmonics 20-23 from mid-frame */
         {127.5, 28, 23, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* inside the run the mark changes nothing */
@@ -710,6 +731,14 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         {160.0, 25, 3, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* harmonics 1-3 to 480 Hz: all from mid-frame */
         {100.0, 30, 0, 8.0f, MBE_FRAME_MARK_PITCH_CARRIES, 0},
         {205.0, 17, 17, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* at the mean pitch: those under 3505 Hz */
+        {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},
+        {170.0, 22, 8, 16.0f, MBE_FRAME_MARK_NONE, 0},
+        {165.0, 23, 0, 16.0f, MBE_FRAME_MARK_MID_COLUMN_0, 0},    /* rate-33 row 17: column 0 at mid-frame, */
+        {150.0, 24, 9, 16.0f, MBE_FRAME_MARK_MID_COLUMNS_0_1, 0}, /* row 13 after it: columns 0-1, the train anew */
+        {150.0, 24, 9, 16.0f, MBE_FRAME_MARK_MID_COLUMNS_0_1, 0}, /* and inside a voiced run */
+        {140.0, 26, 10, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0},     /* row 15 after a voiced frame */
+        {130.0, 28, 0, 8.0f, MBE_FRAME_MARK_MID_COLUMN_0, 0},
+        {125.0, 29, 10, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0}, /* row 15 after row 17: a new train at mid-frame */
         {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},
         {120.0, 28, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0}, /* voiced bands from mid-frame */
         {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE, 0},        /* the longest period: responses span frames */
@@ -763,7 +792,7 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         copy_amplitudes(&cur, &model);
         mbe_set_frame_mark(&cur, frames[f].mark);
         mbe_subframe_own_model(&last, &models[0]);
-        const int late = frames[f].mark == MBE_FRAME_MARK_LATE_ONSET && !models[0].any_voiced;
+        const int late = frames[f].mark == MBE_FRAME_MARK_LATE_ONSET;
         mbe_subframe_mid_model(&last, &cur, late, rendering, &models[1]);
         mbe_subframe_own_model(&cur, &models[2]);
         /* The mid-frame pitch, the library's within float rounding, is then the
@@ -1558,7 +1587,8 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
 /* Advancing a frame unrendered leaves the pulse train, the phases and the
  * noise generator exactly where rendering it does, through the frame marks
  * that shape the mid-frame model: onsets read in columns, before and inside a
- * voiced run, and late onsets. */
+ * voiced run, late onsets after unvoiced and voiced frames, and the mid-frame
+ * columns of rate 33's rows 13 and 17. */
 static void
 test_advance_follows_the_marks(enum mbe_voiced_synthesis rendering) {
     static const struct {
@@ -1575,6 +1605,12 @@ test_advance_follows_the_marks(enum mbe_voiced_synthesis rendering) {
         {90.0, 38, 0, MBE_FRAME_MARK_NONE},
         {150.0, 24, 3, MBE_FRAME_MARK_LATE_ONSET},
         {150.0, 24, 20, MBE_FRAME_MARK_NONE},
+        {170.0, 22, 8, MBE_FRAME_MARK_NONE},
+        {165.0, 23, 0, MBE_FRAME_MARK_MID_COLUMN_0},
+        {150.0, 24, 9, MBE_FRAME_MARK_MID_COLUMNS_0_1},
+        {140.0, 26, 10, MBE_FRAME_MARK_LATE_ONSET},
+        {130.0, 28, 0, MBE_FRAME_MARK_MID_COLUMN_0},
+        {125.0, 29, 10, MBE_FRAME_MARK_LATE_ONSET},
     };
 
     mbe_parms last, model;

@@ -1557,6 +1557,136 @@ stream_settled(struct stream* s, const int last[9]) {
     stream_frame_b(s, last, 0, 0);
 }
 
+/* The pulse phase a synthesized frame leaves (noiseOverlap after the pulse
+ * count and the pulses kept; mbe_subframe.c). */
+static double
+pulse_phase_of(const mbe_parms* mp) {
+    return (double)mp->noiseOverlap[1 + MBE_PULSE_HISTORY];
+}
+
+/* a - b in cycles, wrapped to [-0.5, 0.5). */
+static double
+cycles_between(double a, double b) {
+    const double d = a - b;
+    return d - floor(d + 0.5);
+}
+
+/* Cycles of pitch w0 (radians per sample) over n samples. */
+static double
+cycles_over(float w0, double n) {
+    return (double)w0 * n / (2.0 * M_PI);
+}
+
+/* The rows whose halves DVSI's decoder voices apart, as pitch code 60 frames. */
+static const int k_vuv_row13[9] = {60, 13, 20, 200, 90, 17, 11, 3, 6};
+static const int k_vuv_row15[9] = {60, 15, 20, 200, 90, 17, 11, 3, 6};
+static const int k_vuv_row17[9] = {60, 17, 20, 200, 90, 17, 11, 3, 6};
+
+/*
+ * V/UV rows 13, 15 and 17 through the decoder: the frame's own voicing is
+ * row 13's and 15's columns 0-2 and row 17's none (Annex B), and its
+ * mid-frame model voices columns 0-1 (row 13), none (row 15) and column 0
+ * (row 17), at the mid-frame model's own harmonics (a harmonic voiced when its
+ * frequency, or 250 Hz above it, lies in a voiced column), after a voiced
+ * frame and after an unvoiced one alike; every other row takes its voicing
+ * at mid-frame from the frames around it (row 10, row 13's own pattern, voices
+ * columns 0-2 there).
+ */
+static void
+test_rows_13_15_17_mid_voicing(void) {
+    static const int rows[4] = {13, 15, 17, 10};
+    static const int before_rows[2] = {3, 16};
+    for (int r = 0; r < 4; ++r) {
+        for (int k = 0; k < 2; ++k) {
+            mbe_parms prev, cur, history, enhanced;
+            int b[9] = {60, before_rows[k], 20, 200, 90, 17, 11, 3, 6};
+            char d[49];
+            mbe_initMbeParms(&prev, &history, &enhanced);
+            pack_b(d, b);
+            assert(mbe_decodeAmbe2450Parms(d, &prev, &history) == MBE_AMBE2450_FRAME_VOICE);
+            b[0] = 56;
+            b[1] = rows[r];
+            pack_b(d, b);
+            cur = prev;
+            assert(mbe_decodeAmbe2450Parms(d, &cur, &history) == MBE_AMBE2450_FRAME_VOICE);
+            const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
+            for (int l = 1; l <= cur.L; ++l) {
+                const int own = (rows[r] != 17) && ((double)l * f0 < 1500.0);
+                assert(cur.Vl[l] == own);
+            }
+            struct mbe_subframe_model mid;
+            mbe_subframe_mid_model(&prev, &cur, mbe_voicing_onset_delay(&cur) != 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+                                   &mid);
+            const double mid_f0 = (double)mid.w0 * 8000.0 / (2.0 * M_PI);
+            const double top = (rows[r] == 13) ? 1000.0 : ((rows[r] == 17) ? 500.0 : 0.0);
+            for (int l = 1; l <= mid.L; ++l) {
+                const double hz = (double)l * mid_f0;
+                assert(fabs(hz - 500.0) > 2.0 && fabs(hz - 1000.0) > 2.0 && fabs(hz - 1500.0) > 2.0);
+                if (rows[r] == 10) {
+                    /* From this frame's voicing (or, after a voiced frame, its nearest harmonic's). */
+                    const int nearest = (int)floor((hz / f0) + 0.5);
+                    assert(mid.voiced[l] == ((nearest <= cur.L) ? cur.Vl[nearest < 1 ? 1 : nearest] : cur.Vl[cur.L]));
+                } else {
+                    assert(mid.voiced[l] == (hz < top));
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Row 15 after a voiced frame: the pulse train is not restarted; with no
+ * voiced band at mid-frame it runs through the first subframe at the previous
+ * frame's pitch and through the second at this frame's. After a row-17 frame
+ * (no voiced band of its own) a row-15 frame starts a new train at mid-frame.
+ */
+static void
+test_row15_keeps_the_train(void) {
+    struct stream s;
+    stream_settled(&s, k_voice_loud);
+    const double before = pulse_phase_of(&s.prev_enh);
+    const float last = s.prev_enh.w0;
+    stream_frame_b(&s, k_vuv_row15, 0, 0);
+    assert(mbe_frame_mark(&s.prev_enh) == MBE_FRAME_MARK_LATE_ONSET);
+    const double want = before + cycles_over(last, 80.0) + cycles_over(s.prev_enh.w0, 80.0);
+    assert(fabs(cycles_between(pulse_phase_of(&s.prev_enh), want)) < 1e-4);
+
+    stream_settled(&s, k_voice_loud);
+    stream_frame_b(&s, k_vuv_row17, 0, 0);
+    assert(mbe_frame_mark(&s.prev_enh) == MBE_FRAME_MARK_MID_COLUMN_0);
+    stream_frame_b(&s, k_vuv_row15, 0, 0);
+    assert(fabs(cycles_between(pulse_phase_of(&s.prev_enh), cycles_over(s.prev_enh.w0, 80.0))) < 1e-4);
+}
+
+/*
+ * A lost frame after a frame of row 13, 15 or 17 repeats its model with the
+ * model's own voicing through the frame: the repeat plays as the same model
+ * without the row's mark, which the repeat does not keep, and not as the
+ * row's first half would play it.
+ */
+static void
+test_repeat_of_rows_13_15_17(void) {
+    const int* rows[3] = {k_vuv_row13, k_vuv_row15, k_vuv_row17};
+    char erasure[49];
+    pack_b(erasure, k_erasure);
+    for (int r = 0; r < 3; ++r) {
+        struct stream s;
+        float want[160], marked[160];
+        stream_settled(&s, k_voice_loud);
+        stream_frame_b(&s, rows[r], 0, 0);
+        assert(mbe_frame_mark(&s.prev_enh) != MBE_FRAME_MARK_NONE);
+        struct stream before = s;
+        repeat_reference_out(marked, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
+        mbe_set_frame_mark(&before.prev_enh, MBE_FRAME_MARK_NONE);
+        repeat_reference(want, &before, MBE_SYNTHESIS_CONTINUES);
+        stream_frame(&s, erasure, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_REPEAT) && !has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+        assert(close_to(s.out, want, 0, 160));
+        assert(!close_to(s.out, marked, 0, 160));
+        assert(mbe_frame_mark(&s.prev_enh) == MBE_FRAME_MARK_NONE);
+    }
+}
+
 /* The output a first muted frame plays over the last synthesized frame
  * `last`: its fade plus the mute noise. */
 static void
@@ -1682,8 +1812,10 @@ test_mute_onsets(void) {
  * full level into the second half: that half is the mute noise alone, and
  * the first is the fade against the reference plus the noise, never above the
  * repeats' peak plus the noise. The same after a V/UV row-15 frame, whose
- * late-onset mark the fade does not depend on either; the kept model keeps
- * its own mark.
+ * late-onset mark the fade does not depend on either. The kept model keeps a
+ * silence frame's mark; a row-15 frame's goes with no repeat of it (a repeat
+ * plays the repeated model's own voicing through), so after the erasures the
+ * kept model carries none.
  */
 static void
 test_mute_after_silence_frame(void) {
@@ -1728,10 +1860,10 @@ test_mute_after_silence_frame(void) {
         assert(noise_span_matches(s.out, noise));
         assert(peak_abs(s.out) * 7.0f <= (repeat_peak * 7.0f) + MBE_AMBE_MUTE_NOISE_AMPLITUDE + 1e-3f);
         assert(peak_abs(s.out) * 7.0f > 2.0f * MBE_AMBE_MUTE_NOISE_AMPLITUDE);
-        /* The kept model keeps its own mark. */
+        /* The kept model keeps a silence frame's mark, not a row's. */
         if (!by_rate) {
-            assert(float_bits_equal(s.prev_enh.PHIl[0], mark));
             assert(float_bits_equal(mark, row15 ? 80.0f : k_mark_previous_held));
+            assert(float_bits_equal(s.prev_enh.PHIl[0], row15 ? 0.0f : mark));
         }
     }
 }
@@ -2989,6 +3121,9 @@ main(void) {
     test_mute_fades_the_last_frame();
     test_mute_onsets();
     test_mute_after_silence_frame();
+    test_rows_13_15_17_mid_voicing();
+    test_row15_keeps_the_train();
+    test_repeat_of_rows_13_15_17();
     test_mute_fades_a_held_tone();
     test_mute_first_frame();
     test_noise_generator_through_frame_kinds();
