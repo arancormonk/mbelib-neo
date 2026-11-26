@@ -314,7 +314,8 @@ void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_
  * @brief Render 160 samples of an AMBE 3600x2450 tone, continuing the tone phases in @p mp.
  *
  * mbe_synthesizeTonef() without the frame's bits, for a tone known by its
- * fields. An ID with no tone renders silence. Limited, it equals
+ * fields. Both play the frequencies DVSI's decoders play for the ID
+ * (mbe_tone_played_steps(), mbe_tone.h), not Table 9's nominal ones. An ID with no tone renders silence. Limited, it equals
  * mbe_synthesizeTonef() bit for bit; unlimited, it is the same samples before
  * their limit, for a caller that fades or mixes the tone and limits the
  * result. The oscillator phases it leaves are the same either way.
@@ -326,6 +327,15 @@ void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_
  * @param output Whether the samples are limited.
  */
 void mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad, enum mbe_output_limit output);
+
+/**
+ * @brief Set the tone phases in @p mp to start an AMBE+2 tone as DVSI's decoders
+ * start a tone after a frame that was not a tone frame: a fresh pulse train
+ * from the frame's start (mbelib.c, tone_start_phase()). The next
+ * mbe_renderToneAmbe2450f() of that ID then plays the tone from there. An ID
+ * with no tone leaves them as they are.
+ */
+void mbe_startToneAmbe2450(mbe_parms* mp, int id);
 
 /**
  * @brief Render 160 samples of a D-STAR tone, continuing the tone phases in @p mp.
@@ -347,6 +357,9 @@ void mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume)
  * @param ramp Samples of the level ramp, 1..160 (anything else: none).
  */
 void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int from_volume, int volume, int ramp);
+
+/** @brief mbe_startToneAmbe2450() for a D-STAR tone index. */
+void mbe_startToneDstar(mbe_parms* mp, int index);
 
 /**
  * Mute-noise amplitude of TIA-102.BABA 7.8 (IMBE) and TIA-102.BABA-1 5.7

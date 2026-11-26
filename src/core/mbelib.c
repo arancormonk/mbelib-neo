@@ -894,16 +894,17 @@ mbe_clipFloatBuffer(float* samples, int count) {
 
 #ifndef DISABLE_AMBE_TONES
 static int
-finite_frequency(float value) {
+finite_gain(float value) {
     uint32_t bits;
     memcpy(&bits, &value, sizeof(bits));
     return (bits & UINT32_C(0x7fffffff)) <= UINT32_C(0x7f7fffff);
 }
 
+/* A component of m steps of 2^-19 cycle per sample (mbe_tone_played_steps())
+ * as the 32-bit phase step of the tone oscillators: exact. */
 static uint32_t
-frequency_increment(float frequency) {
-    const double fraction = fmod((double)frequency, 8000.0) / 8000.0;
-    return (uint32_t)(uint64_t)floor(fraction * 4294967296.0 + 0.5);
+tone_phase_step(unsigned m) {
+    return (uint32_t)(m << (32 - MBE_TONE_GRID_BITS));
 }
 
 static float
@@ -919,30 +920,28 @@ mbe_toneAmplitude(double level_db) {
 
 /* A tone whose gain moves linearly from from_gain to gain over the first
  * `ramp` samples (none for 0), each sample limited after the gain is applied,
- * unless the caller fades or mixes the tone and limits the result. The sample
- * loop is the same in both modes: it limits every sample as it computes it
- * (the limiter's classification keeps the loop scalar, so fast-math cannot
- * vectorize it with other sine code) and keeps the unlimited sample beside
- * it, and only after the loop is the unlimited frame chosen. So the limited
- * rendering is computed exactly as before, and limiting the unlimited one
- * gives it bit for bit. */
+ * unless the caller fades or mixes the tone and limits the result. The two
+ * oscillators advance by step1 and step2 a sample (one component when the two
+ * are equal or step2 is 0) from the phases mp carries. The sample loop is the
+ * same in both modes: it limits every sample as it computes it (the limiter's
+ * classification keeps the loop scalar, so fast-math cannot vectorize it with
+ * other sine code) and keeps the unlimited sample beside it, and only after
+ * the loop is the unlimited frame chosen. So the limited rendering is computed
+ * exactly as before, and limiting the unlimited one gives it bit for bit. */
 static void
-mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_gain, float gain, int ramp,
+mbe_renderToneRampf(float* out, mbe_parms* mp, uint32_t step1, uint32_t step2, float from_gain, float gain, int ramp,
                     enum mbe_output_limit output) {
     if (out == NULL) {
         return;
     }
-    if (mp == NULL || !finite_frequency(f1) || !finite_frequency(f2) || !finite_frequency(gain)
-        || !finite_frequency(from_gain) || f1 <= 0.0f) {
+    if (mp == NULL || !finite_gain(gain) || !finite_gain(from_gain) || step1 == 0u) {
         memset(out, 0, 160 * sizeof(*out));
         return;
     }
-    const int dual = f2 > 0.0f && fabsf(f2 - f1) > 1.0e-6f;
+    const int dual = step2 != 0u && step2 != step1;
     uint32_t phase1;
     memcpy(&phase1, &mp->swn, sizeof(phase1));
     uint32_t phase2 = mp->tonePhase;
-    const uint32_t step1 = frequency_increment(f1);
-    const uint32_t step2 = dual ? frequency_increment(f2) : 0;
     float unlimited[160];
     for (int n = 0; n < 160; ++n) {
         const float g = (n < ramp) ? from_gain + ((gain - from_gain) * ((float)n / (float)ramp)) : gain;
@@ -963,8 +962,57 @@ mbe_renderToneRampf(float* out, mbe_parms* mp, float f1, float f2, float from_ga
 }
 
 static void
-mbe_renderTonef(float* out, mbe_parms* mp, float f1, float f2, float gain, enum mbe_output_limit output) {
-    mbe_renderToneRampf(out, mp, f1, f2, gain, gain, 0, output);
+mbe_renderTonef(float* out, mbe_parms* mp, uint32_t step1, uint32_t step2, float gain, enum mbe_output_limit output) {
+    mbe_renderToneRampf(out, mp, step1, step2, gain, gain, 0, output);
+}
+
+/*
+ * The oscillator phase that starts a component of m steps as DVSI's decoders
+ * start a tone after a frame that was not a tone frame: as a fresh pulse
+ * train from the frame's start, so that sample n (0..159) of the frame is
+ * cos(2 pi F (n - MBE_PULSE_PEAK) + p), F the frequency in cycles per sample
+ * and p the output high-pass's phase at it (mbe_low_band_phase()). Measured on
+ * DVSI's rate-33 and D-STAR tone vectors: the phase is the same at every such
+ * onset of a tone within 0.0002 cycle, and within 0.005 cycle of this over the
+ * 64 DTMF and KNOX components. The renderer plays phase_sine() of the phase
+ * after adding the step, -cos of it: the phase before sample 0 is
+ * step (-1 - MBE_PULSE_PEAK) + 2^32 (1/2 + p / (2 pi)).
+ */
+static uint32_t
+tone_start_phase(unsigned m) {
+    const uint32_t step = tone_phase_step(m);
+    const float hz = (float)((double)m * (8000.0 / (double)(1u << MBE_TONE_GRID_BITS)));
+    const double turn = 0.5 + ((double)mbe_low_band_phase(hz) / (2.0 * M_PI));
+    const uint32_t offset = (uint32_t)(uint64_t)floor(((turn - floor(turn)) * 4294967296.0) + 0.5);
+    return offset - (step * (uint32_t)(1 + MBE_PULSE_PEAK));
+}
+
+static void
+mbe_startTone(mbe_parms* mp, unsigned first, unsigned second) {
+    const uint32_t phase1 = tone_start_phase(first);
+    memcpy(&mp->swn, &phase1, sizeof(phase1));
+    mp->tonePhase = (second != 0u && second != first) ? tone_start_phase(second) : 0u;
+}
+
+/* The two oscillator steps of an AMBE+2 tone ID (the upper component first, as
+ * Table 9's lookup gives the nominal pair); 0 if it has none. */
+static int
+mbe_tone_steps_ambe2450(int id, uint32_t* step1, uint32_t* step2) {
+    unsigned upper, lower;
+    const int found = mbe_tone_played_steps(id, &upper, &lower);
+    *step1 = tone_phase_step(upper);
+    *step2 = tone_phase_step(lower);
+    return found;
+}
+
+/* The two oscillator steps of a D-STAR tone index, in its lookup's order. */
+static int
+mbe_tone_steps_dstar(int index, uint32_t* step1, uint32_t* step2) {
+    unsigned first, second;
+    const int found = mbe_tone_dstar_played_steps(index, &first, &second);
+    *step1 = tone_phase_step(first);
+    *step2 = tone_phase_step(second);
+    return found;
 }
 #endif
 
@@ -1020,18 +1068,20 @@ mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp) {
     ID3 = ((u2 & 0x7f) << 1) + ((u3 >> 13) & 0x1);
     ID4 = ((u3 & 0x1fe0) >> 5);
 
-    float freq1, freq2;
+    uint32_t step1, step2;
     (void)ID0;
     (void)ID2;
     (void)ID3; /* parsed for potential validation */
     (void)ID4;
 
-    if (!mbe_tone_lookup_freqs(ID1, &freq1, &freq2)) {
+    /* The frequencies DVSI's decoders play for the ID (mbe_tone_played_steps()),
+     * continuing the phases cur_mp carries: this call has no frame history. */
+    if (!mbe_tone_steps_ambe2450(ID1, &step1, &step2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
 
-    mbe_renderTonef(aout_buf, cur_mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)),
+    mbe_renderTonef(aout_buf, cur_mp, step1, step2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(AD)),
                     MBE_OUTPUT_LIMITED);
 #endif
 }
@@ -1045,12 +1095,25 @@ mbe_renderToneAmbe2450f(float* aout_buf, mbe_parms* mp, int id, int ad, enum mbe
     (void)output;
     mbe_synthesizeSilencef(aout_buf);
 #else
-    float freq1, freq2;
-    if (!mbe_tone_lookup_freqs(id, &freq1, &freq2)) {
+    uint32_t step1, step2;
+    if (!mbe_tone_steps_ambe2450(id, &step1, &step2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)), output);
+    mbe_renderTonef(aout_buf, mp, step1, step2, mbe_toneAmplitude(mbe_tone_ambe2450_level_db(ad)), output);
+#endif
+}
+
+void
+mbe_startToneAmbe2450(mbe_parms* mp, int id) {
+#ifdef DISABLE_AMBE_TONES
+    (void)mp;
+    (void)id;
+#else
+    unsigned upper, lower;
+    if (mp != NULL && mbe_tone_played_steps(id, &upper, &lower)) {
+        mbe_startTone(mp, upper, lower);
+    }
 #endif
 }
 
@@ -1086,13 +1149,13 @@ mbe_renderToneDstarf(float* aout_buf, mbe_parms* mp, int index, int volume) {
     (void)volume;
     mbe_synthesizeSilencef(aout_buf);
 #else
-    float freq1 = 0, freq2 = 0;
+    uint32_t step1, step2;
 
-    if (!mp || !mbe_tone_lookup_dstar_freqs(index, &freq1, &freq2)) {
+    if (!mp || !mbe_tone_steps_dstar(index, &step1, &step2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderTonef(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), MBE_OUTPUT_LIMITED);
+    mbe_renderTonef(aout_buf, mp, step1, step2, mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), MBE_OUTPUT_LIMITED);
 #endif
 }
 
@@ -1106,15 +1169,28 @@ mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int from_vol
     (void)ramp;
     mbe_synthesizeSilencef(aout_buf);
 #else
-    float freq1 = 0, freq2 = 0;
+    uint32_t step1, step2;
 
-    if (!mp || !mbe_tone_lookup_dstar_freqs(index, &freq1, &freq2)) {
+    if (!mp || !mbe_tone_steps_dstar(index, &step1, &step2)) {
         mbe_synthesizeSilencef(aout_buf);
         return;
     }
-    mbe_renderToneRampf(aout_buf, mp, freq1, freq2, mbe_toneAmplitude(mbe_tone_dstar_level_db(from_volume)),
+    mbe_renderToneRampf(aout_buf, mp, step1, step2, mbe_toneAmplitude(mbe_tone_dstar_level_db(from_volume)),
                         mbe_toneAmplitude(mbe_tone_dstar_level_db(volume)), (ramp > 0 && ramp <= 160) ? ramp : 0,
                         MBE_OUTPUT_LIMITED);
+#endif
+}
+
+void
+mbe_startToneDstar(mbe_parms* mp, int index) {
+#ifdef DISABLE_AMBE_TONES
+    (void)mp;
+    (void)index;
+#else
+    unsigned first, second;
+    if (mp != NULL && mbe_tone_dstar_played_steps(index, &first, &second)) {
+        mbe_startTone(mp, first, second);
+    }
 #endif
 }
 

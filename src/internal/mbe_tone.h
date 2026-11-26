@@ -74,6 +74,92 @@ mbe_tone_lookup_dstar_freqs(int tone_id, float* freq1, float* freq2) {
     return (tone_id <= 122) && mbe_tone_lookup_freqs(tone_id, freq1, freq2);
 }
 
+/*
+ * The frequencies DVSI's decoders play for a tone frame, which are not Table
+ * 9's nominal ones: DVSI's AMBE-3000 plays a tone through its voiced
+ * synthesizer as a model of one or two harmonics of a fundamental, the tone
+ * frame parameters of TIA-102.BABA-1 Annex J (f0, l1, l2 per tone index; clause
+ * 8 turns a tone frame into such a model). Measured on DVSI's rate-33 and
+ * D-STAR decodes of its tone vectors (both codecs play the same values), the
+ * fundamentals lie on a grid of 2^-19 cycle per sample to 0.003 of a step.
+ * Below, a component's frequency is counted in those steps: Annex J's f0 on
+ * that grid, round(f0 * 2^19 / 8000), for 34 of the 36 dual tones; IDs 145 and
+ * 147 are DVSI's own (9883 = 150.80 Hz and 5667 = 86.47 Hz, where the text
+ * prints 150.89 and 86.5). So DTMF "1" (ID 129) plays 693.909 + 1214.340 Hz,
+ * where Table 9 has 697 + 1209.
+ */
+#define MBE_TONE_GRID_BITS 19
+
+struct mbe_tone_harmonics {
+    unsigned short f0; /* fundamental, in 2^-19 cycle per sample */
+    unsigned char l1;  /* the lower component's harmonic number */
+    unsigned char l2;  /* the upper component's */
+};
+
+/*
+ * The played components of an AMBE+2 tone ID, in 2^-19 cycle per sample,
+ * `upper` and `lower` (equal for a single tone); 0 for an ID with no tone.
+ * Dual tones (128..163): l2 f0 and l1 f0 of the table. Single tones (5..122):
+ * harmonic l = ID / 16 + 1 of the fundamental floor(2048 ID / l), so that the
+ * fundamental stays under 500 Hz (DVSI's decodes: ID 30 plays 937.5000 Hz, ID
+ * 57 1781.2500 and ID 46 1437.470, three times 31402 steps; back-to-back
+ * single tones keep the pulse train's phase only for these harmonic numbers),
+ * within 0.1 Hz of the nominal 31.25 ID.
+ */
+static inline int
+mbe_tone_played_steps(int tone_id, unsigned* upper, unsigned* lower) {
+    static const struct mbe_tone_harmonics dual_tones[36] = {
+        {5145, 12, 17}, {11369, 4, 7},  {4588, 10, 19}, {5702, 8, 17}, {7206, 7, 11},  {12562, 4, 7},
+        {4599, 11, 21}, {4657, 12, 17}, {7968, 7, 11},  {13894, 4, 7}, {7629, 6, 14},  {6301, 8, 17},
+        {4653, 12, 23}, {15352, 4, 7},  {8807, 7, 9},   {8805, 7, 11}, {4478, 12, 17}, {9883, 4, 7},
+        {4445, 9, 17},  {5667, 7, 15},  {6278, 7, 11},  {10939, 4, 7}, {4437, 10, 19}, {4898, 10, 14},
+        {6940, 7, 11},  {6080, 8, 14},  {6655, 6, 14},  {5506, 8, 17}, {4445, 11, 21}, {6704, 8, 14},
+        {7668, 7, 9},   {7700, 7, 11},  {5753, 4, 5},   {4642, 6, 7},  {7995, 4, 5},   {4588, 5, 7},
+    };
+
+    *upper = 0u;
+    *lower = 0u;
+    if ((tone_id >= 5) && (tone_id <= 122)) {
+        const unsigned l = (unsigned)tone_id / 16u + 1u;
+        *upper = l * ((2048u * (unsigned)tone_id) / l);
+        *lower = *upper;
+        return 1;
+    }
+    if ((tone_id >= 128) && (tone_id <= 163)) {
+        const struct mbe_tone_harmonics tone = dual_tones[tone_id - 128];
+        *upper = (unsigned)tone.l2 * tone.f0;
+        *lower = (unsigned)tone.l1 * tone.f0;
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * The played components of a D-STAR tone index, in the order
+ * mbe_tone_lookup_dstar_freqs() gives the nominal ones (DTMF: the row tone,
+ * then the column tone; call progress and single tones as AMBE+2's), through
+ * the same index mapping. 0 for an index with no tone.
+ */
+static inline int
+mbe_tone_dstar_played_steps(int tone_id, unsigned* first, unsigned* second) {
+    /* D-STAR DTMF 128 + 4 * column + row as the AMBE+2 ID of the same pair. */
+    static const unsigned char dtmf[16] = {129, 132, 135, 142, 130, 133, 136, 128,
+                                           131, 134, 137, 143, 138, 139, 140, 141};
+    unsigned upper, lower;
+    if ((tone_id >= 128) && (tone_id <= 143)) {
+        (void)mbe_tone_played_steps(dtmf[tone_id - 128], &upper, &lower);
+        *first = lower;
+        *second = upper;
+        return 1;
+    }
+    *first = 0u;
+    *second = 0u;
+    if ((tone_id >= 144) && (tone_id <= 147)) {
+        return mbe_tone_played_steps(tone_id + 16, first, second);
+    }
+    return (tone_id <= 122) && mbe_tone_played_steps(tone_id, first, second);
+}
+
 /* D-STAR 8-bit tone volume: bits 12..16, 44, 45, 17 from most to least significant. */
 static inline int
 mbe_tone_dstar_volume_bit(int i) {

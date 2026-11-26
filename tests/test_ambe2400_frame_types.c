@@ -826,6 +826,7 @@ test_noise_overlap_across_a_tone(void) {
     }
     assert(energy > 160.0f); /* the speech is there to compare */
     mbe_parms tone_state = cur;
+    mbe_startToneDstar(&tone_state, 130); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(tail, tone, &tone_state, 130);
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
@@ -1156,6 +1157,7 @@ test_tone_transitions(void) {
     }
     /* The tone frame: the lost frame's speech fading out, the tone fading in. */
     mbe_parms tone_state = cur;
+    mbe_startToneDstar(&tone_state, 130); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
@@ -1202,6 +1204,7 @@ test_tone_transitions(void) {
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     tone_state = cur;
+    mbe_startToneDstar(&tone_state, 130); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 130);
     make_result(&r, 0);
     assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
@@ -1236,6 +1239,7 @@ test_tone_transitions_after_mute(void) {
     }
     assert((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u);
     mbe_parms tone_state = cur;
+    mbe_startToneDstar(&tone_state, 32); /* after a frame that was not a tone */
     mbe_synthesizeTonefdstar(plain, tone, &tone_state, 32);
     make_result(&r, 0);
     r.flags |= MBE_PROCESS_FLAG_SOFT_INPUT;
@@ -2239,6 +2243,7 @@ lost_after_tone_run(int unvoiced) {
     }
     before = prev;
     tone_state = cur;
+    mbe_startToneDstar(&tone_state, 32); /* after a frame that was not a tone */
     for (int i = 0; i < 2; ++i) {
         mbe_synthesizeTonefdstar(plain, tone, &tone_state, 32);
         make_result(&r, 0);
@@ -2305,6 +2310,7 @@ lost_after_dual_tone_run(int index) {
     }
     before = prev;
     tone_state = cur;
+    mbe_startToneDstar(&tone_state, index); /* after a frame that was not a tone */
     for (int i = 0; i < 2; ++i) {
         mbe_synthesizeTonefdstar(plain, tone, &tone_state, index);
         make_result(&r, 0);
@@ -2439,6 +2445,78 @@ test_error_rate_mute_level(void) {
     puts("error-rate mute: DVSI-level noise");
 }
 
+/*
+ * D-STAR tones play the frequencies DVSI's decoders play, through the index
+ * mapping of the nominal lookup: DTMF 128 + 4 * column + row as the AMBE+2
+ * tone of the same pair (134: 852 + 1336 Hz, AMBE+2 136, harmonics 7 and 11 of
+ * 7968 steps of 2^-19 cycle per sample), the row tone first; call progress
+ * 144..147 as AMBE+2's 160..163 (145: 161, harmonics 7 and 6 of 4642), the
+ * upper first; single tones as AMBE+2's (30: harmonic 2 of 30720). The
+ * nominal lookup is unchanged. A tone after a voice frame starts as a fresh
+ * pulse train: past the crossfade, sample t of the tone from its first frame's
+ * start is the amplitude times cos(2 pi F (t - 16) + p), p the output
+ * high-pass's phase at F, within a few 1e-4 of the amplitude; the tone's
+ * second frame goes on from there.
+ */
+static void
+test_tone_played_frequencies(void) {
+    unsigned first, second;
+    assert(mbe_tone_dstar_played_steps(134, &first, &second) && first == 7u * 7968u && second == 11u * 7968u);
+    assert(mbe_tone_dstar_played_steps(145, &first, &second) && first == 7u * 4642u && second == 6u * 4642u);
+    assert(mbe_tone_dstar_played_steps(30, &first, &second) && first == 61440u && second == 61440u);
+    assert(!mbe_tone_dstar_played_steps(148, &first, &second) && !mbe_tone_dstar_played_steps(123, &first, &second));
+    for (int index = 0; index < 256; ++index) {
+        float f1, f2;
+        const int has = mbe_tone_dstar_played_steps(index, &first, &second);
+        assert(has == mbe_tone_lookup_dstar_freqs(index, &f1, &f2));
+        if (has) {
+            assert(fabs((double)first * 8000.0 / 524288.0 - (double)f1) < 20.0);
+            assert(fabs((double)second * 8000.0 / 524288.0 - (double)f2) < 20.0);
+        }
+    }
+    float f1, f2;
+    assert(mbe_tone_lookup_dstar_freqs(134, &f1, &f2) && fabsf(f1 - 852.0f) == 0.0f && fabsf(f2 - 1336.0f) == 0.0f);
+
+    char voice[NVOICE][49], tone[49];
+    make_voice(voice);
+    const int volume = 180;
+    pack_tone(tone, 126, 134, volume);
+    /* A build without tones (NOTONES, a private library definition) plays none. */
+    mbe_parms probe;
+    float probe_out[160];
+    memset(&probe, 0, sizeof(probe));
+    mbe_synthesizeTonefdstar(probe_out, tone, &probe, 134);
+    if (fabsf(probe_out[40]) == 0.0f && fabsf(probe_out[41]) == 0.0f) {
+        return;
+    }
+    mbe_parms cur, prev, enh;
+    mbe_process_result r;
+    float out[160];
+    mbe_initMbeParms(&cur, &prev, &enh);
+    for (int i = 0; i < 4; ++i) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+    }
+    const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, mbe_tone_dstar_level_db(volume) / 20.0) / 7.0;
+    for (int f = 0; f < 2; ++f) {
+        make_result(&r, 0);
+        assert(mbe_processAmbe2400Dataf(out, &r, tone, &cur, &prev, &enh) == 0);
+        assert((r.flags & MBE_PROCESS_FLAG_TONE) != 0u);
+        for (int n = (f == 0) ? 80 : 0; n < 160; ++n) {
+            const double t = (double)(160 * f + n);
+            double want = 0.0;
+            for (int harmonic = 7; harmonic <= 11; harmonic += 4) {
+                const double cycles = (double)harmonic * 7968.0 / 524288.0;
+                const double x = cycles * 8000.0 / 100.0;
+                const double high_pass = M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+                want += amplitude * cos((2.0 * M_PI * cycles * (t - 16.0)) + high_pass);
+            }
+            assert(fabs((double)out[n] - want) < 3e-4 * amplitude);
+        }
+    }
+    puts("tones: DVSI's frequencies, started as a fresh pulse train after voice");
+}
+
 int
 main(void) {
     test_voicing_bands();
@@ -2478,5 +2556,6 @@ main(void) {
     test_lost_after_tone();
     test_lost_after_dual_tone();
     test_tone_volume_step();
+    test_tone_played_frequencies();
     return 0;
 }

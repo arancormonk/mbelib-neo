@@ -1102,6 +1102,12 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
     if (entering && ambe2400_last_frame_audible(prev_mp)) {
         ambe2400_speech_under_tone(speech, amp, cur_mp, prev_mp, prev_mp_enhanced);
     }
+    /* A tone after a frame that was not one starts as DVSI's decoder starts
+     * it, as a fresh pulse train (mbe_startToneDstar()); a tone after a tone
+     * goes on from the phases it left. */
+    if (entering) {
+        mbe_startToneDstar(cur_mp, index);
+    }
     /* A tone that goes on at another volume moves to it over the first
      * MBE_AMBE2400_TONE_FADE samples, before the output clips, as on DVSI's
      * AMBE-3000; a new tone index starts at once (docs/dvsi-parity.md, "D-STAR

@@ -535,28 +535,30 @@ tone_ad_of(const char tone[49]) {
 /*
  * A tone as the decoder's oscillators play it, before any limit, computed
  * here in double: each component's 32-bit phase accumulator, starting from
- * the phases `phases` holds (swn, tonePhase), moves by round(f / 8000 * 2^32)
- * a sample, and plays the sine of its phase a quarter turn back at the level
+ * the phases `phases` holds (swn, tonePhase), moves by m 2^13 a sample for a
+ * component of m 2^-19 cycle per sample (the frequency DVSI's decoders play,
+ * mbe_tone_played_steps(), which test_tone_played_steps() checks against
+ * values of its own), and plays the sine of its phase a quarter turn back at the level
  * law's amplitude sqrt(2) * 32768 * 10^(dB / 20) / 7, dB = -2.523 +
- * (3.17 + 87.13) / 127 * (AD - 127) (docs/dvsi-parity.md). Frequencies are the
- * tone table's. A build without tones renders none. `envelope` receives the
+ * (3.17 + 87.13) / 127 * (AD - 127) (docs/dvsi-parity.md). A build without
+ * tones renders none. `envelope` receives the
  * sum of the components' amplitudes.
  */
 static void
 tone_oscillator(double out[160], const mbe_parms* phases, int id, int ad, double* envelope) {
-    float f1 = 0.0f, f2 = 0.0f;
+    unsigned m1 = 0u, m2 = 0u;
     uint32_t p1, p2 = phases->tonePhase;
     memcpy(&p1, &phases->swn, sizeof(p1));
     memset(out, 0, 160 * sizeof(double));
     *envelope = 0.0;
-    if (!tones_sound() || !mbe_tone_lookup_freqs(id, &f1, &f2)) {
+    if (!tones_sound() || !mbe_tone_played_steps(id, &m1, &m2)) {
         return;
     }
     const double db = -2.523 + (((3.17 + 87.13) / 127.0) * (double)(ad - 127));
     const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
-    const int dual = (f2 > 0.0f) && (fabs((double)f2 - (double)f1) > 1.0e-6);
-    const uint32_t s1 = (uint32_t)floor((((double)f1 / 8000.0) * 4294967296.0) + 0.5);
-    const uint32_t s2 = dual ? (uint32_t)floor((((double)f2 / 8000.0) * 4294967296.0) + 0.5) : 0u;
+    const int dual = m1 != m2;
+    const uint32_t s1 = (uint32_t)(m1 << 13);
+    const uint32_t s2 = dual ? (uint32_t)(m2 << 13) : 0u;
     *envelope = dual ? 2.0 * amplitude : amplitude;
     for (int n = 0; n < 160; ++n) {
         p1 += s1;
@@ -858,6 +860,10 @@ test_valid_tone_keeps_state(void) {
     mbe_parms tone_state = s.cur;
     mbe_parms unlimited_state = s.cur;
     float expected[160], unlimited[160], speech[160], want[160];
+    /* After a voice frame the tone starts afresh, from the phases
+     * mbe_startToneAmbe2450() gives it (test_tone_start_phase()). */
+    mbe_startToneAmbe2450(&tone_state, 7);
+    mbe_startToneAmbe2450(&unlimited_state, 7);
     mbe_synthesizeTonef(expected, tone, &tone_state);
     mbe_renderToneAmbe2450f(unlimited, &unlimited_state, 7, 127, MBE_OUTPUT_UNLIMITED);
     /* What a lost frame would repeat: the last frame, which fades out under
@@ -2335,6 +2341,7 @@ test_limit_tone_over_speech(void) {
     stream_overloaded(&s);
     const struct stream before = s;
     mbe_parms phases = before.cur;
+    mbe_startToneAmbe2450(&phases, 7);
     mbe_synthesizeTonef(tone_out, tone, &phases);
     repeat_reference_out(speech, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
     repeat_reference_out(limited, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
@@ -2538,6 +2545,8 @@ test_loud_tone_first_frame(void) {
         }
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == after_mute);
         mbe_parms u = s.cur, l = s.cur;
+        mbe_startToneAmbe2450(&u, ids[k >> 1]);
+        mbe_startToneAmbe2450(&l, ids[k >> 1]);
         mbe_renderToneAmbe2450f(unlimited, &u, ids[k >> 1], 127, MBE_OUTPUT_UNLIMITED);
         mbe_synthesizeTonef(limited, tone, &l);
         if (after_mute) {
@@ -2561,6 +2570,138 @@ test_loud_tone_first_frame(void) {
         mbe_synthesizeTonef(limited, tone, &l);
         stream_frame(&s, tone, 0, 0);
         assert(matches_reference(s.out, limited, 160));
+    }
+}
+
+/*
+ * The frequencies a tone frame plays, in 2^-19 cycle per sample: harmonics l1
+ * and l2 of the fundamental n of TIA-102.BABA-1 Annex J on that grid as DVSI's
+ * decoders play it (n, l1, l2 written out here: DTMF 128 and 129, KNOX 145 and
+ * 147, whose n are DVSI's own, 150.80 and 86.47 Hz, call progress 161 and 163),
+ * and for a single tone harmonic ID / 16 + 1 of floor(2048 ID / l) (5, 16, 30,
+ * 46, 57, 122). Table 9's nominal frequencies stay what the encoders and the
+ * detector look for.
+ */
+static void
+test_tone_played_steps(void) {
+    static const struct {
+        int id;
+        unsigned upper, lower;
+    } played[] = {
+        {5, 10240u, 10240u},     /* l 1: 156.25 Hz */
+        {16, 32768u, 32768u},    /* l 2 of 16384: 500 Hz */
+        {30, 61440u, 61440u},    /* l 2 of 30720: 937.5 Hz */
+        {46, 94206u, 94206u},    /* l 3 of 31402: 1437.470 Hz, not 1437.5 */
+        {57, 116736u, 116736u},  /* l 4 of 29184: 1781.25 Hz */
+        {122, 249856u, 249856u}, /* l 8 of 31232: 3812.5 Hz */
+        {128, 17u * 5145u, 12u * 5145u},
+        {129, 7u * 11369u, 4u * 11369u}, /* 1214.340 + 693.909 Hz */
+        {145, 7u * 9883u, 4u * 9883u},
+        {147, 15u * 5667u, 7u * 5667u},
+        {161, 7u * 4642u, 6u * 4642u}, /* 495.819 + 424.988 Hz */
+        {163, 7u * 4588u, 5u * 4588u},
+    };
+
+    for (size_t i = 0; i < sizeof(played) / sizeof(played[0]); ++i) {
+        unsigned upper = 0u, lower = 0u;
+        assert(mbe_tone_played_steps(played[i].id, &upper, &lower));
+        assert(upper == played[i].upper && lower == played[i].lower);
+    }
+    unsigned upper = 1u, lower = 1u;
+    for (int id = 0; id < 256; ++id) {
+        float f1, f2;
+        const int has = mbe_tone_played_steps(id, &upper, &lower);
+        assert(has == mbe_tone_lookup_freqs(id, &f1, &f2));
+        /* Within 0.1 Hz of the nominal single tones, and 20 Hz of the dual ones. */
+        if (has) {
+            const double hz_upper = (double)upper * 8000.0 / 524288.0;
+            const double hz_lower = (double)lower * 8000.0 / 524288.0;
+            const double bound = (id <= 122) ? 0.1 : 20.0;
+            assert(fabs(hz_upper - (double)f1) < bound && fabs(hz_lower - (double)f2) < bound);
+        } else {
+            assert(upper == 0u && lower == 0u);
+        }
+    }
+    /* The nominal lookup is Table 9's. */
+    float f1, f2;
+    assert(mbe_tone_lookup_freqs(129, &f1, &f2) && float_bits_equal(f1, 1209.0f) && float_bits_equal(f2, 697.0f));
+    assert(mbe_tone_lookup_freqs(161, &f1, &f2) && float_bits_equal(f1, 480.0f) && float_bits_equal(f2, 440.0f));
+    assert(mbe_tone_lookup_freqs(46, &f1, &f2) && float_bits_equal(f1, 1437.5f) && float_bits_equal(f2, 1437.5f));
+    assert(mbe_tone_lookup_freqs(5, &f1, &f2) && float_bits_equal(f1, 156.25f));
+    assert(!mbe_tone_lookup_freqs(123, &f1, &f2) && !mbe_tone_lookup_freqs(164, &f1, &f2));
+}
+
+/*
+ * The output high-pass's phase at `hz` in double: a second-order Butterworth
+ * at 100 Hz, pi - atan2(sqrt(2) x, 1 - x^2) with x = hz / 100.
+ */
+static double
+high_pass_phase(double hz) {
+    const double x = hz / 100.0;
+    return M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+}
+
+/*
+ * A tone as DVSI's decoders start it after a frame that was not a tone frame,
+ * in double: each component (m steps of 2^-19 cycle per sample) at sample t
+ * from the first tone frame's start is amplitude cos(2 pi F (t - 16) + p), F =
+ * m / 2^19 and p the high-pass's phase at it; one component for a single tone.
+ */
+static void
+fresh_tone_reference(double out[160], int first_sample, unsigned upper, unsigned lower, double amplitude) {
+    const unsigned steps[2] = {upper, lower};
+    for (int n = 0; n < 160; ++n) {
+        const double t = (double)(first_sample + n);
+        out[n] = 0.0;
+        for (int k = 0; k < ((upper == lower) ? 1 : 2); ++k) {
+            const double f = (double)steps[k] / 524288.0;
+            out[n] += amplitude * cos((2.0 * M_PI * f * (t - 16.0)) + high_pass_phase(f * 8000.0));
+        }
+    }
+}
+
+/*
+ * A tone after a voice frame starts as a fresh pulse train: the second half of
+ * its first frame (past the crossfade with the speech) is fresh_tone_reference()
+ * within a few 1e-4 of the amplitude, for a dual tone (DTMF 129) and a single
+ * tone (46); its second frame continues the phases (the same reference from
+ * sample 160), and so does a tone that changes to another (ID 32).
+ */
+static void
+test_tone_start_phase(void) {
+    static const int ids[2] = {129, 46};
+    if (!tones_sound()) {
+        return;
+    }
+    for (int i = 0; i < 2; ++i) {
+        char tone[49], other[49];
+        struct stream s;
+        double want[160];
+        unsigned upper, lower;
+        const int ad = 100;
+        const double db = -2.523 + (((3.17 + 87.13) / 127.0) * (double)(ad - 127));
+        const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
+        pack_tone_ad(tone, ids[i], ad);
+        assert(mbe_tone_played_steps(ids[i], &upper, &lower));
+        stream_settled(&s, k_voice_next);
+        /* Phases a voice frame could not have left the oscillators: they do not count. */
+        s.cur.swn = 0x5A5A5A5A;
+        s.cur.tonePhase = 0xA5A5A5A5u;
+        for (int f = 0; f < 2; ++f) {
+            stream_frame(&s, tone, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+            fresh_tone_reference(want, 160 * f, upper, lower, amplitude);
+            for (int n = (f == 0) ? 80 : 0; n < 160; ++n) {
+                assert(fabs((double)s.out[n] - want[n]) < 3e-4 * amplitude);
+            }
+        }
+        /* Another tone goes on from the phases the last left. */
+        mbe_parms phases = s.cur;
+        float expected[160];
+        pack_tone_ad(other, 32, ad);
+        mbe_synthesizeTonef(expected, other, &phases);
+        stream_frame(&s, other, 0, 0);
+        assert(matches_reference(s.out, expected, 160));
     }
 }
 
@@ -2766,6 +2907,8 @@ main(void) {
     test_limit_tone_over_speech();
     test_limit_mute_over_speech();
     test_unlimited_tone_rendering();
+    test_tone_played_steps();
+    test_tone_start_phase();
     test_loud_tone_tail();
     test_loud_tone_first_frame();
     printf("test_ambe2450_frame_types: OK\n");

@@ -830,6 +830,27 @@ assert_ambe2400_tone_spectrum(const float pcm[20][160], double frequency, int to
     }
 }
 
+/*
+ * The tone a stream plays from its first tone frame on, by the linked
+ * renderer: a tone after a frame that was not a tone frame starts from phases
+ * the decoder sets (as a fresh pulse train, which the private tone tests
+ * check); this reads them back from the state the first frame left, the
+ * oscillator of a single tone of ID `id` (2048 id steps of 2^-19 cycle per
+ * sample) having moved 160 of its steps, and renders 20 frames from there.
+ */
+static void
+ambe2400_tone_oracle(float tone[20][160], const char data[49], int id, const mbe_parms* after_first) {
+    const uint32_t step = (uint32_t)(2048u * (unsigned)id) << 13;
+    uint32_t phase;
+    mbe_parms state = *after_first;
+    memcpy(&phase, &state.swn, sizeof(phase));
+    phase -= 160u * step;
+    memcpy(&state.swn, &phase, sizeof(phase));
+    for (int n = 0; n < 20; ++n) {
+        mbe_synthesizeTonefdstar(tone[n], data, &state, id);
+    }
+}
+
 static void
 test_ambe2400_accepted_tones(void) {
     static const int low_indices[] = {9, 42, 43, 10, 11};
@@ -900,6 +921,9 @@ test_ambe2400_accepted_tones(void) {
                     assert_result_total(&result, ret);
                     assert(ret == total);
                     assert(memcmp(decoded, data, sizeof(data)) == 0);
+                    if (n == 0 && cases[c].accepted) {
+                        ambe2400_tone_oracle(tone, data, id, &cur);
+                    }
                     /* A rejected tone plays as a lost frame: a repeat, muted from the 4th in a
                      * row on, after the 4th's fade-out to DVSI-level noise (int16 0 or +-1). */
                     const unsigned lost = MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
