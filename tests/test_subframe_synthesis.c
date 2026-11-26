@@ -2684,8 +2684,9 @@ check_p25_onset_train(const char imbe_d[88], int early, int provoice) {
 
 /* The bands a P25 frame after one with no voiced band starts with, as DVSI's
  * decoder plays them (MBE_FRAME_MARK_ONSET_COLUMNS): a frame voiced in its
- * first band only starts late at pitch code 56 (three harmonics up to 502.6
- * Hz) and early at 55 (507.9 Hz, the first column covered: harmonics 1 and 2
+ * first band only starts late at pitch code 56 (three harmonics up to 502.8
+ * Hz at the pitch played) and early at 55 (508.1 Hz, the first column
+ * covered: harmonics 1 and 2
  * sound, the third, in column 1, does not); the word 1000001100 early at 86
  * (127.5 Hz: column 5 covered, so harmonics 19, within 250 Hz below it, to
  * 23 sound, and neither band 1 nor harmonic 24, in column 6, does) and late at

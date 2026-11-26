@@ -978,7 +978,11 @@ ambe2450_add_tone_tail(float* aout_buf, const struct ambe2450_snapshot* in) {
  * itself is not played (the first subframe rises from silence to the
  * mid-frame model, which is the ordinary one between the kept model and the
  * frame's own; no unvoiced overlap comes from before), and the pulse train
- * starts anew at the frame's start (MBE_SYNTHESIS_FROM_SILENCE). A silence
+ * starts anew at the frame's start (MBE_SYNTHESIS_FROM_SILENCE): its first
+ * pulse sounds there when the mid-frame model has a voiced band, and a V/UV
+ * row 15 frame, whose first half voices none, launches its first at sample
+ * 80 (what DVSI's decoder plays for rows 13, 15 and 17 here was not
+ * measured; docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17"). A silence
  * frame, whose hold continues what was heard, does not hold the kept model,
  * which was not: it rises from silence to its own model. On DVSI's
  * dam_e10_hd the frames leaving a mute follow DVSI's decode at a median

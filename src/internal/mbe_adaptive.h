@@ -213,8 +213,9 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * a voiced harmonic lies at or above this frequency. It is also the first
  * edge of the columns a P25 onset is read in (MBE_FRAME_MARK_ONSET_COLUMNS):
  * on DVSI's P25 decodes a first band of three voiced harmonics reaching
- * 502.6 Hz (pitch code 56) covers no column and starts at mid-frame, one
- * reaching 507.9 Hz (code 55) covers the first and starts with the frame. */
+ * 502.8 Hz at the pitch played (pitch code 56; 502.6 Hz at eq 46's nominal
+ * pitch) covers no column and starts at mid-frame, one reaching 508.1 Hz
+ * (code 55; 507.9 Hz nominal) covers the first and starts with the frame. */
 #define MBE_VOICING_REACH_HZ 505.0f
 
 /**
