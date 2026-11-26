@@ -320,8 +320,9 @@ void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_
  *
  * mbe_synthesizeTonef() without the frame's bits, for a tone known by its
  * fields. Both play the frequencies DVSI's decoders play for the ID
- * (mbe_tone_played_steps(), mbe_tone.h), not Table 9's nominal ones. An ID with no tone renders silence. Limited, it equals
- * mbe_synthesizeTonef() bit for bit; unlimited, it is the same samples before
+ * (mbe_tone_played_steps(), mbe_tone.h), not Table 9's nominal ones. An ID
+ * with no tone renders silence. Limited, it equals mbe_synthesizeTonef() bit
+ * for bit; unlimited, it is the same samples before
  * their limit, for a caller that fades or mixes the tone and limits the
  * result. The oscillator phases it leaves are the same either way.
  *

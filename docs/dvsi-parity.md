@@ -56,7 +56,15 @@ appear here.
   validation, tone and channel partitions, and the final partition was scored once for the three
   together, after the review's fixes, against the gate set `decoder-phase-pitch-final`, declared
   before, which it passed ([November 2026: phase regeneration and
-  pitch](#november-2026-phase-regeneration-and-pitch)).
+  pitch](#november-2026-phase-regeneration-and-pitch)). The three decoder changes of 2.6.14 ([The
+  pulse train across an octave](#the-pulse-train-across-an-octave), [Tones as harmonics of a
+  fundamental](#tones-as-harmonics-of-a-fundamental) and [P25 tones sent as voice
+  frames](#p25-tones-sent-as-voice-frames)) hold it out as well: the study that found them read
+  DVSI's tone vectors and the development and validation vectors, never `irstia` or `mark`; the
+  change set was measured and gated on the development, validation, tone and channel partitions,
+  and the final partition is to be scored once for it, after the review, against the gate set
+  `tone-model-final`, declared before any build was scored ([November 2026: tones and the octave
+  step](#november-2026-tones-and-the-octave-step)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -484,6 +492,8 @@ capture was repeated, and every repeat was sample-identical.
   that frame's first 80 samples (0.97 at sample 4, 0.06 at 76). The voice fades in over those 80
   samples too: per 16 samples, the median ratio to the voice with no tone is 0.08, 0.22, 0.54, 0.40,
   0.94, and scattered around 1 after that. A tone that follows a tone plays on without a crossfade.
+  (Which frequencies a tone plays and the phase it starts at: [Tones as harmonics of a
+  fundamental](#tones-as-harmonics-of-a-fundamental).)
 
 This library used to cut from the speech to the tone and from the tone to the voice at the frame
 boundary. It now plays the first tone frame as `g(n) tone(n) + (1 - g(n)) repeat(n)` and the first
@@ -669,7 +679,8 @@ played once more, fades out; and it goes on from its phases through the first 80
 frame after its last, fading out on top of that frame, which rises from silence over the same
 samples ([Rate 33 frames after a mute or a tone](#rate-33-frames-after-a-mute-or-a-tone)). A tone
 that changes while it sounds changes at once. The library cut the tone in and out at the frame
-edges.
+edges. Which frequencies a tone plays and the phase it starts at are in [Tones as harmonics of a
+fundamental](#tones-as-harmonics-of-a-fundamental).
 
 When the crossfades came in (2.6.8), over DVSI's 52 tone vectors, in 20-sample blocks relative to
 the tone's level, DVSI's medians were 0.15, 0.37, 0.63, 0.87 going in (1102 starts) and 0.90, 0.65,
@@ -882,16 +893,18 @@ error of 4.42 dB. A tone's first frame is unchanged (1208 frames: 0.38 / 0.21 / 
 
 Still different after a tone: the pulse train of a voiced frame does not line up with DVSI's. Over
 the 205 voiced frames the next frame correlates with DVSI's waveform at a median 0.26, on main and
-now alike, where frames in running speech reach 0.9 and more; what DVSI's pulse train does through
-a tone was not determined. DVSI's tone vectors do hold the frame after a tone with a loud model kept
-through it: 478 tone starts follow a frame whose DVSI output is above RMS 300 (`alltone` 115, `dtmf`
-131, `dtmfvbad` 230, `alert` 1, `dtmf25` 1), and of the voice frames right after a tone, 477 have
-such a loud frame as the model kept through the tone, so the level figures above measure that case
-too. But in every one of those 478 the previous tone frame lies 2 to 35 frames back: the loud frames
-are the frames between tones, where the tone signal itself is coded as voice frames. What the
-vectors do not hold is a tone inside speech: speech, a tone, then different speech. For that case
-this library takes the mid-frame model between the last speech model before the tone and the
-frame's own, as for any other.
+now alike, where frames in running speech reach 0.9 and more. DVSI's decoder plays its tones through
+the voiced synthesizer, and a voiced frame after a tone continues the tone's pulse train there
+([Tones as harmonics of a fundamental](#tones-as-harmonics-of-a-fundamental)); the library plays
+tones beside its synthesizer, so it does not. DVSI's tone vectors do hold the frame after a tone
+with a loud model kept through it: 478 tone starts follow a frame whose DVSI output is above RMS 300
+(`alltone` 115, `dtmf` 131, `dtmfvbad` 230, `alert` 1, `dtmf25` 1), and of the voice frames right
+after a tone, 477 have such a loud frame as the model kept through the tone, so the level figures
+above measure that case too. But in every one of those 478 the previous tone frame lies 2 to 35
+frames back: the loud frames are the frames between tones, where the tone signal itself is coded as
+voice frames. What the vectors do not hold is a tone inside speech: speech, a tone, then different
+speech. For that case this library takes the mid-frame model between the last speech model before
+the tone and the frame's own, as for any other.
 
 ### Rate 33 lost frames and tones
 
@@ -1006,7 +1019,10 @@ stored state keep the decoded values. On the validation vectors the phase DVSI r
 from ours by a median 8.9, 6.6 and 7.7 degrees (D-STAR, P25, rate 33), 4-5 below 300 Hz, where it
 differed by 12.1, 10.0 and 11.5 (12-14 below 300 Hz): per harmonic of steady voiced frames, once
 each frame's time shift and common phase are removed. The filter's corner and shape come from the
-magnitude already measured; nothing in it was fitted to the phase.
+magnitude already measured; nothing in it was fitted to the phase. A rate-33 or D-STAR tone that
+starts after a frame that was not a tone frame starts at this filter's phase at each component's
+frequency, as on DVSI's decoders ([Tones as harmonics of a
+fundamental](#tones-as-harmonics-of-a-fundamental)).
 
 ### Voiced and unvoiced level
 
@@ -1093,8 +1109,10 @@ every frame.
   the pulse and falls over the 16 samples after that. A response so lasts a period and 16
   samples and overlaps the next by 16, where the two windows add up to one: the responses of a
   steady train add up to the harmonics. The pulse rate moves linearly from one model's
-  pitch to the next's across a subframe; into or out of voicing it keeps the voiced model's.
-  A subframe with no voiced band at either end starts the train afresh.
+  pitch to the next's across a subframe, after the train is taken an octave down or up where
+  the new period is within 20% of twice or of half the old ([The pulse train across an
+  octave](#the-pulse-train-across-an-octave)); into or out of voicing it keeps the voiced
+  model's. A subframe with no voiced band at either end starts the train afresh.
 
 DVSI describes a synthesis of this shape in US 8,200,497: square-root triangular windows over
 10 ms subframes, and an impulse sequence convolved with a pitch-dependent impulse response. The
@@ -1195,13 +1213,18 @@ what those fields say (one mark per frame, in the unused element 0 of `PHIl`):
   voiced bands in its second subframe, and so does a P25 frame whose voicing does not reach
   505 Hz (all 40 such onsets on DVSI's vectors).
 
-With these, voiced runs after two or more unvoiced frames start where DVSI's do in 95% of cases
-for P25 (791 of 831 on ten vectors), 96% for D-STAR (812 of 846) and 96% for rate 33 (775 of
-810). Not resolved: of the 64 P25 onsets voiced in the lowest band and in bands above it, but not
-at 505 Hz, 43 start with the frame, 17 in its second subframe and 4 elsewhere, and no rule
-separates them (the width of the widest upper voiced region does for 53 of 57). See also
-[Known differences](#known-differences) for what the unvoiced pitch codes and rate 33's rows 17
-to 31 further tell DVSI's decoder.
+With these, voiced runs after two or more unvoiced frames start where DVSI's do in 95% of cases for
+P25 (791 of 831 on ten vectors), 96% for D-STAR (812 of 846) and 96% for rate 33 (775 of 810).
+Measured again for the octave step of 2.6.14 on all 25 development and validation vectors (D-STAR
+voiced runs of three voiced frames or more after a frame with no voiced band, loud; out of line
+where the two frames after the first correlate with DVSI's under 0.8), 25 of 1,945 D-STAR runs were
+out of line before that step and 4 of 1,945 are with it: most of the misses after a pitch-carrying
+code were a step of about an octave into the second subframe ([The pulse train across an
+octave](#the-pulse-train-across-an-octave)). Not resolved: of the 64 P25 onsets voiced in the lowest
+band and in bands above it, but not at 505 Hz, 43 start with the frame, 17 in its second subframe
+and 4 elsewhere, and no rule separates them (the width of the widest upper voiced region does for 53
+of 57). See also [Known differences](#known-differences) for what the unvoiced pitch codes and rate
+33's rows 17 to 31 further tell DVSI's decoder.
 
 ### Phase regeneration
 
@@ -1244,11 +1267,13 @@ it so: the computation "is applied to the decoded spectral magnitudes for the cu
 **The rule.** The codec paths regenerate a voiced harmonic's phase from the frame's `log2Ml`, for
 every band whatever its voicing, with the kernel unchanged (its floor, tail, mirror and taps;
 `mbe_regenerate_phases_log2()`). `log2Ml` holds the decoded amplitudes in every codec, in the
-synthesized state too. The mid-frame model ([Synthesis in subframes](#synthesis-in-subframes))
-takes the mean of the two frames' `log2Ml`, each read at the band's frequency as the magnitudes
-are, as stored: where the magnitudes' interpolation takes the unvoiced factor `0.2046 / sqrt(w0)`
-out of an unvoiced band, `log2Ml` carries no such factor. Taking it out or putting it in measured
-no better (correlation with DVSI's decode, development means at lag 0, D-STAR / P25 / rate 33):
+synthesized state too, a P25 tone frame's included ([P25 tones sent as voice
+frames](#p25-tones-sent-as-voice-frames)). The mid-frame model ([Synthesis in
+subframes](#synthesis-in-subframes)) takes the mean of the two frames' `log2Ml`, each read at the
+band's frequency as the magnitudes are, as stored: where the magnitudes' interpolation takes the
+unvoiced factor `0.2046 / sqrt(w0)` out of an unvoiced band, `log2Ml` carries no such factor. Taking
+it out or putting it in measured no better (correlation with DVSI's decode, development means at lag
+0, D-STAR / P25 / rate 33):
 
 | Phases from | Correlation |
 |---|---|
@@ -1414,8 +1439,9 @@ specification](#departures-from-the-specification)), not by a gain against the i
 On speech, DVSI's P25 decoder does not play pitch code b0 at TIA-102.BABA eq 46's fundamental
 `w0 = 4 pi / (b0 + 39.5)` exactly: it plays that value times `1 + g`, with g a smooth function of
 the nominal pitch period `P = (b0 + 39.5) / 2` that repeats every half octave and lies between
--0.071% and +0.034%. A tone its encoder sent as voice frames it plays at eq 46's harmonic
-frequencies (below).
+-0.071% and +0.034%. A tone its encoder sent as voice frames it plays at eq 46's fundamental cut
+to a grid of 2^-19 cycle per sample ([P25 tones sent as voice
+frames](#p25-tones-sent-as-voice-frames)).
 
 **The drift.** With [Phase regeneration](#phase-regeneration) in place, the residual of P25's
 voiced runs that line up with DVSI's grew with the run's length (development vectors, residual
@@ -1480,10 +1506,14 @@ combinations of pitch code and harmonic that have 60 frame pairs or more (median
 single frame pairs or on harmonics not measured), not in proportion to the harmonic number and with
 either sign on one code: b0 36, harmonics 4 and 7, +7 and +37 mrad a frame; b0 92, harmonics 7 and
 11, +16 and -11; b0 144, harmonics 8 and 17, -15 and +16; b0 189, harmonics 10, 11, 19 and 21, -21,
--39, -19 and -44; b0 127, harmonics 8 and 17, -32 and -14, where the law gives -68 and -145. On
-these frames the difference from eq 46 is not a time shift of a pulse train: DVSI's decoder plays
-each measured harmonic of such a tone at eq 46's frequency to within 0.35 Hz (44 mrad a frame) in
-the median over its frame pairs, with a small offset of its own that follows no rule found. Fitted
+-39, -19 and -44; b0 127, harmonics 8 and 17, -32 and -14, where the law gives -68 and -145. For
+2.6.13 this was read as each measured harmonic playing at eq 46's frequency to within 0.35 Hz (44
+mrad a frame) in the median over its frame pairs, with a small offset of its own that follows no
+rule found. That reading is corrected: those offsets came from the short runs of the DTMF vectors
+and the sidebands of their frame-to-frame amplitude changes. The long runs of the KNOX vectors,
+measured since, are clean: DVSI's decoder plays such a tone at eq 46's fundamental cut to a grid of
+2^-19 cycle per sample, both harmonics of a tone at the same relative offset from eq 46 ([P25 tones
+sent as voice frames](#p25-tones-sent-as-voice-frames)). Fitted
 as one time shift per frame pair to the phases of the voiced harmonics whose coherence is 0.9 or
 more (at least two of them, DVSI's frame standard deviation 100 or more: 11,647 frame pairs, of
 which the 11,535 with a fitted shift under 0.5 samples are used; 28 codes with 100 pairs or more),
@@ -1497,8 +1527,8 @@ speech vectors (298 pairs; three frames at one code are rare in speech) gives a 
 DVSI's pulse-train vectors drift by -0.10 samples a frame, its tone vectors by -0.010 in the
 one-time-shift fit.
 
-What tells DVSI's decoder the two apart was not found, as for the onset of such a tone ([Known
-differences](#known-differences)). Tried: the tone frames' voicing patterns vary (the bands that
+For 2.6.13 what tells DVSI's decoder the two apart was not found. Tried: the tone frames' voicing
+patterns vary (the bands that
 hold the tone's harmonics are voiced: `01100`, `1110000`, `0111110010000`, ...; 4 of the 28 codes
 have the lowest band voiced, as speech has, and do not drift either); the share of a frame's decoded
 energy outside its two strongest harmonics does not separate them (tone frames: median 1.1%, 90th
@@ -1507,17 +1537,25 @@ frames above an RMS of 100); no floor or rounding of a harmonic's frequency `l /
 fundamental's `1 / P` times l, or of `w0` times l, to a grid of 2^-10 to 2^-25 (cycles a sample, or
 radians) explains the per-harmonic offsets (the best leaves 77% of their rms); and for the
 one-time-shift fit, no floor, rounding or ceiling of w0, f0, the period or log2 f0 to a grid of 2^-8
-to 2^-23 does (the best leaves 63%).
+to 2^-23 does (the best leaves 63%). Those searches ran on the contaminated offsets above; on the
+long runs the floor of the fundamental to 2^-19 cycle per sample does explain the pitch. What tells
+DVSI's decoder a tone from speech was found later: the pitch code and the voicing word its encoder
+sends for the tone, with the tone's harmonics dominating the others ([P25 tones sent as voice
+frames](#p25-tones-sent-as-voice-frames)); the share of energy alone does not separate them.
 
-The library applies the pitch of this section to every P25 frame. On speech that is a fit to the
-pitch DVSI's decoder plays (above). On a tone sent as voice frames DVSI's decoder plays each
-measured harmonic within 0.35 Hz of eq 46's frequency in the median, and the library moves harmonic
-l by `l w0 160 g` a frame against eq 46's: by up to 145 mrad a frame over the 61 measured
-combinations of pitch code and harmonic (b0 127's 17th harmonic, -145), and by -307 mrad a frame on
-the ninth harmonic of b0 2, which `alltone` holds for a few frames. So the median correlation of
-the steady tone frames with DVSI's waveform falls from 0.880 to 0.656, while their level error moves
-from 0.555 to 0.560 dB and the scoreboard's tone detector's agreement with DVSI's output moves by at
-most 0.0083 on a vector (`knox_12`) (below; [Known differences](#known-differences)).
+2.6.13 applied the pitch of this section to every P25 frame. On speech that is a fit to the pitch
+DVSI's decoder plays (above). On a tone sent as voice frames it moved harmonic l by `l w0 160 g` a
+frame against eq 46's: by up to 145 mrad a frame over the 61 measured combinations of pitch code and
+harmonic (b0 127's 17th harmonic, -145), and by -307 mrad a frame on the ninth harmonic of b0 2,
+which `alltone` holds for a few frames. So the median correlation of the steady tone frames with
+DVSI's waveform fell from 0.880 to 0.656 (2.6.13's selection: the 17,334 loud frames of the 52
+vectors whose neighbours are loud too), while their level error moved from 0.555 to 0.560 dB and
+the scoreboard's tone detector's agreement with DVSI's output moved by at most 0.0083 on a vector
+(`knox_12`) (below). That cost belonged to the 2.6.13 change and is gone: since 2.6.14 a frame
+recognised as a tone plays the grid pitch, not the speech pitch, and on that change's selection of
+steady frames (a tone frame between two tone frames of the same tone, on the 47 P25 tone vectors
+with three such frames or more) the median correlation is 0.986 ([November 2026: tones and the
+octave step](#november-2026-tones-and-the-octave-step)).
 
 On the scoreboard (joint lags, against the commit before), P25 decoding DVSI's bits:
 
@@ -1536,10 +1574,11 @@ step, checks that the mid-frame pitch leaves the P25 tone decodes unchanged).
 - **Tones and channel errors.** P25 has no tone frames, and no gate set of this step checks its tone
   rows; on its 52 tone vectors, whose decodes all change, the detector's agreement and wrong-tone
   fraction move by less than 0.01 and the steady tones' level error by at most 0.051 dB on a vector
-  (0.555 to 0.560 dB over the steady frames of all 52; [Known differences](#known-differences)).
-  DVSI's decoder plays a tone sent as voice frames at eq 46's harmonic frequencies, not at this
-  pitch, so the steady tone frames' median correlation with DVSI's waveform falls from 0.880 to
-  0.656 (above). Every P25 channel-error decode changes; the mute decisions do not, and on the loud
+  (0.555 to 0.560 dB over the steady frames of all 52). DVSI's decoder plays a tone sent as voice
+  frames at another pitch than speech's (eq 46's fundamental cut to a 2^-19 grid, as found since),
+  so the steady tone frames' median correlation with DVSI's waveform falls from 0.880 to 0.656
+  (above; 2.6.14 plays recognised tone frames at that grid pitch). Every P25 channel-error decode
+  changes; the mute decisions do not, and on the loud
   frames neither decoder mutes the distance from DVSI's decode falls by 0.007 dB (hard decisions;
   0.006 soft).
 - **Other modes.** The D-STAR and rate-33 decodes are unchanged on every speech, tone and
@@ -1549,6 +1588,151 @@ PESQ against the input falls by 0.0043 ± 0.0022 (8 of 25 vectors better), ESTOI
 (6 of 25), and PESQ against DVSI's decode rises by 0.0002 ± 0.0003 (9 of 25). The pitch of a P25 code
 now departs from eq 46 by up to 0.071% to follow DVSI's decoder ([Departures from the
 specification](#departures-from-the-specification)).
+
+### P25 tones sent as voice frames
+
+TIA-102.BABA has no tone frames: every P25 voice frame plays its decoded harmonics. DVSI's P25
+encoder sends a tone it detects as voice frames built from TIA-102.BABA-1 Annex J: the pitch code
+`b0 = floor(4 pi / w0 - 39)` of the tone's fundamental (with DVSI's own 150.80 and 86.47 Hz for
+indices 145 and 147, [Tones as harmonics of a fundamental](#tones-as-harmonics-of-a-fundamental):
+the observed codes match for all 154 tones), the tone's harmonics l1 and l2 large, and one voicing
+word b1 per tone, the same in every frame of it (154 tones, 89 distinct pairs of b0 and b1; index
+128: b0 164, `000011110100`; index 129: b0 53, `1110000`). The word is not the bands that hold l1
+and l2 under the decoder's band mapping: for index 128 the band of harmonic 12 is unvoiced.
+
+**The test.** US 7,970,606 describes how a decoder recognises such frames (FIG. 7, step 720): the
+reconstructed parameters are checked against its Table 1, which is Annex J's, and a frame is a tone
+frame if its fundamental is about an entry's, the voicing bands of the entry's harmonics are voiced
+and those harmonics are "dominant over the other spectral magnitudes"; the other harmonics are then
+attenuated ("20 dB attenuation is typical"). The patent gives no numbers for the test. Measured on
+DVSI's P25 decodes of its tone vectors and of the 25 development and validation speech vectors:
+
+- **Which tones.** Where the second half of a frame is a clean pair of components (two components
+  leave under 5% of it) and the decoded magnitudes of the pair differ by more than 20%, DVSI's
+  decoder plays the two at one amplitude in 5,092 of 5,094 DTMF frames and 1,344 of 1,344 KNOX
+  frames: those are tone frames. Call-progress tones (160..163) never are (0 of 50 frames): their
+  frames play their decoded harmonics, so they are not in the test.
+- **The voicing word is needed.** Without it nothing separates a tone from speech: 8 speech frames
+  have a dual-tone row's harmonics as their two largest magnitudes (up to 84% of the energy), and
+  DVSI's decoder plays all 8 as speech.
+- **Dual tones.** With b0 and b1 those of a dual tone there are 13,653 loud frames of the tone
+  vectors, 13,557 of them clean pairs, and 48 pairs of a frame and a row in the 25 speech vectors.
+  The ratio r of the rms of the other decoded magnitudes to the rms of the tone's is at most 0.296
+  on those tone frames (99.9% under 0.242) and at least 0.482 on those speech frames. The library's
+  limit is 0.375 (`IMBE_TONE_SHARE_DUAL`). A tone's first frame passes with as little as a third of
+  the frame's energy in the tone's harmonics.
+- **Single tones.** Their pairs of b0 and b1 also hold speech: 292 frames of the 25 speech vectors,
+  high voices with a dominant fundamental. Of the 142 speech frames that pass a single-tone row at
+  0.375, the isolated ones, ordered by r: at 0.0159, 0.0206, 0.0210, 0.0213 and 0.0234 the tone path
+  is closer to DVSI's output than the speech path, or as close; from 0.0236 up (about 65 frames) the
+  speech path is closer in nearly every case (one exception, at 0.0289). The library's limit is
+  0.0235 (`IMBE_TONE_SHARE_SINGLE`); 98.9% of the 918 loud single-tone frames of the tone vectors
+  lie under it (median 0.003).
+
+The library's table (`imbe_tone_rows` in `src/imbe/imbe7200x4400.c`) holds the 116 distinct rows
+of b0, b1, l1 and l2 of the DTMF, KNOX and single tones as DVSI's encoder sends them: the pitch
+codes and harmonics follow Annex J, and the voicing words were read from DVSI's bit streams of its
+tone vectors. Left out are the call-progress tones and three single tones (120..122, at b0 2 and 3)
+whose harmonic 10 lies past the frame's L of 9. Single tones on one code and word share a row's pair
+at several harmonics; the rows of one pair are all dual or all single tones, and of the rows a frame
+passes the one with the smallest r wins. The test reads the decoded magnitudes, before spectral
+enhancement. It runs for P25 only: ProVoice reaches the same data path but has no DVSI reference.
+
+**What a tone frame plays**, measured on DVSI's P25 decodes of the tone vectors:
+
+- **Pitch:** eq 46's fundamental cut to the 2^-19 grid, `floor(2^21 / (2 b0 + 79)) / 2^19` cycle
+  per sample, not the speech pitch of [P25 pitch](#p25-pitch). On the 14 codes with one long run
+  (the KNOX vectors) DVSI's offset from eq 46 against the grid's, in units of 1e-5 (both harmonics
+  of a tone give the same relative offset):
+
+  | b0 | DVSI | Grid | b0 | DVSI | Grid |
+  |---|---|---|---|---|---|
+  | 56 | -7.8 | -7.77 | 133 | -11.5 | -11.54 |
+  | 67 | -7.8 | -7.96 | 146 | -12.3 | -12.40 |
+  | 97 | -11.4 | -11.40 | 151 | -5.9 | -6.10 |
+  | 112 | -4.3 | -4.24 | 175 | -9.7 | -9.54 |
+  | 117 | -2.4 | -2.48 | 195 | -12.1 | -12.06 |
+  | 118 | -9.4 | -9.39 | 196 | -12.5 | -12.40 |
+  | 128 | -2.5 | -2.48 | 197 | -16.4 | -16.36 |
+
+- **Amplitude:** the tone's harmonics at one amplitude. On DVSI's decoder it is 2.0975 times the rms
+  of their decoded magnitudes for the dual tones (3,717 steady frames of the 36 dual tones, robust
+  spread 1.8%) and 2.108 to 2.119 times for the three single tones of `alert`, where the library
+  renders a voiced harmonic at 2.1308 times its magnitude; each harmonic then times
+  `sinc^2(pi l / 256)`, the droop of the synthesis table ([Tones as harmonics of a
+  fundamental](#tones-as-harmonics-of-a-fundamental); the upper component over the lower is a median
+  0.9999 of the sinc^2 ratio). The library takes 0.988 times the rms (`IMBE_TONE_LEVEL`): the steady
+  tone frames of `knox_1` to `knox_16` and `dtone_1` to `dtone_16` then play 0.012 dB above DVSI's
+  (0.9866 would be exact there), and those of the DTMF, `alert`, `alltone` and call-progress vectors
+  0.022 dB (dual tones, 2,087 frames) and 0.031 dB (single tones, 411 frames) below it; at 0.98
+  they play -0.058 dB, at 1.00 +0.117 dB.
+- **The other harmonics:** gone. Two components leave 0.0009 of the frame where the tone holds
+  60-70% of the decoded energy, so the others are at least 27 dB down. The library makes them
+  unvoiced at 0, as clause 8 of TIA-102.BABA-1 builds a tone's voice parameters.
+- **Timing:** the frame's own model stands at mid-frame. The amplitude moves linearly from the last
+  frame's to this one's over the first 80 samples and holds over the second 80; a first tone frame
+  plays at half level, then full, and the frame after the last tone frame plays the tone fading out
+  over 80 samples.
+- **Phases:** the regenerated ones ([Phase regeneration](#phase-regeneration)). The library's kernel
+  over the frame's decoded log2 magnitudes, on a pulse train started at the first tone frame's first
+  sample, predicts DVSI's phase from frame to frame within 0.0009 cycle (standard deviation, median
+  over the 64 components of `knox_1` to `knox_16` and `dtone_1` to `dtone_16`; 0.018 cycle with zero
+  phases). Mean offsets of 0.00 to 0.07 cycle remain (median magnitude 0.015), largest for harmonics
+  4 and 7 at short periods. A model with zero phases, as rate 33's tone frames have, does not fit:
+  its correlations with DVSI's waveform run from -0.5 to +0.85 by vector, at levels within 0.1 dB.
+  At mid-frame the frame's own phases follow DVSI's waveform at a median correlation of 0.9924 on
+  the 3,840 steady frames of those 32 vectors, the mean of the two frames' `log2Ml` at 0.9903.
+- **The noise generator** runs on through a P25 tone frame as through any voice frame, unlike the
+  AMBE tone frames: the unvoiced frames two and three after a tone run of `dtmf` and `alltone`
+  follow DVSI's waveform at a median correlation of 0.80 and 0.99 (154 and 7 frames) so, and at
+  -0.01 and -0.10 with the generator held (`dtmf60` and `dtmf180` hold no such frames).
+
+**How the library carries it.** The decode (`imbe_tone_word()`, P25's path only) leaves the tone it
+recognises in the otherwise unused `Vl[0]` of `cur_mp`: a flag with b0 in bits 16-23, l2 in bits
+8-15 and l1 in bits 0-7, and 0 on any other frame. The decoded model and its frame mark are left as
+they are, so the prediction history is the decoded frame; the public `mbe_decodeImbe4400Parms()`
+sets the word too, so the IMBE encoder's state carries it, and the encoder's bits are unchanged. The
+synthesis (`imbe4400_synthesize_frame()`) builds the tone model after the spectral enhancement: the
+grid pitch (in double, rounded to float once), the tone's harmonics voiced at their level, every
+other harmonic unvoiced at 0, L, K and `log2Ml` kept (the phases are regenerated from them), and the
+mark `MBE_FRAME_MARK_TONE`, which makes the mid-frame model the frame's own
+(`mbe_subframe_mid_model()`). A repeat loads the history, `Vl[0]` included, and plays the tone model
+again; the repeat limit's reset clears it. A word in a caller's state counts only with a pitch code
+and harmonics a decode can give. No result flag marks the frame: it stays a voice frame.
+
+**The first implementation** (`d245efd`) used one limit, 0.375, for single and dual tones. P25
+speech then moved away from DVSI's decode: its waveform correlation with DVSI's fell by 0.0044 on
+the development vectors (16 of 20 lower, `noisy` by 0.058) and by 0.0072 on the validation ones,
+all of it from the 142 speech frames that passed single-tone rows and the frames after them in the
+same voiced stretch (1,104 changed frames, their residual 0.0017 to 0.0140 of the signal energy),
+and its development and validation gate sets failed ([November 2026: tones and the octave
+step](#november-2026-tones-and-the-octave-step)). The single-tone limit above, set on the speech
+frames DVSI's decoder plays as speech or as tones, replaced it (`b58d91d`).
+
+**Before this change.** 2.6.13 played every P25 frame as speech. Over the 52 tone vectors decoded as
+P25, frame for frame at lag 0 (a frame is loud when DVSI's frame RMS is above 30; 17,334 steady
+frames, loud with every neighbour loud: 17,286 between two loud frames and 48 a file's first or last
+frame, with one neighbour only; 791 first loud frames of a tone; 743 first quiet frames after one),
+against DVSI's decode (level: mean absolute difference, dB):
+
+| Build | Steady frames: level | Steady frames: correlation with DVSI's waveform, median | First frame of a tone: level | Last frame: level | Frame after: level |
+|---|---|---|---|---|---|
+| main (`7fb5ca6`, 2.6.12) | 0.555 | 0.847 | 4.27 | 0.46 | 4.82 |
+| phase change (`468e582`) | 0.555 | 0.880 | 4.27 | 0.44 | 4.81 |
+| P25 pitch (`470374c`), 2.6.13 | 0.560 | 0.656 | 4.27 | 0.45 | 4.82 |
+
+(The mean of the steady frames' correlation: 0.582, 0.590 and 0.408; the mean over the vectors of
+the whole-file correlation: 0.576, 0.550 and 0.127.) The measurement is the one made at 2.6.8, which
+main reproduces. On 2.6.7, before the subframe synthesis, it gave 1.3 dB for the first frame of a
+tone (its faster onset is 2 dB too loud on speech), 0.62 dB and a median correlation of 0.76 for the
+steady frames, 1.24 dB for a tone's last frame and 6.7 dB for the frame after it. DVSI's decoder
+brings such a tone in at its full level over the first 80 samples of its first frame (0.13, 0.40,
+0.61, 0.90 of the tone's level in 20-sample blocks, 65 onsets of `dtmf`), and plays the unvoiced
+frame before it, whose amplitudes already hold part of the tone, much quieter than 2.6.13 did; there
+the first frame followed the mid-frame model like any voiced onset (0.01, 0.03, 0.04, 0.04, then
+0.18, 0.47, 0.71, 0.95). The steady frames' selection of this change is another (a tone frame
+between two tone frames of the same tone); on it the median correlation rises from 0.388 to 0.986
+([November 2026: tones and the octave step](#november-2026-tones-and-the-octave-step)).
 
 ### Rate 33: mid-frame pitch
 
@@ -1634,6 +1818,169 @@ reaches -0.0001. Their other checks pass.
 
 PESQ against the input falls by 0.0026 ± 0.0018 (9 of 25 vectors better), ESTOI moves by +0.0000 ±
 0.0000 (14 of 25), and PESQ against DVSI's decode by -0.0002 ± 0.0002 (10 of 25).
+
+### Tones as harmonics of a fundamental
+
+TIA-102.BABA-1 clause 7.3 ("Tone Regeneration") says only that the decoder synthesizes a tone
+"using the decoded tone amplitude and frequency parameters", and Table 9 lists each tone index's
+nominal frequencies. Annex J ("Tone Frame Parameters", normative) gives each index a fundamental f0
+and harmonic numbers l1 and l2, and clause 8 (parametric rate conversion) turns a half-rate tone
+frame into full-rate voice parameters with them (eqs 65-68: `w0 = 2 pi f0 / 8000`,
+`L = floor(3812.5 / f0)`, harmonics l1 and l2 voiced at `16384 * 10^(0.03555 (AD - 127))`, every
+other magnitude 0). US 7,970,606's Table 1 is the same table. The library played Table 9's nominal
+frequencies, in rate 33 and in D-STAR.
+
+**What DVSI's decoders play.** Measured on runs of one tone index of eight frames or more in DVSI's
+decode of its tone vectors, each spectral line's frequency where a Hann-windowed transform of the
+run's interior peaks (the same method on the library's own decode gives 697.000 and 1209.000 Hz for
+index 129, DTMF "1", its nominal pair):
+
+- **Dual tones** (AMBE+2 indices 128..163; D-STAR's 128..147 map onto them). Both lines of each of
+  the 36 tones are harmonics l1 and l2 of one fundamental. In units of 2^-19 cycle per sample
+  (0.01526 Hz) the 36 measured fundamentals lie within 0.003 of an integer. 34 equal
+  `round(f0 * 2^19 / 8000)` for Annex J's printed f0, and two do not: index 145 plays 9883 units
+  (150.80 Hz; the text prints 150.89, which would be 9889) and index 147 plays 5667 (86.47 Hz; the
+  text prints 86.5, 5669). DVSI's rate-33 and D-STAR decodes give the same 36 values. Examples:
+
+  | Index | Table 9 (Hz) | Played (Hz) |
+  |---|---|---|
+  | 128, DTMF "0" | 941 + 1336 | 942.078 + 1334.610 |
+  | 129, DTMF "1" | 697 + 1209 | 693.909 + 1214.340 |
+  | 137 | 852 + 1477 | 848.020 + 1484.035 |
+  | 160 | 350 + 440 | 351.135 + 438.919 |
+  | 161 | 440 + 480 | 424.988 + 495.819 |
+  | 162 | 480 + 620 | 487.976 + 609.970 |
+  | 163 | 350 + 490 | 350.037 + 490.051 |
+
+  Over all components the played frequency lies -0.47% to +0.48% from the nominal one for DTMF
+  (median magnitude 0.13%; the largest, index 137's 1477 Hz at 1484.04), -0.77% to +1.55% for KNOX
+  (median 0.37%; index 153's 1279 Hz at 1298.83) and -3.41% to +3.30% for call progress (median
+  0.97%; index 161's 440 Hz at 424.99).
+- **Single tones** (5..122): harmonic `l = index / 16 + 1` (integer division) of the fundamental
+  `floor(2048 * index / l)` units, which keeps the fundamental under 500 Hz. The played frequency
+  then lies 0 to 0.092 Hz below the nominal 31.25 times the index, and on it for 69 of the 118. The
+  evidence: (a) the three single tones with long runs (indices 30, 46 and 57; 10 runs of 17 frames
+  each in `alert` and `dtmf`, in both codecs' decodes) play 937.4998, 1437.470 and 1781.2500 Hz, so
+  index 46 two units low (3 times 31402), where Annex J's harmonic 4 would play it exactly; (b)
+  `alert` plays 30, 46 and 57 back to back, and the new tone's phase follows the pulse train it
+  continues (below) only for harmonic numbers in the ratio 2 : 3 : 4, within 0.0001 cycle; (c) over
+  `alltone`'s 118 single tones (one run of 3 to 5 frames each) the rule puts 61% within one unit of
+  2^-20 of the measured frequency (rms 1.4 units), against 36% (rms 4.1) for the nominal frequency,
+  the best of about 330 rules of harmonic number and grid tried; those short runs carry a bias of a
+  unit or two that is the same in both codecs' decodes. So the rule is well supported for indices
+  30, 46 and 57, and plausible, not proven, for the others.
+
+**It is the voiced synthesizer.** DVSI's tones carry the marks of its voiced synthesis, US
+8,200,497's impulse-response synthesis, which the library's [subframe
+synthesis](#synthesis-in-subframes) models: weak lines at `k f0 + m 100 Hz`; images of harmonic l at
+`(256 - l) f0` and `(256 + l) f0` about `(l / 256)^2` down (index 129: 3195.80 and 2375.52 Hz at
+-62.1 and -62.9 dB for l 7, 3716.25 and 2895.94 Hz at -72.0 and -72.3 dB for l 4, where
+`(7 / 256)^2` is -62.5 dB and `(4 / 256)^2` -72.2 dB), as the patent's K = 256 table read with
+linear interpolation leaves them; and a ratio of the two components' amplitudes equal to
+`sinc^2(pi l2 / 256) / sinc^2(pi l1 / 256)` within 0.0004 for all 36 dual tones (0.9807 for index
+140's harmonics 12 and 23).
+
+**How a tone starts.** After a frame with no voiced band DVSI's decoders start a tone as a fresh
+pulse train at the first tone frame's first sample: a component of frequency F plays
+`cos(2 pi F (t - 16) + p)`, p the phase of the output high-pass at F (`mbe_low_band_phase()`,
+second order at 100 Hz; [Output high-pass phase](#output-high-pass-phase)). The phase at onset is
+the same at every onset of a tone within 0.0002 cycle (20 to 23 onsets per DTMF tone), and the
+measured phase minus this formula is +0.0016 cycle on average, standard deviation 0.0022, over the
+64 DTMF and KNOX components. The first 80 samples ramp in, as the library already played them
+([D-STAR tone transitions](#d-star-tone-transitions), [Rate 33 tone
+transitions](#rate-33-tone-transitions)). A model of all this outside the library (steady tones
+with a fresh start, no rendering of the glide from tone to tone) follows DVSI's rate-33 decode at a
+correlation of 0.9995 to 1.0000 on the 32 one-tone vectors (`dtone_1` to `dtone_16`, `knox_1` to
+`knox_16`).
+
+**What the library does.** Rate-33 and D-STAR tone frames play these frequencies exactly:
+`mbe_tone_played_steps()` gives an AMBE+2 tone ID's components in units of 2^-19 cycle per sample
+(the 36 fundamentals with their l1 and l2, and the single-tone rule) and
+`mbe_tone_dstar_played_steps()` a D-STAR index's, through D-STAR's mapping to the AMBE+2 tone of the
+same nominal pair (144..147 to 160..163), both in `src/internal/mbe_tone.h`. Each oscillator's
+32-bit phase moves by the component's units times 2^13 a sample, so the frequency is exact. A tone
+whose first frame follows a frame that was not a tone frame starts at the phase above
+(`mbe_startToneAmbe2450()`, `mbe_startToneDstar()`); a tone after a tone, a held tone, lost frames
+that repeat a tone and a tone's tail go on from the phases the state carries, as before. Levels,
+ramps, crossfades, held tones and lost frames are as they were. Table 9's nominal lookups
+(`mbe_tone_lookup_freqs()`, `mbe_tone_lookup_dstar_freqs()`) are unchanged and still serve the
+encoders, tone detection and the validity of an index. The public `mbe_synthesizeTonef()` and
+`mbe_synthesizeTonefdstar()` play the new frequencies and continue the phases they are given: they
+have no frame history, so they never start a tone afresh. No public signature or structure changes.
+On the tone vectors' steady frames the median correlation with DVSI's waveform rises from 0.0014 to
+0.9997 in rate 33 and from 0.0005 to 0.9995 in D-STAR ([November 2026: tones and the octave
+step](#november-2026-tones-and-the-octave-step)).
+
+**Not done: one pulse train for speech and tones.** DVSI's decoders play a tone through the voiced
+synthesizer, and the library still plays it from two oscillators beside it. So:
+
+- a tone after a voiced voice frame continues that frame's pulse train on DVSI's decoder, the pulse
+  rate crossing linearly to the tone's fundamental over the tone's first 80 samples (`cp2` and
+  `cp31`: predicted pulse phase 0.4798 and 0.8068 cycle, measured 0.4805 and 0.807; `cp0` and
+  `cp1`, whose tones follow an unvoiced frame, start fresh), and starts fresh here;
+- a tone after another tone continues the train on DVSI's decoder: of 134 changes from tone to tone
+  in nine vectors (`dtmf4`, `dtmf4r`, `dtmf8`, `dtmf8r`, `dtmf15n`, `dtmf15p`, `dtmf25`, `dtmf50`,
+  `dtmf100`), the same in both codecs, 66 follow the plain linear crossing, 53 the octave up and 10
+  the octave down of [The pulse train across an octave](#the-pulse-train-across-an-octave), each
+  within 0.0012 cycle of the prediction, and 5 cannot be told (index 138, whose harmonics 6 and 14
+  leave the pulse phase open by half a cycle); here the oscillators go on from their phases;
+- a voiced frame after a tone continues the tone's train on DVSI's decoder and starts a new one
+  here (rate 33 `dtmf`: 40 voiced frames right after a tone, the second half of the frame at a
+  median correlation of -0.03 with DVSI's on `fac0111`; not measured again, since nothing in this
+  change touches it);
+- the two components of a dual tone differ by the sinc^2 droop on DVSI's decoder (up to 0.17 dB,
+  index 140), and play at one level here.
+
+12 of the 50 rate-33 tone vectors with three steady frames or more are cases of the first two.
+
+### The pulse train across an octave
+
+Through voiced speech the pulse train of [Synthesis in subframes](#synthesis-in-subframes) moves its
+rate linearly from one model's pitch to the next's across a subframe. Where the step is about an
+octave DVSI's decoders do not glide. With R the new pitch period over the old: at 1.6 < R < 2.4 the
+old train's phase (in [0, 1)) and its rate are halved first, and at 0.4 < R < 0.6 its phase is
+doubled (modulo 1) and its rate doubled; the linear crossing then follows as at any step.
+TIA-102.BABA and TIA-102.BABA-1 define no pulse train, so this is not a departure from their text.
+
+**On tones.** Of the 134 changes from tone to tone of [Tones as harmonics of a
+fundamental](#tones-as-harmonics-of-a-fundamental), where DVSI's decoder carries the train from one
+tone to the next, the 53 at R 0.528 to 0.584 follow the doubled train, the 10 at R 1.712 the halved
+one, and the 66 at R 0.73 to 1.353 and 2.475 to 2.98 the plain crossing, each within 0.0012 cycle.
+
+**On speech**, `fac0111`'s decode of the 25 development and validation vectors against DVSI's:
+
+- **Onsets.** Of the D-STAR voiced runs that start after a frame with no voiced band (three voiced
+  frames or more, loud; out of line where the two frames after the first correlate with DVSI's under
+  0.8), 25 of 1,945 are out of line, 20 of them after a pitch-carrying code (11 of 421 after codes
+  that pulse the frame's own subframe, 9 of 69 after codes that pulse both subframes; 3 of 1,044
+  after a plain unvoiced frame). After a pitch-carrying code the first subframe runs at the
+  geometric mean of the carried and the new pitch ([Voiced onsets and
+  offsets](#voiced-onsets-and-offsets)), so the second subframe steps by the square root of the new
+  period over the carried one. By that ratio, of 490 such onsets: 0.50-0.55, 1 of 4 out of line;
+  0.55-0.60, 18 of 21; 0.60-0.65, 0 of 39; 0.65-1.6, 1 of 426.
+- **Inside voiced runs** (frames in line over the two frames before; the mid-frame model sits at
+  the geometric mean, so each subframe steps by the square root of the frame-to-frame ratio). The
+  frames whose frame-to-frame pitch ratio is 0.30 to 0.42 (per-subframe period ratios 1.62, 1.62,
+  1.62 and 1.72) are one in D-STAR, three in rate 33 and none in P25, and all four lose the
+  alignment (correlation of the two frames after: 0.65; 0.40, 0.38 and -0.23). Frames at
+  per-subframe period ratios of 1.53 and below (pitch ratio 0.425 and up) and of 0.61 and above
+  (pitch ratios up to 2.68: D-STAR 2.667, P25 2.677) keep it.
+
+**The edges** are bracketed, not measured: a per-subframe period ratio of 1.534 glides and 1.618
+halves; 2.475 glides; 0.611 glides and 0.584 doubles. The library takes 20% on either side of 2 and
+of 1/2 (`octave_step()` in `src/core/mbe_subframe.c`).
+
+**The library** takes the step wherever both models of an interval are voiced, in every codec
+path's subframe synthesis, in rendering and in `mbe_advance_subframes()` alike. Pulses already
+launched keep their times and models: only the phase and the rate the interval starts from change.
+The public `mbe_synthesizeSpeechf()` has no pulse train and is unchanged.
+
+**Effect.** D-STAR's onsets out of line fall from 25 to 4 of 1,945 (after codes that pulse the own
+subframe 11 to 0, after codes that pulse both 9 to 0, after a plain unvoiced frame 3 to 2, after
+codes that pulse the mid-frame subframe 2 to 2). The four frames inside voiced runs come back in
+line (D-STAR 0.647 to 0.939; rate 33, median, 0.383 to 0.873). P25 has no pitch-carrying codes; 60
+of its speech frames change by this rule alone, and their residual against DVSI's, as a share of
+all the vectors' signal energy, falls from 0.00176 to 0.00127.
 
 ### Amplitude limit
 
@@ -2023,7 +2370,8 @@ this change alone ([November 2026: encoders and rate-33 rows 18 to
 |---|---|---|---|
 | Rate-33 u3 bits 8-5 | Table 8: b3(0), b4(2), b4(1), b4(0) | b4(2), b4(1), b4(0), b3(0) | DVSI |
 | Rate-33 pitch | Annex A table | smooth log2 law | DVSI |
-| P25 pitch | eq 46: `w0 = 4 pi / (b0 + 39.5)` | on speech and its pulse-train vectors, that pitch times `1 + g`, g between -0.071% and +0.034%, repeating every half octave of the period; a tone its encoder sent as voice frames at eq 46's harmonic frequencies | a fit to DVSI's pitch on speech, for every P25 frame: on tones sent as voice frames the steady frames' median correlation with DVSI's waveform falls from 0.880 to 0.656 (0.847 on main) ([P25 pitch](#p25-pitch)) |
+| P25 pitch | eq 46: `w0 = 4 pi / (b0 + 39.5)` | on speech and its pulse-train vectors, that pitch times `1 + g`, g between -0.071% and +0.034%, repeating every half octave of the period; a tone its encoder sent as voice frames at eq 46's fundamental cut to a grid of 2^-19 cycle per sample | a fit to DVSI's pitch on speech, for every P25 frame but a recognised tone frame, which plays the grid pitch ([P25 pitch](#p25-pitch), [P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)) |
+| P25 tones sent as voice frames | TIA-102.BABA has no tone frames: every voice frame plays its decoded harmonics at eq 46's pitch | a voice frame whose pitch code and voicing word are those its encoder sends for a DTMF, KNOX or single tone, and whose tone harmonics dominate, plays a tone model: the tone's harmonics at one level, the others at least 27 dB down, eq 46's fundamental cut to a 2^-19 grid; call-progress tones play as decoded | DVSI, by a test with two measured limits ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)) |
 | Rate-33 harmonic count, b0 17 | Annex A: 11 | 12 | DVSI |
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
@@ -2031,6 +2379,7 @@ this change alone ([November 2026: encoders and rate-33 rows 18 to
 | Voiced synthesis (P25, rate 33) | eq 127-141: a frame in one piece; harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS`; the phase advances by `l 80 (w0(-1) + w0(0))` per frame, through unvoiced frames too | two 10 ms subframes around a mid-frame model, linear crossfades, a train of pitch pulses that starts afresh after an unvoiced subframe, harmonic phases regenerated from the decoded log2 amplitudes | DVSI ([Synthesis in subframes](#synthesis-in-subframes), [Phase regeneration](#phase-regeneration)) |
 | Where voicing starts and ends inside a frame (P25, rate 33) | the frame's V/UV decisions hold for the whole frame | the pitch code of a frame with no voiced band (P25), V/UV row 15 (rate 33) and how far up the voicing reaches (P25) move it to mid-frame | DVSI ([Voiced onsets and offsets](#voiced-onsets-and-offsets)) |
 | Rate-33 tone frames | clause 7 gives the tone a frame carries, nothing on the frames around it | the tone crossfades with the speech over 80 samples at both ends | DVSI ([Rate 33 tone transitions](#rate-33-tone-transitions)) |
+| Rate-33 tone frequencies | 7.3: the tone synthesized from its decoded frequency parameters; Table 9: the nominal frequencies | harmonics l1 and l2 of Annex J's fundamental on a grid of 2^-19 cycle per sample (indices 145 and 147 at fundamentals of its own), a single tone as harmonic `ID / 16 + 1` of a fundamental under 500 Hz; DTMF within 0.48% of nominal, call progress within 3.41% | DVSI ([Tones as harmonics of a fundamental](#tones-as-harmonics-of-a-fundamental)) |
 | Rate-33 silence frames | 4.1 eq 2: L = 14; 4.3-4.4: amplitudes decoded as a voice frame's | 15 bands, amplitudes a further 13.8 dB down, the previous frame's model held to mid-frame | DVSI ([Rate 33 silence frames](#rate-33-silence-frames)) |
 | Rate-33 mute | 5.7: bypass the synthesis, output noise uniform over [-5, 5] | noise of RMS about 0.6 (0, +-1 and a few +-2 at 16 bits); the first muted frame fades the last frame out over 80 samples; the model goes on underneath | DVSI's level, as 0 and +-1 ([Rate 33 mutes](#rate-33-mutes)) |
 | Rate-33 tone ID 255 | 7.3 and Table 9: a tone of zero amplitude, whatever AD | a lost frame, as an unusable tone index | DVSI ([Rate 33 lost frames and tones](#rate-33-lost-frames-and-tones)) |
@@ -2122,48 +2471,43 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   frame with no voiced band tells a DVSI decoder, as far as the codes measured show, that the
   voicing before lasts through its first 10 ms if it reaches 505 Hz, where DVSI's encoders end it at
   the frame's start on about a third of them.
-- P25 tones. P25 has no tone frames, and DVSI's encoder sends a tone it detects as voice frames
-  at a pitch whose harmonics carry it, with one frame of that pitch and no amplitude after it.
-  DVSI's decoder brings such a tone in at its full level over the first 80 samples of its first
-  frame (0.13, 0.40, 0.61, 0.90 of the tone's level in 20-sample blocks, 65 onsets of `dtmf`), as
-  its rate-33 decoder does a tone frame, and plays the unvoiced frame before it, whose amplitudes
-  already hold part of the tone, much quieter than this library. Here the first frame follows the mid-frame model like
-  any voiced onset (0.01, 0.03, 0.04, 0.04, then 0.18, 0.47, 0.71, 0.95), which on speech is what
-  DVSI's decoder does at every size of step (2106 P25 onsets, also those whose two strongest
-  harmonics hold 95% of the energy). What tells its decoder the two apart was not found. DVSI's
-  decoder also plays such a tone's harmonics at eq 46's frequencies, not at the pitch it plays
-  speech at (each measured harmonic within 0.35 Hz of eq 46's in the median over its frame pairs:
-  the 61 combinations of pitch code and harmonic with 60 pairs or more; not a bound on single frame
-  pairs or on harmonics not measured), while this library applies the pitch of [P25
-  pitch](#p25-pitch) to every P25 frame, which moves harmonic l by `l w0 160 g` a frame against eq
-  46's (up to 145 mrad a frame over the 61 measured combinations, b0 127's 17th harmonic; -307 mrad
-  a frame on the ninth harmonic of b0 2, which `alltone` holds for a few frames): a known difference
-  that the P25 pitch makes larger. What tells DVSI's decoder these frames from speech was not found
-  either. Over the 52 tone vectors decoded as P25, frame for frame at lag 0 (a frame is loud when
-  DVSI's frame RMS is above 30; 17,334 steady frames, loud with every neighbour loud: 17,286 between
-  two loud frames and 48 a file's first or last frame, with one neighbour only; 791 first loud
-  frames of a tone; 743 first quiet frames after one), against DVSI's decode (level: mean absolute
-  difference, dB):
-
-  | Build | Steady frames: level | Steady frames: correlation with DVSI's waveform, median | First frame of a tone: level | Last frame: level | Frame after: level |
-  |---|---|---|---|---|---|
-  | main (`7fb5ca6`, 2.6.12) | 0.555 | 0.847 | 4.27 | 0.46 | 4.82 |
-  | phase change (`468e582`) | 0.555 | 0.880 | 4.27 | 0.44 | 4.81 |
-  | P25 pitch (`470374c`), and this branch | 0.560 | 0.656 | 4.27 | 0.45 | 4.82 |
-
-  (The mean of the steady frames' correlation: 0.582, 0.590 and 0.408; the mean over the vectors
-  of the whole-file correlation: 0.576, 0.550 and 0.127.) The measurement is the one made at
-  2.6.8, which main reproduces. On 2.6.7, before the subframe synthesis, it gave 1.3 dB for the
-  first frame of a tone (its faster onset is 2 dB too loud on speech), 0.62 dB and a median
-  correlation of 0.76 for the steady frames, 1.24 dB for a tone's last frame and 6.7 dB for the
-  frame after it. The subframe synthesis brought the steady frames and a tone's last and next
-  frames closer to DVSI's and the first frame further from it; the phase change raised the steady
-  frames' correlation, and the P25 pitch lowers it. The P25 pitch moves the levels by 0.01 dB or
-  less; the phase change moved the last frame's by 0.02 dB (0.46 to 0.44) and the others by 0.01 dB
-  or less.
+- P25 tones sent as voice frames ([P25 tones sent as voice
+  frames](#p25-tones-sent-as-voice-frames)). The first frame or two of a tone can fail the test and
+  play as speech: a first frame passes the dual-tone limit with as little as a third of its energy
+  in the tone's harmonics, and a tone's first frames still differ from DVSI's more than its steady
+  ones (a median residual of -13.0 dB on 1,255 first tone frames, where rate 33's reach -31.6 dB).
+  Call-progress tones play as their decoded harmonics, as on DVSI's decoder. Of the single tones
+  only `alert`'s 30, 46 and 57 have long runs to measure, and the single-tone limit rests on the
+  isolated speech frames of the 25 development and validation vectors that pass a single-tone row
+  (five below it, about 65 above). Between DVSI's phases and the regenerated ones mean offsets of
+  0.00 to 0.07 cycle remain (median magnitude 0.015), largest for harmonics 4 and 7 at short
+  periods.
+- Rate-33 and D-STAR tones beside the synthesizer ([Tones as harmonics of a
+  fundamental](#tones-as-harmonics-of-a-fundamental)). DVSI's decoders play a tone through the
+  voiced synthesizer and the library from two oscillators beside it. A tone after a voiced frame
+  takes its phase from that frame's pulse train on DVSI's decoder and starts fresh here; a tone
+  after another tone keeps the train there (plain or [across an
+  octave](#the-pulse-train-across-an-octave)) and continues the oscillators here; a voiced frame
+  after a tone continues the tone's train there and starts a new one here (rate 33 `dtmf`: the
+  second half of the 40 voiced frames right after a tone correlates with DVSI's at a median -0.03 on
+  `fac0111`; not measured again); and the two components of a dual tone differ by the sinc^2 droop
+  there (up to 0.17 dB, index 140) and play at one level here. 12 of the 50 rate-33 tone vectors
+  with three steady frames or more hold the first two cases, and they are the 12 whose steady
+  frames' median correlation with DVSI's stays under 0.99. The single tones other than 30, 46 and 57
+  rest on a rule that is plausible, not proven.
+- The `sinc^2(pi l / 256)` droop on voiced speech. On steady, fully voiced speech frames the median
+  gain of DVSI's decoder over the library's, by harmonic number, follows it in rate 33 up to l 29
+  (-0.33 dB at l 25-29, against -0.31) and partly in D-STAR, not in P25, and a fit takes nothing off
+  the 0.6 to 0.75 dB rms scatter. It is modelled for P25's tone frames only.
 - P25 voiced onsets whose voicing covers the lowest band and bands above it but not 505 Hz: 17 of
   64 start in the frame's second subframe on DVSI's decoder and no rule found separates them
   ([Voiced onsets and offsets](#voiced-onsets-and-offsets)); all start with the frame here.
+  Measured again for 2.6.14 on `fac0111`'s decode of the development and validation vectors, 42 of
+  1,940 P25 onsets are out of line, and 29 of the 36 that a lag lines up are 80 samples late modulo
+  the period: a subframe late. By the onset frame's voicing word, the 97 onsets with band 1 voiced,
+  band 2 unvoiced and others voiced are 62 in line, 17 a subframe late and 18 otherwise; of the
+  1,694 whose word starts `11`, 27 are not in line. No rule was found, and this change set models
+  none.
 - A single band whose voicing changes between two frames, on a DVMEGA DVstick 30
   ([#157](https://github.com/arancormonk/mbelib-neo/issues/157)): a band above 1 kHz that turns
   voiced starts with the frame and one that turns unvoiced lasts to mid-frame, and the lowest band
@@ -2208,7 +2552,10 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   (rate 33) of DVSI's, sample for sample at lag 0, pooled over the 20 vectors with each vector
   scaled to the same RMS level of DVSI's decode; these figures and their parts below are pooled so.
   The means over the vectors of each vector's own ratio are 0.0317, 0.0664 and 0.0561 ([November
-  2026: phase regeneration and pitch](#november-2026-phase-regeneration-and-pitch)). Of it:
+  2026: phase regeneration and pitch](#november-2026-phase-regeneration-and-pitch)), and with the
+  changes of 2.6.14 0.0191, 0.0633 and 0.0527 ([November 2026: tones and the octave
+  step](#november-2026-tones-and-the-octave-step)); the pooled figures and their parts below were
+  measured for 2.6.13. Of it:
   - Voiced runs that line up with DVSI's (run correlation 0.8 or more) hold 0.018, 0.021 and 0.033.
     P25's no longer grow with the run's length (0.019 to 0.028 over frames 0 to 3, 4 to 7 and so
     on); D-STAR's are 0.016 to 0.018 over a run's first twenty frames and 0.037 past them; rate 33's
@@ -2217,7 +2564,10 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
     the signal energy as residual, 44 of them off from their first frames (19 after a frame whose
     pitch code is one of the 56 kept for frames with no voiced band and names a pattern for the
     frame's own subframe, 12 after one naming both subframes, 4 after one naming the mid-frame
-    subframe and 9 after a plain unvoiced frame); P25 85 of 1959 runs holding 0.045, 83 off from
+    subframe and 9 after a plain unvoiced frame; counted for 2.6.14 on the development and
+    validation vectors, three voiced frames or more, the octave step brings every out-of-line onset
+    after a code that pulses the own subframe or both in line, [The pulse train across an
+    octave](#the-pulse-train-across-an-octave)); P25 85 of 1959 runs holding 0.045, 83 off from
     their first frames, which no single lag lines up (of the 77 whose first three frames correlate
     under 0.8, 22 reach 0.85 at any lag within 130 samples); rate 33 43 of 1825 runs holding 0.030,
     31 of them off from their first frames (0.012) and 12 starting aligned and losing it inside the
@@ -2227,7 +2577,10 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   - Inside voiced runs rate 33 loses the alignment with DVSI's waveform on 0.6% of its frames
     (D-STAR 0.2%, P25 0.3%; frames whose two frames before correlate 0.9 or more and whose two
     frames after fall under 0.8), more often across large pitch steps (over 20%: 6 of 65 in rate
-    33). What moves its pulse train there, as what sets its mid-frame pitch ([Rate 33: mid-frame
+    33). Of the frames at the largest steps, a frame-to-frame pitch ratio of 0.30 to 0.42 (three in
+    rate 33, one in D-STAR), all four come back in line with the octave step of 2.6.14 ([The pulse
+    train across an octave](#the-pulse-train-across-an-octave)). What moves the pulse train at the
+    others, as what sets rate 33's mid-frame pitch ([Rate 33: mid-frame
     pitch](#rate-33-mid-frame-pitch)), is not known.
 - DVSI's rate-33 encoder sends V/UV indices 17-31 on some voice frames, where clause 4.2
   searches 0-16 and keeps the lowest index on ties, and this library's encoder never sends them.
@@ -2239,10 +2592,12 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
 - Rate-33 mute noise: DVSI's muted samples include +-2 (2.0% each on `dam_e10_hd`); ours are 0 and
   +-1 only ([Rate 33 mutes](#rate-33-mutes)).
 - After a rate-33 tone, the pulse train of a voiced frame does not line up with DVSI's (median
-  correlation of the next frame with DVSI's waveform 0.26, against 0.9 and more in running speech),
-  and what DVSI's decoder plays after a tone inside speech (speech, a tone, then different speech)
-  is not known: its tone vectors hold loud frames before a tone only between tones, where the tone
-  signal is coded as voice frames ([Rate 33 frames after a mute or a
+  correlation of the next frame with DVSI's waveform 0.26, against 0.9 and more in running speech):
+  DVSI's decoder continues the tone's pulse train into it ([Tones as harmonics of a
+  fundamental](#tones-as-harmonics-of-a-fundamental)), and the library plays its tones beside the
+  synthesizer. What DVSI's decoder plays after a tone inside speech (speech, a tone, then different
+  speech) is not known: its tone vectors hold loud frames before a tone only between tones, where
+  the tone signal is coded as voice frames ([Rate 33 frames after a mute or a
   tone](#rate-33-frames-after-a-mute-or-a-tone)).
 - A rate-33 silence frame right after a mute or a tone rises from silence to its own model. No DVSI
   vector shows that case, and the rule is a design choice ([Rate 33 frames after a mute or a
@@ -2629,9 +2984,11 @@ Main (`7fb5ca6`, 2.6.12) against the three decoder changes of 2.6.13:
 - [Phase regeneration](#phase-regeneration): the codec paths regenerate voiced phases from each
   frame's decoded log2 amplitudes, as DVSI's decoders do.
 - [P25 pitch](#p25-pitch): P25 plays each pitch code at a fit to the pitch DVSI's decoder plays on
-  speech, eq 46's moved by at most 0.071%. DVSI's decoder plays a tone sent as voice frames at eq
-  46's harmonic frequencies, and there the change lowers the steady frames' median correlation with
-  DVSI's waveform from 0.880 to 0.656 (0.847 on main).
+  speech, eq 46's moved by at most 0.071%. DVSI's decoder plays a tone sent as voice frames at
+  another pitch, and there the change lowers the steady frames' median correlation with DVSI's
+  waveform from 0.880 to 0.656 (0.847 on main). 2.6.14 plays such frames at the pitch DVSI's decoder
+  plays them at, eq 46's fundamental cut to a 2^-19 grid, and that cost is gone ([November 2026:
+  tones and the octave step](#november-2026-tones-and-the-octave-step)).
 - [Rate 33: mid-frame pitch](#rate-33-mid-frame-pitch): between two voiced rate-33 frames of
   different pitch the mid-frame pitch is the geometric mean times `1 - 3.0e-4`.
 
@@ -2672,8 +3029,8 @@ there), the two comparisons' joint lags differ on some vectors.
   (+0.070 dB), is on a KNOX vector, which D-STAR codes as voice. On P25's tone vectors, whose tone
   rows no gate set of the P25 pitch checks, the P25 pitch lowers the steady tone frames' median
   correlation with DVSI's waveform from 0.880 to 0.656, since DVSI's decoder plays a tone sent as
-  voice frames at eq 46's harmonic frequencies ([P25 pitch](#p25-pitch), [Known
-  differences](#known-differences)).
+  voice frames at another pitch ([P25 pitch](#p25-pitch); since 2.6.14 the library plays it so:
+  [P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)).
 - **Encoders.** Every encoder's bits are unchanged: the three encoders give the same parameter rows
   in all four builds (main and each change) for the 95 DVSI inputs other than `irstia` and `mark`.
 - **Cost.** A complete hard-decision frame decode takes 3.2-3.4% longer, measured at `3e0c6ce`
@@ -2770,6 +3127,127 @@ envelope correlation rises by 0.0013, 0.0005 and 0.0010; the distance from the i
 0.025 and 0.015 dB; the level moves by +0.016, +0.018 and +0.017 dB; and every encoder's bits are
 unchanged on both vectors.
 
+### November 2026: tones and the octave step
+
+The head of PR #196 (`fac0111`, 2.6.13) against the changes of 2.6.14:
+
+- [The pulse train across an octave](#the-pulse-train-across-an-octave): the pulse train is taken an
+  octave down or up before a subframe step whose period ratio lies within 20% of 2 or of 1/2.
+- [Tones as harmonics of a fundamental](#tones-as-harmonics-of-a-fundamental): rate-33 and D-STAR
+  tone frames play the harmonics DVSI's decoders play, and a tone after a frame that was not a tone
+  frame starts as a fresh pulse train.
+- [P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames): a P25 voice frame that carries
+  a DTMF, KNOX or single tone as DVSI's encoder sends it plays the tone model DVSI's decoder plays.
+
+Both builds aligned freely first and were then scored at their joint lags, both runs' encodings
+decoded by the candidate's decoder. The study that found these rules read DVSI's tone vectors and
+the development and validation vectors, never `irstia` or `mark`; the change set was measured and
+gated on the development, validation, tone and channel partitions, and the final partition is held
+out ([Method](#method); below).
+
+**Tones**, each steady tone frame (a tone frame between two tone frames of the same tone) against
+DVSI's decode of the same bits, sample for sample at lag 0, on the vectors with three steady frames
+or more (rate 33 50, D-STAR 34, P25 47), and the residual of a tone's first frame against DVSI's:
+
+| Codec | Steady frames | Correlation, median | Correlation, mean | First tone frames: median residual |
+|---|---|---|---|---|
+| Rate 33 | 12,555 | +0.0014 → +0.9997 | -0.015 → +0.647 | +3.0 → -31.6 dB (1,021 frames) |
+| D-STAR | 10,570 | +0.0005 → +0.9995 | -0.017 → +0.584 | +3.0 → -31.3 dB (989) |
+| P25 | 12,731 | +0.388 → +0.986 | +0.288 → +0.963 | -2.5 → -13.0 dB (1,255) |
+
+- In rate 33, 38 of the 50 vectors reach a median steady-frame correlation of 0.99 or more. The 12
+  that do not are the cases not modelled ([Known differences](#known-differences)): tones after a
+  voiced frame (`cp2`, `cp31`), tones changed back to back (`dtmf4`, `dtmf4r`, `dtmf8`, `dtmf8r`,
+  `dtmf15n`, `dtmf15p`, `dtmf25`, `dtmf50`, `dtmf100`) and `alert`'s single tones back to back.
+- In P25 the mean over the vectors of each vector's median rises from 0.114 to 0.980. PR #196 quoted
+  0.880 to 0.656 for its P25 pitch on another selection of steady frames ([P25 pitch](#p25-pitch));
+  the P25 tone frames now play the grid pitch, not the speech pitch.
+- Over the first 80 samples after a tone the median residual falls from +2.9 to -30.5 dB in rate 33
+  (976 frames), from +3.0 to -23.4 dB in D-STAR (960) and from -6.2 to -10.3 dB in P25 (705).
+- On the scoreboard (means over the vectors that pair), the steady tones' relative frequency error
+  against DVSI's output falls by 0.001579 (D-STAR) and 0.003214 (rate 33), to about zero from means
+  of 0.0016 and 0.0033, and rises on no vector; their level error falls by 0.027 and 0.012 dB, and
+  the balance of a dual tone's components moves by at most 0.002 dB on a vector. No vector plays a
+  wrong tone more often, and the encoders' tone frames agree with DVSI's exactly as before. In P25,
+  on the 47 or 48 vectors that pair, the balance error falls from 2.0999 to 0.0159 dB, the level
+  error from 0.2587 to 0.0959 dB and the wrong-tone fraction from 0.0169 to 0; the detector's
+  agreement with DVSI's output (not gated) rises from 0.9477 to 0.9994.
+
+**Speech**, decoding DVSI's bits: the waveform correlation with DVSI's decode, sample for sample,
+partition means (vectors up and down at four decimals), and the residual energy against DVSI's
+decode, means over the vectors of each vector's own ratio:
+
+| Codec | Partition | Waveform corr. vs DVSI | Vectors up / down | Residual energy vs DVSI |
+|---|---|---|---|---|
+| D-STAR | development | 0.9844 → 0.9907 | 11 / 0 | 0.0317 → 0.0191 |
+| D-STAR | validation | 0.9612 → 0.9820 | 4 / 0 | 0.0779 → 0.0363 |
+| P25 | development | 0.9672 → 0.9687 | 8 / 1 (`ucarm15a` -0.0003) | 0.0664 → 0.0633 |
+| P25 | validation | 0.9855 → 0.9855 | 3 / 1 (`tambf22b` -0.0001) | 0.0289 → 0.0289 |
+| Rate 33 | development | 0.9720 → 0.9737 | 5 / 0 | 0.0561 → 0.0527 |
+| Rate 33 | validation | 0.9788 → 0.9788 | 3 / 0 | 0.0424 → 0.0423 |
+
+The distance from DVSI's decode falls on both partitions (development by 0.0041 dB for D-STAR,
+0.0008 for P25 and 0.0015 for rate 33, rising on no vector; validation by 0.0104, 0.0008 and 0.0005
+dB, rising by at most 0.0006 dB on a vector). The envelope correlation with DVSI's decode moves by
+less than 0.0001, the distance from the input and the level against DVSI's by less than 0.0004 and
+0.0005 dB (partition means), and no encoder's bits change.
+
+**PESQ** ([Method](#method)) of the decode of DVSI's bits on the 25 development and validation
+vectors (mean paired change ± standard error clustered by recording): against the input +0.0008 ±
+0.0007 (D-STAR), -0.0000 ± 0.0002 (P25) and +0.0003 ± 0.0002 (rate 33); against DVSI's decode
++0.0104 ± 0.0045 (D-STAR, 16 of 25 vectors better), +0.0003 ± 0.0008 (P25) and +0.0009 ± 0.0012
+(rate 33).
+
+**Channel errors.** No mute decision changes at any error rate, hard or soft. On the loud frames
+neither decoder mutes the distance from DVSI's decode falls by 0.030 dB for D-STAR (hard decisions;
+0.008 soft), 0.010 dB for P25 (it rises by 0.0004 with soft decisions) and 0.023 dB for rate 33
+(0.007), means over the four error rates.
+
+**Cost.** A complete hard-decision frame decode takes as long as on `fac0111` within the spread of
+the measurement: -0.5% (D-STAR), +0.3% (AMBE+2) and +0.1% (IMBE), medians of seven invocations
+([benchmarks](testing.md#tones-and-the-octave-step)). Before the P25 tone test looked a frame's
+pitch code up in an index, its scan of the table cost IMBE 1.4%.
+
+**Gate sets**, declared in `c736edf` before any build of the change set was scored, and evaluated
+in one run over the development, validation, tone and channel partitions, `fac0111` against the
+change set:
+
+| Gate set | Result | Failing checks |
+|---|---|---|
+| `tone-model-development` | passes | |
+| `tone-model-validation` | passes | |
+| `tone-model-tones` | fails 5 of its 20 checks | P25: the balance error falling by 1.0 dB, the level error not rising, the frequency error not rising by 0.0005 on any vector and the wrong-tone fraction not rising, all four for `knox_9`, which the comparison cannot pair; rate 33: the detector's agreement not falling on any vector (`alltone` -0.003175, allowed 0) |
+| `tone-model-channel` | passes | |
+| `tone-model-final` | declared; to be scored once, after the review | |
+
+The four P25 checks fail because the scoreboard cannot pair `knox_9`: `fac0111`'s P25 decode of it
+has no steady tone window the scoreboard's tone detector recognises, so its tone metrics are null
+there and a paired check refuses the vector. On the vectors that pair, each of the four moves the
+way its check asks (the figures under **Tones** above; the frequency error rises by at most 8.7e-05
+on a vector, `cp31`), and `knox_9`'s detector agreement goes from 0 to 1. The rate-33 failure is
+one detector window of `alltone`, which holds some 300 short single-tone runs; the mean agreement
+over the vectors rises by 0.003886. Both failures are kept as declared, and the gate sets were not
+changed.
+
+The first build of the P25 tone path (`d245efd`, one limit of 0.375 for single and dual tones) was
+scored in the same way first. D-STAR and rate 33 came out as above, `tone-model-tones` failed the
+same five checks and `tone-model-channel` passed, but the P25 checks of `tone-model-development`
+failed five times (the waveform correlation's mean, -0.004377, and every vector, `noisy` -0.0585;
+the distance from DVSI's decode, mean +0.02598 dB and `noisy` +0.1005; the envelope correlation,
+-0.001189) and those of `tone-model-validation` four times (the waveform correlation's mean,
+-0.007197, and every vector, `t03` -0.0275; the distance, +0.01615 and +0.0318 dB). The single-tone
+limit of [P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames) followed from that, as
+`b58d91d`, before any of this documentation, and was scored against the same gate sets.
+
+**The final partition.** The gate set `tone-model-final` was declared with the others in `c736edf`,
+before any build was scored: the checks of `tone-model-development` on `irstia` and `mark` (in
+every mode the waveform correlation with DVSI's decode falls by no more than 0.0002 on the mean and
+0.001 on any vector, the distance from DVSI's decode rises by no more than 0.01 dB on the mean and
+0.03 dB on any vector, the envelope correlation falls by no more than 0.001, the distance from the
+input rises by no more than 0.01 dB, the level against DVSI's moves by at most 0.05 dB, and every
+encoder's bits are unchanged). The final partition will be scored once for this change set, after
+its review, `fac0111` against the reviewed branch, against that gate set.
+
 ### Scoring history
 
 The final partition was scored twice, with the library unchanged in between. The first scoring fixed
@@ -2838,3 +3316,13 @@ partitions were scored alone. The outcomes reported above are the combined run's
 partition was scored once, for the three changes together, after they and the review's fixes were
 complete, and passed ([November 2026: phase regeneration and
 pitch](#november-2026-phase-regeneration-and-pitch)).
+
+The three changes of 2.6.14 were scored together, `fac0111` against the change set, on the
+development, validation, tone and channel partitions in one combined run with the four gate sets
+declared in `c736edf`, before any build of the change set was scored. The first build of the P25
+tone path, `d245efd`, failed `tone-model-development` and `-validation` on P25; its single-tone
+limit was corrected (`b58d91d`) and the change set scored again with the same gate sets, builds of
+the baseline and protocol. `tone-model-tones` failed the same five checks both times and is kept as
+declared ([November 2026: tones and the octave step](#november-2026-tones-and-the-octave-step)).
+The final partition has not been scored for 2.6.14: it is scored once, after the review, against
+`tone-model-final`.
