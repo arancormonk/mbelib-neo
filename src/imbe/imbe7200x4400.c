@@ -143,6 +143,21 @@ imbe_dvsi_pitch_offset(int b0) {
  * count, the harmonic where the high-band shelf starts) follow the pitch
  * played and do move at some codes.
  */
+/* Eq 46's nominal fundamental of pitch code b0 (0..207), in float: rounded to
+ * float here, where the contract names it, as under x87 excess precision the
+ * quotient could otherwise reach what follows unrounded (mbe_round_to_float(),
+ * mbe_math.h). */
+static float
+imbe_nominal_fundamental(int b0) {
+    return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+}
+
+/* Eq 47's harmonic count of a nominal fundamental. */
+static int
+imbe_harmonic_count(float nominal) {
+    return (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
+}
+
 static int
 imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
@@ -159,13 +174,10 @@ imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cu
         return 1;
     }
 
-    /* Rounded to float here, where the contract names it: under x87 excess
-     * precision the quotient could otherwise reach the correction below
-     * unrounded (mbe_round_to_float(), mbe_math.h). */
-    const float nominal = mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    const float nominal = imbe_nominal_fundamental(b0);
     cur_mp->w0 = nominal;
 
-    int L = (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
+    int L = imbe_harmonic_count(nominal);
     if ((L > 56) || (L < 9)) {
 #ifdef IMBE_DEBUG
         fprintf(stderr, "invalid L: %i\n", L);
@@ -739,6 +751,33 @@ imbe_power(const float* magnitude) {
     return (double)*magnitude * (double)*magnitude;
 }
 
+/* A positive, finite float that is not subnormal, read from its bit pattern
+ * (fast-math folds isfinite()), as the synthesis reads a magnitude
+ * (positive_normal() in mbe_subframe.c): anything else is no magnitude. */
+static int
+imbe_positive_normal(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return bits - UINT32_C(0x00800000) < UINT32_C(0x7F000000);
+}
+
+/* Whether the tone harmonics l1 and l2 are those of a row of pitch code b0
+ * (whatever its voicing word): the rows the index gives for b0, so that a
+ * code without rows costs one lookup. */
+static int
+imbe_tone_row_of(int b0, int l1, int l2) {
+    if (b0 < 0 || b0 > IMBE_TONE_LAST_CODE) {
+        return 0;
+    }
+    for (unsigned i = imbe_tone_first_row[b0]; i < imbe_tone_first_row[b0 + 1]; i++) {
+        const struct imbe_tone_row* row = &imbe_tone_rows[i];
+        if (row->b0 == b0 && row->l1 == l1 && row->l2 == l2) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The share of the other harmonics against the tone's, squared: the mean of
  * M_l^2 over the other harmonics over its mean over the tone's (one harmonic
  * for a single tone); -1 if a magnitude is not finite or the tone's are 0. */
@@ -767,7 +806,9 @@ imbe_tone_share2(const mbe_parms* mp, int l1, int l2) {
 /*
  * The tone a decoded P25 voice frame carries, as the word to keep in Vl[0], or
  * 0: among the rows of the frame's pitch code and voicing word whose harmonics
- * are within L, the one whose tone harmonics dominate most, if the others'
+ * are within L and whose tone magnitudes are positive, finite and normal
+ * (imbe_positive_normal(), as imbe4400_take_tone() asks of a word it plays),
+ * the one whose tone harmonics dominate most, if the others'
  * rms is under the row's share of the tone's (IMBE_TONE_SHARE_DUAL,
  * IMBE_TONE_SHARE_SINGLE; decoded magnitudes, before enhancement). The rows of
  * one pair are all dual or all single tones. Every voice frame passes here, so
@@ -785,7 +826,8 @@ imbe_tone_word(const mbe_parms* mp, int b0) {
     int found = 0;
     for (unsigned i = imbe_tone_first_row[b0]; i < imbe_tone_first_row[b0 + 1]; i++) {
         const struct imbe_tone_row* row = &imbe_tone_rows[i];
-        if (row->b0 != b0 || row->b1 != word || row->l2 > mp->L) {
+        if (row->b0 != b0 || row->b1 != word || row->l2 > mp->L || !imbe_positive_normal(&mp->Ml[row->l1])
+            || !imbe_positive_normal(&mp->Ml[row->l2])) {
             continue;
         }
         const double limit = (row->l1 == row->l2) ? IMBE_TONE_SHARE_SINGLE : IMBE_TONE_SHARE_DUAL;
@@ -1099,8 +1141,12 @@ imbe4400_mute_noise(const mbe_process_result* result) {
 #define IMBE_TONE_LEVEL 0.988
 
 /* The tone a frame's model carries (the word imbe_tone_word() left in Vl[0])
- * and its level, or 0; read before enhancement. A word a caller's state holds
- * counts only with a pitch code and harmonics a decode can give. */
+ * and its level, or 0; read before enhancement. A word counts only as a decode
+ * leaves it in the model it sits in: the flag, a pitch code with rows, tone
+ * harmonics that are one of that code's rows, the model at that code's
+ * harmonic count (so a word copied into a state of another pitch counts for
+ * nothing), and tone magnitudes that are positive, finite and normal. A
+ * caller's state can hold any other word; it plays as no tone. */
 struct imbe_tone {
     int b0;
     int l1;
@@ -1111,20 +1157,21 @@ struct imbe_tone {
 static int
 imbe4400_take_tone(const mbe_parms* mp, struct imbe_tone* tone) {
     const int word = mp->Vl[0];
-    if ((word & ~0x00FFFFFF) != IMBE_TONE_FLAG || !mbe_harmonic_count_is_valid(mp->L)) {
+    if ((word & ~0x00FFFFFF) != IMBE_TONE_FLAG) {
         return 0;
     }
     tone->b0 = (word >> 16) & 0xFF;
     tone->l2 = (word >> 8) & 0xFF;
     tone->l1 = word & 0xFF;
-    if (tone->b0 > 207 || tone->l1 < 1 || tone->l1 > tone->l2 || tone->l2 > mp->L) {
+    if (!imbe_tone_row_of(tone->b0, tone->l1, tone->l2)
+        || mp->L != imbe_harmonic_count(imbe_nominal_fundamental(tone->b0)) || tone->l2 > mp->L) {
         return 0;
     }
-    const double p1 = imbe_power(&mp->Ml[tone->l1]);
-    const double p2 = imbe_power(&mp->Ml[tone->l2]);
-    if (p1 < 0.0 || p2 < 0.0) {
+    if (!imbe_positive_normal(&mp->Ml[tone->l1]) || !imbe_positive_normal(&mp->Ml[tone->l2])) {
         return 0;
     }
+    const double p1 = (double)mp->Ml[tone->l1] * (double)mp->Ml[tone->l1];
+    const double p2 = (double)mp->Ml[tone->l2] * (double)mp->Ml[tone->l2];
     tone->amplitude = IMBE_TONE_LEVEL * sqrt((tone->l1 == tone->l2) ? p1 : 0.5 * (p1 + p2));
     return 1;
 }
@@ -1180,6 +1227,12 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
     int frame_muted = mbe_isMaxFrameRepeat(cur_mp) || mbe_requiresMuting(cur_mp);
     struct imbe_tone tone;
 
+    /* Only imbe4400_play_tone() marks a frame MBE_FRAME_MARK_TONE, on the
+     * frame it plays: the decoders never do, and the history never holds the
+     * mark, so one here came from a caller's state and is not the frame's. */
+    if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
+        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
+    }
     mbe_moveMbeParms(cur_mp, prev_mp);
     /* The prediction history (prev_mp) keeps the decoded frame; a tone frame's
      * synthesis model is the tone model, from its decoded magnitudes. */

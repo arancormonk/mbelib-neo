@@ -479,10 +479,154 @@ test_tone_run_renders(void) {
     puts("p25 tones: a tone run renders its two components at one level; the frame after fades it out");
 }
 
+/* Two frames' samples alike, bit for bit. */
+static int
+same_samples(const float* a, const float* b, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (!same_float(a[i], b[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Parameter bits no pitch code reads as a voice frame (b0 255): the data path
+ * repeats the last frame. */
+static void
+special_frame(char imbe_d[88]) {
+    memset(imbe_d, 1, 88);
+}
+
+/* A stream after one DTMF 1 frame (b0 53, word 1110000, harmonics 4 and 7):
+ * its history holds the decoded frame and the tone word. */
+static void
+stream_after_tone(struct stream* s) {
+    char imbe_d[88];
+    float logm[57], out[160];
+    int K;
+    stream_init(s);
+    const int L = harmonics_of(53, &K);
+    tone_amplitudes(logm, L, 4, 7, 11.0f, 2.0f);
+    build_frame(imbe_d, 53, 0x70u, logm, &s->prev);
+    play(out, s, imbe_d, 0);
+    assert(s->prev.Vl[0] == tone_word(53, 4, 7) && mbe_frame_mark(&s->enhanced) == MBE_FRAME_MARK_TONE);
+}
+
+/* The frame a repeat of `s` plays, through the P25 or ProVoice data path. */
+static void
+play_repeat(float out[160], struct stream* s, int provoice) {
+    char imbe_d[88];
+    special_frame(imbe_d);
+    play(out, s, imbe_d, provoice);
+}
+
+/*
+ * A word in Vl[0] counts as a tone only as a decode leaves it: a pitch code
+ * with rows, harmonics that are one of that code's rows, the model at that
+ * code's harmonic count, and tone magnitudes that are positive, finite and
+ * normal. A repeat of a history holding any other word plays as the same
+ * history without it: a code past the table (207, with a loud harmonic 1),
+ * a code inside the table without rows (11), a row of another code (harmonics
+ * 7 and 9 at b0 53), the word of another code's row in this code's model (b0
+ * 56's 4 and 7), the real word in the model of another pitch code (b0 60), and
+ * the real word with a tone magnitude negative, zero, subnormal, infinite or
+ * not a number. The real word itself plays the tone.
+ */
+static void
+test_impossible_tone_words(void) {
+    static const uint32_t magnitudes[] = {0xC4FA0000u /* -2000 */, 0x00000000u, 0x00000001u, 0x7F800000u, 0x7FC00000u};
+    struct stream base;
+    float with_word[160], without[160];
+    stream_after_tone(&base);
+
+    struct stream s = base;
+    play_repeat(with_word, &s, 0);
+    assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_TONE && same_float(s.enhanced.w0, tone_pitch(53)));
+
+    /* The model of another pitch code (b0 60, harmonics 4 and 7 loud, a voicing word no row has). */
+    struct stream other;
+    char imbe_d[88];
+    float logm[57], out[160];
+    int K;
+    stream_init(&other);
+    tone_amplitudes(logm, harmonics_of(60, &K), 4, 7, 11.0f, 2.0f);
+    build_frame(imbe_d, 60, 0x7Fu, logm, &other.prev);
+    play(out, &other, imbe_d, 0);
+    assert(other.prev.Vl[0] == 0 && other.prev.L != base.prev.L);
+
+    const int words = 4 + (int)(sizeof(magnitudes) / sizeof(magnitudes[0])) + 1;
+    for (int c = 0; c < words; ++c) {
+        struct stream forged = (c == words - 1) ? other : base;
+        if (c == 0) {
+            forged.prev.Vl[0] = tone_word(207, 1, 1);
+            forged.prev.Ml[1] = 2000.0f;
+        } else if (c == 1) {
+            forged.prev.Vl[0] = tone_word(11, 3, 3);
+        } else if (c == 2) {
+            forged.prev.Vl[0] = tone_word(53, 7, 9);
+        } else if (c == 3) {
+            forged.prev.Vl[0] = tone_word(56, 4, 7);
+        } else if (c < words - 1) {
+            memcpy(&forged.prev.Ml[4], &magnitudes[c - 4], sizeof(float));
+        } else {
+            forged.prev.Vl[0] = tone_word(53, 4, 7);
+        }
+        struct stream plain = forged;
+        plain.prev.Vl[0] = 0;
+        play_repeat(with_word, &forged, 0);
+        play_repeat(without, &plain, 0);
+        assert(mbe_frame_mark(&forged.enhanced) != MBE_FRAME_MARK_TONE);
+        assert(same_samples(with_word, without, 160));
+        assert(same_float(forged.enhanced.w0, plain.enhanced.w0));
+    }
+    puts("p25 tones: a word counts only as a decode leaves it");
+}
+
+/*
+ * Only the tone model is marked MBE_FRAME_MARK_TONE, by the synthesis of the
+ * frame that plays it: a history whose mark says tone but which holds no
+ * tone word plays its repeat as the same history unmarked, through the P25
+ * and the ProVoice data paths, and leaves no such mark. The decoders' own
+ * marks reach the history untouched (a frame with no voiced band at b0 60:
+ * MBE_FRAME_MARK_PITCH_ABSENT).
+ */
+static void
+test_forged_tone_mark(void) {
+    char imbe_d[88];
+    float logm[57], out[160], forged_out[160], plain_out[160];
+    int K;
+    for (int provoice = 0; provoice < 2; ++provoice) {
+        struct stream s;
+        stream_init(&s);
+        const int L = harmonics_of(60, &K);
+        tone_amplitudes(logm, L, 0, 0, 0.0f, 6.0f);
+        build_frame(imbe_d, 60, 0x7Fu, logm, &s.prev);
+        play(out, &s, imbe_d, provoice);
+        assert(mbe_frame_mark(&s.prev) == MBE_FRAME_MARK_NONE && s.prev.Vl[0] == 0);
+
+        struct stream forged = s, plain = s;
+        mbe_set_frame_mark(&forged.prev, MBE_FRAME_MARK_TONE);
+        play_repeat(forged_out, &forged, provoice);
+        play_repeat(plain_out, &plain, provoice);
+        assert(same_samples(forged_out, plain_out, 160));
+        assert(mbe_frame_mark(&forged.enhanced) != MBE_FRAME_MARK_TONE);
+        assert(mbe_frame_mark(&forged.prev) != MBE_FRAME_MARK_TONE);
+
+        /* The decoder's own mark: no voiced band at a code outside 128..183. */
+        build_frame(imbe_d, 60, 0x00u, logm, &s.prev);
+        play(out, &s, imbe_d, provoice);
+        assert(mbe_frame_mark(&s.prev) == MBE_FRAME_MARK_PITCH_ABSENT);
+        assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_PITCH_ABSENT);
+    }
+    puts("p25 tones: the tone mark is the tone model's alone");
+}
+
 int
 main(void) {
     test_tone_test();
     test_tone_model();
     test_tone_run_renders();
+    test_impossible_tone_words();
+    test_forged_tone_mark();
     return 0;
 }
