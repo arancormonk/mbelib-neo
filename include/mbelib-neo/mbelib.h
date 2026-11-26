@@ -195,9 +195,9 @@ typedef struct mbe_soft_bit {
  * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
  * data API, as for the C0/C4 context, and it decodes them as the ProVoice
  * frame APIs do: a decoded frame keeps TIA-102.BABA eq 46's nominal pitch
- * (P25's is the pitch DVSI's P25 decoder plays, mbe_decodeImbe4400Parms()),
- * and a muted frame gets library comfort noise instead of the TIA-102.BABA 7.8
- * level.
+ * (P25's is the pitch DVSI's P25 decoder plays on speech,
+ * mbe_decodeImbe4400Parms()), and a muted frame gets library comfort noise
+ * instead of the TIA-102.BABA 7.8 level.
  */
 #define MBE_PROCESS_FLAG_PROVOICE         0x0200u
 /**
@@ -867,12 +867,14 @@ MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
 /**
  * @brief Decode IMBE 4400 parameters.
  *
- * `cur_mp->w0` is the pitch DVSI's P25 decoder plays for the pitch code b0:
- * TIA-102.BABA eq 46's 4 pi / (b0 + 39.5), computed in float as this decoder
- * always has (and L and K, TIA-102.BABA's, from it), times 1 + g, g between
- * -7.06e-4 and +3.38e-4 by b0, the product formed in double and rounded to
- * float once. The ProVoice (7100x4400) process paths, and the IMBE 4400 data
- * API given `MBE_PROCESS_FLAG_PROVOICE`, keep the nominal pitch.
+ * `cur_mp->w0` is the pitch DVSI's P25 decoder plays on speech for the pitch
+ * code b0: TIA-102.BABA eq 46's 4 pi / (b0 + 39.5), computed in float as this
+ * decoder always has (and L and K, TIA-102.BABA's, from it), times 1 + g, g
+ * between -7.06e-4 and +3.38e-4 by b0, the product formed in double and
+ * rounded to float once. (DVSI's decoder plays a tone its encoder sent as
+ * voice frames at eq 46's harmonic frequencies, which this library does not
+ * model.) The ProVoice (7100x4400) process paths, and the IMBE 4400 data API
+ * given `MBE_PROCESS_FLAG_PROVOICE`, keep the nominal pitch.
  */
 MBE_API int mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate IMBE 7200x4400 interleaved data. */
