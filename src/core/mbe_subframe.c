@@ -506,7 +506,10 @@ store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const
      * state) must not leave phases a float cannot hold. */
     const double advance = (2.0 * M_PI * train->phase) - ((double)PEAK * (double)own->w0);
     const float linear = (fabs(advance) < 1.0e6) ? (float)advance : 0.0f;
-    const float phase = (float)train->phase;
+    /* Rounded to float before it is compared with 1: under x87 excess
+     * precision the comparison could otherwise see the unrounded value, just
+     * under 1, and store 1.0f (mbe_round_to_float(), mbe_math.h). */
+    const float phase = mbe_round_to_float((float)train->phase);
     int kept = 0;
 
     for (int l = 1; l <= 56; l++) {
@@ -520,7 +523,8 @@ store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const
         }
     }
     cur_mp->noiseOverlap[0] = (float)kept;
-    /* A phase that rounds up to a whole cycle is the start of the next one. */
+    /* A phase that rounds up to a whole cycle is the start of the next one:
+     * the stored phase lies in [0, 1). */
     cur_mp->noiseOverlap[PHASE_SLOT] = (phase < 1.0f) ? phase : 0.0f;
     mbe_subframe_state_mark(cur_mp);
 }

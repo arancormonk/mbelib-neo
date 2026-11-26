@@ -152,6 +152,15 @@ pulse_phase(const mbe_parms* mp) {
     return (double)mp->noiseOverlap[PHASE_SLOT];
 }
 
+/* Whether the pulse phase a frame stored lies in [0, 1) as stored, read from
+ * its bits (a comparison modulo a cycle takes 1.0 for 0). */
+static int
+stored_phase_in_range(const mbe_parms* mp) {
+    uint32_t bits;
+    memcpy(&bits, &mp->noiseOverlap[PHASE_SLOT], sizeof(bits));
+    return bits < UINT32_C(0x3F800000); /* +0 up to, not including, 1.0f */
+}
+
 /* a - b in cycles, wrapped to [-0.5, 0.5). */
 static double
 cycles_apart(double a, double b) {
@@ -836,10 +845,46 @@ test_octave_steps(void) {
         next_frame(out, &last, &step);
         const double want = cases[i].octave ? rule : glide;
         assert(fabs(cycles_apart(pulse_phase(&last), want)) < 1e-5);
+        assert(stored_phase_in_range(&last));
         assert(all_finite(out, 160));
         assert(same_bits(last.noiseOverlap, advanced.noiseOverlap, 96));
         assert(same_bits(&last.PSIl[1], &advanced.PSIl[1], 56) && same_bits(&last.PHIl[1], &advanced.PHIl[1], 56));
     }
+}
+
+/*
+ * The pulse phase a frame stores lies in [0, 1) as stored: one whose last
+ * interval ends within float's spacing below a whole cycle is stored as the
+ * start of the next (0), whatever precision the arithmetic before the store
+ * kept (x87 may compare the unrounded value with 1 and then store 1.0f). The
+ * case: a voiced frame at w0 0.2 that left a phase of 0.9070417284965515,
+ * then one at w0 0.1 marked MBE_FRAME_MARK_TONE (its own model at mid-frame):
+ * the first interval an octave down (period ratio 2), the train reaches
+ * 0.9999999917 cycle at the frame's end, which rounds to 1.0f. Rendered and
+ * advanced unrendered alike.
+ */
+static void
+test_stored_phase_range(void) {
+    float out[160];
+    mbe_parms last, model, step;
+    fresh_stream(&last);
+    set_model(&model, 100.0, 15, 15, 16.0f);
+    model.w0 = 0.2f;
+    for (int f = 0; f < 3; ++f) {
+        next_frame(out, &last, &model);
+    }
+    last.noiseOverlap[PHASE_SLOT] = 0.9070417284965515f;
+    set_model(&step, 100.0, 31, 31, 16.0f);
+    step.w0 = 0.1f;
+    mbe_set_frame_mark(&step, MBE_FRAME_MARK_TONE);
+    mbe_parms advanced = with_model(&last, &step);
+    mbe_set_frame_mark(&advanced, MBE_FRAME_MARK_TONE);
+    mbe_advance_subframes(&advanced, &last, 0, MBE_VOICED_SYNTHESIS_DVSI);
+    next_frame(out, &last, &step);
+    assert(fabs(cycles_apart(pulse_phase(&last), 0.0)) < 1e-6);
+    assert(stored_phase_in_range(&last));
+    assert(stored_phase_in_range(&advanced));
+    assert(same_bits(last.noiseOverlap, advanced.noiseOverlap, 96));
 }
 
 /* An unvoiced frame marked as carrying its pitch gives the voiced frame after
@@ -2552,6 +2597,7 @@ main(void) {
     test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI);
     test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
     test_octave_steps();
+    test_stored_phase_range();
     test_unvoiced_pitch_carries();
     test_voicing_persists_without_a_pitch();
     test_mid_model();
