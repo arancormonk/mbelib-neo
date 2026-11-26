@@ -224,18 +224,37 @@ mbe_subframe_state_adopt(mbe_parms* mp) {
 }
 
 /*
- * A sample of an overlap a frame carries into the next (previousUw, the
- * TIA-102.BABA rendering's noise overlap): as stored if it is a finite number,
- * else 0. A caller's state can hold anything there, and a sample that is not
- * finite would pass into the output (the output limit lets a NaN through).
- * Read from the bit pattern, which fast-math cannot fold (see
- * subframe_mark_is_set()).
+ * A sample of the unvoiced overlap a frame carries into the next (previousUw,
+ * in either rendering): as stored if it is a finite number, else 0. A
+ * caller's state can hold anything there, and a sample that is not finite
+ * would pass into the output (the output limit lets a NaN through). Read from
+ * the bit pattern, which fast-math cannot fold (see subframe_mark_is_set()).
  */
 static float
 overlap_sample(const float* sample) {
     uint32_t bits;
     memcpy(&bits, sample, sizeof(bits));
     return ((bits & UINT32_C(0x7FFFFFFF)) < UINT32_C(0x7F800000)) ? *sample : 0.0f;
+}
+
+/* 53124.0f, the largest sample mbe_generate_noise_lcg() writes. */
+#define LCG_LARGEST_SAMPLE_BITS UINT32_C(0x474F8400)
+
+/*
+ * A sample of the TIA-102.BABA rendering's noise overlap: as stored if the
+ * generator can have written it (0 to 53124), else 0. The library leaves
+ * nothing else there: zeros (a fresh stream, the cold start) or the
+ * generator's samples, and the subframe rendering's pulse train is cleared by
+ * its mark before this reads it. A caller's state can hold anything, and a
+ * huge finite sample (FLT_MAX) would overflow the transform of the noise
+ * buffer into NaN. Read from the bit pattern: a negative value or a NaN lies
+ * above the bound as an unsigned pattern, and fast-math cannot fold the test.
+ */
+static float
+noise_overlap_sample(const float* sample) {
+    uint32_t bits;
+    memcpy(&bits, sample, sizeof(bits));
+    return (bits <= LCG_LARGEST_SAMPLE_BITS) ? *sample : 0.0f;
 }
 
 void
@@ -255,7 +274,7 @@ mbe_generate_noise_with_overlap(float* buffer, float* seed, float* overlap) {
         memset(overlap, 0, MBE_NOISE_OVERLAP * sizeof(float));
     }
     for (int i = 0; i < MBE_NOISE_OVERLAP; ++i) {
-        buffer[i] = overlap_sample(&overlap[i]);
+        buffer[i] = noise_overlap_sample(&overlap[i]);
     }
     mbe_generate_noise_lcg(buffer + MBE_NOISE_OVERLAP, MBE_FFT_SIZE - MBE_NOISE_OVERLAP, seed);
     memmove(overlap, buffer + MBE_FFT_SIZE - MBE_NOISE_OVERLAP, MBE_NOISE_OVERLAP * sizeof(float));

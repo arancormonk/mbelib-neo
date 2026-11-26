@@ -1145,7 +1145,9 @@ same_model(const struct mbe_subframe_model* a, const struct mbe_subframe_model* 
  * whatever the voicing of either frame and whatever the late-onset flag; the
  * marks P25 and D-STAR set keep their rules. The pulse train runs on through
  * such a frame at the held pitch, and rendering and advancing it leave the
- * same state. */
+ * pulse train in the same place (not the unvoiced overlap: a rendered frame
+ * leaves its own subframe's second half in previousUw, an advanced one none;
+ * here, with no transform plan, the voiced part alone). */
 static void
 test_previous_model_held(void) {
     static const int voiced_before[3] = {24, 3, 0};
@@ -1296,8 +1298,9 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     assert(
         !same_bits(&whole.previousUw[MBE_UNVOICED_TAIL_OFFSET], &no_overlap[MBE_UNVOICED_TAIL_OFFSET], MBE_SUBFRAME));
 
-    /* Through the core: a frame muted by the error rate leaves the state a
-     * rendered frame leaves, so the frame after both plays the same voiced part. */
+    /* Through the core: a frame muted by the error rate leaves the pulse train
+     * and the noise generator where a rendered frame leaves them, so the frame
+     * after both plays the same voiced part. */
     mbe_parms muted = last, enh_a = last, enh_b = last;
     muted.w0 = model.w0;
     muted.L = model.L;
@@ -1496,8 +1499,9 @@ held_from_silence(const mbe_parms* loud, double loud_peak) {
  *    from silence after its own model, and stays within a small multiple of
  *    its steady level after loud voiced speech; continuing, the mark still
  *    holds the previous model;
- *  - advancing (a frame the core mutes) leaves the state rendering leaves,
- *    through the core as well.
+ *  - advancing (a frame the core mutes) leaves the pulse train and the noise
+ *    generator where rendering leaves them, through the core as well (not
+ *    the unvoiced overlap, which an advanced frame does not leave).
  */
 static void
 test_from_silence(void) {
@@ -1568,7 +1572,10 @@ test_from_silence(void) {
      * same noise state; its level stays that of a steady silence frame. */
     held_from_silence(&no_train, peak);
 
-    /* Advancing and rendering leave the same state, from silence too. */
+    /* Advancing and rendering leave the pulse train and the noise generator in
+     * the same place, from silence too (not the unvoiced overlap: a rendered
+     * frame leaves its own subframe's second half, an advanced one none;
+     * here, with no transform plan, the voiced part alone). */
     mbe_parms rendered = carried, advanced = carried;
     set_model(&model, 210.0, 17, 9, 16.0f);
     rendered.w0 = advanced.w0 = model.w0;
@@ -1588,7 +1595,8 @@ test_from_silence(void) {
     assert(same_bits(&rendered.noiseSeed, &advanced.noiseSeed, 1));
     assert(!same_bits(continued.noiseOverlap, advanced.noiseOverlap, 96));
 
-    /* Through the core: a frame it mutes moves the state on as the rendered frame does. */
+    /* Through the core: a frame it mutes moves the pulse train and the noise
+     * generator on as the rendered frame does. */
     mbe_parms muted = carried, heard = carried, enh_a = carried, enh_b = carried;
     muted.w0 = heard.w0 = model.w0;
     muted.L = heard.L = model.L;
@@ -1725,23 +1733,66 @@ corrupt_overlap(float* bad, float* clean, int start, int n, uint32_t value) {
     }
 }
 
+/* The TIA-102.BABA rendering (mbe_synthesizeSpeechf()) of a third frame of
+ * `model`, from the state two frames leave (so that the noise overlap is drawn
+ * noise) with `value` in every 7th sample of its previousUw (from 128) or of
+ * its noise overlap, and from the same state with 0 there. */
+static void
+spec_frame_after(float out[2][160], const mbe_parms* model, int noise_overlap, uint32_t value) {
+    mbe_parms spec, unused, spec_prev;
+    mbe_initMbeParms(&spec, &spec_prev, &unused);
+    for (int f = 0; f < 2; ++f) {
+        mbe_parms next = with_model(&spec, model);
+        mbe_synthesizeSpeechf(out[0], &next, &spec);
+        spec = next;
+    }
+    mbe_parms spec_bad = spec, spec_clean = spec;
+    if (noise_overlap) {
+        corrupt_overlap(spec_bad.noiseOverlap, spec_clean.noiseOverlap, 0, 96, value);
+    } else {
+        corrupt_overlap(spec_bad.previousUw, spec_clean.previousUw, 128, 128, value);
+    }
+    for (int k = 0; k < 2; ++k) {
+        mbe_parms* state = (k == 0) ? &spec_bad : &spec_clean;
+        mbe_parms next = with_model(state, model);
+        mbe_synthesizeSpeechf(out[k], &next, state);
+    }
+}
+
 /*
  * The unvoiced overlap a frame plays from the state before it is a caller's
- * state too: a sample of it that is not a finite number (not a number, plus
- * or minus infinity) plays as 0, and the frame is finite. The subframe
- * rendering's overlap (previousUw from MBE_UNVOICED_TAIL_OFFSET) directly and
- * through the P25 data path, and the TIA-102.BABA rendering's
- * (mbe_synthesizeSpeechf(): previousUw and the noise overlap).
+ * state too. The subframe rendering's overlap (previousUw from
+ * MBE_UNVOICED_TAIL_OFFSET) directly and through the P25 data path, and the
+ * TIA-102.BABA rendering's (mbe_synthesizeSpeechf(): previousUw and the noise
+ * overlap), each with not a number of either sign, plus and minus infinity,
+ * plus and minus FLT_MAX and 2^127 in it:
+ *  - the frame is finite;
+ *  - a sample of previousUw that is not a finite number plays as 0 (a huge
+ *    finite one plays as stored, and the output limit, or the lack of one,
+ *    keeps the frame finite);
+ *  - a sample of the noise overlap that the TIA-102.BABA generator cannot
+ *    have written (it writes 0 to 53124) plays as 0: a huge one would
+ *    otherwise overflow the transform of the noise buffer into NaN.
  */
 static void
 test_untrusted_unvoiced_overlap(void) {
-    static const uint32_t bits[] = {0x7FC00000u, 0xFFC00000u, 0x7F800000u, 0xFF800000u};
+    static const struct {
+        uint32_t bits;
+        int finite;
+    } values[] = {
+        {0x7FC00000u, 0}, {0xFFC00000u, 0}, {0x7F800000u, 0}, {0xFF800000u, 0}, {0x7F7FFFFFu, 1}, /* FLT_MAX */
+        {0xFF7FFFFFu, 1},                                                                         /* -FLT_MAX */
+        {0x7F000000u, 1},                                                                         /* 2^127 */
+    };
+
     mbe_fft_plan* plan = mbe_fft_plan_alloc();
     assert(plan != NULL);
     mbe_parms mixed, unused[2];
     mbe_initMbeParms(&mixed, &unused[0], &unused[1]);
     set_model(&mixed, 200.0, 18, 6, 16.0f); /* 12 unvoiced bands */
-    for (size_t i = 0; i < sizeof(bits) / sizeof(bits[0]); ++i) {
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        const uint32_t bits = values[i].bits;
+        const int zeroed = !values[i].finite;
         float out[2][160];
 
         mbe_parms last;
@@ -1749,11 +1800,11 @@ test_untrusted_unvoiced_overlap(void) {
         next_whole_frame(out[0], &last, &mixed, plan);
         assert(mbe_subframe_state_is_marked(&last));
         mbe_parms bad = last, clean = last;
-        corrupt_overlap(bad.previousUw, clean.previousUw, MBE_UNVOICED_TAIL_OFFSET, MBE_SUBFRAME, bits[i]);
+        corrupt_overlap(bad.previousUw, clean.previousUw, MBE_UNVOICED_TAIL_OFFSET, MBE_SUBFRAME, bits);
         next_whole_frame(out[0], &bad, &mixed, plan);
         next_whole_frame(out[1], &clean, &mixed, plan);
         assert(all_finite(out[0], 160));
-        assert(same_or_close(out[0], out[1], 160));
+        assert(!zeroed || same_or_close(out[0], out[1], 160));
 
         mbe_parms cur[2], prev[2], enhanced[2];
         char imbe_d[88];
@@ -1766,35 +1817,31 @@ test_untrusted_unvoiced_overlap(void) {
         cur[1] = cur[0];
         prev[1] = prev[0];
         enhanced[1] = enhanced[0];
-        corrupt_overlap(enhanced[0].previousUw, enhanced[1].previousUw, MBE_UNVOICED_TAIL_OFFSET, MBE_SUBFRAME,
-                        bits[i]);
+        corrupt_overlap(enhanced[0].previousUw, enhanced[1].previousUw, MBE_UNVOICED_TAIL_OFFSET, MBE_SUBFRAME, bits);
         for (int k = 0; k < 2; ++k) {
             rc = mbe_processImbe4400Dataf(out[k], NULL, imbe_d, &cur[k], &prev[k], &enhanced[k]);
             assert(rc >= 0);
         }
         (void)rc;
         assert(all_finite(out[0], 160));
-        assert(same_or_close(out[0], out[1], 160));
+        assert(!zeroed || same_or_close(out[0], out[1], 160));
 
-        /* The TIA-102.BABA rendering: two frames, so that the noise overlap is drawn noise. */
-        mbe_parms spec, unused, spec_prev;
-        mbe_initMbeParms(&spec, &spec_prev, &unused);
-        for (int f = 0; f < 2; ++f) {
-            mbe_parms model = with_model(&spec, &mixed);
-            mbe_synthesizeSpeechf(out[0], &model, &spec);
-            spec = model;
-        }
-        mbe_parms spec_bad = spec, spec_clean = spec;
-        corrupt_overlap(spec_bad.previousUw, spec_clean.previousUw, 128, 128, bits[i]);
-        corrupt_overlap(spec_bad.noiseOverlap, spec_clean.noiseOverlap, 0, 96, bits[i]);
-        for (int k = 0; k < 2; ++k) {
-            mbe_parms* state = (k == 0) ? &spec_bad : &spec_clean;
-            mbe_parms model = with_model(state, &mixed);
-            mbe_synthesizeSpeechf(out[k], &model, state);
-        }
+        /* The TIA-102.BABA rendering: previousUw, then the noise overlap,
+         * where every one of these values is outside what the generator writes. */
+        spec_frame_after(out, &mixed, 0, bits);
+        assert(all_finite(out[0], 160));
+        assert(!zeroed || same_or_close(out[0], out[1], 160));
+        spec_frame_after(out, &mixed, 1, bits);
         assert(all_finite(out[0], 160));
         assert(same_or_close(out[0], out[1], 160));
     }
+    /* The bound: 53124, the largest sample the generator writes, plays as
+     * stored; 53125 plays as 0. */
+    float out[2][160];
+    spec_frame_after(out, &mixed, 1, 0x474F8400u);
+    assert(!same_bits(out[0], out[1], 160));
+    spec_frame_after(out, &mixed, 1, 0x474F8500u);
+    assert(same_or_close(out[0], out[1], 160));
     mbe_fft_plan_free(plan);
 }
 
