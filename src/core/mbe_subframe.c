@@ -277,8 +277,9 @@ voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
 
 /* ---- the harmonics a P25 onset starts with ---- */
 
-/* The 500 Hz columns DVSI's P25 decoder reads a frame's voicing in after a
- * frame with no voiced band (MBE_FRAME_MARK_ONSET_COLUMNS): column 0 from 0 Hz
+/* The 500 Hz columns a P25 frame's voicing is read in after a frame with no
+ * voiced band (MBE_FRAME_MARK_ONSET_COLUMNS; a rule fitted to DVSI's P25
+ * decodes, docs/dvsi-parity.md): column 0 from 0 Hz
  * to MBE_VOICING_REACH_HZ, each next one ONSET_COLUMN_HZ wide, ONSET_COLUMNS of
  * them, up to 3505 Hz; a harmonic within ONSET_REACH_HZ below a covered column
  * sounds with it. */
@@ -809,7 +810,9 @@ unvoiced_subframe(const struct mbe_subframe_model* model, struct mbe_unvoiced_su
 /* Whether the frame's voiced bands start in its own subframe: a frame so
  * marked (mbe_set_voicing_onset_delay()), in the rate-33 rendering whatever
  * the frame before (V/UV row 15), in the others only after a frame with no
- * voiced band (the mark's meaning there before the rate-33 rows' reading). */
+ * voiced band (the mark's meaning there before the rate-33 rows' reading; in
+ * P25's rendering a voiced model never reaches here with the mark, which
+ * mark_rendered_model() replaces). */
 static int
 starts_late(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_synthesis rendering) {
     if (mbe_voicing_onset_delay(cur_mp) == 0) {

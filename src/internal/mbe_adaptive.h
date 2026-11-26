@@ -225,9 +225,15 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * value in float. The marks of the mid-frame voicing (ONSET_COLUMNS,
  * MID_COLUMN_0, MID_COLUMNS_0_1, and LATE_ONSET's reading whatever the frame
  * before) act only in the rendering of the codec whose decoder writes them, so
- * that a mark a caller's state holds changes no other codec's stream:
- * elsewhere 5, 6 and 7 play as none, and LATE_ONSET as it always has there,
- * only after a frame with no voiced band.
+ * that a mark a caller's state holds changes no other codec's stream: in
+ * D-STAR's rendering 5, 6 and 7 play as none and LATE_ONSET acts as it did
+ * before them, only after a frame with no voiced band; in rate 33's 5 plays as
+ * none. P25's rendering gives the model it renders a mark of its own
+ * (MBE_FRAME_MARK_ONSET_COLUMNS on any model with a voiced band that is not
+ * a tone model), so there a caller's mark on a voiced model, LATE_ONSET and
+ * PREVIOUS_HELD included, is overwritten and has no effect; on a model with
+ * no voiced band PITCH_ABSENT, PREVIOUS_HELD and PITCH_CARRIES still act,
+ * and LATE_ONSET, 6 and 7 change nothing.
  */
 enum mbe_frame_mark {
     MBE_FRAME_MARK_NONE = 0,
@@ -255,11 +261,12 @@ enum mbe_frame_mark {
      * renders so whenever, after adaptive smoothing, it has a voiced band and
      * is not a tone model, whatever its decoded mark (smoothing can voice
      * harmonics of a frame decoded with none), and clears the mark from one
-     * with no voiced band. After a frame with no voiced band, DVSI's P25
-     * decoder sounds at mid-frame only the voiced harmonics that lie in a
-     * covered 500 Hz column or within 250 Hz below one, and starts the others
-     * with the frame's second half (docs/dvsi-parity.md, "P25: the bands that
-     * start with the frame"). The columns are [0, 505), [505, 1005), ... [3005, 3505) Hz,
+     * with no voiced band. After a frame with no voiced band, the voiced
+     * harmonics that lie in a covered 500 Hz column or within 250 Hz below one
+     * sound at mid-frame and the others start with the frame's second half: a
+     * rule fitted to DVSI's P25 decodes (its whole-frame form agrees with
+     * 1,838 of 1,843 decisively labelled onsets; docs/dvsi-parity.md, "P25:
+     * the bands that start with the frame"). The columns are [0, 505), [505, 1005), ... [3005, 3505) Hz,
      * none above; one is covered when the frame's voicing is voiced at both
      * its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next
      * above each other edge (unvoiced past L), all at the pitch the frame
@@ -287,9 +294,11 @@ enum mbe_frame_mark {
      * the frame its own voicing (docs/dvsi-parity.md, "Rate 33: rows 13, 15
      * and 17"); a lost frame that repeats such a frame plays the repeated
      * model's own voicing through (the rate-33 path clears these marks on a
-     * repeat). In every other rendering the mark keeps its earlier meaning:
-     * no band voiced at mid-frame only after a frame with no voiced band
-     * (no decoder of those codecs writes it). */
+     * repeat). In D-STAR's rendering the mark keeps its earlier meaning: no
+     * band voiced at mid-frame only after a frame with no voiced band (no
+     * decoder of D-STAR writes it). In P25's rendering it is overwritten on a
+     * voiced model (MBE_FRAME_MARK_ONSET_COLUMNS) and changes nothing on one
+     * with no voiced band. */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };
 
