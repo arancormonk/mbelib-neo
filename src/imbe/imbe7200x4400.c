@@ -772,7 +772,8 @@ imbe_tone_share2(const mbe_parms* mp, int l1, int l2) {
  * IMBE_TONE_SHARE_SINGLE; decoded magnitudes, before enhancement). The rows of
  * one pair are all dual or all single tones. Every voice frame passes here, so
  * a code with no row returns after one lookup and the scan covers only the
- * rows of the frame's code.
+ * rows the index gives for the frame's code (each row's code still checked, so
+ * an index that is off can drop a row but never add one).
  */
 static int
 imbe_tone_word(const mbe_parms* mp, int b0) {
@@ -784,7 +785,7 @@ imbe_tone_word(const mbe_parms* mp, int b0) {
     int found = 0;
     for (unsigned i = imbe_tone_first_row[b0]; i < imbe_tone_first_row[b0 + 1]; i++) {
         const struct imbe_tone_row* row = &imbe_tone_rows[i];
-        if (row->b1 != word || row->l2 > mp->L) {
+        if (row->b0 != b0 || row->b1 != word || row->l2 > mp->L) {
             continue;
         }
         const double limit = (row->l1 == row->l2) ? IMBE_TONE_SHARE_SINGLE : IMBE_TONE_SHARE_DUAL;
