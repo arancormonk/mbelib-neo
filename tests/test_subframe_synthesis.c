@@ -933,11 +933,13 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering, int inexact) 
          * of harmonics only). */
         const float mid_pitch = reference_mid_pitch(&last, &cur, rendering);
         assert(same_bits(&models[1].w0, &mid_pitch, 1) || (inexact && within_an_ulp(models[1].w0, mid_pitch)));
+        assert(last.L >= 1 && last.L <= 56 && cur.L >= 1 && cur.L <= 56);
         const int mid_count =
             (mark == MBE_FRAME_MARK_PREVIOUS_HELD)
                 ? last.L
                 : reference_mid_count(mid_pitch, (last.L < cur.L) ? last.L : cur.L, (last.L < cur.L) ? cur.L : last.L);
         assert(models[1].L == mid_count || (inexact && count_margin(mid_pitch) < 1.0e-5));
+        assert(mid_count >= 1 && mid_count <= 56);
         models[1].w0 = mid_pitch;
         models[1].L = mid_count;
         /* Its voicing is the reference's own, which the library's must equal. */
