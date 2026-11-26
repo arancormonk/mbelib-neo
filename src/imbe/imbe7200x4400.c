@@ -200,7 +200,10 @@ imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cu
 
     int L = 0, K = 0;
     const int invalid = imbe_code_pitch(b0, pitch, &cur_mp->w0, &L, &K);
-    if (invalid) {
+    /* imbe_code_pitch() returns 0 only with L in 9..56; the bound is tested
+     * here again, where the bit layout's tables are indexed by L - 9 (a static
+     * analyzer does not look into a function that is not inlined). */
+    if (invalid || (L > 56) || (L < 9)) {
 #ifdef IMBE_DEBUG
         fprintf(stderr, "invalid L at b0 %i\n", b0);
 #endif
