@@ -868,6 +868,30 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
     return 1;
 }
 
+/* In P25's rendering, the mark of the model rendered, as it stands after
+ * adaptive smoothing (which can voice harmonics of a frame decoded with none):
+ * MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band and is not a tone
+ * model (MBE_FRAME_MARK_TONE), so that its onset is read in the 500 Hz columns
+ * whatever mark it was decoded or repeated with; with no voiced band, not that
+ * mark (none instead), any other mark kept. The prediction history the data
+ * path committed before keeps the decoded model and its mark. Other renderings
+ * leave the mark as it is. */
+static void
+mark_rendered_model(mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
+    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE || !mbe_harmonic_count_is_valid(cur_mp->L)) {
+        return;
+    }
+    const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
+    if (mark == MBE_FRAME_MARK_TONE) {
+        return;
+    }
+    if (model_has_voiced_band(cur_mp)) {
+        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_ONSET_COLUMNS);
+    } else if (mark == MBE_FRAME_MARK_ONSET_COLUMNS) {
+        mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
+    }
+}
+
 void
 mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
                          float voiced_gain, int from_silence, enum mbe_voiced_synthesis rendering) {
@@ -876,6 +900,7 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
     struct mbe_unvoiced_subframe noise[2];
     struct pulse_train train;
 
+    mark_rendered_model(cur_mp, rendering);
     if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
         return;
     }
@@ -905,6 +930,7 @@ mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_sile
     struct mbe_subframe_model models[3];
     struct pulse_train train;
 
+    mark_rendered_model(cur_mp, rendering);
     if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
         return;
     }

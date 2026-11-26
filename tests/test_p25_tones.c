@@ -698,10 +698,12 @@ test_every_row_plays(void) {
  * Only the tone model is marked MBE_FRAME_MARK_TONE, by the synthesis of the
  * frame that plays it: a history whose mark says tone but which holds no
  * tone word plays its repeat as the same history unmarked, through the P25
- * and the ProVoice data paths, and leaves the mark a decode gives a voiced
- * model (MBE_FRAME_MARK_ONSET_COLUMNS). The decoders' own marks reach the
- * history untouched (a frame with no voiced band at b0 60:
- * MBE_FRAME_MARK_PITCH_ABSENT).
+ * and the ProVoice data paths. A voiced model then carries the mark a voiced
+ * model rendered carries (MBE_FRAME_MARK_ONSET_COLUMNS); a model with no voiced
+ * band carries none, in all three states, where its decode had left
+ * MBE_FRAME_MARK_PITCH_ABSENT (a frame with no voiced band at b0 60): the
+ * decoded mark the caller's state overwrote is not recovered. The decoders' own
+ * marks reach the history untouched.
  */
 static void
 test_forged_tone_mark(void) {
@@ -732,6 +734,22 @@ test_forged_tone_mark(void) {
         play(out, &s, imbe_d, provoice);
         assert(mbe_frame_mark(&s.prev) == MBE_FRAME_MARK_PITCH_ABSENT);
         assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_PITCH_ABSENT);
+
+        /* That history marked as a tone: a repeat plays it as unmarked. */
+        struct stream unvoiced_forged = s, unvoiced_plain = s;
+        mbe_set_frame_mark(&unvoiced_forged.prev, MBE_FRAME_MARK_TONE);
+        mbe_set_frame_mark(&unvoiced_plain.prev, MBE_FRAME_MARK_NONE);
+        play_repeat(forged_out, &unvoiced_forged, provoice);
+        play_repeat(plain_out, &unvoiced_plain, provoice);
+        assert(same_samples(forged_out, plain_out, 160));
+        assert(mbe_frame_mark(&unvoiced_forged.cur) == MBE_FRAME_MARK_NONE);
+        assert(mbe_frame_mark(&unvoiced_forged.prev) == MBE_FRAME_MARK_NONE);
+        assert(mbe_frame_mark(&unvoiced_forged.enhanced) == MBE_FRAME_MARK_NONE);
+        /* Left alone, the repeat keeps the decoded mark. */
+        struct stream decoded = s;
+        play_repeat(out, &decoded, provoice);
+        assert(mbe_frame_mark(&decoded.prev) == MBE_FRAME_MARK_PITCH_ABSENT);
+        assert(mbe_frame_mark(&decoded.enhanced) == MBE_FRAME_MARK_PITCH_ABSENT);
     }
     puts("p25 tones: the tone mark is the tone model's alone");
 }

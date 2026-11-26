@@ -172,6 +172,12 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * start with phase 0; no unvoiced overlap comes from the previous state. The
  * noise generator runs as for any frame.
  *
+ * In P25's rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) the frame is first
+ * marked by the voicing it is rendered with (after the adaptive smoothing of
+ * the synthesis core): MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band
+ * and is not a tone model (MBE_FRAME_MARK_TONE), that mark cleared when it
+ * has none; mbe_advance_subframes() marks it alike.
+ *
  * @param aout_buf     160 samples.
  * @param cur_mp       Current frame: enhanced, smoothed amplitudes without render gains.
  * @param prev_mp      Previous frame as synthesized.
@@ -191,7 +197,8 @@ void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parm
  * and no unvoiced overlap is left for it. @p from_silence starts the train as
  * mbe_synthesize_subframes() does, so that the pulse train and the noise
  * generator end where rendering the frame leaves them; so does @p rendering,
- * which must be the one the stream renders with. The state is not the one a
+ * which must be the one the stream renders with (and marks the frame as
+ * rendering it does). The state is not the one a
  * rendering leaves in full: a rendered frame with unvoiced bands leaves its own
  * subframe's second half in previousUw, an advanced one leaves none.
  */

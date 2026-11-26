@@ -1334,7 +1334,11 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
      * frame it plays: the decoders never do, and the history never holds the
      * mark, so one here came from a caller's state and is not the frame's. It
      * gives way to the mark a decode leaves a model with a voiced band
-     * (MBE_FRAME_MARK_ONSET_COLUMNS, imbe_decode_voicing()), or to none.
+     * (MBE_FRAME_MARK_ONSET_COLUMNS, imbe_decode_voicing()), or to none; the
+     * model rendered is marked again after smoothing, by its own voicing
+     * (MBE_VOICED_SYNTHESIS_DVSI_IMBE, mbe_synthesize_subframes()). A decoded
+     * mark the caller's state overwrote (MBE_FRAME_MARK_PITCH_ABSENT on a frame
+     * with no voiced band) is not recovered.
      * ProVoice keeps no tone word either: Vl[0] reads 0 after its frames, so
      * a P25 repeat after a ProVoice frame (a state moved between the two
      * entry points, outside the stream contract) plays the repeated model as

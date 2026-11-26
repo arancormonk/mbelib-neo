@@ -154,7 +154,9 @@ enum mbe_voiced_synthesis {
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's P25 (IMBE 7200x4400) decoder
      * renders it: a voiced frame after one with no voiced band starts only
      * the bands of its covered 500 Hz columns with the frame
-     * (MBE_FRAME_MARK_ONSET_COLUMNS). The P25 and ProVoice data path. */
+     * (MBE_FRAME_MARK_ONSET_COLUMNS, which the rendering gives the model it
+     * renders, after adaptive smoothing: mbe_synthesize_subframes(),
+     * mbe_advance_subframes()). The P25 and ProVoice data path. */
     MBE_VOICED_SYNTHESIS_DVSI_IMBE,
 };
 
@@ -247,12 +249,16 @@ enum mbe_frame_mark {
      * imbe4400_play_tone() sets it, on the frame it plays; no decoder does,
      * and the P25 and ProVoice data path clears it on any other frame. */
     MBE_FRAME_MARK_TONE = 4,
-    /* A P25 or ProVoice voice frame with a voiced band (imbe7200x4400.c):
-     * after a frame with no voiced band, DVSI's P25 decoder sounds at
-     * mid-frame only the voiced harmonics that lie in a covered 500 Hz column
-     * or within 250 Hz below one, and starts the others with the frame's
-     * second half (docs/dvsi-parity.md, "P25: the bands that start with the
-     * frame"). The columns are [0, 505), [505, 1005), ... [3005, 3505) Hz,
+    /* A P25 or ProVoice voice frame with a voiced band, as decoded
+     * (imbe7200x4400.c) and as rendered: P25's rendering marks the model it
+     * renders so whenever, after adaptive smoothing, it has a voiced band and
+     * is not a tone model, whatever its decoded mark (smoothing can voice
+     * harmonics of a frame decoded with none), and clears the mark from one
+     * with no voiced band. After a frame with no voiced band, DVSI's P25
+     * decoder sounds at mid-frame only the voiced harmonics that lie in a
+     * covered 500 Hz column or within 250 Hz below one, and starts the others
+     * with the frame's second half (docs/dvsi-parity.md, "P25: the bands that
+     * start with the frame"). The columns are [0, 505), [505, 1005), ... [3005, 3505) Hz,
      * none above; one is covered when the frame's voicing is voiced at both
      * its ends, read at harmonic 1 for 0 Hz and at the harmonic at or next
      * above each other edge (unvoiced past L), all at the pitch the frame
