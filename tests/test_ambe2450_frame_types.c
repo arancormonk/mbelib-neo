@@ -495,7 +495,7 @@ fade_reference(float out[160], const mbe_parms* last_synthesized, mbe_parms* fad
     memset(faded->Ml, 0, sizeof(faded->Ml));
     mbe_set_frame_mark(faded, MBE_FRAME_MARK_NONE);
     faded->repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechStartf(out, faded, &last, MBE_VOICED_SYNTHESIS_DVSI, MBE_SYNTHESIS_CONTINUES,
+    mbe_synthesizeRepeatedSpeechStartf(out, faded, &last, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_SYNTHESIS_CONTINUES,
                                        MBE_OUTPUT_UNLIMITED);
 }
 
@@ -744,8 +744,9 @@ frame_reference_out(float out[160], mbe_parms* model, const struct stream* befor
     (void)kind;
     const float rm0 = mbe_spectralAmpEnhanceWithRm0(model, MBE_HIGH_BAND_GAIN_AMBE2450);
     enh.Vl[0] = 0;
-    mbe_synthesizeSpeechWithPreEnhRm0Startf(out, model, &enh, rm0, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI,
-                                            MBE_AMPLITUDE_LIMIT_NONE, start, output);
+    mbe_synthesizeSpeechWithPreEnhRm0Startf(out, model, &enh, rm0, MBE_MUTE_NOISE_SPEC,
+                                            MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_AMPLITUDE_LIMIT_NONE, start,
+                                            output);
 }
 
 /** frame_reference_out() with the output limited, as a frame that mixes nothing plays. */
@@ -778,7 +779,7 @@ repeat_reference_out(float out[160], const struct stream* before, enum mbe_synth
     repeated.Vl[0] = 0;
     last.Vl[0] = 0;
     repeated.repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechStartf(out, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI, start, output);
+    mbe_synthesizeRepeatedSpeechStartf(out, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, start, output);
 }
 
 static void

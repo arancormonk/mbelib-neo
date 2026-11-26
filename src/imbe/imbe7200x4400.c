@@ -86,8 +86,65 @@ imbe_get_dct_cache(void) {
 #define IMBE_UNVOICED_CODES_FIRST 128
 #define IMBE_UNVOICED_CODES_LAST  183
 
+/* Which pitch a decoded pitch code plays (imbe_decode_fundamental()). */
+enum imbe_pitch {
+    IMBE_PITCH_DVSI,    /* P25: a fit to the pitch DVSI's P25 decoder plays for b0 */
+    IMBE_PITCH_NOMINAL, /* ProVoice: TIA-102.BABA eq 46 as it stands */
+};
+
+/*
+ * The relative pitch offset g of DVSI's P25 decoder at pitch code b0
+ * (docs/dvsi-parity.md, "P25 pitch"): DVSI's AMBE-3000 plays b0 at
+ * TIA-102.BABA eq 46's w0 = 4 pi / (b0 + 39.5) times 1 + g, where, with the
+ * nominal period P = (b0 + 39.5) / 2 samples and t = 4 pi log2(P), so that g
+ * repeats every half octave of the period,
+ *   g = C0 + C1 cos(t) + S1 sin(t) + C2 cos(2t) + S2 sin(2t),
+ * from about -7.1e-4 to +3.4e-4 over b0 0..207. Measured from the drift of
+ * DVSI's pulse train against ours at one pitch code (the phase advance per
+ * frame of each voiced harmonic) on DVSI's speech and synthetic pulse-train
+ * vectors: fitted on 69 rows of one pitch code and corpus with five frame
+ * pairs or more (50 pulse-train, 19 speech; 5,401 pairs on 61 pitch codes),
+ * each row weighing at most 40 pairs; the fit leaves 0.0064% rms with those
+ * weights. In double with the double-precision functions, so that the pitch
+ * does not move with a libm's single-precision ones; no state.
+ */
+static double
+imbe_dvsi_pitch_offset(int b0) {
+    const double C0 = -1.980564e-4, C1 = 1.263798e-4, S1 = 4.835086e-4, C2 = 2.352386e-5, S2 = 7.623621e-5;
+    const double t = 4.0 * M_PI * log2(((double)b0 + 39.5) / 2.0);
+    return C0 + (C1 * cos(t)) + (S1 * sin(t)) + (C2 * cos(2.0 * t)) + (S2 * sin(2.0 * t));
+}
+
+/*
+ * b0 and the fundamental, harmonic count and band count it gives (TIA-102.BABA
+ * eqs 46-48). The nominal pitch of eq 46 is computed in float, as this decoder
+ * always has (4 pi rounded to float, divided by b0 + 39.5 in float, the
+ * quotient rounded to float also where the arithmetic keeps excess
+ * precision), and L and K, and with them the bit layout, follow it for every
+ * pitch code. The pitch stored for synthesis is a fit to the one DVSI's P25
+ * decoder plays on speech: that float times 1 + g (imbe_dvsi_pitch_offset(),
+ * -7.06e-4 to +3.38e-4), the product formed in double and rounded to float
+ * once (a tone its encoder sent as voice frames DVSI's decoder plays at eq
+ * 46's harmonic frequencies, which is not modelled). That is not the law
+ * evaluated wholly in double and rounded once: the nominal float's own
+ * rounding stays in it (the two differ by an ulp at 79 of the 208 codes), as
+ * it stays in L and K.
+ * ProVoice (IMBE 7100x4400), which reaches this decoder converted to the 7200
+ * layout, has no DVSI reference and keeps the nominal pitch (`pitch`).
+ *
+ * The decisions on 505 Hz (MBE_VOICING_REACH_HZ) do not move for any pitch
+ * code: neither the late-onset mark imbe_decode_voicing() decodes, whatever
+ * harmonic is the top voiced one (the nearest to 505 Hz, b0 119's 5th
+ * harmonic, is 0.053% below it and the correction moves it further below),
+ * nor the harmonic whose voicing synthesis reads to tell whether a frame's
+ * voicing reaches 505 Hz (ceil(505 Hz / f0), voicing_persists() in
+ * mbe_subframe.c); checked for all 208 codes. Discrete steps elsewhere in
+ * synthesis (a band edge's transform bin, the mid-frame model's harmonic
+ * count, the harmonic where the high-band shelf starts) follow the pitch
+ * played and do move at some codes.
+ */
 static int
-imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
+imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
     int b0 = mbe_bits_by_index_to_int(imbe_d, b0_indices, sizeof(b0_indices) / sizeof(b0_indices[0]));
     *out_b0 = b0;
@@ -102,9 +159,13 @@ imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_b0, int*
         return 1;
     }
 
-    cur_mp->w0 = ((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    /* Rounded to float here, where the contract names it: under x87 excess
+     * precision the quotient could otherwise reach the correction below
+     * unrounded (mbe_round_to_float(), mbe_math.h). */
+    const float nominal = mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+    cur_mp->w0 = nominal;
 
-    int L = (int)(0.9254 * (int)((M_PI / cur_mp->w0) + 0.25));
+    int L = (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
     if ((L > 56) || (L < 9)) {
 #ifdef IMBE_DEBUG
         fprintf(stderr, "invalid L: %i\n", L);
@@ -118,6 +179,10 @@ imbe_decode_fundamental(const char* imbe_d, mbe_parms* cur_mp, int* out_b0, int*
         cur_mp->K = (int)((float)(L + 2) / (float)3);
     } else {
         cur_mp->K = 12;
+    }
+    if (pitch == IMBE_PITCH_DVSI) {
+        /* The nominal float, widened, times 1 + g; one rounding to float. */
+        cur_mp->w0 = (float)((double)nominal * (1.0 + imbe_dvsi_pitch_offset(b0)));
     }
 
 #ifdef IMBE_DEBUG
@@ -563,15 +628,9 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
     return mbe_eccImbe7200x4400DataInternal(imbe_fr, imbe_d, NULL);
 }
 
-/**
- * @brief Decode IMBE 4400 parameters from demodulated bitstream.
- * @param imbe_d  Demodulated IMBE parameter bits (88).
- * @param cur_mp  Output: current frame parameters.
- * @param prev_mp Input: previous frame parameters (for prediction).
- * @return 0 on voice; non-zero for special frames (implementation-specific).
- */
-int
-mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+/* mbe_decodeImbe4400Parms(), the pitch played for b0 chosen by `pitch`. */
+static int
+imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, mbe_parms* prev_mp) {
 
     int b0;
     int L9;
@@ -587,7 +646,7 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
         return ret;
     }
 
-    if (imbe_decode_fundamental(imbe_d, cur_mp, &b0, &L9) != 0) {
+    if (imbe_decode_fundamental(imbe_d, pitch, cur_mp, &b0, &L9) != 0) {
         return 1;
     }
 
@@ -612,6 +671,22 @@ mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_m
     imbe_update_spectral_amplitudes(cur_mp, prev_mp, Tl, imbe_spectral_rho(cur_mp->L));
 
     return 0;
+}
+
+/**
+ * @brief Decode IMBE 4400 parameters from demodulated bitstream.
+ *
+ * The pitch stored is a fit to the one DVSI's P25 decoder plays for b0
+ * (imbe_decode_fundamental()): this decoder has no frame context, so a P25
+ * one. The ProVoice frame paths keep the nominal pitch.
+ * @param imbe_d  Demodulated IMBE parameter bits (88).
+ * @param cur_mp  Output: current frame parameters.
+ * @param prev_mp Input: previous frame parameters (for prediction).
+ * @return 0 on voice; non-zero for special frames (implementation-specific).
+ */
+int
+mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp) {
+    return imbe4400_decode_parms(imbe_d, IMBE_PITCH_DVSI, cur_mp, prev_mp);
 }
 
 /**
@@ -825,11 +900,16 @@ imbe4400_apply_repeat_decision(int repeat_required, mbe_process_result* result, 
     mbe_result_set_flag(result, MBE_PROCESS_FLAG_REPEAT);
 }
 
+/* Whether the parameters come from a ProVoice (IMBE 7100x4400) frame. */
+static int
+imbe4400_is_provoice(const mbe_process_result* result) {
+    return result && ((result->flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+}
+
 /* P25 mutes with the TIA-102.BABA 7.8 noise; ProVoice, not a TIA-102 codec, keeps library comfort noise. */
 static enum mbe_mute_noise
 imbe4400_mute_noise(const mbe_process_result* result) {
-    const int provoice = result && ((result->flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
-    return provoice ? MBE_MUTE_NOISE_COMFORT : MBE_MUTE_NOISE_SPEC;
+    return imbe4400_is_provoice(result) ? MBE_MUTE_NOISE_COMFORT : MBE_MUTE_NOISE_SPEC;
 }
 
 static void
@@ -871,7 +951,9 @@ mbe_processImbe4400Dataf_internal(float* aout_buf, mbe_process_result* result, c
         return ret;
     }
 
-    bad = mbe_decodeImbe4400Parms(imbe_d, cur_mp, prev_mp);
+    /* P25 plays DVSI's pitch for b0; ProVoice, with no DVSI reference, the nominal one. */
+    bad = imbe4400_decode_parms(imbe_d, imbe4400_is_provoice(result) ? IMBE_PITCH_NOMINAL : IMBE_PITCH_DVSI, cur_mp,
+                                prev_mp);
     if (bad < 0) {
         return bad;
     }

@@ -132,6 +132,12 @@ void mbe_seedUnvoicedNoiseLcg(uint32_t seed);
  * Library cold-start policy: seed < 0 emits an all-zero buffer,
  * then primes state for the next call with MBE_LCG_DEFAULT_SEED.
  *
+ * An overlap sample outside the range the generator writes (+0 to 53124 by
+ * its bit pattern: -0, a negative value, a NaN or an infinity among those
+ * outside) is read as 0; any value inside the range is read as stored. The
+ * overlap is copied into the buffer as memmove() copies, so the two may
+ * overlap.
+ *
  * @param buffer Output buffer of 256 samples.
  * @param seed In/out LCG state.
  * @param overlap In/out 96-sample head/tail state buffer.
@@ -196,8 +202,12 @@ void mbe_synthesizeUnvoicedFFTFrom(float* output, mbe_parms* cur_mp, const mbe_p
 
 /*
  * DVSI's unvoiced synthesis (docs/dvsi-parity.md, "Unvoiced synthesis"), which
- * the codec paths render with MBE_VOICED_SYNTHESIS_DVSI. DVSI's decoders, in
- * every mode, synthesize a 10 ms subframe at a time: the noise under a
+ * the codec paths render with the subframe renderings, MBE_VOICED_SYNTHESIS_DVSI
+ * and, for rate 33, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 (the two differ in the
+ * mid-frame model's pitch, which the voiced and the unvoiced part of a
+ * subframe both read: the mid-frame model's band frequencies, magnitudes and
+ * band edges follow it). DVSI's decoders, in every mode, synthesize a 10 ms
+ * subframe at a time: the noise under a
  * square-root triangular window two subframes long, a 256-point transform,
  * each unvoiced band scaled against its own noise power, the inverse
  * transform, the same window again and overlap-add. A frame carries two

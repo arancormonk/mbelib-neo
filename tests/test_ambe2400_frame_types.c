@@ -426,6 +426,113 @@ test_lost_plays_as_repeat(void) {
     puts("lost frames: b0 125, unused tone index, b0 127 play as error repeats; the 4th mutes");
 }
 
+/* The phases a frame's log2 amplitudes give (the kernel the codec paths
+ * regenerate them with, mbe_regenerate_phases_log2()), at harmonic count L. */
+static void
+phases_of(const float log2Ml[57], int L, float phase[57]) {
+    mbe_regenerate_phases_log2(log2Ml, L, phase);
+}
+
+/* How far apart two phases are, wrapped to [0, pi]. */
+static double
+phase_distance(double a, double b) {
+    const double d = fmod(fabs(a - b), 2.0 * M_PI);
+    return (d > M_PI) ? (2.0 * M_PI) - d : d;
+}
+
+/* The largest distance between the phases a synthesized frame left in its
+ * state (harmonic l's at the frame's end, PHIl, less the pulse train's,
+ * PSIl) and `phase`, over its harmonics. */
+static double
+rendered_phase_gap(const mbe_parms* state, const float phase[57]) {
+    double gap = 0.0;
+    for (int l = 1; l <= state->L; ++l) {
+        gap = fmax(gap, phase_distance((double)state->PHIl[l] - (double)state->PSIl[l], (double)phase[l]));
+    }
+    return gap;
+}
+
+/* The largest distance between two sets of phases over harmonics 1..L. */
+static double
+phase_gap(const float a[57], const float b[57], int L) {
+    double gap = 0.0;
+    for (int l = 1; l <= L; ++l) {
+        gap = fmax(gap, phase_distance((double)a[l], (double)b[l]));
+    }
+    return gap;
+}
+
+/*
+ * The envelopes a stream holding an uncorrectable frame's history carries
+ * apart, and the one it renders: the last synthesized frame (`enh`) holds the
+ * repeated model's log2Ml (those `lost_enh`, a stream of lost frames in their
+ * place, holds), the prediction history (`prev`) the held one, which differ
+ * in shape; and the frame's phases came from the first, not from the held
+ * history's nor from the amplitudes it rendered (Ml).
+ */
+static void
+assert_renders_the_repeated_envelope(const mbe_parms* enh, const mbe_parms* prev, const mbe_parms* lost_enh) {
+    float played[57], held[57], rendered[57];
+    assert(enh->L == lost_enh->L);
+    assert_same_pcm(&enh->log2Ml[1], &lost_enh->log2Ml[1], (size_t)enh->L, "the repeated model's log2Ml");
+    phases_of(enh->log2Ml, enh->L, played);
+    phases_of(prev->log2Ml, enh->L, held);
+    mbe_regenerate_phases(enh->Ml, enh->L, rendered);
+    assert(phase_gap(played, held, enh->L) > 0.1);
+    assert(phase_gap(played, rendered, enh->L) > 0.1);
+    assert(rendered_phase_gap(enh, played) < 1e-3);
+}
+
+/*
+ * A frame whose C0 word is uncorrectable plays as a lost frame does, whatever
+ * history it holds: a run of three such frames, or of lost frames after one,
+ * plays sample for sample as three lost frames (all without corrections, so
+ * the adaptive smoothing reads the same counts). Each repeat renders the
+ * repeated model with its own log2 amplitudes, which its phases come from,
+ * not with the held history's nor from the amplitudes it renders
+ * (docs/dvsi-parity.md, "Phase regeneration"): the states carry the two
+ * envelopes apart (assert_renders_the_repeated_envelope()).
+ */
+static void
+test_held_history_plays_the_repeated_model(void) {
+    static const char patterns[4][3] = {{0, 0, 0}, {1, 1, 1}, {1, 0, 0}, {0, 1, 0}}; /* 1: uncorrectable C0 */
+    char voice[NVOICE][49], b125[49];
+    static float pcm[4][160 * 7];
+    static mbe_parms lost_enh[7];
+    make_voice(voice);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    for (int k = 0; k < 4; ++k) {
+        const int held_from = (k == 0) ? 7 : (k == 3) ? 5 : 4;
+        mbe_parms cur, prev, enh;
+        mbe_process_result r;
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int f = 0; f < 7; ++f) {
+            const int lost = f >= 4;
+            const int uncorrectable = lost && patterns[k][f - 4];
+            if (uncorrectable) {
+                make_uncorrectable_result(&r, 0);
+            } else {
+                make_result(&r, 0);
+            }
+            const char* bits = !lost ? voice[f] : (uncorrectable ? voice[(f == 4) ? 4 : 5] : b125);
+            const int ret = mbe_processAmbe2400Dataf(pcm[k] + ((size_t)160 * (size_t)f), &r, bits, &cur, &prev, &enh);
+            assert(ret >= 0);
+            (void)ret;
+            assert(((r.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == lost);
+            assert(((prev.Vl[0] & MBE_AMBE2400_HISTORY_HELD) != 0) == (f >= held_from));
+            if (k == 0) {
+                lost_enh[f] = enh;
+            } else if (f >= held_from) {
+                assert_renders_the_repeated_envelope(&enh, &prev, &lost_enh[f]);
+            }
+        }
+        assert_same_pcm(pcm[k], pcm[0], (size_t)160 * 7u, "uncorrectable C0 frames vs lost frames");
+    }
+    puts("held history: frames with an uncorrectable C0 word repeat the model with its own amplitudes");
+}
+
 /* Lost frames and frames repeated for errors share one repeat count. */
 static void
 test_mixed_repeat_count(void) {
@@ -842,6 +949,187 @@ test_one_state_as_current_and_last(void) {
 }
 
 /*
+ * A frame sequence for test_one_state_held_history(): V a voice frame, U the
+ * same voice frame with an uncorrectable C0 word (a held prediction history),
+ * L a lost frame (b0 125), S a single tone (index 32), D a dual tone (index
+ * 130). Each V, U or L takes the next of the voice frames, so a sequence and
+ * its copy with every U played as L carry the same voice frames.
+ */
+#define HELD_SEQ_MAX 16
+
+struct held_run {
+    float pcm[HELD_SEQ_MAX][160];
+    mbe_parms prev[HELD_SEQ_MAX]; /* prev_mp after each frame */
+};
+
+static void
+run_held_sequence(const char* seq, int one_state, int held_as_lost, struct held_run* run) {
+    char voice[NVOICE][49], lost[49], single[49], dual[49];
+    make_voice(voice);
+    memcpy(lost, voice[3], sizeof(lost));
+    put_b0(lost, 125);
+    pack_tone(single, 126, 32, 180);
+    pack_tone(dual, 126, 130, 180);
+    mbe_parms cur, prev, enh;
+    mbe_parms* last = one_state ? &cur : &enh;
+    mbe_setThreadRngSeed(1);
+    mbe_initMbeParms(&cur, &prev, &enh);
+    size_t v = 0;
+    for (size_t f = 0; seq[f] != '\0'; ++f) {
+        assert(f < HELD_SEQ_MAX);
+        const char kind = (held_as_lost && seq[f] == 'U') ? 'L' : seq[f];
+        const char* bits = (kind == 'S') ? single : (kind == 'D') ? dual : (kind == 'L') ? lost : voice[v % NVOICE];
+        v += (kind == 'V' || kind == 'U' || kind == 'L') ? 1u : 0u;
+        mbe_process_result r;
+        if (kind == 'U') {
+            make_uncorrectable_result(&r, 0);
+        } else {
+            make_result(&r, 0);
+        }
+        const int ret = mbe_processAmbe2400Dataf(run->pcm[f], &r, bits, &cur, &prev, last);
+        assert(ret >= 0);
+        (void)ret;
+        run->prev[f] = prev;
+    }
+}
+
+/* Whether a frame plays no more than the mute noise (uniform within
+ * MBE_AMBE_MUTE_NOISE_AMPLITUDE int16 steps): nothing of a model under it. The
+ * margin is for a build that may compute the noise's last bit otherwise. */
+static int
+at_mute_noise_level(const float* pcm) {
+    const float bound = MBE_AMBE_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN * 1.0001f;
+    for (int n = 0; n < 160; ++n) {
+        if (!(fabsf(pcm[n]) <= bound)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Whether a frame is digital silence: every sample +0 or -0, by its bits. */
+static int
+is_silent(const float* pcm) {
+    for (int n = 0; n < 160; ++n) {
+        uint32_t bits;
+        memcpy(&bits, &pcm[n], sizeof(bits));
+        if ((bits & 0x7FFFFFFFu) != 0u) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A repeat after the repeat limit's mute with one state as with three: the
+ * same samples, by their bits (both are the library's own output), and the
+ * mute noise, not silence, which the level bound alone would accept. */
+static void
+assert_same_mute_noise(const float* one_state, const float* three_states, const char* what) {
+    assert_same_pcm(one_state, three_states, 160, what);
+    if (is_silent(three_states)) {
+        printf("%s: silence where the mute noise plays\n", what);
+        assert(0);
+    }
+}
+
+/* The prediction history two runs leave after a frame: log2Ml and w0 by their
+ * bits, L, and every Vl (element 0 holds the held history's count). */
+static void
+assert_same_history(const mbe_parms* a, const mbe_parms* b, const char* seq, size_t f) {
+    int same = memcmp(a->Vl, b->Vl, sizeof(a->Vl)) == 0 && a->L == b->L;
+    for (int l = 0; l < 57; ++l) {
+        uint32_t x, y;
+        memcpy(&x, &a->log2Ml[l], sizeof(x));
+        memcpy(&y, &b->log2Ml[l], sizeof(y));
+        same &= x == y;
+    }
+    uint32_t wa, wb;
+    memcpy(&wa, &a->w0, sizeof(wa));
+    memcpy(&wb, &b->w0, sizeof(wb));
+    if (!same || wa != wb) {
+        printf("%s: prediction history after frame %zu differs\n", seq, f);
+        assert(0);
+    }
+}
+
+/*
+ * A held prediction history (a voice frame with an uncorrectable C0 word),
+ * with one state as cur_mp and prev_mp_enhanced as with three. A frame that
+ * holds a history plays as a lost frame, and so does every frame after it
+ * until the next voice frame, which predicts from it: through repeats, single
+ * and dual tones and the repeat limit's mute, each sequence plays sample for
+ * sample as its copy with lost frames in place of the held ones, in both
+ * arrangements, up to the first voice frame after a held one (that frame
+ * predicts from another history than the copy's), so each repeat renders the
+ * repeated model with its own log2Ml. Every repeat after the repeat limit's
+ * mute, until a voice or tone frame, plays the mute noise alone, in both
+ * arrangements and both copies, and with one state the samples three states
+ * play there (not silence). And the history committed to prev_mp after
+ * each frame (log2Ml, L, w0 and the voicing) is the same with one state as
+ * with three, in these sequences, none of which has channel errors: with
+ * errors the voicing and amplitudes a tone's first frame commits can differ
+ * between the arrangements (the decoder and the D-STAR encoder predict from
+ * log2Ml, L and w0).
+ */
+static void
+test_one_state_held_history(void) {
+    static const char* const sequences[] = {
+        "VVVVULL",      "VVVVUUL",     "VVVVULLLLL",  "VVVVLLLULV", "VVVVUS",       "VVVVUSL",
+        "VVVVUSLV",     "VVVVULS",     "VVVVUSD",     "VVVVUD",     "VVVVUDLLLLV",  "VVVVDUL",
+        "VVVVDULLLV",   "VVVVSUL",     "VVVVLLLLV",   "VVVVLLLLVV", "VVVVULLLLVV",  "VVVVDLLLLLVV",
+        "VVVVULVLUSLV", "VVVVSLUSDUL", "VVVVLLLLSUL", "VVVVUVV",    "VVVVLLLLULLV",
+    };
+    static struct held_run runs[2][2]; /* [one state][held frames played as lost] */
+    for (size_t k = 0; k < sizeof(sequences) / sizeof(sequences[0]); ++k) {
+        const char* seq = sequences[k];
+        const size_t n = strlen(seq);
+        /* The frames that play as lost frames: up to the first voice frame after a held one. */
+        const char* held = strchr(seq, 'U');
+        const char* next_voice = held ? strchr(held, 'V') : NULL;
+        const size_t as_lost = next_voice ? (size_t)(next_voice - seq) : n;
+        for (int one_state = 0; one_state < 2; ++one_state) {
+            for (int held_as_lost = 0; held_as_lost < 2; ++held_as_lost) {
+                run_held_sequence(seq, one_state, held_as_lost, &runs[one_state][held_as_lost]);
+            }
+            for (size_t f = 0; f < as_lost; ++f) {
+                char what[64];
+                snprintf(what, sizeof(what), "%s frame %zu, %s", seq, f, one_state ? "one state" : "three states");
+                assert_same_pcm(runs[one_state][0].pcm[f], runs[one_state][1].pcm[f], 160, what);
+            }
+            /* After the repeat limit's mute, until a voice or tone frame, the
+             * mute noise alone: two streams that both replayed speech there
+             * would match each other. */
+            for (int held_as_lost = 0; held_as_lost < 2; ++held_as_lost) {
+                const struct held_run* run = &runs[one_state][held_as_lost];
+                for (size_t f = 1; f < n; ++f) {
+                    const int after_limit = run->prev[f - 1].repeatCount >= MBE_MAX_FRAME_REPEATS;
+                    if (after_limit && (seq[f] == 'L' || seq[f] == 'U') && !at_mute_noise_level(run->pcm[f])) {
+                        printf("%s frame %zu, %s: speech after the repeat limit\n", seq, f,
+                               one_state ? "one state" : "three states");
+                        assert(0);
+                    }
+                }
+            }
+        }
+        /* And there one state plays the three states' mute noise. */
+        for (int held_as_lost = 0; held_as_lost < 2; ++held_as_lost) {
+            const struct held_run* three = &runs[0][held_as_lost];
+            for (size_t f = 1; f < n; ++f) {
+                if (three->prev[f - 1].repeatCount >= MBE_MAX_FRAME_REPEATS && (seq[f] == 'L' || seq[f] == 'U')) {
+                    char what[64];
+                    snprintf(what, sizeof(what), "%s frame %zu, %s", seq, f, held_as_lost ? "held as lost" : "held");
+                    assert_same_mute_noise(runs[1][held_as_lost].pcm[f], three->pcm[f], what);
+                }
+            }
+        }
+        for (size_t f = 0; f < n; ++f) {
+            assert_same_history(&runs[1][0].prev[f], &runs[0][0].prev[f], seq, f);
+        }
+    }
+    puts("state: a held history plays and predicts alike with one state as current and last");
+}
+
+/*
  * Tone transitions, as on DVSI's decoder: the first tone frame crossfades
  * linearly over its first 80 samples from the last frame repeated (what a lost
  * frame plays there) to the tone, and the first voice frame after it from the
@@ -1035,6 +1323,61 @@ test_repeat_limit_mute(void) {
     puts("repeat limit: fades out, mutes at DVSI's level, keeps the prediction history");
 }
 
+/*
+ * The repeats after the repeat limit's mute play the mute noise alone, with
+ * one state as cur_mp and prev_mp_enhanced as with three: with one state each
+ * repeat loaded the repeated model over the silent last frame the mute left,
+ * and the mute faded that speech out again on every frame. Those repeats play
+ * with one state the samples they play with three, which are the mute noise,
+ * not silence. The 4th repeat still fades the last frame out. The state left
+ * as the last frame carries the repeat count at the limit in both
+ * arrangements.
+ */
+static void
+test_repeat_limit_mute_holds(void) {
+    static float pcm[2][7][160]; /* [one state][frame] */
+    char voice[49], lost[49];
+    memset(voice, 0, sizeof(voice));
+    memset(lost, 0, sizeof(lost));
+    put_b0(voice, 60);
+    voice[38] = voice[39] = voice[40] = voice[41] = 1; /* b1 15 */
+    put_b2(voice, 40);
+    put_b0(lost, 125);
+    for (int one_state = 0; one_state < 2; ++one_state) {
+        mbe_parms cur, prev, enh;
+        mbe_parms* last = one_state ? &cur : &enh;
+        mbe_setThreadRngSeed(1);
+        mbe_initMbeParms(&cur, &prev, &enh);
+        for (int f = 0; f < 7; ++f) {
+            mbe_process_result r;
+            float* out = pcm[one_state][f];
+            make_result(&r, 0);
+            const int ret = mbe_processAmbe2400Dataf(out, &r, (f == 0) ? voice : lost, &cur, &prev, last);
+            assert(ret == 0);
+            (void)ret;
+            assert(((r.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (f >= 4));
+            if (f == 4) {
+                /* The limit's frame fades the last frame out. */
+                assert(!at_mute_noise_level(out));
+            }
+            if (f > 4 && !at_mute_noise_level(out)) {
+                printf("%s, lost frame %d: speech after the repeat limit\n", one_state ? "one state" : "three states",
+                       f);
+                assert(0);
+            }
+            if (f >= 4) {
+                assert(last->repeatCount == MBE_MAX_FRAME_REPEATS);
+            }
+        }
+    }
+    for (int f = 5; f < 7; ++f) {
+        char what[64];
+        snprintf(what, sizeof(what), "lost frame %d after the repeat limit, one state", f);
+        assert_same_mute_noise(pcm[1][f], pcm[0][f], what);
+    }
+    puts("repeat limit: the repeats after it stay at the mute noise, with one state as with three");
+}
+
 /* Reaching the repeat limit while the error rate mutes does not fade the
  * suppressed speech back in: the output stays DVSI-level noise. */
 static void
@@ -1183,13 +1526,14 @@ enum resume_expect {
  * docs/dvsi-parity.md describes it: the history's amplitudes from log2Ml (the
  * decoder's unvoiced scale on unvoiced bands) at gain 0.3, enhanced, with the
  * unvoiced overlap a frame of it leaves from the noise block after the next
- * frame's.
+ * frame's, and the history's log2Ml, which its phases come from.
  */
 static void
 expected_resume_model(mbe_parms* enh, const mbe_parms* history) {
     mbe_parms m = *enh;
     m.L = history->L;
     m.w0 = history->w0;
+    memcpy(m.log2Ml, history->log2Ml, sizeof(m.log2Ml));
     memset(m.Ml, 0, sizeof(m.Ml));
     for (int l = 1; l <= history->L; ++l) {
         const float scale = (history->Vl[l] == 1) ? 1.0f : 0.2046f / sqrtf(history->w0);
@@ -1207,6 +1551,7 @@ expected_resume_model(mbe_parms* enh, const mbe_parms* history) {
     model.repeatCount = 0;
     mbe_synthesizeRepeatedSpeechf(scratch, &second, &model, MBE_VOICED_SYNTHESIS_DVSI);
     memcpy(enh->Ml, m.Ml, sizeof(m.Ml));
+    memcpy(enh->log2Ml, m.log2Ml, sizeof(m.log2Ml));
     memcpy(&enh->Vl[1], &m.Vl[1], sizeof(m.Vl) - sizeof(m.Vl[0]));
     enh->L = m.L;
     enh->w0 = m.w0;
@@ -1242,6 +1587,14 @@ resume_run(enum resume_lead lead, int lost, int unvoiced, enum resume_expect exp
     const int uncorrectable = lead == RESUME_AFTER_UNCORRECTABLE;
     for (int i = 0; i < lost; ++i) {
         resume_frame(out, uncorrectable ? voice[(i + 1) % NVOICE] : b125, uncorrectable, &cur, &prev, &enh);
+    }
+    if (expect == RESUMES) {
+        /* The silent last frame's log2Ml, apart from the history's (they are
+         * the same there after lost frames): the frame resumed from must take
+         * the history's, or its phases are another envelope's. */
+        for (int l = 1; l <= 56; ++l) {
+            enh.log2Ml[l] += 4.0f * sinf(0.9f * (float)l);
+        }
     }
     mbe_parms tcur = cur, tprev = prev, tenh = enh;
     mbe_parms ecur = cur, eprev = prev, eenh = enh;
@@ -1624,8 +1977,41 @@ test_c0_uncorrectable_plays_lost(void) {
     puts("uncorrectable C0: plays as a lost frame, the next frame predicts from its decode");
 }
 
+/* Voice frames 0..2, voice frame 3 with an uncorrectable C0 word (`held`) or a
+ * lost frame in its place, then `between`: its output in `out`, the states
+ * after it in cur, prev and enh. */
+static void
+run_held_then(const char voice[NVOICE][49], const char between[49], int held, float out[160], mbe_parms* cur,
+              mbe_parms* prev, mbe_parms* enh) {
+    char b125[49];
+    mbe_process_result r;
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    mbe_initMbeParms(cur, prev, enh);
+    for (int i = 0; i < 3; ++i) {
+        make_result(&r, 0);
+        const int ret = mbe_processAmbe2400Dataf(out, &r, voice[i], cur, prev, enh);
+        assert(ret == 0);
+        (void)ret;
+    }
+    if (held) {
+        make_uncorrectable_result(&r, 0);
+    } else {
+        make_result(&r, 0);
+    }
+    int ret = mbe_processAmbe2400Dataf(out, &r, held ? voice[3] : b125, cur, prev, enh);
+    assert(ret == 0);
+    make_result(&r, 0);
+    ret = mbe_processAmbe2400Dataf(out, &r, between, cur, prev, enh);
+    assert(ret == 0);
+    (void)ret;
+}
+
 /* The history an uncorrectable frame leaves outlasts the frames that do not
- * replace it: a lost frame or a tone between it and the next voice frame. */
+ * replace it: a lost frame or a tone between it and the next voice frame.
+ * Either plays as after a lost frame in its place: the speech under the
+ * tone's first frame repeats the model the lost frame repeated, with that
+ * model's own log2Ml. */
 static void
 test_c0_uncorrectable_history_kept(void) {
     char voice[NVOICE][49], b125[49], tone[49], d[49];
@@ -1635,26 +2021,34 @@ test_c0_uncorrectable_history_kept(void) {
     pack_tone(tone, 126, 32, 180);
     const char* between[] = {b125, tone};
     for (size_t k = 0; k < sizeof(between) / sizeof(between[0]); ++k) {
-        mbe_parms cur, prev, enh, decoded, history;
+        mbe_parms cur, prev, enh, decoded, history, lcur, lprev, lenh;
         mbe_process_result r;
-        float out[160];
+        float out[160], lost_out[160];
         mbe_initMbeParms(&cur, &prev, &enh);
         for (int i = 0; i < 3; ++i) {
             make_result(&r, 0);
-            assert(mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh) == 0);
+            const int ret = mbe_processAmbe2400Dataf(out, &r, voice[i], &cur, &prev, &enh);
+            assert(ret == 0);
+            (void)ret;
         }
         decoded = cur;
         history = prev;
-        assert(mbe_decodeAmbe2400Parms(voice[3], &decoded, &history) == 0);
-        make_uncorrectable_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[3], &cur, &prev, &enh) == 0);
-        make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, between[k], &cur, &prev, &enh) == 0);
+        const int decode = mbe_decodeAmbe2400Parms(voice[3], &decoded, &history);
+        assert(decode == 0);
+        (void)decode;
+        run_held_then((const char (*)[49])voice, between[k], 1, out, &cur, &prev, &enh);
+        run_held_then((const char (*)[49])voice, between[k], 0, lost_out, &lcur, &lprev, &lenh);
+        assert_same_pcm(out, lost_out, 160, "the frame after an uncorrectable one vs after a lost one");
+        assert_renders_the_repeated_envelope(&enh, &prev, &lenh);
         mbe_parms want = decoded, want_prev = decoded;
         memcpy(d, voice[4], sizeof(d));
-        assert(mbe_decodeAmbe2400Parms(d, &want, &want_prev) == 0);
+        const int want_decode = mbe_decodeAmbe2400Parms(d, &want, &want_prev);
+        assert(want_decode == 0);
+        (void)want_decode;
         make_result(&r, 0);
-        assert(mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh) == 0);
+        const int ret = mbe_processAmbe2400Dataf(out, &r, voice[4], &cur, &prev, &enh);
+        assert(ret == 0);
+        (void)ret;
         assert(cur.L == want.L);
         assert_same_pcm(&prev.log2Ml[1], &want.log2Ml[1], (size_t)want.L, "prediction after the frame between");
         assert((prev.Vl[0] & ~0xFFFF) == 0); /* a decoded voice frame drops the held history */
@@ -2052,16 +2446,19 @@ main(void) {
     test_null_frame_is_voice();
     test_b0_124_silence_frame();
     test_lost_plays_as_repeat();
+    test_held_history_plays_the_repeated_model();
     test_mixed_repeat_count();
     test_frame_apis_agree();
     test_zero_volume_tone();
     test_tone_ends_repeat_run();
     test_tone_muted_by_error_rate();
     test_one_state_as_current_and_last();
+    test_one_state_held_history();
     test_tone_transitions();
     test_noise_overlap_across_a_tone();
     test_tone_transitions_after_mute();
     test_repeat_limit_mute();
+    test_repeat_limit_mute_holds();
     test_error_rate_mute_level();
     test_repeat_limit_under_error_mute();
     test_repeat_limit_noise_continuity();

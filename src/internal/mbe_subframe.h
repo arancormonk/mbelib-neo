@@ -7,9 +7,9 @@
  * @file
  * @brief Speech synthesis in 10 ms subframes, as DVSI's decoders render it.
  *
- * The codec paths (MBE_VOICED_SYNTHESIS_DVSI) synthesize a frame as two
- * subframes of MBE_SUBFRAME samples (docs/dvsi-parity.md, "Synthesis in
- * subframes"):
+ * The codec paths (MBE_VOICED_SYNTHESIS_DVSI and, for rate 33,
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) synthesize a frame as two subframes of
+ * MBE_SUBFRAME samples (docs/dvsi-parity.md, "Synthesis in subframes"):
  *  - the frame's own model stands at its end; a mid-frame model, between the
  *    previous frame's and this one's, stands at sample 80;
  *  - each interval between two models crossfades linearly from one to the next;
@@ -27,6 +27,7 @@
 #ifndef MBEINT_MBE_SUBFRAME_H
 #define MBEINT_MBE_SUBFRAME_H
 
+#include "mbe_adaptive.h"
 #include "mbe_unvoiced_fft.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -54,11 +55,16 @@ struct mbe_subframe_model {
     int any_voiced;           /**< Whether a band is voiced. */
     unsigned char voiced[57]; /**< [1..L]: the band is voiced (and below Nyquist). */
     float magnitude[57];      /**< [1..L]: the band's amplitude, as mbe_parms.Ml holds it. */
-    float phase[57];          /**< [1..L]: regenerated phase of a voiced band. */
+    float phase[57];          /**< [1..L]: regenerated phase of a voiced band (from log2Ml). */
 };
 
 /**
  * @brief The model a frame's parameters give at its end.
+ *
+ * Its phases are regenerated from the frame's decoded log2 amplitudes
+ * (log2Ml), not from the amplitudes it renders, as DVSI's decoders regenerate
+ * them (docs/dvsi-parity.md, "Phase regeneration"); a log2Ml that is not a
+ * finite number counts as the kernel's floor.
  * @param mp    Frame parameters.
  * @param model Receives the model; it has no band when w0 is not a pitch
  *              (positive, finite and not subnormal: a subnormal value is zero
@@ -67,20 +73,43 @@ struct mbe_subframe_model {
  */
 void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model);
 
+/* The rate-33 rendering plays the mid-frame pitch between two voiced frames of
+ * different pitch at the geometric mean of their pitches times this
+ * (docs/dvsi-parity.md, "Rate 33: mid-frame pitch"). A measured offset, not a
+ * known mechanism: DVSI's rate-33 pulse train falls behind ours by 0.013
+ * samples a frame for each mid-frame pitch taken between two different pitch
+ * codes, and by nothing between equal ones, measured on steps of one to three
+ * codes in either direction; as a factor on the mid-frame pitch the
+ * development vectors fit 1 - 2.9e-4 (1 - 3.3e-4 scored a residual energy
+ * against DVSI's of 0.0564, against 0.0683 at 1). Implemented as 1 - 3.0e-4
+ * for every step; larger steps were not measured. */
+#define MBE_AMBE2450_MID_PITCH_FACTOR (1.0f - 3.0e-4f)
+
 /**
  * @brief The mid-frame model between two frames.
  *
  * Its pitch is the geometric mean of the two frames' when both have a voiced
  * band, the voiced frame's when one has (the geometric mean again when the
  * unvoiced frame before a voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES),
- * and the geometric mean when neither has. A band takes the current frame's
+ * and the geometric mean when neither has. In the rate-33 rendering
+ * (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) the geometric mean of two voiced
+ * frames whose pitches differ is multiplied by MBE_AMBE2450_MID_PITCH_FACTOR;
+ * no other case changes. A band takes the current frame's
  * voicing at its frequency, or the previous frame's when the current frame has
  * no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT and the previous
  * frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no band is
  * voiced (the voiced bands of a frame so marked start in its own subframe).
  * Its magnitudes are the two frames' at its frequency, interpolated in the log
- * domain. A current frame marked MBE_FRAME_MARK_PREVIOUS_HELD (a rate-33
- * silence frame) instead gets the previous frame's own model
+ * domain. Its phases are regenerated from the mean of the two frames' log2Ml
+ * at the band's frequency, read as the magnitudes are, each log2Ml used as
+ * the decoder stored it: where the magnitudes' interpolation takes the
+ * unvoiced factor out of an unvoiced band's Ml, nothing is taken out of or put
+ * into its log2Ml, which carries no such factor (an AMBE decoder builds an
+ * ordinary voice frame's unvoiced band as Ml = MBE_UNVOICED_MAGNITUDE_FACTOR
+ * / sqrt(w0) times 2^log2Ml; Ml then also carries what log2Ml does not, such
+ * as rate 33's further silence scale and spectral enhancement). A current
+ * frame marked MBE_FRAME_MARK_PREVIOUS_HELD
+ * (a rate-33 silence frame) instead gets the previous frame's own model
  * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
  * decoder plays it through the silence frame's first 10 ms and crossfades to
  * the silence model over the second. Harmonic counts outside 1..56 give a
@@ -89,10 +118,12 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * @param prev_mp    Previous frame parameters.
  * @param cur_mp     Current frame parameters.
  * @param late_onset Nonzero when the frame's voiced bands start late.
+ * @param rendering  MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 for rate 33; any other
+ *                   value renders as MBE_VOICED_SYNTHESIS_DVSI.
  * @param model      Receives the model.
  */
 void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset,
-                            struct mbe_subframe_model* model);
+                            enum mbe_voiced_synthesis rendering, struct mbe_subframe_model* model);
 
 /**
  * @brief Synthesize one frame in subframes.
@@ -126,9 +157,10 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * @param plan         Transform plan, or NULL (no unvoiced part).
  * @param voiced_gain  Render gain of the voiced harmonics.
  * @param from_silence Nonzero for a frame that starts from silence.
+ * @param rendering    The codec's subframe rendering (mbe_subframe_mid_model()).
  */
 void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
-                              float voiced_gain, int from_silence);
+                              float voiced_gain, int from_silence, enum mbe_voiced_synthesis rendering);
 
 /**
  * @brief Move a stream's synthesis state one frame on without rendering it.
@@ -136,9 +168,13 @@ void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parm
  * For a frame muted inside the synthesis core: the pulse train and the noise
  * generator run on (the pulses still sounding are kept for the next frame),
  * and no unvoiced overlap is left for it. @p from_silence starts the train as
- * mbe_synthesize_subframes() does, so that the state left is the one
- * rendering the frame leaves.
+ * mbe_synthesize_subframes() does, so that the pulse train and the noise
+ * generator end where rendering the frame leaves them; so does @p rendering,
+ * which must be the one the stream renders with. The state is not the one a
+ * rendering leaves in full: a rendered frame with unvoiced bands leaves its own
+ * subframe's second half in previousUw, an advanced one leaves none.
  */
-void mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence);
+void mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence,
+                           enum mbe_voiced_synthesis rendering);
 
 #endif /* MBEINT_MBE_SUBFRAME_H */

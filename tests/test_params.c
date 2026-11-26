@@ -21,6 +21,7 @@
 #include "ambe3600x2450_const.h"
 #include "ambe3600x2450_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_math.h"
 #include "mbe_subframe.h"
 #include "mbe_tone.h"
 #include "mbe_unvoiced_fft.h"
@@ -981,6 +982,117 @@ test_ambe2450_pitch_law(void) {
     }
 }
 
+/* TIA-102.BABA eq 46's fundamental for P25 pitch code b0, as the decoder
+ * computes it (in float), and the harmonic and band counts it gives (eqs 47-48). */
+static float
+imbe_nominal_w0(int b0) {
+    /* Rounded to float, also under x87 excess precision. */
+    return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+}
+
+/* The relative offset of the pitch DVSI's P25 decoder plays for b0, in double:
+ * a two-harmonic series in 4 pi log2 of the nominal period (b0 + 39.5) / 2. */
+static double
+imbe_dvsi_offset(int b0) {
+    const double t = 4.0 * M_PI * log2(((double)b0 + 39.5) / 2.0);
+    return -1.980564e-4 + 1.263798e-4 * cos(t) + 4.835086e-4 * sin(t) + 2.352386e-5 * cos(2.0 * t)
+           + 7.623621e-5 * sin(2.0 * t);
+}
+
+/* Whether a lies within `ulps` units in the last place of float of b. */
+static int
+within_ulps(float a, double b, double ulps) {
+    const double ulp = (double)nextafterf((float)b, INFINITY) - (double)(float)b;
+    return fabs((double)a - b) <= ulps * ulp;
+}
+
+/* x rounded to double, also under x87 excess precision. */
+static double
+round_to_double(double x) {
+    volatile double rounded = x;
+    return rounded;
+}
+
+/* Whether the library is built with fast-math (CMake defines
+ * MBELIB_TEST_LIBRARY_FAST_MATH): it may then evaluate an expression otherwise
+ * than this test does. */
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define LIBRARY_FAST_MATH 1
+#else
+#define LIBRARY_FAST_MATH 0
+#endif
+
+/* Whether the stored pitch is `want`: bit for bit, or within an ulp where
+ * `tolerant` (the build mode is passed in, not tested around the only use of
+ * a value). */
+static int
+pitch_matches(float stored, float want, int tolerant) {
+    uint32_t a, b;
+    memcpy(&a, &stored, sizeof(a));
+    memcpy(&b, &want, sizeof(b));
+    return (a == b) || (tolerant && within_ulps(stored, (double)want, 1.0));
+}
+
+/* P25 plays every pitch code at DVSI's pitch: the nominal one times 1 + g,
+ * while L and K (and so the bit layout) stay the nominal pitch's; ProVoice,
+ * through the same data path, keeps the nominal pitch. */
+static void
+test_imbe_pitch_law(void) {
+    double low = 1.0, high = -1.0;
+    for (int b0 = 0; b0 <= 207; ++b0) {
+        char imbe_d[88];
+        mbe_parms cur, prev, enh;
+        mbe_initMbeParms(&cur, &prev, &enh);
+        set_bits_zero(imbe_d, 88);
+        set_imbe7200_b0(imbe_d, b0);
+        const int rc = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+        assert(rc == 0);
+        (void)rc;
+        const float nominal = imbe_nominal_w0(b0);
+        const int L = (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
+        const int K = (L < 37) ? ((L + 2) / 3) : 12;
+        const double g = imbe_dvsi_offset(b0);
+        low = (g < low) ? g : low;
+        high = (g > high) ? g : high;
+        /* What the decoder stores: eq 46's nominal pitch as it computes it in
+         * float, times 1 + g in double, rounded to float once. Bit for bit
+         * where the library's arithmetic is IEEE (the x87 build included,
+         * which rounds the nominal pitch to float before the correction; g
+         * comes from the same libm here as in the library); within an ulp
+         * when it is built with fast-math, which may evaluate the library's
+         * expression otherwise than this test. Looser, against the law
+         * evaluated wholly in double (4 pi / (b0 + 39.5) times 1 + g), not
+         * rounded: the nominal float's own rounding stays in the stored
+         * pitch, at most 1.21 ulps from that over the codes (b0 77), within
+         * 1.5. (Rounded once to float, that law differs from the stored pitch
+         * by an ulp at 79 codes.) */
+        const float want = mbe_round_to_float((float)round_to_double((double)nominal * (1.0 + g)));
+        assert(pitch_matches(cur.w0, want, LIBRARY_FAST_MATH));
+        assert(within_ulps(cur.w0, (4.0 * M_PI / ((double)b0 + 39.5)) * (1.0 + g), 1.5));
+        assert(cur.L == L && cur.K == K);
+
+        /* The data path: P25 stores the same pitch, ProVoice the nominal one. */
+        for (int provoice = 0; provoice < 2; ++provoice) {
+            float out[160];
+            mbe_process_result result;
+            mbe_parms pcur, pprev, penh;
+            mbe_initMbeParms(&pcur, &pprev, &penh);
+            mbe_initProcessResult(&result);
+            result.flags = provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
+            const int processed = mbe_processImbe4400Dataf(out, &result, imbe_d, &pcur, &pprev, &penh);
+            assert(processed >= 0 && (result.flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
+            (void)processed;
+            /* Bit for bit, or within an ulp in a fast-math build. */
+            assert(pitch_matches(pprev.w0, provoice ? nominal : cur.w0, LIBRARY_FAST_MATH));
+            assert(pprev.L == L && pprev.K == K);
+            /* Where g is more than a few ulps, the two pitches differ. */
+            assert(provoice || fabs(g) < 1.0e-6 || !within_ulps(pprev.w0, (double)nominal, 2.0));
+        }
+    }
+    /* The law's range over the pitch codes. */
+    assert(low > -7.2e-4 && low < -7.0e-4 && high > 3.3e-4 && high < 3.5e-4);
+}
+
 /* D-STAR's gain is absolute, as DVSI's AMBE-3000 decodes it: gamma =
  * 2 Dg[b2] - 0.09 whatever the previous frame's gamma (in DVSI's re-
  * quantizations of decoded D-STAR frames into rate 33 the implied gain sits a
@@ -1502,6 +1614,7 @@ main(void) {
     test_ambe2450_layout();
     test_ambe2450_prba_reconstruction();
     test_ambe2450_pitch_law();
+    test_imbe_pitch_law();
     test_ambe2400_absolute_gain();
     test_ambe2450_differential_gain();
     test_ambe2400_error_rate_mute();
@@ -1533,34 +1646,7 @@ main(void) {
     test_high_band_shelf_shape();
     test_high_band_shelf_per_codec();
 
-    // IMBE 7200x4400: verify w0/L/K from b0
-    {
-        char imbe_d[88];
-        mbe_parms cur = {0}, prev = {0};
-        mbe_parms dummy;
-        mbe_initMbeParms(&cur, &prev, &dummy);
-
-        set_bits_zero(imbe_d, 88);
-        // Pick a few valid b0 values well inside range to avoid edge cases
-        int b0_values[] = {0, 100, 206};
-        for (unsigned i = 0; i < sizeof(b0_values) / sizeof(b0_values[0]); ++i) {
-            set_bits_zero(imbe_d, 88);
-            set_imbe7200_b0(imbe_d, b0_values[i]);
-            int rc = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
-            // valid voice frame expected
-            assert(rc == 0);
-            (void)rc; /* Suppress unused-but-set warning when asserts disabled */
-            float w0_expected = (float)((4.0 * M_PI) / ((double)b0_values[i] + 39.5));
-            int L_expected = (int)(0.9254 * (int)((M_PI / w0_expected) + 0.25));
-            int K_expected = (L_expected < 37) ? ((L_expected + 2) / 3) : 12;
-            assert(approx_equal(cur.w0, w0_expected, 1e-6f));
-            assert(cur.L == L_expected);
-            assert(cur.K == K_expected);
-            (void)w0_expected; /* Suppress unused-but-set warning when asserts disabled */
-            (void)L_expected;
-            (void)K_expected;
-        }
-    }
+    // IMBE 7200x4400: w0/L/K from b0 (every code: test_imbe_pitch_law()).
 
     // Phase arrays initialize to zero
     {
