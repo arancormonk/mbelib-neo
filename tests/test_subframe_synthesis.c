@@ -1232,7 +1232,7 @@ test_mid_model(void) {
     cur.Vl[3] = 0;
     cur.Vl[4] = 7; /* neither voiced nor unvoiced: renders nothing */
     mbe_subframe_own_model(&cur, &own);
-    assert(own.w0 == cur.w0 && own.L == 20 && own.any_voiced);
+    assert(same_bits(&own.w0, &cur.w0, 1) && own.L == 20 && own.any_voiced);
     assert(own.voiced[2] == 1 && own.voiced[3] == 0 && own.voiced[4] > 1 && own.magnitude[2] == 20.0f);
 }
 
@@ -3087,10 +3087,9 @@ same_rendering(const float a[160], const mbe_parms* a_state, const float b[160],
  * and MBE_FRAME_MARK_LATE_ONSET whatever the frame before) in the rate-33
  * rendering; P25's (MBE_FRAME_MARK_ONSET_COLUMNS) in P25's. In D-STAR's (and
  * every other) rendering the marks 5, 6 and 7 play as none, and a late onset
- * acts only after a frame with no voiced band, as before these marks. P25's
- * rendering marks a model with a voiced band for the onset columns whatever
- * its mark, so there every mark plays as that one, and an onset is read in the
- * columns unmarked too. A voiced frame (127.5 Hz, 23 of 28 harmonics voiced,
+ * acts only after a frame with no voiced band, as before these marks. (P25's
+ * rendering replaces the mark of a voiced model:
+ * test_p25_rendering_marks_the_model_it_renders().) A voiced frame (127.5 Hz, 23 of 28 harmonics voiced,
  * which covers the 500 Hz column 5) after an unvoiced and after a voiced one.
  */
 static void
@@ -3098,8 +3097,8 @@ test_marks_act_in_their_own_rendering(void) {
     static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_ONSET_COLUMNS, MBE_FRAME_MARK_MID_COLUMN_0,
                                                 MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET};
 
-    static const enum mbe_voiced_synthesis renderings[] = {
-        MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_VOICED_SYNTHESIS_DVSI_IMBE};
+    static const enum mbe_voiced_synthesis renderings[] = {MBE_VOICED_SYNTHESIS_DVSI,
+                                                           MBE_VOICED_SYNTHESIS_DVSI_AMBE2450};
 
     for (int voiced_before = 0; voiced_before < 2; ++voiced_before) {
         mbe_parms last, model;
@@ -3114,22 +3113,12 @@ test_marks_act_in_their_own_rendering(void) {
             float plain[160], marked[160];
             mbe_parms plain_state, marked_state;
             render_marked(plain, &plain_state, &last, &model, MBE_FRAME_MARK_NONE, rendering);
-            if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
-                /* The onset read in the columns: unlike D-STAR's rendering of it. */
-                float other[160];
-                mbe_parms other_state;
-                render_marked(other, &other_state, &last, &model, MBE_FRAME_MARK_NONE, MBE_VOICED_SYNTHESIS_DVSI);
-                assert(same_rendering(other, &other_state, plain, &plain_state) == voiced_before);
-            }
             for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
                 const enum mbe_frame_mark mark = marks[m];
                 render_marked(marked, &marked_state, &last, &model, mark, rendering);
                 int acts;
                 if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) {
                     acts = mark != MBE_FRAME_MARK_ONSET_COLUMNS;
-                } else if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
-                    acts = 0;
-                    assert(mbe_frame_mark(&marked_state) == MBE_FRAME_MARK_ONSET_COLUMNS);
                 } else {
                     acts = mark == MBE_FRAME_MARK_LATE_ONSET && !voiced_before;
                 }
@@ -3137,6 +3126,58 @@ test_marks_act_in_their_own_rendering(void) {
                 assert(all_finite(marked, 160));
             }
         }
+    }
+}
+
+/*
+ * P25's rendering marks the model it renders: a model with a voiced band that
+ * is not a tone model carries MBE_FRAME_MARK_ONSET_COLUMNS whatever mark it
+ * came with, so a caller's mark on it is overwritten and has no effect, the
+ * late onset (80) and the held previous model (3) included, which before these
+ * marks, as at the branch point, delayed the voiced bands and held the model
+ * before: every one renders as the onset mark (after an unvoiced frame, where
+ * the columns act, and after a voiced one), and an onset is read in the
+ * columns unmarked too, unlike D-STAR's rendering. A tone model keeps
+ * MBE_FRAME_MARK_TONE (its own model at mid-frame). A model with no voiced
+ * band keeps any other mark (PITCH_CARRIES, PITCH_ABSENT and PREVIOUS_HELD
+ * still act there) and loses the onset mark.
+ */
+static void
+test_p25_rendering_marks_the_model_it_renders(void) {
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE,         MBE_FRAME_MARK_PITCH_CARRIES,
+                                                MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
+                                                MBE_FRAME_MARK_MID_COLUMN_0, MBE_FRAME_MARK_MID_COLUMNS_0_1,
+                                                MBE_FRAME_MARK_LATE_ONSET};
+    const enum mbe_voiced_synthesis p25 = MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    for (int voiced_before = 0; voiced_before < 2; ++voiced_before) {
+        mbe_parms last, model, unvoiced;
+        float out[160], onset[160], marked[160], other[160];
+        mbe_parms onset_state, marked_state, other_state;
+        fresh_stream(&last);
+        set_model(&model, 150.0, 24, voiced_before ? 20 : 0, 16.0f);
+        next_frame(out, &last, &model);
+        set_model(&model, 127.5, 28, 23, 16.0f);
+        shape_model(&model, 3);
+        render_marked(onset, &onset_state, &last, &model, MBE_FRAME_MARK_ONSET_COLUMNS, p25);
+        assert(mbe_frame_mark(&onset_state) == MBE_FRAME_MARK_ONSET_COLUMNS);
+        render_marked(other, &other_state, &last, &model, MBE_FRAME_MARK_NONE, MBE_VOICED_SYNTHESIS_DVSI);
+        assert(same_rendering(other, &other_state, onset, &onset_state) == voiced_before);
+        for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
+            render_marked(marked, &marked_state, &last, &model, marks[m], p25);
+            assert(same_rendering(marked, &marked_state, onset, &onset_state));
+            assert(mbe_frame_mark(&marked_state) == MBE_FRAME_MARK_ONSET_COLUMNS);
+        }
+        render_marked(marked, &marked_state, &last, &model, MBE_FRAME_MARK_TONE, p25);
+        assert(mbe_frame_mark(&marked_state) == MBE_FRAME_MARK_TONE);
+        assert(!same_rendering(marked, &marked_state, onset, &onset_state));
+
+        set_model(&unvoiced, 110.0, 30, 0, 8.0f);
+        for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
+            render_marked(marked, &marked_state, &last, &unvoiced, marks[m], p25);
+            assert(mbe_frame_mark(&marked_state) == marks[m]);
+        }
+        render_marked(marked, &marked_state, &last, &unvoiced, MBE_FRAME_MARK_ONSET_COLUMNS, p25);
+        assert(mbe_frame_mark(&marked_state) == MBE_FRAME_MARK_NONE);
     }
 }
 
@@ -3356,6 +3397,7 @@ main(void) {
     test_p25_reset_drops_the_mark();
     test_p25_foreign_marks_in_state();
     test_marks_act_in_their_own_rendering();
+    test_p25_rendering_marks_the_model_it_renders();
     test_p25_smoothed_onset();
     return 0;
 }

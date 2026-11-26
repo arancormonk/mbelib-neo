@@ -712,7 +712,7 @@ expect_codec_shelf(process_fn process, const char* data, float gain) {
     mbe_parms cur, prev, enhanced;
     float out[160];
     mbe_initMbeParms(&cur, &prev, &enhanced);
-    assert(process(out, NULL, data, &cur, &prev, &enhanced) >= 0);
+    expect_ok(process(out, NULL, data, &cur, &prev, &enhanced));
     mbe_parms model = prev;
     (void)mbe_spectralAmpEnhanceWithRm0(&model, gain);
     assert(model.L == enhanced.L);
@@ -2407,7 +2407,7 @@ main(void) {
                 mode == 0 ? mbe_processAmbe2400Dataf : mbe_processAmbe2450Dataf;
             // Establish AMBE defaults before constructing the previous frame.
             mbe_initProcessResult(&result);
-            assert(process(out, &result, data, &cur, &prev, &prev_enh) >= 0);
+            expect_ok(process(out, &result, data, &cur, &prev, &prev_enh));
             prev.L = prev_enh.L = 56;
             prev.w0 = prev_enh.w0 = 0.05f;
             mbe_initProcessResult(&result);

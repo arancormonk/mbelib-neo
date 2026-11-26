@@ -635,7 +635,11 @@ assert_word_plays_as_none(const struct stream* s, int word) {
 static void
 test_word_from_the_model(void) {
     int K1, K2;
-    assert(harmonics_of(1, &K1) == 9 && harmonics_of(2, &K2) == 9 && K1 == 3 && K2 == 3);
+    const int L1 = harmonics_of(1, &K1);
+    const int L2 = harmonics_of(2, &K2);
+    assert(L1 == 9 && L2 == 9 && K1 == 3 && K2 == 3);
+    (void)L1;
+    (void)L2;
 
     struct stream code2;
     stream_after_frame(&code2, 2, 0x001u, 7, 7, 11.0f, 2.0f);
