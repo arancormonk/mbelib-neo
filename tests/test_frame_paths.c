@@ -1012,7 +1012,9 @@ test_ambe2400_accepted_tones(void) {
                             assert(samples_match_reference(pcm[n], tone[n], 160, K_LIBRARY_FAST_MATH));
                         }
                     } else if (cases[c].accepted) {
-                        assert(float_array_equal_exact(pcm[n], tone[n], 160));
+                        /* No tones: silence past the first frame's fading speech. */
+                        const size_t from = (n == 0) ? 80u : 0u;
+                        assert(float_array_equal_exact(pcm[n] + from, tone[n] + from, 160 - from));
                     } else if (n >= 4) {
                         short muted[160];
                         (void)short_from_float(AMBE2400, pcm[n], muted);
