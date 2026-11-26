@@ -2865,6 +2865,49 @@ test_noise_generator_through_frame_kinds(void) {
     assert(frames == 12);
 }
 
+/*
+ * A held-tone word counts only with a tone ID rate 33 plays (the ID test the
+ * decoder applies to a tone frame, mbe_tone_id_is_valid()): a word in the
+ * last synthesized frame that says a tone is held but names an ID with no
+ * tone (255, Table 9's zero-amplitude ID; 0; 123; 164; 127), with or without
+ * the start-afresh bit, plays as the same word without the held tone: the
+ * next tone frame a tone after a frame that was not one (the fade over the
+ * repeated speech, the fresh start), the next voice frame without a tone's
+ * tail, an erasure a plain repeat; bit for bit, the frame after them too, and
+ * the states left.
+ */
+static void
+test_invalid_held_tone(void) {
+    static const int ids[] = {255, 0, 123, 164, 127};
+    char tone[49], voice[49], erasure[49];
+    pack_tone(tone, 129);
+    pack_b(voice, k_voice_loud);
+    pack_b(erasure, k_erasure);
+    const char* nexts[] = {tone, voice, erasure};
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i) {
+        for (int afresh = 0; afresh < 2; ++afresh) {
+            for (size_t k = 0; k < sizeof(nexts) / sizeof(nexts[0]); ++k) {
+                struct stream s, plain;
+                stream_settled(&s, k_voice_next);
+                assert(s.prev_enh.Vl[0] == 0);
+                plain = s;
+                s.prev_enh.Vl[0] = W_TONE_HELD | (afresh ? W_AFRESH : 0) | (127 << 8) | ids[i];
+                plain.prev_enh.Vl[0] = afresh ? W_AFRESH : 0;
+                for (int f = 0; f < 2; ++f) {
+                    const char* d = (f == 0) ? nexts[k] : voice;
+                    stream_frame(&s, d, 0, 0);
+                    stream_frame(&plain, d, 0, 0);
+                    assert(s.result.flags == plain.result.flags);
+                    assert(float_array_bits_equal(s.out, plain.out, 160));
+                }
+                assert(parms_equal(&s.cur, &plain.cur) && parms_equal(&s.prev, &plain.prev)
+                       && parms_equal(&s.prev_enh, &plain.prev_enh));
+            }
+        }
+    }
+    puts("held tones: a word counts only with a tone rate 33 plays");
+}
+
 int
 main(void) {
     test_repeat_preserves_model();
@@ -2911,6 +2954,7 @@ main(void) {
     test_tone_start_phase();
     test_loud_tone_tail();
     test_loud_tone_first_frame();
+    test_invalid_held_tone();
     printf("test_ambe2450_frame_types: OK\n");
     return 0;
 }

@@ -142,6 +142,12 @@ make_uncorrectable_result(mbe_process_result* r, int errors) {
     r->flags |= MBE_PROCESS_FLAG_C0_UNCORRECTABLE;
 }
 
+/* A call's status: the call is made by the caller, outside assert(). */
+static void
+assert_status(int got, int want) {
+    assert(got == want);
+}
+
 /* A frame result with `c0` Golay corrections in C0 and `protected` elsewhere. */
 static void
 make_result_c0(mbe_process_result* r, int c0, int protected_errors) {
@@ -2517,6 +2523,53 @@ test_tone_played_frequencies(void) {
     puts("tones: DVSI's frequencies, started as a fresh pulse train after voice");
 }
 
+/*
+ * A held-tone word counts only with a tone index D-STAR plays (the index test
+ * the decoder applies to a tone frame, mbe_tone_lookup_dstar_freqs()): a word
+ * in the caller's state that says a tone is held but names an index with no
+ * tone (255, 148, 124, 123, 0) leaves the next tone frame a tone after a frame
+ * that was not one (the last frame's speech fading out under it, the fresh
+ * start), the next voice frame without a tone's tail and a lost frame a plain
+ * repeat: each plays as the stream without the word, bit for bit, and so does
+ * the voice frame after it.
+ */
+static void
+test_invalid_held_tone(void) {
+    static const int indexes[] = {255, 148, 124, 123, 0};
+    char voice[NVOICE][49], tone[49], b125[49];
+    make_voice(voice);
+    pack_tone(tone, 126, 134, 180);
+    memcpy(b125, voice[3], sizeof(b125));
+    put_b0(b125, 125);
+    const char* nexts[] = {tone, voice[4], b125};
+    mbe_process_result r;
+    float out[160], plain_out[160];
+    for (size_t i = 0; i < sizeof(indexes) / sizeof(indexes[0]); ++i) {
+        for (size_t k = 0; k < sizeof(nexts) / sizeof(nexts[0]); ++k) {
+            mbe_parms cur, prev, enh;
+            mbe_initMbeParms(&cur, &prev, &enh);
+            for (int f = 0; f < 4; ++f) {
+                make_result(&r, 0);
+                assert_status(mbe_processAmbe2400Dataf(out, &r, voice[f], &cur, &prev, &enh), 0);
+            }
+            assert(prev.Vl[0] == 0);
+            mbe_parms pcur = cur, pprev = prev, penh = enh;
+            prev.Vl[0] = (1 << 16) | indexes[i]; /* held, with the index */
+            for (int f = 0; f < 2; ++f) {
+                const char* d = (f == 0) ? nexts[k] : voice[5];
+                make_result(&r, 0);
+                assert_status(mbe_processAmbe2400Dataf(out, &r, d, &cur, &prev, &enh), 0);
+                make_result(&r, 0);
+                assert_status(mbe_processAmbe2400Dataf(plain_out, &r, d, &pcur, &pprev, &penh), 0);
+                assert_same_pcm(out, plain_out, 160, "a held word with no tone");
+            }
+            assert_same_state(&prev, &pprev, "history after a held word with no tone");
+            assert_same_state(&enh, &penh, "last frame after a held word with no tone");
+        }
+    }
+    puts("held tones: a word counts only with a tone D-STAR plays");
+}
+
 int
 main(void) {
     test_voicing_bands();
@@ -2557,5 +2610,6 @@ main(void) {
     test_lost_after_dual_tone();
     test_tone_volume_step();
     test_tone_played_frequencies();
+    test_invalid_held_tone();
     return 0;
 }

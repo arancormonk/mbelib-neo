@@ -909,13 +909,19 @@ struct ambe2450_snapshot {
     uint32_t tone_phase; /* (the state cur_mp carries) */
 };
 
+/* The word is read here alone, and a held tone counts only with an ID rate 33
+ * plays (the test a tone frame's ID passes, ambe2450_tone_id_usable()): a
+ * decoder leaves no other, and any other a caller's state holds is no held
+ * tone (its start-afresh bit still counts), so the next tone frame starts as
+ * a tone after a frame that was not one, and no tail, tone repeat or mute
+ * fade reads it. */
 static void
 ambe2450_take_snapshot(const mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, struct ambe2450_snapshot* in) {
     const int stored = prev_mp_enhanced->Vl[0];
-    in->held = (stored & AMBE2450_TONE_HELD) != 0;
-    in->afresh = in->held || ((stored & AMBE2450_STARTS_AFRESH) != 0);
     in->id = stored & 0xFF;
     in->ad = (stored >> 8) & 0x7F;
+    in->held = (stored & AMBE2450_TONE_HELD) != 0 && mbe_tone_id_is_valid(in->id);
+    in->afresh = in->held || ((stored & AMBE2450_STARTS_AFRESH) != 0);
     in->swn = cur_mp->swn;
     in->tone_phase = cur_mp->tonePhase;
     prev_mp_enhanced->Vl[0] = 0;
