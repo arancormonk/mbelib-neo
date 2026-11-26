@@ -10,6 +10,7 @@
  */
 #include <assert.h>
 #include <fenv.h>
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -790,7 +791,7 @@ test_voicing_persists_without_a_pitch(void) {
 
     struct mbe_subframe_model mid;
     mbe_subframe_mid_model(&last, &unvoiced, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
-    assert(mid.w0 == voiced.w0);
+    assert(same_bits(&mid.w0, &voiced.w0, 1));
     for (int l = 1; l <= mid.L; ++l) {
         assert(mid.voiced[l] == ((l <= 12) ? 1 : 0));
     }
@@ -910,11 +911,11 @@ test_mid_model(void) {
     /* Only one frame with a voiced band: its pitch. Neither: between them. */
     set_model(&prev, 150.0, 24, 0, 10.0f);
     mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
-    assert(mid.w0 == cur.w0 && mid.any_voiced);
+    assert(same_bits(&mid.w0, &cur.w0, 1) && mid.any_voiced);
     set_model(&prev, 150.0, 24, 24, 10.0f);
     set_model(&cur, 180.0, 20, 0, 20.0f);
     mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
-    assert(mid.w0 == prev.w0 && !mid.any_voiced);
+    assert(same_bits(&mid.w0, &prev.w0, 1) && !mid.any_voiced);
     set_model(&prev, 150.0, 24, 0, 10.0f);
     mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
     assert(fabs((double)mid.w0 - w0) < 1e-6 && !mid.any_voiced);
@@ -1280,7 +1281,7 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     assert(same_bits(rendered.PSIl, advanced.PSIl, 57));
     assert(same_bits(rendered.PHIl, advanced.PHIl, 57));
     assert(same_bits(rendered.noiseOverlap, advanced.noiseOverlap, 96));
-    assert(rendered.noiseSeed == advanced.noiseSeed);
+    assert(same_bits(&rendered.noiseSeed, &advanced.noiseSeed, 1));
     for (int n = 0; n < 256; ++n) {
         assert(advanced.previousUw[n] == 0.0f);
     }
@@ -1316,7 +1317,7 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
                                        MBE_AMPLITUDE_LIMIT_NONE);
     assert(same_bits(muted.noiseOverlap, heard.noiseOverlap, 96));
     assert(same_bits(muted.PSIl, heard.PSIl, 57));
-    assert(muted.noiseSeed == heard.noiseSeed);
+    assert(same_bits(&muted.noiseSeed, &heard.noiseSeed, 1));
     /* The pulses the pitch step leaves: the mid-frame pitch's offset in the
      * rate-33 rendering moves them, by the cycles it takes from the frame. */
     mbe_parms other = last;
@@ -1733,6 +1734,29 @@ corrupt_overlap(float* bad, float* clean, int start, int n, uint32_t value) {
     }
 }
 
+/* Where a huge finite sample of previousUw plays as stored: at every 7th
+ * output sample from `first` up to `last`, the output of the state that holds
+ * it there is `want`, and that of the state with 0 there is not, at one of
+ * those samples at least (a loud frame reaches the limit at some anyway). */
+static void
+assert_plays_huge_overlap(const float bad[160], const float clean[160], int first, int last, float want) {
+    int apart = 0;
+    for (int n = first; n <= last; n += 7) {
+        assert(same_bits(&bad[n], &want, 1));
+        apart += !same_bits(&clean[n], &want, 1);
+    }
+    assert(apart > 0);
+}
+
+/* The output limit of the codec paths and mbe_synthesizeSpeechf(), with the
+ * sign of `bits`. */
+static float
+limit_with_sign_of(uint32_t bits) {
+    float limit = ((bits >> 31) != 0u) ? -FLT_MAX : FLT_MAX;
+    mbe_clipFloatBuffer(&limit, 1);
+    return limit;
+}
+
 /* The TIA-102.BABA rendering (mbe_synthesizeSpeechf()) of a third frame of
  * `model`, from the state two frames leave (so that the noise overlap is drawn
  * noise) with `value` in every 7th sample of its previousUw (from 128) or of
@@ -1767,9 +1791,12 @@ spec_frame_after(float out[2][160], const mbe_parms* model, int noise_overlap, u
  * overlap), each with not a number of either sign, plus and minus infinity,
  * plus and minus FLT_MAX and 2^127 in it:
  *  - the frame is finite;
- *  - a sample of previousUw that is not a finite number plays as 0 (a huge
- *    finite one plays as stored, and the output limit, or the lack of one,
- *    keeps the frame finite);
+ *  - a sample of previousUw that is not a finite number plays as 0, and a huge
+ *    finite one plays as stored: the subframe rendering alone, before any
+ *    limit, gives the stored value at that sample (it drowns everything else
+ *    there), and the limited paths (the P25 data path, mbe_synthesizeSpeechf())
+ *    give the output limit of its sign there, where the state with 0 in its
+ *    place does not (at some of those samples: the P25 frame is loud);
  *  - a sample of the noise overlap that the TIA-102.BABA generator cannot
  *    have written (it writes 0 to 53124) plays as 0: a huge one would
  *    otherwise overflow the transform of the noise buffer into NaN.
@@ -1805,6 +1832,12 @@ test_untrusted_unvoiced_overlap(void) {
         next_whole_frame(out[1], &clean, &mixed, plan);
         assert(all_finite(out[0], 160));
         assert(!zeroed || same_or_close(out[0], out[1], 160));
+        float stored;
+        memcpy(&stored, &bits, sizeof(stored));
+        if (!zeroed) {
+            /* Rendered as stored: at a sample this large nothing else counts. */
+            assert_plays_huge_overlap(out[0], out[1], 0, MBE_SUBFRAME - 1, stored);
+        }
 
         mbe_parms cur[2], prev[2], enhanced[2];
         char imbe_d[88];
@@ -1825,12 +1858,19 @@ test_untrusted_unvoiced_overlap(void) {
         (void)rc;
         assert(all_finite(out[0], 160));
         assert(!zeroed || same_or_close(out[0], out[1], 160));
+        if (!zeroed) {
+            assert_plays_huge_overlap(out[0], out[1], 0, MBE_SUBFRAME - 1, limit_with_sign_of(bits));
+        }
 
         /* The TIA-102.BABA rendering: previousUw, then the noise overlap,
          * where every one of these values is outside what the generator writes. */
         spec_frame_after(out, &mixed, 0, bits);
         assert(all_finite(out[0], 160));
         assert(!zeroed || same_or_close(out[0], out[1], 160));
+        if (!zeroed) {
+            /* Where its overlap window is whole (WOLA, mbe_synthesisWindow()). */
+            assert_plays_huge_overlap(out[0], out[1], 0, 55, limit_with_sign_of(bits));
+        }
         spec_frame_after(out, &mixed, 1, bits);
         assert(all_finite(out[0], 160));
         assert(same_or_close(out[0], out[1], 160));

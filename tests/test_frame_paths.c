@@ -683,7 +683,10 @@ test_imbe_fundamental_roundtrip(void) {
     init_params(&warm_cur, &warm_prev, &warm_enh);
     for (int n = 0; n < 3; ++n) {
         mbe_initProcessResult(&result7200);
-        assert(mbe_processImbe4400Dataf(warm_pcm, &result7200, warm_data, &warm_cur, &warm_prev, &warm_enh) == 0);
+        const int warm_ret =
+            mbe_processImbe4400Dataf(warm_pcm, &result7200, warm_data, &warm_cur, &warm_prev, &warm_enh);
+        assert(warm_ret == 0);
+        (void)warm_ret;
     }
     /* Exhaustive b0 covers every K transition, including out-of-speech indices.
      * Seven bit planes uniquely tag all payload positions and vary the status
@@ -697,16 +700,22 @@ test_imbe_fundamental_roundtrip(void) {
                 data[b0_indices[i]] = (char)((b0 >> (7u - i)) & 1u);
             }
             data[87] = (char)(tag & 1u);
-            assert(mbe_quality_frame_from_data("imbe7200", data, sizeof(data), frame7200, sizeof(frame7200)) == 184);
-            assert(mbe_quality_frame_from_data("imbe7100", data, sizeof(data), frame7100, sizeof(frame7100)) == 168);
+            const int bits7200 =
+                mbe_quality_frame_from_data("imbe7200", data, sizeof(data), frame7200, sizeof(frame7200));
+            const int bits7100 =
+                mbe_quality_frame_from_data("imbe7100", data, sizeof(data), frame7100, sizeof(frame7100));
+            assert(bits7200 == 184 && bits7100 == 168);
+            (void)bits7200;
+            (void)bits7100;
 
             cur = warm_cur;
             prev = warm_prev;
             enh = warm_enh;
             mbe_setThreadRngSeed(0x12345678u);
-            assert(mbe_processImbe7200x4400Framef(pcm7200, &result7200, (const char (*)[23])frame7200, decoded, &cur,
-                                                  &prev, &enh)
-                   == 0);
+            const int ret7200 = mbe_processImbe7200x4400Framef(pcm7200, &result7200, (const char (*)[23])frame7200,
+                                                               decoded, &cur, &prev, &enh);
+            assert(ret7200 == 0);
+            (void)ret7200;
             assert(memcmp(decoded, data, sizeof(data)) == 0);
             assert(((result7200.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == (b0 > 207));
             const mbe_parms p25 = prev;
@@ -727,9 +736,10 @@ test_imbe_fundamental_roundtrip(void) {
             prev = warm_prev;
             enh = warm_enh;
             mbe_setThreadRngSeed(0x12345678u);
-            assert(mbe_processImbe7100x4400Framef(pcm7100, &result7100, (const char (*)[24])frame7100, decoded, &cur,
-                                                  &prev, &enh)
-                   == 0);
+            const int ret7100 = mbe_processImbe7100x4400Framef(pcm7100, &result7100, (const char (*)[24])frame7100,
+                                                               decoded, &cur, &prev, &enh);
+            assert(ret7100 == 0);
+            (void)ret7100;
             assert(memcmp(decoded, data, sizeof(data)) == 0);
             /* Only the ProVoice context flag tells the two results apart. */
             assert((result7100.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
