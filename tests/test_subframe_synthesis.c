@@ -235,18 +235,24 @@ set_imbe_b0(char imbe_d[88], int b0) {
 /* The frame marks: only an exact stored value counts, and one replaces another. */
 static void
 test_frame_marks(void) {
-    static const enum mbe_frame_mark marks[] = {
-        MBE_FRAME_MARK_NONE, MBE_FRAME_MARK_PITCH_CARRIES, MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
-        MBE_FRAME_MARK_TONE, MBE_FRAME_MARK_ONSET_COLUMNS, MBE_FRAME_MARK_LATE_ONSET};
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE,         MBE_FRAME_MARK_PITCH_CARRIES,
+                                                MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
+                                                MBE_FRAME_MARK_TONE,         MBE_FRAME_MARK_ONSET_COLUMNS,
+                                                MBE_FRAME_MARK_MID_COLUMN_0, MBE_FRAME_MARK_MID_COLUMNS_0_1,
+                                                MBE_FRAME_MARK_LATE_ONSET};
 
     static const uint32_t others[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0x80000000u, 0x3F800001u, 0x40400001u,
-                                      0x40A00001u, 0x40900000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
+                                      0x40A00001u, 0x40C00001u, 0x40E00001u, 0x40BFFFFFu, 0x40900000u, 0x41000000u,
+                                      0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
     mbe_parms mp;
     memset(&mp, 0, sizeof(mp));
     assert(mbe_frame_mark(&mp) == MBE_FRAME_MARK_NONE);
     for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); ++i) {
         mbe_set_frame_mark(&mp, marks[i]);
         assert(mbe_frame_mark(&mp) == marks[i]);
+        /* Stored as the mark's value in float. */
+        const float stored = (float)marks[i];
+        assert(same_bits(&mp.PHIl[0], &stored, 1));
         assert(mbe_voicing_onset_delay(&mp) == ((marks[i] == MBE_FRAME_MARK_LATE_ONSET) ? MBE_VOICING_ONSET_LATE : 0));
     }
     for (size_t i = 0; i < sizeof(others) / sizeof(others[0]); ++i) {
@@ -2790,8 +2796,11 @@ test_p25_onset_edges(void) {
 }
 
 /* Through the P25 data path: an onset frame muted by the error rate, which the
- * core advances, leaves the stream where the same frame heard leaves it, so
- * the frames after both play alike. */
+ * core advances, leaves the pulse train and the noise generator where the same
+ * frame heard leaves them. The unvoiced overlap does not end alike (an advanced
+ * frame leaves none, a rendered one the second half of its own subframe), so
+ * the frame after plays otherwise in its first 80 samples, over which that
+ * overlap is added, and alike from sample 80 on. */
 static void
 test_p25_muted_onset_advances(void) {
     mbe_parms cur[2], prev[2], enhanced[2];
@@ -2825,6 +2834,15 @@ test_p25_muted_onset_advances(void) {
             assert(same_bits(enhanced[0].noiseOverlap, enhanced[1].noiseOverlap, 96));
             assert(same_bits(enhanced[0].PSIl, enhanced[1].PSIl, 57));
             assert(same_bits(&enhanced[0].noiseSeed, &enhanced[1].noiseSeed, 1));
+        }
+        if (f == 1) {
+            const float none[256] = {0.0f};
+            assert(same_bits(enhanced[1].previousUw, none, 256));
+            assert(!same_bits(enhanced[0].previousUw, none, 256));
+        }
+        if (f == 2) {
+            assert(!same_bits(out[0], out[1], 80));
+            assert(same_bits(&out[0][80], &out[1][80], 80));
         }
     }
 }

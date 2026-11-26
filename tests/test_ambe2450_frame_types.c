@@ -1603,12 +1603,16 @@ test_rows_13_15_17_mid_voicing(void) {
             char d[49];
             mbe_initMbeParms(&prev, &history, &enhanced);
             pack_b(d, b);
-            assert(mbe_decodeAmbe2450Parms(d, &prev, &history) == MBE_AMBE2450_FRAME_VOICE);
+            const int before_kind = mbe_decodeAmbe2450Parms(d, &prev, &history);
+            assert(before_kind == MBE_AMBE2450_FRAME_VOICE);
+            (void)before_kind;
             b[0] = 56;
             b[1] = rows[r];
             pack_b(d, b);
             cur = prev;
-            assert(mbe_decodeAmbe2450Parms(d, &cur, &history) == MBE_AMBE2450_FRAME_VOICE);
+            const int kind = mbe_decodeAmbe2450Parms(d, &cur, &history);
+            assert(kind == MBE_AMBE2450_FRAME_VOICE);
+            (void)kind;
             const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
             for (int l = 1; l <= cur.L; ++l) {
                 const int own = (rows[r] != 17) && ((double)l * f0 < 1500.0);
@@ -1685,6 +1689,53 @@ test_repeat_of_rows_13_15_17(void) {
         assert(!close_to(s.out, marked, 0, 160));
         assert(mbe_frame_mark(&s.prev_enh) == MBE_FRAME_MARK_NONE);
     }
+}
+
+/*
+ * A tone frame right after a frame of row 13, 15 or 17: the speech that the
+ * tone's first 80 samples fade out is the last frame repeated, as a lost frame
+ * repeats it, with the repeated model's own voicing through the frame, not the
+ * row's mid-frame voicing (the row's mark does not go with the repeat): the
+ * tone's first frame plays exactly as after the same frame without the mark,
+ * and the repeat with the mark kept would play otherwise.
+ */
+static void
+test_tone_after_rows_13_15_17(void) {
+    const int* rows[3] = {k_vuv_row13, k_vuv_row15, k_vuv_row17};
+    char tone[49];
+    pack_tone(tone, 7);
+    for (int r = 0; r < 3; ++r) {
+        struct stream s, unmarked;
+        float marked[160], plain[160];
+        stream_settled(&s, k_voice_loud);
+        stream_frame_b(&s, rows[r], 0, 0);
+        assert(mbe_frame_mark(&s.prev_enh) != MBE_FRAME_MARK_NONE);
+        unmarked = s;
+        mbe_set_frame_mark(&unmarked.prev_enh, MBE_FRAME_MARK_NONE);
+        repeat_reference_out(marked, &s, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
+        repeat_reference_out(plain, &unmarked, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
+        assert(!close_to(marked, plain, 0, 80));
+        stream_frame(&s, tone, 0, 0);
+        stream_frame(&unmarked, tone, 0, 0);
+        assert(has_flag(&s, MBE_PROCESS_FLAG_TONE) && has_flag(&unmarked, MBE_PROCESS_FLAG_TONE));
+        assert(float_array_bits_equal(s.out, unmarked.out, 160));
+    }
+}
+
+/*
+ * Row 17 then row 16: row 17 has no voiced band of its own, so the row-16
+ * frame after it (no voiced band, no mark) starts no pulse and keeps none.
+ */
+static void
+test_row17_then_row16(void) {
+    static const int row16[9] = {60, 16, 20, 200, 90, 17, 11, 3, 6};
+    struct stream s;
+    stream_settled(&s, k_voice_loud);
+    stream_frame_b(&s, k_vuv_row17, 0, 0);
+    assert(s.prev_enh.noiseOverlap[0] > 0.0f);
+    stream_frame_b(&s, row16, 0, 0);
+    assert(float_bits_equal(s.prev_enh.noiseOverlap[0], 0.0f));
+    assert(float_bits_equal((float)pulse_phase_of(&s.prev_enh), 0.0f));
 }
 
 /*
@@ -2282,6 +2333,42 @@ stream_into_tone(struct stream* s, char tone[49], int tone_id) {
     pack_tone(tone, tone_id);
     stream_frame(s, tone, 0, 0);
     assert(has_flag(s, MBE_PROCESS_FLAG_TONE) && !has_flag(s, MBE_PROCESS_FLAG_REPEAT));
+}
+
+/*
+ * A frame of row 13, 15 or 17 as the first frame after a mute (the 4th
+ * erasure) and after a tone, through the public process function: the frame
+ * starts from silence (the kept model unheard, a new pulse train), and its
+ * mid-frame voicing is its row's: rows 13 and 17 launch their first pulse at
+ * the frame's start, row 15, whose first half is unvoiced, at sample 80. What
+ * DVSI's decoder plays there was not measured (docs/dvsi-parity.md, "Rate 33:
+ * rows 13, 15 and 17"); this pins what the library does.
+ */
+static void
+test_rows_13_15_17_after_mute_or_tone(void) {
+    const int* rows[3] = {k_vuv_row13, k_vuv_row15, k_vuv_row17};
+    static const float first_pulse[3] = {-160.0f, -80.0f, -160.0f};
+    char erasure[49], tone[49];
+    pack_b(erasure, k_erasure);
+    for (int after_tone = 0; after_tone < 2; ++after_tone) {
+        for (int r = 0; r < 3; ++r) {
+            struct stream s;
+            if (after_tone) {
+                stream_into_tone(&s, tone, 7);
+            } else {
+                stream_settled(&s, k_voice_loud);
+                for (int i = 0; i < 4; ++i) {
+                    stream_frame(&s, erasure, 0, 0);
+                }
+                assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+            }
+            stream_frame_b(&s, rows[r], 0, 0);
+            assert(s.result.flags == MBE_PROCESS_FLAG_C0_VALID);
+            const int count = (int)s.prev_enh.noiseOverlap[0];
+            assert(count > 0);
+            assert(float_bits_equal(s.prev_enh.noiseOverlap[count], first_pulse[r]));
+        }
+    }
 }
 
 /*
@@ -3163,6 +3250,9 @@ main(void) {
     test_row15_keeps_the_train();
     test_repeat_of_rows_13_15_17();
     test_p25_mark_in_state();
+    test_tone_after_rows_13_15_17();
+    test_row17_then_row16();
+    test_rows_13_15_17_after_mute_or_tone();
     test_mute_fades_a_held_tone();
     test_mute_first_frame();
     test_noise_generator_through_frame_kinds();
