@@ -19,7 +19,7 @@ The CTest suite includes:
 - Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven, for the D-STAR, AMBE+2 and IMBE encoders) clean up fully; after successful allocation, encoding (tone frames included) and reset allocate nothing (`test_ambe2400_encoder_oom`, `test_ambe2450_encoder_oom`, `test_imbe7200_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
 - parameter and synthesis behavior checks, including an `L * w0 < pi` bound for every model the decoders emit and rate-33 V/UV rows 18-31 on their band grid (`w0 = 2.81 / L`, the unvoiced factor from it, the next frame's prediction unchanged; `test_params`)
-- the codec paths' unvoiced synthesis: DVSI's noise generator (its period, its first samples, a cold start and a skipped frame), a subframe against the equations it implements, the window's squares summing to one, a level step inside a frame, the public `mbe_synthesizeSpeechf()` keeping the specification's rendering, a state handed from one rendering to the other, invalid arguments and models, and two streams replaying alike (`test_unvoiced_subframes`)
+- the codec paths' unvoiced synthesis: DVSI's noise generator (its period, its first samples, a cold start and a skipped frame, and the samples and next state of a frame drawn from each of its 65,536 states against the recurrence), a subframe against the equations it implements, the window's squares summing to one, a level step inside a frame, the public `mbe_synthesizeSpeechf()` keeping the specification's rendering, a state handed from one rendering to the other, invalid arguments and models, and two streams replaying alike (`test_unvoiced_subframes`)
 - the codec paths' voiced synthesis in subframes: a steady model adding up to its harmonics, an onset starting the pulse train, a late onset, a pitch step keeping the train, the mid-frame model against an independent evaluation, linear crossfades into and out of silence, a muted frame moving the train on, stored pulse state that is not a frame's own being dropped, invalid models (harmonic counts, pitches and magnitudes of any value) leaving the neighbouring state alone, and the frame marks the decoders set: every P25 and D-STAR pitch code of an unvoiced frame, P25 voicing that stays under 505 Hz, the previous voicing lasting to mid-frame through the P25 data path, and the previous model held to mid-frame by a rate-33 silence frame; a frame that starts from silence: the independent rendering of the waveform test through such frames, a steady voiced pair rising as n / 80 of the ordinary rendering from an empty train, stale pulses, phases and overlap neither sounding nor moving the new train, a silence frame rising to its own model, and advancing leaving the state rendering leaves (`test_subframe_synthesis`)
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1 and as DVSI's decoder plays it: frame classification, silence history freeze, silence frames on 15 bands at their level with the previous model held to mid-frame, repeats, erasures (tone ID 255 among them, on the hard, soft and parameter-bit paths, and the all-ones frame of DVSI's DTX vectors, a tone frame with the unusable index 180), tones (including unverified tone frames), muting (the mute noise level, the last frame fading out against an independent rendering, the model kept and the noise generator's single frame through every kind of mute), the frame after a mute or a tone rendered from silence from the kept model (plus a tone's tail), and lost frames repeating a tone bit for bit until the repeat limit fades it out (`test_ambe2450_frame_types`)
 - D-STAR voicing: every b1 value at four pitches, each voiced band reaching 250 Hz into the band below (`test_ambe2400_frame_types`)
@@ -275,20 +275,28 @@ speed and bit-exactness checks.
 The soft ECC codebooks are immutable 32-bit codewords (32 KiB in all) in the
 original enumeration order, with the codeword bit of each data bit. Regenerate
 them with Python 3.10+ using `python3 tools/gen_ecc_codebooks.py >
-src/internal/mbe_ecc_codebooks.h`. Each decode builds small cost tables on the
-stack (data bits by enumeration index, parity bits by value) and starts from
-the cost of the codeword carrying the hard decision's data bits; it skips only
-codewords that cost more, so the result is exactly that of a full scan, ties
-included. SIMD builds screen candidates in groups of four (SSE2) or eight (AVX2),
-then resolve surviving candidates in enumeration order with the same exact
-integer scores and tie rules. AVX2 gathers pairs of 16-bit parity costs without
-reading beyond the cost table. Other targets use the scalar search. The search
-has no lazy initialization or shared mutable state; a portable x86-64 build
-only reads the run-time dispatch's cached ISA choice, which every thread
-computes identically. `test_ecc` checks every clean codeword, then compares
-1024 pseudo-random inputs per code against an independent oracle that scores
-every codeword, with zero, full, binary, single-bit, small tied, mostly
-confident and random confidences.
+src/internal/mbe_ecc_codebooks.h`. A decode starts from the codeword carrying
+the hard decision's data bits. A received word that is that codeword is
+returned at once: it costs nothing, and of the codewords that cost nothing it
+ranks first. Any other word is searched: the search builds small cost tables
+on the stack (data bits by enumeration index, parity bits by value), starts
+from that codeword's cost and skips only codewords that cost more, so the
+result is exactly that of a full scan, ties included. SIMD builds screen
+candidates in groups of four (SSE2) or eight (AVX2), then resolve surviving
+candidates in enumeration order with the same exact integer scores and tie
+rules. AVX2 gathers pairs of 16-bit parity costs without reading beyond the
+cost table. Other targets use the scalar search. The search has no lazy
+initialization or shared mutable state; a portable x86-64 build only reads the
+run-time dispatch's cached ISA choice, which every thread computes identically.
+`test_ecc` checks every clean codeword, at full confidence and under six
+confidence patterns (zero confidence among them, where other codewords can
+cost as little), then compares 1024 pseudo-random inputs per code against an
+independent oracle that scores every codeword, with zero, full, binary,
+single-bit, small tied, mostly confident and random confidences. It compares
+codewords with one to three different bits flipped at zero confidence, which
+are no codewords and so go through the search, against the same oracle, and
+checks a case in which the soft decision must override the hard decision
+although the received data bits agree with it.
 
 `test_simd_numerics` compares tone fits to direct trigonometric projection and
 an independent solver (relative tolerance 1e-9), and, where the target has
@@ -331,9 +339,12 @@ seed. This oracle also runs on ARM32 and AArch64 under QEMU.
 
 These kernels now serve the public `mbe_synthesizeSpeechf()`. The codec paths
 render in subframes ([DVSI parity](dvsi-parity.md#synthesis-in-subframes)) with
-scalar loops: DVSI's 16-bit noise generator one sample at a time, and each
-pitch pulse's harmonics by rotation. They share the transform, the phase
-regeneration and the PCM conversion with the specification's rendering.
+scalar loops: each pitch pulse's harmonics by rotation, and DVSI's 16-bit noise
+generator, whose states a frame draws in eight lanes that each step eight
+states at once in 16-bit arithmetic (the same states in the same order:
+`test_unvoiced_subframes` compares a frame drawn from every state with the
+recurrence). They share the transform, the phase regeneration and the PCM
+conversion with the specification's rendering.
 
 On AVX2 compile targets, float kernels process eight lanes, including voiced
 oscillators, unvoiced windowing/overlap and PCM conversion. Portable x86-64
@@ -541,6 +552,130 @@ at `8875729`. Portable is `MBELIB_ENABLE_NATIVE=OFF`, whose AVX2 kernel copies r
 | D-STAR, hard | host-tuned | 4.363 us | 5.108 us | 17.1% |
 | AMBE+2, hard | host-tuned | 4.662 us | 5.599 us | 20.1% |
 | IMBE, hard | host-tuned | 4.623 us | 5.463 us | 18.2% |
+
+### Clean soft blocks and noise generator lanes
+
+Two changes that compute what main computes, against main at `361e0c1`:
+
+- The soft ECC search returns a received word that is already the codeword of
+  the hard decision's data bits before it builds its cost tables. On a clean
+  stream that is every block.
+- A frame draws DVSI's noise in eight lanes of 16-bit states instead of one
+  chain of 240 dependent steps (`mbe_dvsi_noise_frame()`).
+
+Measured on a Ryzen 7 5800HS with GCC 16.2.1, Release with fast-math and LTO on
+both sides: `bench_replay hard|soft <codec> 10 5` on DVSI's `dam` (ProVoice: the
+same speech encoded to IMBE parameter rows and reframed), the median of seven
+alternating baseline/candidate invocations pinned to one CPU. Soft replay uses
+confidence 255. Portable is `MBELIB_ENABLE_NATIVE=OFF`.
+
+| Complete frame | Build | Before | After | Time reduction |
+| --- | --- | ---: | ---: | ---: |
+| D-STAR, hard decode | portable | 6.475 us | 6.194 us | 4.3% |
+| AMBE+2, hard decode | portable | 7.163 us | 6.919 us | 3.4% |
+| IMBE, hard decode | portable | 6.882 us | 6.641 us | 3.5% |
+| ProVoice, hard decode | portable | 7.444 us | 7.205 us | 3.2% |
+| D-STAR, soft decode | portable | 7.212 us | 6.444 us | 10.6% |
+| AMBE+2, soft decode | portable | 7.882 us | 7.135 us | 9.5% |
+| IMBE, soft decode | portable | 8.695 us | 6.977 us | 19.8% |
+| ProVoice, soft decode | portable | 9.070 us | 7.521 us | 17.1% |
+
+The host-tuned build takes 2.8-5.2% less for a hard decode and 11.1-22.5% less
+for a soft decode; Clang 23.1.5 with fast-math and LTO at `-march=x86-64-v3`
+takes 5.0-6.0% and 10.8-19.5% less. With errors in the stream fewer blocks
+arrive clean: on `dam_e5_hd` with mixed confidences a soft P25 decode takes
+6.0% less and a D-STAR one 4.3%. Encoding and TETRA decoding, which neither
+change touches, are the controls: within 0.5% with GCC, and within 1.5% with
+Clang, whose encode timings scatter more.
+
+Both changes are integer arithmetic and return what main returns for every
+input: the search returns the word its scan would have returned, and the lanes
+hold the generator's own states, which a frame converts to the same samples
+(`test_ecc`, `test_unvoiced_subframes`). What an edit can still move is how a
+compiler treats the float code around it, so main and the change were built
+alike in eight configurations (GCC portable and host-tuned with fast-math and
+LTO, GCC with IEEE math and LTO, Clang with fast-math and LTO at
+`-march=x86-64-v3`, and x87 arithmetic in a 32-bit build and in a 64-bit build
+with `-mfpmath=387`, each at `-O3` and at `-O2`) and compared in each:
+
+- The code of the shared library (the four builds with LTO) or of the
+  library's objects (the others), function by function, with alignment
+  padding, addresses and pc-relative displacements set aside, so not the
+  constants an instruction loads: the soft search differs, and so do the
+  functions that draw or skip a frame's noise and the one that holds the
+  unvoiced subframe synthesis, the last in no float arithmetic, only in the
+  integer conversions of the noise samples and the noise state. No other
+  function does, except that the host-tuned build keeps two spilled vector
+  registers of the D-STAR encoder in exchanged stack slots.
+- All 321 DVSI frame streams and four ProVoice streams: 313 decoded with hard
+  and with soft decisions (confidences running through every value, zero
+  included) and DVSI's 12 soft-decision vectors with their own. These 638
+  decodes, 695,558 frames and 111,289,280 samples give the same float samples,
+  parameter bits, return values and `mbe_process_result` bit for bit, and the
+  same 64-bit hash of the three parameter sets after every frame.
+- The three encoders give the same parameter rows for all 97 DVSI inputs
+  (296,772 frames).
+
+A program that links the static library with LTO is optimized as a whole, and
+there an edit can move the compiler's choices in code far from it: the
+host-tuned `test_golden_pcm` specializes the FFT's twiddle setup on one side
+only, where a division by the transform size, a power of two, becomes a
+multiplication. The decode comparison was therefore repeated with the harness
+linked that way in the four LTO builds, with the same result, and `gen_golden`
+prints the same hashes on both sides in each. Output identity is thus what
+these comparisons observed, not a property every toolchain is bound to keep.
+The scalar, SSE2 and AVX2 Debug golden hashes, which the suite checks, are
+unchanged.
+
+Left out, each measured on the same setup:
+
+- An encoder that sends a frame with no voiced band on its fixed grid taking
+  again only the magnitude estimate it reads there, where
+  `mbe_analysis_measure_at()` takes every per-harmonic measure (on `dam` 61%
+  of rate-33 frames are such frames): 2.7-3.9% less to encode, and the same
+  rows on all 296,772 DVSI frames in all eight configurations. But x87
+  rounding follows the compiler's inlining and register allocation, which the
+  change moves: in the 64-bit `-O2 -mfpmath=387` build the D-STAR encoder
+  sends other bits near decisions, on a voiced frame that is never measured
+  again among them.
+- The TETRA synthesis filter with its history in registers: 13% less for a
+  TETRA decode with GCC and 1% more with Clang, whose loop is the faster to
+  begin with (4.0 us a frame against 4.8).
+- An unvoiced subframe with no noise band skipping its forward transform and
+  shaping: 1.3-1.9% less for a hard decode, and the same samples on all the
+  streams above with portable GCC, host-tuned GCC and Clang. It does not raise
+  the inexact flag main raises there, and a model built by hand with a NaN
+  amplitude, which no codec path builds, renders differently.
+- The encoder's front-end filters with their state in locals: 3-5% less to
+  encode, and identical rows on all 296,772 DVSI frames, yet with portable GCC
+  five frames of a quiet 130 Hz tone in noise changed 3 D-STAR, 7 AMBE+2 and 47
+  IMBE bits: the vectorized loop on main rounds otherwise, and a decision of
+  the noise estimator turns on it.
+- One codebook row per SIMD lane in the joint AMBE vector search (7% less to
+  encode) and a band fit for pitch refinement without the outputs it discards
+  (3-5% less): identical on the DVSI inputs, different rows near decisions.
+- A memo of the previous frame's model per thread (6% less for a hard decode):
+  it depends on the rounding mode staying the same between calls, and two
+  streams decoded alternately on one thread lose it and pay 2.5%.
+- The response window of a pitch pulse by rotation instead of a cosine a
+  sample, and the low-band response as a rational function without `atan2`:
+  3-6% and 7-8% less for a hard decode, with PCM differing by up to 1.3e-5 and
+  1.2e-6 of full scale.
+
+Identical rows on a corpus do not show that a change to float code is exact
+where the compiler may round one expression differently in two places
+(fast-math, x87): a corpus seldom lands within a rounding error of a decision.
+The encoder candidates were therefore also compared at such decisions. For
+random pairs of three-frame inputs (noise, harmonic series, resonant noise,
+voiced onsets) the blend between the two is bisected to where main's bits
+change, and both builds encode every blend visited. In the x87 `-O2` build
+above, where the corpus rows are identical, that probe finds the fixed-grid
+estimates out within its first pair; in the five configurations it was run in
+before, it passed them (about 145,000 inputs per encoder in each 64-bit one).
+It does not aim at a decision that acts through encoder state some frames
+later, and it passed the front-end filters, which an input built for one
+decision then broke. So passing it in one configuration says nothing of
+another, and passing it in all would not show exactness.
 
 ## TETRA Conformance
 
