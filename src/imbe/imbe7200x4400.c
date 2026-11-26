@@ -157,7 +157,31 @@ imbe_harmonic_count(float nominal) {
  * synthesis (a band edge's transform bin, the mid-frame model's harmonic
  * count, the harmonic where the high-band shelf starts) follow the pitch
  * played and do move at some codes.
+ *
+ * imbe_code_pitch() computes them for pitch code b0 (0..207); it returns 1,
+ * with the nominal pitch in *w0 and no L or K, for a harmonic count outside
+ * 9..56. One body (not inlined) serves the decode and imbe4400_take_tone(),
+ * which asks a tone word's model for the pitch of its code, so that the two
+ * round alike in every build.
  */
+static MBE_NOINLINE int
+imbe_code_pitch(int b0, enum imbe_pitch pitch, float* w0, int* L, int* K) {
+    const float nominal = imbe_nominal_fundamental(b0);
+    *w0 = nominal;
+
+    const int harmonics = imbe_harmonic_count(nominal);
+    if ((harmonics > 56) || (harmonics < 9)) {
+        return 1;
+    }
+    *L = harmonics;
+    *K = (harmonics < 37) ? (int)((float)(harmonics + 2) / (float)3) : 12;
+    if (pitch == IMBE_PITCH_DVSI) {
+        /* The nominal float, widened, times 1 + g; one rounding to float. */
+        *w0 = (float)((double)nominal * (1.0 + imbe_dvsi_pitch_offset(b0)));
+    }
+    return 0;
+}
+
 static int
 imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
@@ -174,28 +198,17 @@ imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cu
         return 1;
     }
 
-    const float nominal = imbe_nominal_fundamental(b0);
-    cur_mp->w0 = nominal;
-
-    int L = imbe_harmonic_count(nominal);
-    if ((L > 56) || (L < 9)) {
+    int L = 0, K = 0;
+    const int invalid = imbe_code_pitch(b0, pitch, &cur_mp->w0, &L, &K);
+    if (invalid) {
 #ifdef IMBE_DEBUG
-        fprintf(stderr, "invalid L: %i\n", L);
+        fprintf(stderr, "invalid L at b0 %i\n", b0);
 #endif
         return 1;
     }
     cur_mp->L = L;
+    cur_mp->K = K;
     *out_L9 = L - 9;
-
-    if (L < 37) {
-        cur_mp->K = (int)((float)(L + 2) / (float)3);
-    } else {
-        cur_mp->K = 12;
-    }
-    if (pitch == IMBE_PITCH_DVSI) {
-        /* The nominal float, widened, times 1 + g; one rounding to float. */
-        cur_mp->w0 = (float)((double)nominal * (1.0 + imbe_dvsi_pitch_offset(b0)));
-    }
 
 #ifdef IMBE_DEBUG
     fprintf(stderr, "b0:%i L:%i K:%i\n", b0, L, cur_mp->K);
@@ -799,23 +812,6 @@ imbe_positive_normal(const float* x) {
     return bits - UINT32_C(0x00800000) < UINT32_C(0x7F000000);
 }
 
-/* Whether the tone harmonics l1 and l2 are those of a row of pitch code b0
- * (whatever its voicing word): the rows the index gives for b0, so that a
- * code without rows costs one lookup. */
-static int
-imbe_tone_row_of(int b0, int l1, int l2) {
-    if (b0 < 0 || b0 > IMBE_TONE_LAST_CODE) {
-        return 0;
-    }
-    for (unsigned i = imbe_tone_first_row[b0]; i < imbe_tone_first_row[b0 + 1]; i++) {
-        const struct imbe_tone_row* row = &imbe_tone_rows[i];
-        if (row->b0 == b0 && row->l1 == l1 && row->l2 == l2) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /* The share of the other harmonics against the tone's, squared: the mean of
  * M_l^2 over the other harmonics over its mean over the tone's (one harmonic
  * for a single tone); -1 if a magnitude is not finite or the tone's are 0. */
@@ -845,16 +841,18 @@ imbe_tone_share2(const mbe_parms* mp, int l1, int l2) {
  * The tone a decoded P25 voice frame carries, as the word to keep in Vl[0], or
  * 0: among the rows of the frame's pitch code and voicing word whose harmonics
  * are within L and whose tone magnitudes are positive, finite and normal
- * (imbe_positive_normal(), as imbe4400_take_tone() asks of a word it plays),
- * the one whose tone harmonics dominate most, if the others'
- * rms is under the row's share of the tone's (IMBE_TONE_SHARE_DUAL,
+ * (imbe_positive_normal()), the one whose tone harmonics dominate most, if the
+ * others' rms is under the row's share of the tone's (IMBE_TONE_SHARE_DUAL,
  * IMBE_TONE_SHARE_SINGLE; decoded magnitudes, before enhancement). The rows of
  * one pair are all dual or all single tones. Every voice frame passes here, so
  * a code with no row returns after one lookup and the scan covers only the
  * rows the index gives for the frame's code (each row's code still checked, so
- * an index that is off can drop a row but never add one).
+ * an index that is off can drop a row but never add one). The synthesis runs
+ * it again on the model a word sits in (imbe4400_take_tone()): one body, not
+ * inlined, so that the two runs on the same model give the same word in every
+ * build (fast-math or x87 could round an inlined copy otherwise).
  */
-static int
+static MBE_NOINLINE int
 imbe_tone_word(const mbe_parms* mp, int b0) {
     if (b0 < 0 || b0 > IMBE_TONE_LAST_CODE || imbe_tone_first_row[b0] == imbe_tone_first_row[b0 + 1]) {
         return 0;
@@ -1187,12 +1185,14 @@ imbe4400_mute_noise(const mbe_process_result* result) {
 #define IMBE_TONE_LEVEL 0.988
 
 /* The tone a frame's model carries (the word imbe_tone_word() left in Vl[0])
- * and its level, or 0; read before enhancement. A word counts only as a decode
- * leaves it in the model it sits in: the flag, a pitch code with rows, tone
- * harmonics that are one of that code's rows, the model at that code's
- * harmonic count (so a word copied into a state of another pitch counts for
- * nothing), and tone magnitudes that are positive, finite and normal. A
- * caller's state can hold any other word; it plays as no tone. */
+ * and its level, or 0; read before enhancement, on the decoded model (or the
+ * repeated one, the decoded history). A word counts only if the decode's own
+ * test, run again on the model it sits in, gives exactly that word: the model
+ * at the pitch its code decodes to (w0 by its bits, L and K:
+ * imbe_code_pitch()), and imbe_tone_word() on the model's voicing and decoded
+ * magnitudes equal to the word. A decode's own word passes on its frame and on
+ * every repeat of it; a caller's state can hold any other word, and it plays
+ * as no tone. */
 struct imbe_tone {
     int b0;
     int l1;
@@ -1200,22 +1200,38 @@ struct imbe_tone {
     double amplitude; /* the rms of the tone harmonics' decoded magnitudes, times IMBE_TONE_LEVEL */
 };
 
+/* Whether the model is at the pitch, harmonic count and band count P25 pitch
+ * code b0 decodes to (the pitch by its bits). */
+static int
+imbe_model_at_code(const mbe_parms* mp, int b0) {
+    float w0;
+    int L = 0, K = 0;
+    if (imbe_code_pitch(b0, IMBE_PITCH_DVSI, &w0, &L, &K) != 0 || mp->L != L || mp->K != K) {
+        return 0;
+    }
+    uint32_t want, have;
+    memcpy(&want, &w0, sizeof(want));
+    memcpy(&have, &mp->w0, sizeof(have));
+    return want == have;
+}
+
 static int
 imbe4400_take_tone(const mbe_parms* mp, struct imbe_tone* tone) {
     const int word = mp->Vl[0];
     if ((word & ~0x00FFFFFF) != IMBE_TONE_FLAG) {
         return 0;
     }
-    tone->b0 = (word >> 16) & 0xFF;
+    const int b0 = (word >> 16) & 0xFF;
+    /* A code without rows returns after one lookup, before any pitch. */
+    if (b0 > IMBE_TONE_LAST_CODE || imbe_tone_first_row[b0] == imbe_tone_first_row[b0 + 1]
+        || !imbe_model_at_code(mp, b0) || imbe_tone_word(mp, b0) != word) {
+        return 0;
+    }
+    /* imbe_tone_word() gave this word: l1 and l2 are within L, their
+     * magnitudes positive, finite and normal. */
+    tone->b0 = b0;
     tone->l2 = (word >> 8) & 0xFF;
     tone->l1 = word & 0xFF;
-    if (!imbe_tone_row_of(tone->b0, tone->l1, tone->l2)
-        || mp->L != imbe_harmonic_count(imbe_nominal_fundamental(tone->b0)) || tone->l2 > mp->L) {
-        return 0;
-    }
-    if (!imbe_positive_normal(&mp->Ml[tone->l1]) || !imbe_positive_normal(&mp->Ml[tone->l2])) {
-        return 0;
-    }
     const double p1 = (double)mp->Ml[tone->l1] * (double)mp->Ml[tone->l1];
     const double p2 = (double)mp->Ml[tone->l2] * (double)mp->Ml[tone->l2];
     tone->amplitude = IMBE_TONE_LEVEL * sqrt((tone->l1 == tone->l2) ? p1 : 0.5 * (p1 + p2));

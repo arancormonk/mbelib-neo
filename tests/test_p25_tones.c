@@ -511,18 +511,25 @@ special_frame(char imbe_d[88]) {
     memset(imbe_d, 1, 88);
 }
 
-/* A stream after one DTMF 1 frame (b0 53, word 1110000, harmonics 4 and 7):
- * its history holds the decoded frame and the tone word. */
+/* A stream after one frame at pitch code b0 with voicing word `word`, log2
+ * amplitude `tone` at harmonics l1 and l2 and `rest` elsewhere, played through
+ * the P25 data path: its history holds the decoded frame. */
 static void
-stream_after_tone(struct stream* s) {
+stream_after_frame(struct stream* s, int b0, unsigned word, int l1, int l2, float tone, float rest) {
     char imbe_d[88];
     float logm[57], out[160];
     int K;
     stream_init(s);
-    const int L = harmonics_of(53, &K);
-    tone_amplitudes(logm, L, 4, 7, 11.0f, 2.0f);
-    build_frame(imbe_d, 53, 0x70u, logm, &s->prev);
+    tone_amplitudes(logm, harmonics_of(b0, &K), l1, l2, tone, rest);
+    build_frame(imbe_d, b0, word, logm, &s->prev);
     play(out, s, imbe_d, 0);
+}
+
+/* A stream after one DTMF 1 frame (b0 53, word 1110000, harmonics 4 and 7):
+ * its history holds the decoded frame and the tone word. */
+static void
+stream_after_tone(struct stream* s) {
+    stream_after_frame(s, 53, 0x70u, 4, 7, 11.0f, 2.0f);
     assert(s->prev.Vl[0] == tone_word(53, 4, 7) && mbe_frame_mark(&s->enhanced) == MBE_FRAME_MARK_TONE);
 }
 
@@ -535,11 +542,12 @@ play_repeat(float out[160], struct stream* s, int provoice) {
 }
 
 /*
- * A word in Vl[0] counts as a tone only as a decode leaves it: a pitch code
- * with rows, harmonics that are one of that code's rows, the model at that
- * code's harmonic count, and tone magnitudes that are positive, finite and
- * normal. A repeat of a history holding any other word plays as the same
- * history without it: a code past the table (207, with a loud harmonic 1),
+ * A word in Vl[0] counts as a tone only as a decode leaves it (the decode's
+ * test run again on the model gives it: a pitch code with rows, the model at
+ * that code's pitch, harmonics that are one of that code's rows, tone
+ * magnitudes positive, finite and normal). A repeat of a history holding any
+ * other word plays as the same history without it: a code past the table
+ * (207, with a loud harmonic 1),
  * a code inside the table without rows (11), a row of another code (harmonics
  * 7 and 9 at b0 53), the word of another code's row in this code's model (b0
  * 56's 4 and 7), the real word in the model of another pitch code (b0 60), and
@@ -594,6 +602,93 @@ test_impossible_tone_words(void) {
         assert(same_float(forged.enhanced.w0, plain.enhanced.w0));
     }
     puts("p25 tones: a word counts only as a decode leaves it");
+}
+
+/* A repeat of `s` with the word `word` in its history plays as the same
+ * history without a word: unmarked, sample for sample alike. */
+static void
+assert_word_plays_as_none(const struct stream* s, int word) {
+    float with_word[160], without[160];
+    struct stream forged = *s, plain = *s;
+    forged.prev.Vl[0] = word;
+    plain.prev.Vl[0] = 0;
+    play_repeat(with_word, &forged, 0);
+    play_repeat(without, &plain, 0);
+    assert(mbe_frame_mark(&forged.enhanced) != MBE_FRAME_MARK_TONE);
+    assert(same_samples(with_word, without, 160));
+    assert(same_float(forged.enhanced.w0, plain.enhanced.w0));
+}
+
+/*
+ * A word counts only if the decode's own test, run again on the model it sits
+ * in, gives exactly that word: the model at the pitch its code decodes to
+ * (w0 by its bits, L and K), and the tone test on its voicing and decoded
+ * magnitudes. Codes 1 and 2 have the same L (9), K (3) and a row at harmonic 7
+ * with the voicing word 001: code 1's word in a real code-2 tone frame's
+ * history plays as no word, and so does code 1's word in a real code-1 frame
+ * of that voicing whose other magnitudes are too large for a single tone (no
+ * word decoded). The real words play the tone.
+ */
+static void
+test_word_from_the_model(void) {
+    int K1, K2;
+    assert(harmonics_of(1, &K1) == 9 && harmonics_of(2, &K2) == 9 && K1 == 3 && K2 == 3);
+
+    struct stream code2;
+    stream_after_frame(&code2, 2, 0x001u, 7, 7, 11.0f, 2.0f);
+    assert(code2.prev.Vl[0] == tone_word(2, 7, 7) && mbe_frame_mark(&code2.enhanced) == MBE_FRAME_MARK_TONE);
+    assert_word_plays_as_none(&code2, tone_word(1, 7, 7));
+
+    struct stream speech;
+    stream_after_frame(&speech, 1, 0x001u, 7, 7, 11.0f, 8.0f);
+    assert(speech.prev.Vl[0] == 0 && others_over_tone(&speech.prev, 7, 7) > 0.0235);
+    assert(mbe_frame_mark(&speech.enhanced) != MBE_FRAME_MARK_TONE);
+    assert_word_plays_as_none(&speech, tone_word(1, 7, 7));
+
+    /* The real words: a code-1 tone frame plays the tone, and its repeat. */
+    struct stream code1;
+    float out[160];
+    stream_after_frame(&code1, 1, 0x001u, 7, 7, 11.0f, 2.0f);
+    assert(code1.prev.Vl[0] == tone_word(1, 7, 7) && mbe_frame_mark(&code1.enhanced) == MBE_FRAME_MARK_TONE);
+    play_repeat(out, &code1, 0);
+    assert(mbe_frame_mark(&code1.enhanced) == MBE_FRAME_MARK_TONE && same_float(code1.enhanced.w0, tone_pitch(1)));
+    play_repeat(out, &code2, 0);
+    assert(mbe_frame_mark(&code2.enhanced) == MBE_FRAME_MARK_TONE && same_float(code2.enhanced.w0, tone_pitch(2)));
+    puts("p25 tones: a word counts only if the model's own test gives it");
+}
+
+/*
+ * Every row of the table through a real decode: ten frames of the row's pitch
+ * code and voicing word with its tone harmonics loud play the tone model once
+ * the prediction has settled (from the fourth), and three repeats after them
+ * play it again, at the row's tone pitch and harmonics.
+ */
+static void
+test_every_row_plays(void) {
+    int i = 0, b0, b1, l1, l2;
+    while (mbe_imbe4400_tone_row(i, &b0, &b1, &l1, &l2)) {
+        struct stream s;
+        char imbe_d[88];
+        float logm[57], out[160];
+        int K;
+        stream_init(&s);
+        tone_amplitudes(logm, harmonics_of(b0, &K), l1, l2, 11.0f, 2.0f);
+        for (int f = 0; f < 13; ++f) {
+            if (f < 10) {
+                build_frame(imbe_d, b0, (unsigned)b1, logm, &s.prev);
+                play(out, &s, imbe_d, 0);
+            } else {
+                play_repeat(out, &s, 0);
+            }
+            if (f >= 3) {
+                assert(mbe_frame_mark(&s.enhanced) == MBE_FRAME_MARK_TONE);
+                assert(s.prev.Vl[0] == tone_word(b0, l1, l2) && same_float(s.enhanced.w0, tone_pitch(b0)));
+            }
+        }
+        ++i;
+    }
+    assert(i == 116);
+    puts("p25 tones: every row plays the tone through a real decode and three repeats");
 }
 
 /*
@@ -788,6 +883,8 @@ main(void) {
     test_tone_model();
     test_tone_run_renders();
     test_impossible_tone_words();
+    test_word_from_the_model();
+    test_every_row_plays();
     test_forged_tone_mark();
     test_public_decoder_clears_the_word();
     test_provoice_keeps_no_word();
