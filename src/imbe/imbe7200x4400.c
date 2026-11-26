@@ -657,8 +657,9 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
  * P25 tones sent as voice frames. P25 has no tone frames: DVSI's encoder
  * sends a tone it detects as voice frames built from TIA-102.BABA-1 Annex J
  * (the pitch code b0 = floor(4 pi / w0 - 39) of the tone's fundamental, the
- * tone's harmonics l1 and l2 large, and one voicing word b1 per tone, the same
- * in every steady frame of the tone), and
+ * tone's harmonics l1 and l2 large, and a voicing word b1 that is the same in
+ * every steady frame of the tone: 12,555 steady frames compared, while 112
+ * frames at tone boundaries carry another pair), and
  * DVSI's decoder recognises such a frame and plays a tone model in place of
  * its decoded harmonics, as US 7,970,606 describes (a frame whose fundamental
  * is a table entry's, whose tone harmonics are voiced and dominate the other
@@ -666,21 +667,24 @@ mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d) {
  * DTMF (128..143), KNOX (144..159) and single tones (5..122) as DVSI's encoder
  * sends them, b1 the K band voicing bits as transmitted, band 1 the most
  * significant. The harmonics are Annex J's (a single tone's l1 = l2 is Annex
- * J's harmonic number: 1 for IDs 5..12, 2 for 13..25, 3 for 26..38, and one
- * more for each 13 IDs up to 10 for 116..122; not the ID / 16 + 1 by which the
- * rate-33 and D-STAR decoders play a single tone, mbe_tone.h). The pitch code
- * is that of the fundamental Annex J gives: a dual tone's printed f0 (DVSI's
- * own 150.80 and 86.47 Hz for 145 and 147, mbe_tone.h), and for a single tone
- * the quotient 31.25 ID / l, which Annex J prints rounded (10.417 ID for
- * 26..38, 5.2803 ID for 65..76; built from the printed values, the codes of
- * IDs 32, 65, 66, 68, 69, 71, 73, 74 and 76 would come out otherwise). So
+ * J's harmonic number: 1 for IDs 5..12, 2 for 13..25, 3 for 26..38, 4 for
+ * 39..51, 5 for 52..64, 6 for 65..76, 7 for 77..89, 8 for 90..102, 9 for
+ * 103..115 and 10 for 116..122; not the ID / 16 + 1 by which the rate-33 and
+ * D-STAR decoders play a single tone, mbe_tone.h). The pitch code is that of
+ * the fundamental Annex J gives: a dual tone's printed f0 (DVSI's own 150.80
+ * and 86.47 Hz for 145 and 147, mbe_tone.h), and for a single tone the
+ * quotient 31.25 ID / l. For two ranges Annex J prints a multiplier instead:
+ * 10.417 ID for 26..38 (31.25 / 3 rounded) and 5.2803 ID for 65..76 (31.25 /
+ * 6 is 5.2083); built from the printed values, the codes of IDs 32, 65, 66,
+ * 68, 69, 71, 73, 74 and 76 would come out otherwise. So
  * built, the codes equal those in DVSI's bit streams for all 154 tones. The
  * voicing word, which is not the bands of l1 and l2 under the decoder's band
  * mapping, was read from DVSI's bit streams of its tone vectors. Single tones on one code
  * and word share a row's pair at several harmonics (b0 17, 1000: l 1, 2 and
  * 3). Left out: three single tones whose harmonic lies past the frame's L
  * (120..122 at b0 2 and 3, harmonic 10 of 9), and the call-progress tones
- * (160..163), whose frames DVSI's decoder plays as their decoded harmonics.
+ * (160..163), whose frames DVSI's decoder does not play as equal-amplitude
+ * tone models (none of the 50 frames selected), and which play as decoded.
  * The rows are sorted by b0, and imbe_tone_first_row indexes them by it.
  */
 struct imbe_tone_row {
@@ -894,9 +898,11 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
         return ret;
     }
     /* Vl[0] holds a tone word only where this frame's decode recognises a
-     * tone (below): 0 on every other return, a special or invalid frame
-     * included, whatever cur_mp held before. prev_mp is not touched: the
-     * process functions repeat from it, its word included. */
+     * tone (below): 0 for every other frame it decodes, a special or invalid
+     * frame included, whatever cur_mp held before (a status error above is no
+     * frame and writes nothing). prev_mp's word is not touched (the prediction
+     * writes only its taps there): the process functions repeat from it, its
+     * word included. */
     cur_mp->Vl[0] = 0;
 
     if (imbe_decode_fundamental(imbe_d, pitch, cur_mp, &b0, &L9) != 0) {
@@ -937,8 +943,11 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
  * (imbe_decode_fundamental()): this decoder has no frame context, so a P25
  * one. The ProVoice frame paths keep the nominal pitch. A frame that is a P25
  * tone sent as voice frames leaves its tone in the otherwise unused Vl[0]
- * (imbe_tone_word()); every other frame, special and invalid frames included,
- * leaves 0 there (prev_mp is not written). The decoded model is unchanged.
+ * (imbe_tone_word()); every other frame it decodes, special and invalid frames
+ * included, leaves 0 there. A status error (MBE_STATUS_INVALID_ARGUMENT,
+ * MBE_STATUS_INVALID_BITS) is no frame and writes nothing. The word of prev_mp
+ * is not written (the prediction writes its taps, as before). The decoded
+ * model is unchanged.
  * @param imbe_d  Demodulated IMBE parameter bits (88).
  * @param cur_mp  Output: current frame parameters.
  * @param prev_mp Input: previous frame parameters (for prediction).
@@ -1262,9 +1271,9 @@ imbe_tone_droop(int l) {
  * builds a tone's voice parameters (the measurement bounds them: two components
  * leave 0.0009 of the frame, so the others are at least 27 dB down; the patent
  * says 20 dB is typical). L, K and log2Ml stay the decoded frame's: the voiced
- * phases are regenerated from them, which predicts DVSI's frame-to-frame phase
- * on tone frames within 0.0009 cycle (standard deviation, median over 64
- * components). Only this function marks a frame MBE_FRAME_MARK_TONE
+ * phases are regenerated from them (on DVSI's tone frames the frame-to-frame
+ * phase error's standard deviation has a median of 0.0009 cycle over 64
+ * components, around mean offsets of up to 0.07 cycle). Only this function marks a frame MBE_FRAME_MARK_TONE
  * (imbe4400_synthesize_frame() clears the mark on any other), and the mark
  * makes the synthesizer take the frame's own model at mid-frame
  * (with its own phases: on the steady frames of DVSI's knox_1..16 and
@@ -1296,7 +1305,10 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
     /* Only imbe4400_play_tone() marks a frame MBE_FRAME_MARK_TONE, on the
      * frame it plays: the decoders never do, and the history never holds the
      * mark, so one here came from a caller's state and is not the frame's.
-     * ProVoice keeps no tone word either: Vl[0] reads 0 after its frames. */
+     * ProVoice keeps no tone word either: Vl[0] reads 0 after its frames, so
+     * a P25 repeat after a ProVoice frame (a state moved between the two
+     * entry points, outside the stream contract) plays the repeated model as
+     * speech. */
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
         mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
     }

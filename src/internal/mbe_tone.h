@@ -105,8 +105,11 @@ struct mbe_tone_harmonics {
  * l = ID / 16 + 1 of the fundamental floor(2048 ID / l), so that the
  * fundamental stays under 500 Hz, within 0.1 Hz of the nominal 31.25 ID. DVSI's
  * decodes (nine runs of 17 frames per ID in alert and dtmf, and one short run
- * in alltone): ID 30 plays 937.5000 Hz, ID 57 1781.2500 and ID 46 1437.470,
- * three times 31402 steps, where Annex J's harmonic 4 would play it exactly;
+ * in alltone) measure ID 30 at 937.4998 Hz, ID 46 at 1437.470 and ID 57 at
+ * 1781.2501; this rule plays the grid values 937.500, 1437.469 (three times
+ * 31402 steps, two below the nominal 1437.5) and 1781.250 Hz. ID 46 is not an
+ * Annex J harmonic here: the rule gives it harmonic 3, where Annex J lists
+ * harmonic 4, which would play the nominal 1437.5 exactly;
  * where alert plays the three back to back, the pulse train's phase carries
  * from one to the next only for harmonic numbers in the ratio 2 : 3 : 4, which
  * fixes their ratio, not the numbers themselves. For the other single tones the

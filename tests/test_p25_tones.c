@@ -9,10 +9,12 @@
  * model the synthesis plays for a frame that passes it.
  *
  * DVSI's P25 encoder sends a tone as voice frames at the pitch code of the
- * tone's Annex J fundamental, with a voicing word that is the same in every
- * steady frame of the tone (12,555 steady frames compared; 112 frames at tone
- * boundaries carry another pair) and the tone's harmonics large; DVSI's decoder recognises such a frame and plays a tone
- * model. The frames here are built with the IMBE encoder's quantizer
+ * tone's fundamental (Annex J's f0 for a dual tone, but DVSI's own for 145 and
+ * 147; 31.25 ID / l for a single tone, l Annex J's harmonic number), with a
+ * voicing word that is the same in every steady frame of the tone (12,555
+ * steady frames compared; 112 frames at tone boundaries carry another pair)
+ * and the tone's harmonics large; DVSI's decoder recognises such a frame and
+ * plays a tone model. The frames here are built with the IMBE encoder's quantizer
  * (mbe_imbe4400_quantize_amplitudes()) from a pitch code, a voicing word and
  * log2 amplitudes, and decoded as the library decodes P25.
  */
