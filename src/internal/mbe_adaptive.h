@@ -196,10 +196,12 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
 
 /* Where a frame's voicing must reach for it to hold at a subframe the frame
  * does not own: DVSI's decoders keep the voicing of the frame before a frame
- * marked MBE_FRAME_MARK_PITCH_ABSENT through that frame's first half, and
- * start a P25 onset at once, only when a voiced harmonic lies at or above this
- * frequency. On DVSI's P25 decodes three voiced harmonics reaching 502.6 Hz
- * (pitch code 56) do not count and three reaching 507.9 Hz (code 55) do. */
+ * marked MBE_FRAME_MARK_PITCH_ABSENT through that frame's first half only when
+ * a voiced harmonic lies at or above this frequency. It is also the first
+ * edge of the columns a P25 onset is read in (MBE_FRAME_MARK_ONSET_COLUMNS):
+ * on DVSI's P25 decodes a first band of three voiced harmonics reaching
+ * 502.6 Hz (pitch code 56) covers no column and starts at mid-frame, one
+ * reaching 507.9 Hz (code 55) covers the first and starts with the frame. */
 #define MBE_VOICING_REACH_HZ 505.0f
 
 /**
@@ -229,6 +231,18 @@ enum mbe_frame_mark {
      * imbe4400_play_tone() sets it, on the frame it plays; no decoder does,
      * and the P25 and ProVoice data path clears it on any other frame. */
     MBE_FRAME_MARK_TONE = 4,
+    /* A P25 or ProVoice voice frame with a voiced band (imbe7200x4400.c):
+     * after a frame with no voiced band, DVSI's P25 decoder sounds at
+     * mid-frame only the voiced harmonics that lie in a covered 500 Hz column
+     * or within 250 Hz below one, and starts the others with the frame's
+     * second half (docs/dvsi-parity.md, "Voiced onsets and offsets"). The
+     * columns are [0, 505), [505, 1005), ... [3005, 3505) Hz, none above; one
+     * is covered when the frame's voicing is voiced at both its ends, read at
+     * harmonic 1 for 0 Hz and at the harmonic at or next above each other
+     * edge (unvoiced past L), all at the pitch the frame plays. A frame voiced
+     * only below 505 Hz covers none: its voiced bands, and its pulse train,
+     * start at mid-frame. After a voiced frame the mark changes nothing. */
+    MBE_FRAME_MARK_ONSET_COLUMNS = 5,
     /* The voiced bands start MBE_VOICING_ONSET_LATE samples late at an onset. */
     MBE_FRAME_MARK_LATE_ONSET = MBE_VOICING_ONSET_LATE,
 };

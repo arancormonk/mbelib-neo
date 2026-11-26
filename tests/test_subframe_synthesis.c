@@ -234,12 +234,12 @@ set_imbe_b0(char imbe_d[88], int b0) {
 /* The frame marks: only an exact stored value counts, and one replaces another. */
 static void
 test_frame_marks(void) {
-    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE,         MBE_FRAME_MARK_PITCH_CARRIES,
-                                                MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
-                                                MBE_FRAME_MARK_TONE,         MBE_FRAME_MARK_LATE_ONSET};
+    static const enum mbe_frame_mark marks[] = {
+        MBE_FRAME_MARK_NONE, MBE_FRAME_MARK_PITCH_CARRIES, MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
+        MBE_FRAME_MARK_TONE, MBE_FRAME_MARK_ONSET_COLUMNS, MBE_FRAME_MARK_LATE_ONSET};
 
     static const uint32_t others[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0x80000000u, 0x3F800001u, 0x40400001u,
-                                      0x40A00000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
+                                      0x40A00001u, 0x40900000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
     mbe_parms mp;
     memset(&mp, 0, sizeof(mp));
     assert(mbe_frame_mark(&mp) == MBE_FRAME_MARK_NONE);
@@ -607,6 +607,65 @@ reference_mid_pitch(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced
                : mean;
 }
 
+/* The P25 onset rule, in double, from its statement: a voiced harmonic at `hz`
+ * of a frame after one with no voiced band sounds at mid-frame when the 500 Hz
+ * column holding hz, or the one holding hz + 250 Hz, is covered; columns
+ * [0, 505), [505, 1005), ... [3005, 3505) Hz, none above, each covered when
+ * the frame is voiced at harmonic 1 (for 0 Hz) or at the harmonic at or next
+ * above the edge (unvoiced past L) at both its ends. */
+static int
+reference_onset_sounds(const mbe_parms* mp, double hz) {
+    const double f0 = (double)mp->w0 * 8000.0 / (2.0 * M_PI);
+    int covered[8] = {0}, edge_voiced[8];
+    edge_voiced[0] = mp->Vl[1] == 1;
+    for (int k = 1; k <= 7; ++k) {
+        const int n = (int)ceil((505.0 + 500.0 * (k - 1)) / f0);
+        edge_voiced[k] = (n <= mp->L) && (mp->Vl[n] == 1);
+    }
+    for (int k = 0; k < 7; ++k) {
+        covered[k] = edge_voiced[k] && edge_voiced[k + 1];
+    }
+    int column = 0, reach = 0;
+    for (int k = 0; k < 7; ++k) {
+        column += (hz >= 505.0 + 500.0 * k);
+        reach += (hz + 250.0 >= 505.0 + 500.0 * k);
+    }
+    return covered[column] || covered[reach];
+}
+
+/* The mid-frame model's band states (0 unvoiced, 1 voiced, 2 none) at pitch
+ * w0 and L harmonics, from the rules as docs/dvsi-parity.md states them: each
+ * harmonic takes the voicing of the nearest harmonic of the frame whose
+ * voicing holds at mid-frame (the previous frame's when this one has no voiced
+ * band and is marked as lacking a pitch, and the previous one is voiced at its
+ * harmonic at or next above 505 Hz; else this frame's); a frame marked as a
+ * late onset after one with no voiced band voices none; a frame marked for the
+ * onset columns after one with no voiced band voices only the harmonics the
+ * P25 onset rule sounds. */
+static void
+reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, int L, unsigned char voiced[57]) {
+    const enum mbe_frame_mark mark = mbe_frame_mark(cur);
+    const int onset = !reference_voiced(prev);
+    const mbe_parms* source = cur;
+    if (mark == MBE_FRAME_MARK_PITCH_ABSENT && !reference_voiced(cur)) {
+        const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev->w0);
+        source = (n <= prev->L && prev->Vl[n] == 1) ? prev : cur;
+    }
+    for (int l = 1; l <= L; ++l) {
+        const double w = w0 * l;
+        const int nearest = (int)fmin(fmax(floor(w / (double)source->w0 + 0.5), 1.0), (double)source->L);
+        int state = (source->Vl[nearest] == 0) ? 0 : ((source->Vl[nearest] == 1) ? 1 : 2);
+        if (state == 1 && onset && mark == MBE_FRAME_MARK_LATE_ONSET) {
+            state = 0;
+        }
+        if (state == 1 && onset && mark == MBE_FRAME_MARK_ONSET_COLUMNS
+            && !reference_onset_sounds(cur, w * 8000.0 / (2.0 * M_PI))) {
+            state = 0;
+        }
+        voiced[l] = (unsigned char)state;
+    }
+}
+
 /* Give frame f's model a decoded spectral shape (log2Ml, which its phases come
  * from) and render it with a high-band shelf on top (Ml), as enhancement shapes
  * a decoded model. */
@@ -634,19 +693,26 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         enum mbe_frame_mark mark;
         int from_silence;
     } frames[] = {
-        {200.0, 18, 14, 16.0f, MBE_FRAME_MARK_NONE, 0},        /* an onset */
-        {200.0, 18, 14, 16.0f, MBE_FRAME_MARK_NONE, 0},        /* steady */
-        {230.0, 16, 16, 16.0f, MBE_FRAME_MARK_NONE, 0},        /* pitch up, fewer harmonics */
-        {180.0, 20, 12, 16.0f, MBE_FRAME_MARK_NONE, 0},        /* pitch down, more of them, fewer voiced */
-        {207.0, 17, 17, 40.0f, MBE_FRAME_MARK_NONE, 0},        /* a level step */
-        {100.0, 30, 0, 8.0f, MBE_FRAME_MARK_PITCH_CARRIES, 0}, /* no voiced band, its pitch carried */
-        {180.0, 20, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},        /* onset at the mean of the two pitches */
-        {250.0, 14, 0, 8.0f, MBE_FRAME_MARK_PITCH_ABSENT, 0},  /* the voicing before lasts to mid-frame */
-        {150.0, 24, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},        /* and the train goes on */
-        {150.0, 24, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0},   /* a mark that needs an unvoiced frame before it */
-        {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},           /* voicing ends with the frame's start */
-        {120.0, 28, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0},   /* voiced bands from mid-frame */
-        {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE, 0},          /* the longest period: responses span frames */
+        {200.0, 18, 14, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* an onset */
+        {200.0, 18, 14, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* steady */
+        {230.0, 16, 16, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* pitch up, fewer harmonics */
+        {180.0, 20, 12, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* pitch down, more of them, fewer voiced */
+        {207.0, 17, 17, 40.0f, MBE_FRAME_MARK_NONE, 0},          /* a level step */
+        {100.0, 30, 0, 8.0f, MBE_FRAME_MARK_PITCH_CARRIES, 0},   /* no voiced band, its pitch carried */
+        {180.0, 20, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* onset at the mean of the two pitches */
+        {250.0, 14, 0, 8.0f, MBE_FRAME_MARK_PITCH_ABSENT, 0},    /* the voicing before lasts to mid-frame */
+        {150.0, 24, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},          /* and the train goes on */
+        {150.0, 24, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0},     /* a mark that needs an unvoiced frame before it */
+        {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},             /* voicing ends with the frame's start */
+        {127.5, 28, 23, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* a P25 onset: harmonics 20-23 from mid-frame */
+        {127.5, 28, 23, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* inside the run the mark changes nothing */
+        {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},
+        {160.0, 25, 3, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* harmonics 1-3 to 480 Hz: all from mid-frame */
+        {100.0, 30, 0, 8.0f, MBE_FRAME_MARK_PITCH_CARRIES, 0},
+        {205.0, 17, 17, 16.0f, MBE_FRAME_MARK_ONSET_COLUMNS, 0}, /* at the mean pitch: those under 3505 Hz */
+        {90.0, 38, 0, 8.0f, MBE_FRAME_MARK_NONE, 0},
+        {120.0, 28, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 0}, /* voiced bands from mid-frame */
+        {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE, 0},        /* the longest period: responses span frames */
         {60.0, 56, 40, 6.0f, MBE_FRAME_MARK_NONE, 0},
         {110.0, 30, 30, 16.0f, MBE_FRAME_MARK_NONE, 0},
         {250.0, 14, 0, 8.0f, MBE_FRAME_MARK_PITCH_ABSENT, 0}, /* the train runs on through this frame, */
@@ -705,6 +771,17 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         const double mid_pitch = reference_mid_pitch(&last, &cur, rendering);
         assert(fabs((double)models[1].w0 / mid_pitch - 1.0) < 1.0e-6);
         models[1].w0 = (float)mid_pitch;
+        /* Its voicing is the reference's own, which the library's must equal. */
+        if (frames[f].mark != MBE_FRAME_MARK_PREVIOUS_HELD) {
+            unsigned char voiced[57] = {0};
+            reference_mid_voicing(&last, &cur, mid_pitch, models[1].L, voiced);
+            models[1].any_voiced = 0;
+            for (int l = 1; l <= models[1].L; ++l) {
+                assert(models[1].voiced[l] == voiced[l]);
+                models[1].voiced[l] = voiced[l];
+                models[1].any_voiced |= voiced[l] == 1;
+            }
+        }
         /* The phases: each frame's own from its log2Ml, the mid-frame model's
          * from the two frames' met at its frequencies, except where it is the
          * last frame's own model held (and, from silence, this frame's). */
@@ -1476,6 +1553,46 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     const double lost = 3.0e-4 * cycles_of(sqrt(210.0 * 190.0), 80.0);
     const double offset = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) ? -lost : lost;
     assert(fabs(cycles_apart(pulse_phase(&advanced), pulse_phase(&other) + offset)) < 1e-6);
+}
+
+/* Advancing a frame unrendered leaves the pulse train, the phases and the
+ * noise generator exactly where rendering it does, through the frame marks
+ * that shape the mid-frame model: onsets read in columns, before and inside a
+ * voiced run, and late onsets. */
+static void
+test_advance_follows_the_marks(enum mbe_voiced_synthesis rendering) {
+    static const struct {
+        double hz;
+        int L, voiced;
+        enum mbe_frame_mark mark;
+    } frames[] = {
+        {90.0, 38, 0, MBE_FRAME_MARK_NONE},
+        {127.5, 28, 23, MBE_FRAME_MARK_ONSET_COLUMNS},
+        {127.5, 28, 23, MBE_FRAME_MARK_ONSET_COLUMNS},
+        {90.0, 38, 0, MBE_FRAME_MARK_NONE},
+        {160.0, 25, 3, MBE_FRAME_MARK_ONSET_COLUMNS},
+        {160.0, 25, 9, MBE_FRAME_MARK_ONSET_COLUMNS},
+        {90.0, 38, 0, MBE_FRAME_MARK_NONE},
+        {150.0, 24, 3, MBE_FRAME_MARK_LATE_ONSET},
+        {150.0, 24, 20, MBE_FRAME_MARK_NONE},
+    };
+
+    mbe_parms last, model;
+    float out[160];
+    fresh_stream(&last);
+    for (size_t f = 0; f < sizeof(frames) / sizeof(frames[0]); ++f) {
+        set_model(&model, frames[f].hz, frames[f].L, frames[f].voiced, 16.0f);
+        mbe_set_frame_mark(&model, frames[f].mark);
+        mbe_parms advanced = with_model(&last, &model);
+        mbe_set_frame_mark(&advanced, frames[f].mark);
+        mbe_advance_subframes(&advanced, &last, 0, rendering);
+        next_frame_as(out, &last, &model, 0, rendering);
+        assert(same_bits(last.PSIl, advanced.PSIl, 57));
+        assert(same_bits(last.PHIl, advanced.PHIl, 57));
+        assert(same_bits(last.noiseOverlap, advanced.noiseOverlap, 96));
+        assert(same_bits(&last.noiseSeed, &advanced.noiseSeed, 1));
+        assert(all_finite(out, 160));
+    }
 }
 
 /* Whether a lies within an ulp of float of b. */
@@ -2383,10 +2500,11 @@ test_subnormal_pitch_is_no_pitch(void) {
     }
 }
 
-/* The parameter bit that voices a P25 frame's lowest band (harmonics 1..3) and
- * nothing else, for pitch code b0; -1 if there is none. */
+/* The parameter bit that voices band `band` of a P25 frame of pitch code b0
+ * (harmonics 3 band - 2 .. 3 band, the last band the rest) and nothing else;
+ * -1 if there is none. */
 static int
-imbe_lowest_band_bit(int b0) {
+imbe_band_bit(int b0, int band) {
     for (int bit = 6; bit < 85; ++bit) {
         mbe_parms cur, prev, enhanced;
         char imbe_d[88] = {0};
@@ -2396,58 +2514,253 @@ imbe_lowest_band_bit(int b0) {
         if (mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) != 0) {
             continue;
         }
-        int others = 0;
-        for (int l = 4; l <= cur.L; ++l) {
-            others |= cur.Vl[l];
+        int match = 1;
+        for (int l = 1; l <= cur.L; ++l) {
+            const int in_band = (l > 3 * (band - 1)) && ((l <= 3 * band) || (band == cur.K));
+            match &= cur.Vl[l] == in_band;
         }
-        if (cur.Vl[1] && cur.Vl[2] && cur.Vl[3] && !others) {
+        if (match) {
             return bit;
         }
     }
     return -1;
 }
 
-/* A P25 frame whose voicing does not reach MBE_VOICING_REACH_HZ is marked as a
- * late onset: three voiced harmonics at pitch codes 56 (502.8 Hz at the pitch
- * the decoder plays) and 100 (344.2 Hz) are, at codes 55 (508.1 Hz) and 30
- * (690.8 Hz) they are not. */
+/* P25 parameter bits of pitch code b0 whose voicing word is `word` (band 1
+ * first, one character per band, '1' voiced); the other fields 0. */
 static void
-test_p25_marks_late_onsets(void) {
-    static const int codes[] = {56, 100, 207, 55, 30, 0};
-    for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); ++i) {
-        mbe_parms cur, prev, enhanced;
-        char imbe_d[88] = {0};
-        const int bit = imbe_lowest_band_bit(codes[i]);
-        assert(bit >= 0);
-        set_imbe_b0(imbe_d, codes[i]);
-        imbe_d[bit] = 1;
-        mbe_initMbeParms(&cur, &prev, &enhanced);
-        const int kind = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
-        assert(kind == 0);
-        (void)kind;
-        assert(mbe_frame_mark(&cur) == ((i < 3) ? MBE_FRAME_MARK_LATE_ONSET : MBE_FRAME_MARK_NONE));
+set_imbe_voicing(char imbe_d[88], int b0, const char* word) {
+    memset(imbe_d, 0, 88);
+    set_imbe_b0(imbe_d, b0);
+    for (int band = 1; word[band - 1] != '\0'; ++band) {
+        if (word[band - 1] == '1') {
+            const int bit = imbe_band_bit(b0, band);
+            assert(bit >= 0);
+            imbe_d[bit] = 1;
+        }
+    }
+}
 
-        /* Through the data path, after frames with no voiced band: the pulse
-         * train starts at mid-frame when marked, at the frame's start if not. */
-        char unvoiced[88] = {0};
-        float out[160];
-        set_imbe_b0(unvoiced, 150);
-        mbe_initMbeParms(&cur, &prev, &enhanced);
-        for (int f = 0; f < 2; ++f) {
-            const int rc = mbe_processImbe4400Dataf(out, NULL, unvoiced, &cur, &prev, &enhanced);
+/* The P25 onset rule for harmonic l of a frame at its own pitch (any l: one
+ * past L is voiced as harmonic L is). */
+static int
+onset_harmonic_sounds(const mbe_parms* mp, int l) {
+    const int nearest = (l > mp->L) ? mp->L : l;
+    return mp->Vl[nearest] == 1 && reference_onset_sounds(mp, (double)l * (double)mp->w0 * 8000.0 / (2.0 * M_PI));
+}
+
+/* A frame decoded from `imbe_d` after a P25 frame with no voiced band (b0 150,
+ * a code DVSI's encoder keeps for such frames): its mid-frame model voices
+ * exactly the harmonics `sounds` lists (0-terminated), which are the rule's;
+ * the frame is marked for it. Returns whether any sounds. */
+static int
+check_p25_onset(const char imbe_d[88], const int* sounds) {
+    mbe_parms cur, prev, enhanced, unvoiced;
+    char before[88] = {0};
+    struct mbe_subframe_model mid;
+    set_imbe_b0(before, 150);
+    mbe_initMbeParms(&unvoiced, &prev, &enhanced);
+    const int kind = mbe_decodeImbe4400Parms(before, &unvoiced, &prev);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    const int kind2 = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+    assert(kind == 0 && kind2 == 0);
+    (void)kind;
+    (void)kind2;
+    assert(mbe_frame_mark(&cur) == MBE_FRAME_MARK_ONSET_COLUMNS);
+    mbe_subframe_mid_model(&unvoiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
+    assert(same_bits(&mid.w0, &cur.w0, 1));
+    int listed = 0, any = 0;
+    for (int l = 1; l <= mid.L; ++l) {
+        const int want = sounds[listed] == l;
+        listed += want;
+        assert(mid.voiced[l] == (want ? 1 : 0));
+        assert(onset_harmonic_sounds(&cur, l) == want);
+        any |= want;
+    }
+    assert(sounds[listed] == 0);
+    return any;
+}
+
+/* Through the P25 data path, after two frames with no voiced band: the frame's
+ * pulse train starts with the frame when a harmonic sounds at mid-frame and
+ * at mid-frame when none does; ProVoice, which shares the path, alike. */
+static void
+check_p25_onset_train(const char imbe_d[88], int early, int provoice) {
+    mbe_parms cur, prev, enhanced;
+    char unvoiced[88] = {0};
+    float out[160];
+    set_imbe_b0(unvoiced, 150);
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    for (int f = 0; f < 3; ++f) {
+        mbe_process_result result;
+        mbe_initProcessResult(&result);
+        result.flags |= provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
+        const int rc = mbe_processImbe4400Dataf(out, &result, (f < 2) ? unvoiced : imbe_d, &cur, &prev, &enhanced);
+        assert(rc >= 0);
+        (void)rc;
+    }
+    assert(mbe_frame_mark(&enhanced) == MBE_FRAME_MARK_ONSET_COLUMNS);
+    const double hz = (double)enhanced.w0 * 8000.0 / (2.0 * M_PI);
+    assert(fabs(cycles_apart(pulse_phase(&enhanced), cycles_of(hz, early ? 160.0 : 80.0))) < 1e-4);
+    assert(all_finite(out, 160));
+}
+
+/* The bands a P25 frame after one with no voiced band starts with, as DVSI's
+ * decoder plays them (MBE_FRAME_MARK_ONSET_COLUMNS): a frame voiced in its
+ * first band only starts late at pitch code 56 (three harmonics up to 502.6
+ * Hz) and early at 55 (507.9 Hz, the first column covered: harmonics 1 and 2
+ * sound, the third, in column 1, does not); the word 1000001100 early at 86
+ * (127.5 Hz: column 5 covered, so harmonics 19, within 250 Hz below it, to
+ * 23 sound, and neither band 1 nor harmonic 24, in column 6, does) and late at
+ * 92 (121.7 Hz); 1011 then unvoiced bands early at 79 (column 2: harmonics 7
+ * to 11) and late at 92, 99 and 102; and nothing above 3505 Hz (a frame
+ * voiced throughout at code 0, whose 9th harmonic lies at 3.65 kHz). */
+static void
+test_p25_onset_columns(void) {
+    static const struct {
+        int b0;
+        const char* word;
+        int sounds[10];
+    } cases[] = {
+        {56, "10000000", {0}},
+        {55, "1000000", {1, 2, 0}},
+        {86, "1000001100", {19, 20, 21, 22, 23, 0}},
+        {92, "1000001100", {0}},
+        {79, "101100000", {7, 8, 9, 10, 11, 0}},
+        {92, "1011000000", {0}},
+        {99, "10110000000", {0}},
+        {102, "10110000000", {0}},
+        {0, "111", {1, 2, 3, 4, 5, 6, 7, 8, 0}},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char imbe_d[88];
+        set_imbe_voicing(imbe_d, cases[i].b0, cases[i].word);
+        const int early = check_p25_onset(imbe_d, cases[i].sounds);
+        check_p25_onset_train(imbe_d, early, 0);
+        check_p25_onset_train(imbe_d, early, 1);
+    }
+}
+
+/* Where the onset rule does not act: after a voiced frame the mark changes
+ * nothing (the mid-frame model is that of an unmarked frame, every voiced
+ * band sounding), and a frame played as a P25 tone model keeps its own model
+ * at mid-frame. */
+static void
+test_p25_onset_columns_only_at_onsets(void) {
+    mbe_parms cur, prev, enhanced, voiced, unvoiced;
+    char imbe_d[88], before[88] = {0};
+    struct mbe_subframe_model marked, plain, own;
+    set_imbe_voicing(imbe_d, 86, "1000001100");
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    const int kind = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+    assert(kind == 0);
+    (void)kind;
+    memset(before, 1, sizeof(before));
+    set_imbe_b0(before, 80);
+    mbe_initMbeParms(&voiced, &prev, &enhanced);
+    const int kind2 = mbe_decodeImbe4400Parms(before, &voiced, &prev);
+    assert(kind2 == 0);
+    (void)kind2;
+    mbe_parms unmarked = cur;
+    mbe_set_frame_mark(&unmarked, MBE_FRAME_MARK_NONE);
+    mbe_subframe_mid_model(&voiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &marked);
+    mbe_subframe_mid_model(&voiced, &unmarked, 0, MBE_VOICED_SYNTHESIS_DVSI, &plain);
+    assert(same_model(&marked, &plain));
+    /* Band 1, which no covered column holds, sounds at mid-frame. */
+    assert(marked.voiced[1] == 1);
+
+    /* The same frame as a tone model after a frame with no voiced band. */
+    memset(before, 0, sizeof(before));
+    set_imbe_b0(before, 150);
+    mbe_initMbeParms(&unvoiced, &prev, &enhanced);
+    const int kind3 = mbe_decodeImbe4400Parms(before, &unvoiced, &prev);
+    assert(kind3 == 0);
+    (void)kind3;
+    mbe_set_frame_mark(&cur, MBE_FRAME_MARK_TONE);
+    mbe_subframe_mid_model(&unvoiced, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &marked);
+    mbe_subframe_own_model(&cur, &own);
+    assert(same_model(&marked, &own));
+}
+
+/* The quantities the onset rule rounds up to a harmonic number, the column
+ * edges 505 + 500 k Hz and the same edges 250 Hz lower over the frame's
+ * fundamental, lie far from a whole number at every pitch code: at least
+ * 2.5e-4 of a harmonic at the pitch the P25 decoder plays (2.86e-4 is the
+ * least, code 3 at 1505 Hz) and 1.5e-4 at ProVoice's nominal one (1.55e-4,
+ * code 36 at 2755 Hz), so that no build's arithmetic moves a harmonic across
+ * an edge. The pitches are the decoder's, through its own paths. */
+static void
+test_p25_onset_edges(void) {
+    double least[2] = {1.0, 1.0};
+    for (int provoice = 0; provoice < 2; ++provoice) {
+        for (int b0 = 0; b0 <= 207; ++b0) {
+            mbe_parms cur, prev, enhanced;
+            mbe_process_result result;
+            char imbe_d[88] = {0};
+            float out[160];
+            set_imbe_b0(imbe_d, b0);
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            mbe_initProcessResult(&result);
+            result.flags |= provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
+            const int rc = mbe_processImbe4400Dataf(out, &result, imbe_d, &cur, &prev, &enhanced);
             assert(rc >= 0);
             (void)rc;
+            for (int k = 0; k < 14; ++k) {
+                const double hz = 505.0 + (500.0 * (k % 7)) - ((k < 7) ? 0.0 : 250.0);
+                const double position = hz * M_PI / (4000.0 * (double)enhanced.w0);
+                const double margin = fabs(position - floor(position + 0.5));
+                least[provoice] = fmin(least[provoice], margin);
+            }
         }
-        const int rc2 = mbe_processImbe4400Dataf(out, NULL, imbe_d, &cur, &prev, &enhanced);
-        assert(rc2 >= 0);
-        (void)rc2;
-        const double hz = (double)enhanced.w0 * 8000.0 / (2.0 * M_PI);
-        assert(fabs(cycles_apart(pulse_phase(&enhanced), cycles_of(hz, (i < 3) ? 80.0 : 160.0))) < 1e-4);
+    }
+    assert(least[0] > 2.5e-4 && least[0] < 3.0e-4);
+    assert(least[1] > 1.5e-4 && least[1] < 2.0e-4);
+}
+
+/* Through the P25 data path: an onset frame muted by the error rate, which the
+ * core advances, leaves the stream where the same frame heard leaves it, so
+ * the frames after both play alike. */
+static void
+test_p25_muted_onset_advances(void) {
+    mbe_parms cur[2], prev[2], enhanced[2];
+    char unvoiced[88] = {0}, onset[88], voiced[88];
+    float out[2][160];
+    set_imbe_b0(unvoiced, 150);
+    set_imbe_voicing(onset, 86, "1000001100");
+    memset(voiced, 1, sizeof(voiced));
+    set_imbe_b0(voiced, 86);
+    for (int s = 0; s < 2; ++s) {
+        mbe_initMbeParms(&cur[s], &prev[s], &enhanced[s]);
+    }
+    const char* frames[4] = {unvoiced, onset, voiced, voiced};
+    for (int f = 0; f < 4; ++f) {
+        for (int s = 0; s < 2; ++s) {
+            mbe_process_result result;
+            mbe_initProcessResult(&result);
+            /* Stream 1's onset frame comes with errors enough to mute it: its
+             * error rate is back under the limit for the frames after. */
+            if (s == 1 && f == 1) {
+                prev[s].errorRate = 1.0f;
+            } else if (f == 2) {
+                prev[s].errorRate = 0.0f;
+            }
+            const int rc = mbe_processImbe4400Dataf(out[s], &result, frames[f], &cur[s], &prev[s], &enhanced[s]);
+            assert(rc >= 0);
+            (void)rc;
+            assert(((result.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (s == 1 && f == 1));
+        }
+        if (f >= 1) {
+            assert(same_bits(enhanced[0].noiseOverlap, enhanced[1].noiseOverlap, 96));
+            assert(same_bits(enhanced[0].PSIl, enhanced[1].PSIl, 57));
+            assert(same_bits(&enhanced[0].noiseSeed, &enhanced[1].noiseSeed, 1));
+        }
     }
 }
 
 /* The P25 and D-STAR decoders mark a frame with no voiced band by its pitch
- * code, replacing whatever mark the caller's state held. */
+ * code, and P25 a voiced frame for the onset columns, replacing whatever mark
+ * the caller's state held. */
 static void
 test_decoders_mark_unvoiced_frames(void) {
     mbe_parms cur, prev, enhanced;
@@ -2469,8 +2782,9 @@ test_decoders_mark_unvoiced_frames(void) {
             assert(any == voiced);
             /* b0 128..183 are the codes DVSI's encoder keeps for frames with no voiced band. */
             const int own_code = b0 >= 128 && b0 <= 183;
-            assert(mbe_frame_mark(&cur)
-                   == ((!voiced && !own_code) ? MBE_FRAME_MARK_PITCH_ABSENT : MBE_FRAME_MARK_NONE));
+            const enum mbe_frame_mark want =
+                voiced ? MBE_FRAME_MARK_ONSET_COLUMNS : (own_code ? MBE_FRAME_MARK_NONE : MBE_FRAME_MARK_PITCH_ABSENT);
+            assert(mbe_frame_mark(&cur) == want);
         }
     }
 
@@ -2608,6 +2922,8 @@ main(void) {
     test_subframes_crossfade_linearly();
     test_muted_frame_advances(MBE_VOICED_SYNTHESIS_DVSI);
     test_muted_frame_advances(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI);
+    test_advance_follows_the_marks(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
     test_ambe2450_mid_pitch();
     test_from_silence();
     test_output_limit_option();
@@ -2617,7 +2933,10 @@ main(void) {
     test_invalid_models();
     test_subnormal_pitch_is_no_pitch();
     test_decoders_mark_unvoiced_frames();
-    test_p25_marks_late_onsets();
+    test_p25_onset_columns();
+    test_p25_onset_columns_only_at_onsets();
+    test_p25_onset_edges();
+    test_p25_muted_onset_advances();
     test_p25_voicing_persists();
     test_p25_reset_drops_the_mark();
     return 0;

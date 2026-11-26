@@ -100,6 +100,10 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT and the previous
  * frame's voicing reaches MBE_VOICING_REACH_HZ; with @p late_onset no band is
  * voiced (the voiced bands of a frame so marked start in its own subframe).
+ * When the current frame is marked MBE_FRAME_MARK_ONSET_COLUMNS (P25,
+ * ProVoice) and the previous frame has no voiced band, a band voiced so is
+ * voiced only if its frequency lies in one of the current frame's covered
+ * 500 Hz columns or within 250 Hz below one (the mark's rule, mbe_adaptive.h).
  * Its magnitudes are the two frames' at its frequency, interpolated in the log
  * domain. Its phases are regenerated from the mean of the two frames' log2Ml
  * at the band's frequency, read as the magnitudes are, each log2Ml used as

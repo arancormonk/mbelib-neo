@@ -698,8 +698,9 @@ test_every_row_plays(void) {
  * Only the tone model is marked MBE_FRAME_MARK_TONE, by the synthesis of the
  * frame that plays it: a history whose mark says tone but which holds no
  * tone word plays its repeat as the same history unmarked, through the P25
- * and the ProVoice data paths, and leaves no such mark. The decoders' own
- * marks reach the history untouched (a frame with no voiced band at b0 60:
+ * and the ProVoice data paths, and leaves the mark a decode gives a voiced
+ * model (MBE_FRAME_MARK_ONSET_COLUMNS). The decoders' own marks reach the
+ * history untouched (a frame with no voiced band at b0 60:
  * MBE_FRAME_MARK_PITCH_ABSENT).
  */
 static void
@@ -714,15 +715,17 @@ test_forged_tone_mark(void) {
         tone_amplitudes(logm, L, 0, 0, 0.0f, 6.0f);
         build_frame(imbe_d, 60, 0x7Fu, logm, &s.prev);
         play(out, &s, imbe_d, provoice);
-        assert(mbe_frame_mark(&s.prev) == MBE_FRAME_MARK_NONE && s.prev.Vl[0] == 0);
+        assert(mbe_frame_mark(&s.prev) == MBE_FRAME_MARK_ONSET_COLUMNS && s.prev.Vl[0] == 0);
 
         struct stream forged = s, plain = s;
         mbe_set_frame_mark(&forged.prev, MBE_FRAME_MARK_TONE);
         play_repeat(forged_out, &forged, provoice);
         play_repeat(plain_out, &plain, provoice);
         assert(same_samples(forged_out, plain_out, 160));
-        assert(mbe_frame_mark(&forged.enhanced) != MBE_FRAME_MARK_TONE);
-        assert(mbe_frame_mark(&forged.prev) != MBE_FRAME_MARK_TONE);
+        /* The forged mark gives way to the one a decode leaves a voiced model. */
+        assert(mbe_frame_mark(&forged.enhanced) == MBE_FRAME_MARK_ONSET_COLUMNS);
+        assert(mbe_frame_mark(&forged.prev) == MBE_FRAME_MARK_ONSET_COLUMNS);
+        assert(mbe_frame_mark(&plain.enhanced) == MBE_FRAME_MARK_ONSET_COLUMNS);
 
         /* The decoder's own mark: no voiced band at a code outside 128..183. */
         build_frame(imbe_d, 60, 0x00u, logm, &s.prev);

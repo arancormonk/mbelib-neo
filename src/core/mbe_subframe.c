@@ -274,10 +274,100 @@ voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
     return prev_mp->Vl[harmonic_below(position, prev_mp->L, &within)] == 1;
 }
 
+/* ---- the harmonics a P25 onset starts with ---- */
+
+/* The 500 Hz columns DVSI's P25 decoder reads a frame's voicing in after a
+ * frame with no voiced band (MBE_FRAME_MARK_ONSET_COLUMNS): column 0 from 0 Hz
+ * to MBE_VOICING_REACH_HZ, each next one ONSET_COLUMN_HZ wide, ONSET_COLUMNS of
+ * them, up to 3505 Hz; a harmonic within ONSET_REACH_HZ below a covered column
+ * sounds with it. */
+#define ONSET_COLUMNS   7
+#define ONSET_COLUMN_HZ 500.0
+#define ONSET_REACH_HZ  250.0
+
+struct onset_columns {
+    double edge[ONSET_COLUMNS];     /* column k's upper edge, in harmonics of the frame's pitch */
+    double reach[ONSET_COLUMNS];    /* the same edges ONSET_REACH_HZ lower */
+    int covered[ONSET_COLUMNS + 1]; /* column k covered; [ONSET_COLUMNS], above 3505 Hz, never */
+};
+
+/* Whether a frame is voiced at its harmonic at or next above `position` (in
+ * harmonics of its pitch, positive and finite): unvoiced past L. Decided on
+ * the bit pattern, positive doubles ordering as their patterns do, so that the
+ * conversion only ever sees a value from 0 to L. */
+static int
+voiced_from(const mbe_parms* mp, double position) {
+    const double last = (double)mp->L;
+    uint64_t bits, last_bits;
+    memcpy(&bits, &position, sizeof(bits));
+    memcpy(&last_bits, &last, sizeof(last_bits));
+    if (bits > last_bits) {
+        return 0;
+    }
+    const int l = (int)ceil(position);
+    return mp->Vl[(l < 1) ? 1 : l] == 1;
+}
+
+/* The columns of a frame with a positive, normal pitch and 1..56 harmonics.
+ * The edges' positions among its harmonics are quotients formed in double
+ * from the stored pitch: for every P25 pitch code (and ProVoice's nominal
+ * pitch) each lies at least 1.5e-4 of a harmonic from a whole number
+ * (test_p25_onset_edges in test_subframe_synthesis.c), far past any
+ * difference the arithmetic of a build (x87 excess precision, fast-math's
+ * reordering) can make, so every build reads the same harmonics. */
+static void
+onset_columns(const mbe_parms* mp, struct onset_columns* columns) {
+    const double harmonics_per_hz = M_PI / (4000.0 * (double)mp->w0);
+    int lower = mp->Vl[1] == 1;
+    for (int k = 0; k < ONSET_COLUMNS; k++) {
+        const double hz = (double)MBE_VOICING_REACH_HZ + (ONSET_COLUMN_HZ * (double)k);
+        columns->edge[k] = hz * harmonics_per_hz;
+        columns->reach[k] = (hz - ONSET_REACH_HZ) * harmonics_per_hz;
+        const int upper = voiced_from(mp, columns->edge[k]);
+        columns->covered[k] = lower && upper;
+        lower = upper;
+    }
+    columns->covered[ONSET_COLUMNS] = 0;
+}
+
+/* The column holding a position among the frame's harmonics, by `edges`. */
+static int
+column_of(const double edges[ONSET_COLUMNS], double position) {
+    int k = 0;
+    while (k < ONSET_COLUMNS && position >= edges[k]) {
+        k++;
+    }
+    return k;
+}
+
+/* Whether the mid-frame model's harmonic at `position` (in harmonics of the
+ * frame's pitch: a whole number at an onset, where the mid-frame pitch is the
+ * frame's) sounds at an onset: in a covered column, or within ONSET_REACH_HZ
+ * below one. */
+static int
+sounds_at_onset(const struct onset_columns* columns, double position) {
+    return columns->covered[column_of(columns->edge, position)]
+           || columns->covered[column_of(columns->reach, position)];
+}
+
+/* The columns of the current frame when its onset is read in them (a frame
+ * marked MBE_FRAME_MARK_ONSET_COLUMNS after one with no voiced band), else
+ * NULL. */
+static const struct onset_columns*
+onset_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, struct onset_columns* columns) {
+    if (mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_ONSET_COLUMNS || model_has_voiced_band(prev_mp)) {
+        return NULL;
+    }
+    onset_columns(cur_mp, columns);
+    return columns;
+}
+
 /* The mid-frame model's voicing, magnitudes and phases, its pitch and harmonic
  * count being set: each band's state from the frame whose voicing holds at
  * mid-frame, and the two frames' magnitudes at the band's frequency, met in
- * the log domain. Its phases come from the mean of the two frames' decoded
+ * the log domain. At an onset of a frame marked MBE_FRAME_MARK_ONSET_COLUMNS
+ * (`onset`), a voiced band that does not sound there (sounds_at_onset()) is
+ * unvoiced. Its phases come from the mean of the two frames' decoded
  * log2 amplitudes (phase_log2_amplitudes()), each read at the band's
  * frequency as the magnitudes are and used as the decoder stored it: where
  * common_log2_magnitudes() takes the unvoiced factor out of an unvoiced band's
@@ -287,7 +377,8 @@ voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
  * carries what log2Ml does not, such as rate 33's further silence scale and
  * spectral enhancement). */
 static void
-fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, struct mbe_subframe_model* model) {
+fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, const struct onset_columns* onset,
+               struct mbe_subframe_model* model) {
     const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
     const mbe_parms* voicing = voicing_persists(prev_mp, cur_mp) ? prev_mp : cur_mp;
     double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
@@ -301,6 +392,10 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset
         const float w = model->w0 * (float)l;
         int state = band_state(voicing, harmonic_at(voicing, w));
         if (late_onset && state == BAND_VOICED) {
+            state = BAND_UNVOICED;
+        }
+        if (onset != NULL && state == BAND_VOICED
+            && !sounds_at_onset(onset, ((double)model->w0 * (double)l) / (double)cur_mp->w0)) {
             state = BAND_UNVOICED;
         }
         const double mean = 0.5 * (log2_magnitude_at(prev_mp, prev_log2, w) + log2_magnitude_at(cur_mp, cur_log2, w));
@@ -355,7 +450,8 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     const float harmonics = floorf((0.9254f * (float)M_PI) / w0);
     model->w0 = w0;
     model->L = (harmonics < (float)shorter) ? shorter : ((harmonics > (float)longer) ? longer : (int)harmonics);
-    fill_mid_bands(prev_mp, cur_mp, late_onset, model);
+    struct onset_columns columns;
+    fill_mid_bands(prev_mp, cur_mp, late_onset, onset_rule(prev_mp, cur_mp, &columns), model);
 }
 
 /* ---- the pulse train ---- */
