@@ -159,11 +159,13 @@ same_subframe_model(const struct mbe_subframe_model* a, const struct mbe_subfram
  * The tone test on frames built from the table's pairs: DTMF 1 (b0 53, word
  * 1110000, harmonics 4 and 7) passes; the same amplitudes with another voicing
  * word do not; with a third harmonic raised, the frame passes exactly while
- * the others' rms stays under 0.375 of the tone's (both sides seen); a
- * call-progress pair (162: b0 92, 0100000000, harmonics 4 and 5) does not; a
- * single tone (30: b0 12, 1100, harmonic 3) passes, and where several single
- * tones share a pair (b0 17, 1000: harmonics 1, 2 and 3) the dominant
- * harmonic's row is taken.
+ * the others' rms stays under 0.375 of the tone's (passing near 0.3, failing
+ * under 0.45); a call-progress pair (162: b0 92, 0100000000, harmonics 4 and
+ * 5) does not; a single tone (30: b0 12, 1100, harmonic 3) passes, and where
+ * several single tones share a pair (b0 17, 1000: harmonics 1, 2 and 3) the
+ * dominant harmonic's row is taken; with the other harmonics raised, a single
+ * tone passes exactly while their rms stays under 0.0235 of the tone's
+ * (passing just under it and failing just over it).
  */
 static void
 test_tone_test(void) {
@@ -183,17 +185,18 @@ test_tone_test(void) {
     assert(frame.Vl[0] == 0);
 
     /* The tone harmonics lower, the third raised past where the share crosses. */
-    int passed = 0, failed = 0;
+    double highest_pass = 0.0, lowest_fail = 1.0e9;
     tone_amplitudes(logm, L, 4, 7, 8.0f, 2.0f);
     for (int step = 0; step <= 40; ++step) {
         logm[10] = 6.0f + (0.125f * (float)step);
         frame = settled(imbe_d, 53, 0x70u, logm);
         const double share = others_over_tone(&frame, 4, 7);
-        assert((frame.Vl[0] == tone_word(53, 4, 7)) == (share < 0.375));
-        passed += share < 0.375;
-        failed += share >= 0.375;
+        const int passes = share < 0.375;
+        assert((frame.Vl[0] == tone_word(53, 4, 7)) == passes);
+        highest_pass = passes ? fmax(highest_pass, share) : highest_pass;
+        lowest_fail = passes ? lowest_fail : fmin(lowest_fail, share);
     }
-    assert(passed > 0 && failed > 0);
+    assert(highest_pass > 0.3 && lowest_fail < 0.45);
 
     const int cp_L = harmonics_of(92, &K);
     assert(K == 10);
@@ -213,7 +216,20 @@ test_tone_test(void) {
         frame = settled(imbe_d, 17, 0x8u, logm);
         assert(frame.Vl[0] == tone_word(17, l, l));
     }
-    puts("p25 tones: the table's pairs, the voicing word, the 0.375 share and the call-progress pairs");
+    /* A single tone holds the other harmonics far lower: raised together. */
+    highest_pass = 0.0;
+    lowest_fail = 1.0e9;
+    for (int step = 0; step <= 64; ++step) {
+        tone_amplitudes(logm, single_L, 3, 3, 11.0f, 3.0f + (0.0625f * (float)step));
+        frame = settled(imbe_d, 12, 0xCu, logm);
+        const double share = others_over_tone(&frame, 3, 3);
+        const int passes = share < 0.0235;
+        assert((frame.Vl[0] == tone_word(12, 3, 3)) == passes);
+        highest_pass = passes ? fmax(highest_pass, share) : highest_pass;
+        lowest_fail = passes ? lowest_fail : fmin(lowest_fail, share);
+    }
+    assert(highest_pass > 0.021 && lowest_fail < 0.026);
+    puts("p25 tones: the table's pairs, the voicing word, the 0.375 and 0.0235 shares and the call-progress pairs");
 }
 
 /* A stream's three states. */

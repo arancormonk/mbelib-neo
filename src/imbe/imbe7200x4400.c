@@ -681,15 +681,21 @@ static const struct imbe_tone_row imbe_tone_rows[] = {
     {197, 0x3F2, 10, 19},
 };
 
-/* Others over tone: a frame passes when the rms of its other decoded
- * magnitudes is under this share of the rms of the tone's (DVSI's tone vectors:
- * at most 0.296, 99.9% under 0.242; frames of the speech vectors whose (b0, b1)
- * is a dual tone's: 0.482 and above). */
-#define IMBE_TONE_SHARE 0.375
+/* Others over tone: a frame passes a row when the rms of its other decoded
+ * magnitudes is under a share of the rms of the tone's. For a dual tone: DVSI's
+ * tone frames reach at most 0.296 (99.9% under 0.242) and the frames of the
+ * speech vectors whose (b0, b1) is a dual tone's start at 0.482. */
+#define IMBE_TONE_SHARE_DUAL   0.375
+/* For a single tone, whose pairs also hold speech frames of high voices with a
+ * dominant fundamental: DVSI's decoder plays such speech frames as tones up to
+ * a share of 0.0234 and as speech from 0.0236 on (isolated frames of the 25
+ * development and validation vectors), and 98.9% of the single-tone frames of
+ * its tone vectors lie under this (median 0.003). */
+#define IMBE_TONE_SHARE_SINGLE 0.0235
 /* The word a tone frame's decode leaves in the otherwise unused Vl[0] (Vl is
  * indexed from 1, and P25 keeps nothing there): the flag, b0 in bits 16-23,
  * l2 in bits 8-15 and l1 in bits 0-7. */
-#define IMBE_TONE_FLAG  (1 << 24)
+#define IMBE_TONE_FLAG         (1 << 24)
 
 /* The frame's voicing word as transmitted, band 1 the most significant bit:
  * band j holds harmonics 3j - 2 .. 3j, the last band the rest
@@ -744,21 +750,23 @@ imbe_tone_share2(const mbe_parms* mp, int l1, int l2) {
  * The tone a decoded P25 voice frame carries, as the word to keep in Vl[0], or
  * 0: among the rows of the frame's pitch code and voicing word whose harmonics
  * are within L, the one whose tone harmonics dominate most, if the others'
- * rms is under IMBE_TONE_SHARE of the tone's (decoded magnitudes, before
- * enhancement).
+ * rms is under the row's share of the tone's (IMBE_TONE_SHARE_DUAL,
+ * IMBE_TONE_SHARE_SINGLE; decoded magnitudes, before enhancement). The rows of
+ * one pair are all dual or all single tones.
  */
 static int
 imbe_tone_word(const mbe_parms* mp, int b0) {
     const unsigned word = imbe_voicing_word(mp);
-    double best = IMBE_TONE_SHARE * IMBE_TONE_SHARE;
+    double best = -1.0;
     int found = 0;
     for (size_t i = 0; i < sizeof(imbe_tone_rows) / sizeof(imbe_tone_rows[0]); i++) {
         const struct imbe_tone_row* row = &imbe_tone_rows[i];
         if (row->b0 != b0 || row->b1 != word || row->l2 > mp->L) {
             continue;
         }
+        const double limit = (row->l1 == row->l2) ? IMBE_TONE_SHARE_SINGLE : IMBE_TONE_SHARE_DUAL;
         const double share = imbe_tone_share2(mp, row->l1, row->l2);
-        if (share >= 0.0 && share < best) {
+        if (share >= 0.0 && share < limit * limit && (found == 0 || share < best)) {
             best = share;
             found = IMBE_TONE_FLAG | (b0 << 16) | (row->l2 << 8) | row->l1;
         }
