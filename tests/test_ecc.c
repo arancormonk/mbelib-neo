@@ -270,12 +270,219 @@ test_soft_differential(void) {
     }
 }
 
+/* Soft-decode one word of code `variant`: Golay (23,12), Hamming (15,11) or
+ * the ProVoice Hamming (15,11). */
+static int
+decode_soft(int variant, const mbe_soft_bit* soft, char* out) {
+    if (variant == 0) {
+        return mbe_golay2312Soft(soft, out);
+    }
+    return variant == 1 ? mbe_hamming1511Soft(soft, out) : mbe_7100x4400hamming1511Soft(soft, out);
+}
+
+/* Confidence of bit i under pattern `kind`, from a random draw: nothing
+ * known, everything certain, every other bit unknown, binary, small weights
+ * (many ties), and any weight. */
+static unsigned char
+pattern_reliability(int kind, int i, unsigned draw) {
+    switch (kind) {
+        case 0: return 0;
+        case 1: return 255;
+        case 2: return (unsigned char)((i & 1) ? 0 : 255);
+        case 3: return (unsigned char)(draw & 1u);
+        case 4: return (unsigned char)(draw & 3u);
+        default: return (unsigned char)(draw & 255u);
+    }
+}
+
+/* A received word that is a codeword decodes to itself, with no errors,
+ * whatever the confidences are. Where enough bits have zero confidence, other
+ * codewords cost as little as it does (nothing), and the hard decision's own
+ * codeword must still win. Fails for a tie-break, or a shortcut around the
+ * search, that hands back another codeword of equal cost. */
+static void
+test_soft_clean_words(void) {
+    unsigned rng = 0x51ab37u;
+    for (int variant = 0; variant < 3; ++variant) {
+        const int width = variant == 0 ? 23 : 15;
+        const int count = variant == 0 ? 4096 : 2048;
+        for (int d = 0; d < count; ++d) {
+            const char* word = reference_words[variant][d];
+            for (int kind = 0; kind < 6; ++kind) {
+                mbe_soft_bit soft[23];
+                char actual[23];
+                for (int i = 0; i < width; ++i) {
+                    rng = rng * 1664525u + 1013904223u;
+                    soft[i].bit = (unsigned char)word[i];
+                    soft[i].reliability = pattern_reliability(kind, i, rng >> 16);
+                }
+                const int errors = decode_soft(variant, soft, actual);
+                assert(errors == 0);
+                assert(memcmp(actual, word, (size_t)width) == 0);
+                (void)errors;
+            }
+        }
+    }
+}
+
+/* Whether the hard decisions of a soft word are one of the code's codewords. */
+static int
+is_reference_word(int variant, const mbe_soft_bit* soft) {
+    const int width = variant == 0 ? 23 : 15;
+    const int count = variant == 0 ? 4096 : 2048;
+    for (int d = 0; d < count; ++d) {
+        int same = 1;
+        for (int i = 0; i < width && same; ++i) {
+            same = reference_words[variant][d][i] == (char)soft[i].bit;
+        }
+        if (same) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Flip `flips` different bits of a soft word, chosen by *rng, and take their
+ * confidence away. */
+static void
+flip_at_zero_confidence(mbe_soft_bit* soft, int width, int flips, unsigned* rng) {
+    int flipped = 0;
+    while (flipped < flips) {
+        *rng = *rng * 1664525u + 1013904223u;
+        const int at = (int)((*rng >> 16) % (unsigned)width);
+        if (soft[at].reliability != 0) { /* every bit starts with some confidence */
+            soft[at].bit = (unsigned char)(soft[at].bit ? 0 : 1);
+            soft[at].reliability = 0;
+            ++flipped;
+        }
+    }
+}
+
+/* Codewords with one to three different bits flipped at zero confidence,
+ * against the oracle. The flips cost the original codeword nothing, yet the
+ * received word is no codeword (a draw whose flips make another codeword, as
+ * three can in a Hamming code, is left out), so the whole search decides; the
+ * hard decoder may land on the original codeword or on another one. Fails for
+ * a shortcut taken on a word that only costs nothing. */
+static void
+test_soft_zero_weight_flips(void) {
+    unsigned rng = 0x2f6e2b1u;
+    int searched = 0, left_out = 0;
+    for (int variant = 0; variant < 3; ++variant) {
+        const int width = variant == 0 ? 23 : 15;
+        const int count = variant == 0 ? 4096 : 2048;
+        for (int d = 0; d < count; d += 29) {
+            for (int flips = 1; flips <= 3; ++flips) {
+                mbe_soft_bit soft[23];
+                char expected[23], actual[23];
+                for (int i = 0; i < width; ++i) {
+                    rng = rng * 1664525u + 1013904223u;
+                    soft[i].bit = (unsigned char)reference_words[variant][d][i];
+                    /* 1..255, or all 255 for every other word. */
+                    soft[i].reliability = (unsigned char)((d & 1) ? 255 : 1u + ((rng >> 16) % 255u));
+                }
+                flip_at_zero_confidence(soft, width, flips, &rng);
+                if (is_reference_word(variant, soft)) {
+                    ++left_out;
+                    continue;
+                }
+                const int errors = reference_soft(soft, expected, variant);
+                const int decoded = decode_soft(variant, soft, actual);
+                assert(decoded == errors);
+                assert(memcmp(actual, expected, (size_t)width) == 0);
+                (void)errors;
+                (void)decoded;
+                ++searched;
+            }
+        }
+    }
+    /* 142 Golay and 2 x 71 Hamming words, three flip counts each. These draws
+     * make a codeword of 6 Hamming and 11 ProVoice words (three flips each). */
+    assert(searched == 835 && left_out == 17);
+    (void)searched;
+    (void)left_out;
+}
+
+/* Whether bit i is a parity bit of a code. The Hamming codebook counts bits 0,
+ * 1, 3 and 7 as parity, while P25 takes its payload from bits 4 to 14: bits 2
+ * and 7 are parity to one and data to the other, and count as neither here. */
+static int
+is_parity_bit(int variant, int i) {
+    if (variant == 0) {
+        return i < 11;
+    }
+    return variant == 1 ? (i == 0 || i == 1 || i == 3) : (i < 4);
+}
+
+/* Whether bit i is a data bit of a code, to its codebook and to the decoders alike. */
+static int
+is_data_bit(int variant, int i) {
+    if (variant == 0) {
+        return i >= 11;
+    }
+    return variant == 1 ? (i >= 4 && i != 7) : (i >= 4);
+}
+
+/* The first codeword of a code whose ones are `parity_ones` parity bits and
+ * `data_ones` data bits; NULL if it has none. */
+static const char*
+word_with_ones(int variant, int parity_ones, int data_ones) {
+    const int width = variant == 0 ? 23 : 15;
+    const int count = variant == 0 ? 4096 : 2048;
+    for (int d = 1; d < count; ++d) {
+        int ones = 0, parity = 0, data = 0;
+        for (int i = 0; i < width; ++i) {
+            ones += reference_words[variant][d][i];
+            parity += reference_words[variant][d][i] && is_parity_bit(variant, i);
+            data += reference_words[variant][d][i] && is_data_bit(variant, i);
+        }
+        if (parity == parity_ones && data == data_ones && ones == parity_ones + data_ones) {
+            return reference_words[variant][d];
+        }
+    }
+    return NULL;
+}
+
+/* The soft decision overrides the hard one. Take a lightest codeword whose
+ * ones are `parity_ones` parity bits and otherwise data bits, and receive only
+ * its parity ones: the hard decoder corrects those few errors back to the zero
+ * codeword, whose data bits the received word already has. With the missing
+ * data bits barely known (confidence 1) and every other bit certain, that
+ * codeword costs its data ones and the zero codeword `parity_ones` certain
+ * bits, and no third codeword comes close, so the decoder must return it and
+ * report its data ones as changed. Fails for a shortcut taken because the
+ * received data bits agree with the hard decision. */
+static void
+test_soft_overrides_hard_decision(void) {
+    for (int variant = 0; variant < 3; ++variant) {
+        const int width = variant == 0 ? 23 : 15;
+        const int weight = variant == 0 ? 7 : 3; /* the codes' minimum distances */
+        const int parity_ones = variant == 0 ? 3 : 1;
+        const char* word = word_with_ones(variant, parity_ones, weight - parity_ones);
+        assert(word != NULL);
+        mbe_soft_bit soft[23];
+        char actual[23];
+        for (int i = 0; i < width; ++i) {
+            const int data_one = word[i] && is_data_bit(variant, i);
+            soft[i].bit = (unsigned char)(word[i] && is_parity_bit(variant, i));
+            soft[i].reliability = (unsigned char)(data_one ? 1 : 255);
+        }
+        const int errors = decode_soft(variant, soft, actual);
+        assert(errors == weight - parity_ones);
+        assert(memcmp(actual, word, (size_t)width) == 0);
+        (void)errors;
+    }
+}
+
 /**
  * @brief Test entry: exercises Hamming and Golay decoders.
  */
 int
 main(void) {
     test_soft_differential();
+    test_soft_clean_words();
+    test_soft_zero_weight_flips();
+    test_soft_overrides_hard_decision();
     setvbuf(stderr, NULL, _IONBF, 0);
 
     // Hamming (15,11): fixed-point and data invariance under single-bit errors

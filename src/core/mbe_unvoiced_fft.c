@@ -358,6 +358,50 @@ mbe_dvsi_noise_skip(uint32_t state, int samples) {
     return state;
 }
 
+/* Samples a frame draws: its own and one subframe more, which its own
+ * subframe's window reaches. */
+#define DVSI_FRAME_NOISE (MBE_VOICED_FRAME + MBE_SUBFRAME)
+
+/* Lanes a frame's draw is spread over. x -> A x + C (mod 2^16) applied k times
+ * is x -> A^k x + C (A^(k-1) + ... + 1), again mod 2^16, so a lane that holds
+ * every k-th state can step k states at once, and the k lanes do not wait on
+ * one another as the samples of one chain do. Unsigned 16-bit arithmetic gives
+ * every state exactly. */
+#define DVSI_NOISE_LANES 8
+#if (DVSI_FRAME_NOISE % DVSI_NOISE_LANES) != 0
+#error "a frame's noise samples must fill whole rounds of the generator's lanes"
+#endif
+
+uint32_t
+mbe_dvsi_noise_frame(uint32_t state, float* noise) {
+    uint16_t raw[DVSI_FRAME_NOISE];
+    uint16_t lane[DVSI_NOISE_LANES] = {0};
+    uint16_t multiplier = 1u;
+    uint16_t increment = 0u;
+
+    if (noise == NULL) {
+        return mbe_dvsi_noise_skip(state, MBE_VOICED_FRAME);
+    }
+    /* The first round one state at a time, and with it the step that takes a
+     * lane a whole round on. */
+    for (int j = 0; j < DVSI_NOISE_LANES; ++j) {
+        state = mbe_dvsi_noise_next(state);
+        lane[j] = (uint16_t)state;
+        increment = (uint16_t)((MBE_DVSI_NOISE_MULTIPLIER * increment) + MBE_DVSI_NOISE_INCREMENT);
+        multiplier = (uint16_t)(MBE_DVSI_NOISE_MULTIPLIER * multiplier);
+    }
+    for (int i = 0; i < DVSI_FRAME_NOISE; i += DVSI_NOISE_LANES) {
+        for (int j = 0; j < DVSI_NOISE_LANES; ++j) {
+            raw[i + j] = lane[j];
+            lane[j] = (uint16_t)(((uint32_t)multiplier * lane[j]) + increment);
+        }
+    }
+    for (int i = 0; i < DVSI_FRAME_NOISE; ++i) {
+        noise[i] = (float)(int16_t)raw[i];
+    }
+    return raw[MBE_VOICED_FRAME - 1];
+}
+
 /* The generator state a stream's noiseSeed holds. A negative value is a fresh
  * stream, which starts from 0 as every DVSI stream does (the thread seed of
  * mbe_setThreadRngSeed() is not used: DVSI's generator has none); anything
@@ -470,21 +514,14 @@ unvoiced_subframe(mbe_fft_plan* plan, const float* noise, const struct mbe_unvoi
 void
 mbe_synthesizeUnvoicedSubframes(float* output, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
                                 const struct mbe_unvoiced_subframe* mid, const struct mbe_unvoiced_subframe* own) {
-    float noise[MBE_VOICED_FRAME + MBE_SUBFRAME];
+    float noise[DVSI_FRAME_NOISE];
     float subframe[MBE_SUBFRAME_WINDOW];
 
     if (output == NULL || cur_mp == NULL || prev_mp == NULL || plan == NULL || mid == NULL || own == NULL) {
         return;
     }
     /* Output sample n of the frame is the state n + 1 steps on. */
-    uint32_t state = dvsi_noise_state(&cur_mp->noiseSeed);
-    for (int i = 0; i < MBE_VOICED_FRAME + MBE_SUBFRAME; ++i) {
-        state = mbe_dvsi_noise_next(state);
-        noise[i] = (float)(int16_t)(uint16_t)state;
-        if (i == MBE_VOICED_FRAME - 1) {
-            cur_mp->noiseSeed = (float)state;
-        }
-    }
+    cur_mp->noiseSeed = (float)mbe_dvsi_noise_frame(dvsi_noise_state(&cur_mp->noiseSeed), noise);
     /* The last frame's own subframe plays out over the first half (read
      * before cur_mp's is written: a caller may pass one set as both), unless
      * the other rendering wrote that state: its overlap is not a subframe. */

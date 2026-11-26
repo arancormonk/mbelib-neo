@@ -258,6 +258,22 @@ uint32_t mbe_dvsi_noise_next(uint32_t state);
 uint32_t mbe_dvsi_noise_skip(uint32_t state, int samples);
 
 /**
+ * @brief Draw the samples one frame's unvoiced part takes from DVSI's noise generator.
+ *
+ * Sample n is the state n + 1 steps on from @p state, read as a signed 16-bit
+ * value, exactly as stepping mbe_dvsi_noise_next() gives them. There are
+ * MBE_VOICED_FRAME + MBE_SUBFRAME of them: the frame's own subframe window
+ * reaches one subframe past the frame's end, and the next frame draws those
+ * samples again.
+ *
+ * @param state Generator state before the frame; only its low 16 bits count.
+ * @param noise Receives MBE_VOICED_FRAME + MBE_SUBFRAME samples. May be NULL:
+ *              nothing is drawn and the state still moves a frame on.
+ * @return The state MBE_VOICED_FRAME samples on: the next frame's.
+ */
+uint32_t mbe_dvsi_noise_frame(uint32_t state, float* noise);
+
+/**
  * @brief Move a stream's DVSI noise state one frame on without drawing from it.
  *
  * For a frame that plays no synthesized speech but is not a tone frame (a
