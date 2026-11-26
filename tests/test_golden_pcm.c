@@ -67,13 +67,13 @@ golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x954F53C2u;
-        e.ambe2450_s16 = 0x5F42CDC1u;
+        e.ambe2450_f32 = 0x373A5264u;
+        e.ambe2450_s16 = 0xC7B9EB05u;
         e.ambe2400_f32 = 0xC89A3643u;
         e.ambe2400_s16 = 0xD93C5851u;
     } else {
-        e.ambe2450_f32 = 0x9FD99D39u;
-        e.ambe2450_s16 = 0x4F5F873Eu;
+        e.ambe2450_f32 = 0x82E505D2u;
+        e.ambe2450_s16 = 0x01A15166u;
         e.ambe2400_f32 = 0x25F7B472u;
         e.ambe2400_s16 = 0x71A03C76u;
     }

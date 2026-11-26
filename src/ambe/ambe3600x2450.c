@@ -987,8 +987,8 @@ ambe2450_synthesize_decoded(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_
                             enum mbe_output_limit output) {
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_AMBE2450);
     mbe_synthesizeSpeechWithPreEnhRm0Startf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, MBE_MUTE_NOISE_SPEC,
-                                            MBE_VOICED_SYNTHESIS_DVSI, MBE_AMPLITUDE_LIMIT_NONE, ambe2450_start(afresh),
-                                            output);
+                                            MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_AMPLITUDE_LIMIT_NONE,
+                                            ambe2450_start(afresh), output);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
 }
 
@@ -1015,8 +1015,8 @@ ambe2450_fade_out_last(float* aout_buf, const mbe_parms* cur_mp, const mbe_parms
     memset(faded->Ml, 0, sizeof(faded->Ml));
     mbe_set_frame_mark(faded, MBE_FRAME_MARK_NONE);
     faded->repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechStartf(aout_buf, faded, &last, MBE_VOICED_SYNTHESIS_DVSI, MBE_SYNTHESIS_CONTINUES,
-                                       MBE_OUTPUT_UNLIMITED);
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, faded, &last, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+                                       MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
 }
 
 /*
@@ -1099,7 +1099,7 @@ ambe2450_repeat(float* aout_buf, const struct ambe2450_snapshot* in, mbe_parms* 
     /* Step 2 repeats the previous frame's model, enhanced amplitudes included
      * (eqs 59-64), so synthesis continues its WOLA and phase state. */
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
-    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI,
+    mbe_synthesizeRepeatedSpeechStartf(aout_buf, cur_mp, prev_mp_enhanced, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
                                        ambe2450_start(in->afresh), MBE_OUTPUT_LIMITED);
     mbe_moveMbeParms(cur_mp, prev_mp_enhanced);
     return 0;
@@ -1216,8 +1216,8 @@ ambe2450_speech_under_tone(float* speech, const mbe_parms* cur_mp, const mbe_par
     mbe_parms last = *prev_mp_enhanced;
     mbe_repeat_load_model(&repeated, &last);
     repeated.repeatCount = 0;
-    mbe_synthesizeRepeatedSpeechStartf(speech, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI, MBE_SYNTHESIS_CONTINUES,
-                                       MBE_OUTPUT_UNLIMITED);
+    mbe_synthesizeRepeatedSpeechStartf(speech, &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+                                       MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
 }
 
 /**

@@ -1447,8 +1447,8 @@ enum mbe_speech_smoothing {
 static void
 mbe_render_muted_frame(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_mute_noise mute_noise,
                        enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start) {
-    if (voiced == MBE_VOICED_SYNTHESIS_DVSI) {
-        mbe_advance_subframes(cur_mp, prev_mp, start == MBE_SYNTHESIS_FROM_SILENCE);
+    if (voiced != MBE_VOICED_SYNTHESIS_SPEC) {
+        mbe_advance_subframes(cur_mp, prev_mp, start == MBE_SYNTHESIS_FROM_SILENCE, voiced);
     }
     if (mute_noise == MBE_MUTE_NOISE_SPEC) {
         mbe_synthesizeUniformNoisef(aout_buf, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
@@ -1539,10 +1539,10 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
     }
 
     memset(aout_buf, 0, N * sizeof(float));
-    if (options->voiced == MBE_VOICED_SYNTHESIS_DVSI) {
-        /* The codec paths render the frame in DVSI's subframes. */
+    if (options->voiced != MBE_VOICED_SYNTHESIS_SPEC) {
+        /* The codec paths render the frame in DVSI's subframes, each its codec's way. */
         mbe_synthesize_subframes(aout_buf, cur_mp, prev_mp, mbe_get_fft_plan(), MBE_RENDER_VOICED_GAIN_DVSI,
-                                 options->start == MBE_SYNTHESIS_FROM_SILENCE);
+                                 options->start == MBE_SYNTHESIS_FROM_SILENCE, options->voiced);
     } else {
         mbe_render_spec_frame(aout_buf, cur_mp, prev_mp, N);
     }

@@ -137,15 +137,22 @@ enum mbe_voiced_synthesis {
      * the unvoiced part is one transform per frame (eq 117-126). The public
      * mbe_synthesizeSpeechf() renders this way. */
     MBE_VOICED_SYNTHESIS_SPEC,
-    /** Every codec path, as DVSI's AMBE-3000 decoders: two 10 ms subframes
+    /** The codec paths, as DVSI's AMBE-3000 decoders: two 10 ms subframes
      * per frame, the voiced part a train of pitch pulses and the unvoiced
      * part DVSI's noise (mbe_subframe.h; docs/dvsi-parity.md, "Synthesis in
-     * subframes"). */
+     * subframes"). D-STAR, P25 and ProVoice. */
     MBE_VOICED_SYNTHESIS_DVSI,
+    /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's rate-33 (AMBE 3600x2450) decoder
+     * renders it, whose mid-frame pitch between two voiced frames of
+     * different pitch lies a little below their geometric mean
+     * (mbe_subframe_mid_model(); docs/dvsi-parity.md, "Rate 33: mid-frame
+     * pitch"). Every rate-33 synthesis call. */
+    MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
 };
 
 /** How a frame's rendering starts; chosen per call, it has a meaning for
- * MBE_VOICED_SYNTHESIS_DVSI only. */
+ * the subframe renderings (MBE_VOICED_SYNTHESIS_DVSI and
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) only. */
 enum mbe_synthesis_start {
     /** From the previous frame as it was synthesized: its model, the pulse
      * train it carries and its unvoiced overlap. */
@@ -269,7 +276,7 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
 /**
  * @brief mbe_synthesizeSpeechWithPreEnhRm0f() with the way its rendering starts
  *        and whether its output is limited.
- * @param start  How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only;
+ * @param start  How the frame's rendering starts (the subframe renderings only;
  *               a frame the core mutes moves its state on the same way).
  * @param output Whether the rendered frame is limited (a frame the core mutes
  *               is noise either way). The state the call leaves is the same.
@@ -296,7 +303,7 @@ void mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
 /**
  * @brief mbe_synthesizeRepeatedSpeechf() with the way its rendering starts and
  *        whether its output is limited.
- * @param start  How the frame's rendering starts (MBE_VOICED_SYNTHESIS_DVSI only).
+ * @param start  How the frame's rendering starts (the subframe renderings only).
  * @param output Whether the rendered frame is limited.
  */
 void mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
@@ -369,7 +376,7 @@ void mbe_renderToneDstarFromf(float* aout_buf, mbe_parms* mp, int index, int fro
  * 0.32-0.40 dB quieter than this synthesis otherwise does, in all three modes.
  */
 #define MBE_RENDER_VOICED_GAIN        1.03514217f /* +0.3 dB */
-/* The voiced gain on the codec paths (MBE_VOICED_SYNTHESIS_DVSI), whose pitch
+/* The voiced gain on the codec paths (the subframe renderings), whose pitch
  * pulses in 10 ms subframes (mbe_subframe.h) carry a little less energy
  * between two levels than the rendering before them: at +0.55 dB DVSI's
  * decoders play fully voiced frames within 0.02 dB of ours on identical bits

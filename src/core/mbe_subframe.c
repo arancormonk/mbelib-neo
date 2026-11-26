@@ -219,12 +219,28 @@ model_has_voiced_band(const mbe_parms* mp) {
     return 0;
 }
 
+/* Whether two pitches are the same, read from their bit patterns. */
+static int
+same_pitch(const float* a, const float* b) {
+    uint32_t a_bits, b_bits;
+    memcpy(&a_bits, a, sizeof(a_bits));
+    memcpy(&b_bits, b, sizeof(b_bits));
+    return a_bits == b_bits;
+}
+
 /* The mid-frame pitch: between the two frames' when both are pitched speech
  * or neither is, the voiced frame's when only one has a voiced band, unless
  * the unvoiced frame before a voiced one is marked as carrying its pitch
- * (MBE_FRAME_MARK_PITCH_CARRIES). */
+ * (MBE_FRAME_MARK_PITCH_CARRIES).
+ * Between two voiced frames of different pitch, DVSI's rate-33 decoder plays
+ * the geometric mean times MBE_AMBE2450_MID_PITCH_FACTOR (docs/dvsi-parity.md,
+ * "Rate 33: mid-frame pitch"). A measured offset: DVSI's rate-33 pulse train
+ * falls behind ours by 0.013 samples a frame for every mid-frame pitch taken
+ * between two different pitch codes, and by nothing between equal ones,
+ * whatever the step's size and direction (about 16,000 frame pairs); how the
+ * decoder comes to it is not known. D-STAR and P25 show nothing of the kind. */
 static float
-mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
+mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
     const int prev_voiced = model_has_voiced_band(prev_mp);
     const int cur_voiced = model_has_voiced_band(cur_mp);
     if (prev_voiced && !cur_voiced) {
@@ -233,7 +249,12 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
     if (cur_voiced && !prev_voiced && mbe_frame_mark(prev_mp) != MBE_FRAME_MARK_PITCH_CARRIES) {
         return cur_mp->w0;
     }
-    return sqrtf(prev_mp->w0 * cur_mp->w0);
+    const float mean = sqrtf(prev_mp->w0 * cur_mp->w0);
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced
+        && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
+        return mean * MBE_AMBE2450_MID_PITCH_FACTOR;
+    }
+    return mean;
 }
 
 /* Whether the mid-frame model keeps the previous frame's voicing instead of
@@ -255,8 +276,12 @@ voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
  * count being set: each band's state from the frame whose voicing holds at
  * mid-frame, and the two frames' magnitudes at the band's frequency, met in
  * the log domain. Its phases come from the mean of the two frames' decoded
- * log2 amplitudes (phase_log2_amplitudes(), the unvoiced factor left in),
- * each read at the band's frequency as the magnitudes are. */
+ * log2 amplitudes (phase_log2_amplitudes()), each read at the band's
+ * frequency as the magnitudes are and used as the decoder stored it: where
+ * common_log2_magnitudes() takes the unvoiced factor out of an unvoiced band's
+ * Ml, nothing is taken out of or put into its log2Ml, which carries no such
+ * factor (for the AMBE codecs an unvoiced band's Ml is
+ * MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) times 2^log2Ml). */
 static void
 fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, struct mbe_subframe_model* model) {
     const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
@@ -291,7 +316,7 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset
 
 void
 mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset,
-                       struct mbe_subframe_model* model) {
+                       enum mbe_voiced_synthesis rendering, struct mbe_subframe_model* model) {
     memset(model, 0, sizeof(*model));
     if (!mbe_harmonic_count_is_valid(prev_mp->L) || !mbe_harmonic_count_is_valid(cur_mp->L)) {
         return;
@@ -310,7 +335,7 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     if (!positive_normal(&prev_mp->w0) || !positive_normal(&cur_mp->w0)) {
         return;
     }
-    const float w0 = mid_pitch(prev_mp, cur_mp);
+    const float w0 = mid_pitch(prev_mp, cur_mp, rendering);
     if (!positive_normal(&w0)) {
         return;
     }
@@ -618,13 +643,13 @@ silence_model(struct mbe_subframe_model* model) {
  * plays no speech from before them. Returns 0 when a harmonic count is not
  * 1..56. */
 static int
-prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence, struct mbe_subframe_model models[3],
-              struct pulse_train* train) {
+prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence, enum mbe_voiced_synthesis rendering,
+              struct mbe_subframe_model models[3], struct pulse_train* train) {
     if (!mbe_harmonic_count_is_valid(cur_mp->L) || !mbe_harmonic_count_is_valid(prev_mp->L)) {
         return 0;
     }
     mbe_subframe_own_model(prev_mp, &models[0]);
-    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp), &models[1]);
+    mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp), rendering, &models[1]);
     mbe_subframe_own_model(cur_mp, &models[2]);
     if (from_silence) {
         silence_model(&models[0]);
@@ -641,13 +666,13 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
 
 void
 mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
-                         float voiced_gain, int from_silence) {
+                         float voiced_gain, int from_silence, enum mbe_voiced_synthesis rendering) {
     struct mbe_subframe_model models[3]; /* the last frame's own, mid-frame, this frame's own */
     struct rendered_model renders[3];
     struct mbe_unvoiced_subframe noise[2];
     struct pulse_train train;
 
-    if (!prepare_frame(cur_mp, prev_mp, from_silence, models, &train)) {
+    if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
         return;
     }
     for (int i = 0; i < 3; i++) {
@@ -671,11 +696,12 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
 }
 
 void
-mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence) {
+mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence,
+                      enum mbe_voiced_synthesis rendering) {
     struct mbe_subframe_model models[3];
     struct pulse_train train;
 
-    if (!prepare_frame(cur_mp, prev_mp, from_silence, models, &train)) {
+    if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
         return;
     }
     advance_interval(&train, 0.0f, &models[0], &models[1]);
