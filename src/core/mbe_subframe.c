@@ -330,6 +330,15 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
         mbe_subframe_own_model(prev_mp, model);
         return;
     }
+    if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
+        /* A P25 tone frame's own model stands at mid-frame: DVSI's decoder
+         * brings a tone's amplitude from the last frame's to its own over the
+         * first subframe and holds it over the second (a first tone frame is at
+         * full level from sample 80; the frame after the last holds the tone
+         * fading out over its first 80 samples). */
+        mbe_subframe_own_model(cur_mp, model);
+        return;
+    }
     const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
     const int longer = (prev_mp->L < cur_mp->L) ? cur_mp->L : prev_mp->L;
     model->L = shorter;
@@ -433,15 +442,52 @@ interval_pulses(struct pulse_train* train, float start, double from, double to) 
     train->phase = reached - floor(reached);
 }
 
+/* Where a step between two voiced models counts as about an octave: the new
+ * pitch period within 20% of twice the old one, or of half of it. */
+#define OCTAVE_DOWN_LOW  1.6
+#define OCTAVE_DOWN_HIGH 2.4
+#define OCTAVE_UP_LOW    0.4
+#define OCTAVE_UP_HIGH   0.6
+
+/* About an octave apart the pulse train does not glide: DVSI's decoders first
+ * take the old train an octave down (its phase and rate halved) when the new
+ * period is 1.6 to 2.4 times the old, or up (its phase doubled, modulo a
+ * cycle, and its rate doubled) at 0.4 to 0.6 times, and then cross linearly to
+ * the new pitch as at any step. Measured on the tone-to-tone changes of DVSI's
+ * rate-33 and D-STAR tone vectors (129 of 134 classified, each within 0.0012
+ * cycle of its prediction; 5 cannot be told) and on the speech frames with
+ * such steps. The inner edges are bracketed, not measured: 1.534 glides and
+ * 1.618 halves; 0.611 glides and 0.584 doubles. Nothing brackets the outer
+ * ones: 2.475 glides, but no step was observed between the largest halved
+ * (1.72) and it, and the smallest observed to double is 0.528; 0.4 and 2.4 are
+ * this library's choice, by symmetry. The train keeps its pulses' launch
+ * times, not their models: a pulse launched before the step is rendered
+ * through both end models of each later interval it reaches, as before; only
+ * the phase and the rate the interval starts from change. */
+static void
+octave_step(struct pulse_train* train, double* from, double to) {
+    const double ratio = *from / to; /* the new period over the old */
+    if (ratio > OCTAVE_DOWN_LOW && ratio < OCTAVE_DOWN_HIGH) {
+        train->phase *= 0.5;
+        *from *= 0.5;
+    } else if (ratio > OCTAVE_UP_LOW && ratio < OCTAVE_UP_HIGH) {
+        const double doubled = 2.0 * train->phase;
+        train->phase = doubled - floor(doubled);
+        *from *= 2.0;
+    }
+}
+
 /* One interval of the train, from model `a` to model `b`: through voiced
- * speech the pulses follow the pitch from one to the other; into or out of it
- * they keep the voiced model's; with neither voiced the train starts afresh. */
+ * speech the pulses follow the pitch from one to the other (after an octave
+ * step, octave_step()); into or out of it they keep the voiced model's; with
+ * neither voiced the train starts afresh. */
 static void
 advance_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
                  const struct mbe_subframe_model* b) {
-    const double from = (double)a->w0 / (2.0 * M_PI);
+    double from = (double)a->w0 / (2.0 * M_PI);
     const double to = (double)b->w0 / (2.0 * M_PI);
     if (a->any_voiced && b->any_voiced) {
+        octave_step(train, &from, to);
         interval_pulses(train, start, from, to);
     } else if (a->any_voiced) {
         interval_pulses(train, start, from, from);
@@ -465,7 +511,10 @@ store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const
      * state) must not leave phases a float cannot hold. */
     const double advance = (2.0 * M_PI * train->phase) - ((double)PEAK * (double)own->w0);
     const float linear = (fabs(advance) < 1.0e6) ? (float)advance : 0.0f;
-    const float phase = (float)train->phase;
+    /* Rounded to float before it is compared with 1: under x87 excess
+     * precision the comparison could otherwise see the unrounded value, just
+     * under 1, and store 1.0f (mbe_round_to_float(), mbe_math.h). */
+    const float phase = mbe_round_to_float((float)train->phase);
     int kept = 0;
 
     for (int l = 1; l <= 56; l++) {
@@ -479,7 +528,8 @@ store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const
         }
     }
     cur_mp->noiseOverlap[0] = (float)kept;
-    /* A phase that rounds up to a whole cycle is the start of the next one. */
+    /* A phase that rounds up to a whole cycle is the start of the next one:
+     * the stored phase lies in [0, 1). */
     cur_mp->noiseOverlap[PHASE_SLOT] = (phase < 1.0f) ? phase : 0.0f;
     mbe_subframe_state_mark(cur_mp);
 }

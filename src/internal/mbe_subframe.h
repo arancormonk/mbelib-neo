@@ -20,7 +20,8 @@
  *    and falls over MBE_PULSE_PEAK more, so a response lasts a period and
  *    MBE_PULSE_PEAK samples and the responses of a steady train add up to
  *    the harmonics; the pulse rate moves linearly from one model's pitch to
- *    the next's across an interval;
+ *    the next's across an interval, after taking the train an octave down or
+ *    up first where the new period is within 20% of twice or of half the old;
  *  - the unvoiced part is mbe_synthesizeUnvoicedSubframes().
  */
 
@@ -112,8 +113,12 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * (a rate-33 silence frame) instead gets the previous frame's own model
  * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
  * decoder plays it through the silence frame's first 10 ms and crossfades to
- * the silence model over the second. Harmonic counts outside 1..56 give a
- * model with no band.
+ * the silence model over the second. A current frame marked
+ * MBE_FRAME_MARK_TONE (a P25 tone sent as voice frames, played as its tone
+ * model) gets its own model (mbe_subframe_own_model()): DVSI's decoder brings
+ * the tone's amplitude from the last frame's to its own over the first 10 ms
+ * and holds it over the second. Harmonic counts outside 1..56 give a model
+ * with no band.
  *
  * @param prev_mp    Previous frame parameters.
  * @param cur_mp     Current frame parameters.

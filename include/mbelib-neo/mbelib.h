@@ -196,8 +196,8 @@ typedef struct mbe_soft_bit {
  * data API, as for the C0/C4 context, and it decodes them as the ProVoice
  * frame APIs do: a decoded frame keeps TIA-102.BABA eq 46's nominal pitch
  * (P25's is a fit to the pitch DVSI's P25 decoder plays on speech,
- * mbe_decodeImbe4400Parms()), and a muted frame gets library comfort noise
- * instead of the TIA-102.BABA 7.8 level.
+ * mbe_decodeImbe4400Parms()) and plays no P25 tone model, and a muted frame
+ * gets library comfort noise instead of the TIA-102.BABA 7.8 level.
  */
 #define MBE_PROCESS_FLAG_PROVOICE         0x0200u
 /**
@@ -872,11 +872,22 @@ MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
  * validation vectors' codes): TIA-102.BABA eq 46's 4 pi / (b0 + 39.5),
  * computed in float as this decoder always has (and L and K, TIA-102.BABA's,
  * from it), times 1 + g, g between -7.06e-4 and +3.38e-4 by b0, the product
- * formed in double and rounded to float once. (DVSI's decoder plays a tone
- * its encoder sent as voice frames at eq 46's harmonic frequencies, which
- * this library does not model.) The ProVoice (7100x4400) process paths, and
- * the IMBE 4400 data API given `MBE_PROCESS_FLAG_PROVOICE`, keep the nominal
- * pitch.
+ * formed in double and rounded to float once. The ProVoice (7100x4400)
+ * process paths, and the IMBE 4400 data API given `MBE_PROCESS_FLAG_PROVOICE`,
+ * keep the nominal pitch.
+ *
+ * A P25 tone sent as voice frames (a frame whose pitch code and voicing word
+ * are those DVSI's encoder sends for a DTMF, KNOX or single tone, and whose
+ * tone harmonics dominate the other decoded magnitudes) leaves the decoded
+ * model in `cur_mp` as for any frame, and marks it in the otherwise unused
+ * `cur_mp->Vl[0]`: a flag (bit 24) with b0 in bits 16-23 and the tone's
+ * harmonic numbers in bits 8-15 and 0-7. `cur_mp->Vl[0]` is 0 after every
+ * other frame it decodes, a special or invalid one (return 1) included. A
+ * status error (`MBE_STATUS_INVALID_ARGUMENT`, `MBE_STATUS_INVALID_BITS`) is
+ * not a frame: it writes nothing, so `cur_mp` holds whatever it held. The tone
+ * word of `prev_mp` is not written (the prediction writes its taps in
+ * `prev_mp`, as before). The IMBE process functions read the word to play the
+ * tone model.
  */
 MBE_API int mbe_decodeImbe4400Parms(const char* imbe_d, mbe_parms* cur_mp, mbe_parms* prev_mp);
 /** @brief Demodulate IMBE 7200x4400 interleaved data. */
@@ -913,6 +924,22 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  * from a 7100x4400 decode; a repeated frame plays the repeated model's pitch.
  * A muted frame outputs the TIA-102.BABA 7.8 noise (P25), or library comfort
  * noise when `result` carries `MBE_PROCESS_FLAG_PROVOICE`.
+ *
+ * A P25 frame that mbe_decodeImbe4400Parms() marks as a tone sent as voice
+ * frames (`Vl[0]`) plays as DVSI's decoder plays it: the tone's harmonics at
+ * one level, at eq 46's fundamental cut to a grid of 2^-19 cycle per sample,
+ * every other harmonic unvoiced at 0, and the frame's own model at mid-frame.
+ * `prev_mp` keeps the decoded frame (`Vl[0]` included) as the prediction
+ * history, so a repeat plays the tone again; `cur_mp` and `prev_mp_enhanced`
+ * are left holding the tone model synthesized. A word in caller state counts
+ * only if the decoder's own tone test, run again on the model it sits in,
+ * gives exactly that word (the model at the pitch, L and K its pitch code
+ * decodes to, and the test on its voicing and decoded magnitudes); any other
+ * plays as no tone. No result flag is set for it, and ProVoice frames never
+ * play it (their states keep 0 in `Vl[0]`): a state moved between the P25 and
+ * the ProVoice entry points in mid-stream is outside the stream contract, and
+ * a P25 repeat after a ProVoice frame plays the repeated model as speech. The
+ * 7200x4400 frame process functions behave the same way.
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -1153,6 +1180,19 @@ MBE_API void mbe_initMbeParms(mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* 
 MBE_API void mbe_spectralAmpEnhance(mbe_parms* cur_mp);
 /**
  * @brief Synthesize tone frame (AMBE tone indices) into float PCM.
+ *
+ * Plays the frequencies DVSI's decoders play for the tone ID, not Table 9's
+ * nominal ones (since 2.6.13): a dual tone at harmonics l1 and l2 of
+ * TIA-102.BABA-1 Annex J's fundamental on DVSI's grid of 2^-19 cycle per sample
+ * (DTMF "1" at 693.909 + 1214.340 Hz, where Table 9's nominal 697 + 1209 Hz is
+ * what releases before 2.6.13 played), with two exceptions, IDs 145 and 147,
+ * whose fundamentals are DVSI's own; a single tone by its own rule, harmonic
+ * ID / 16 + 1 of a fundamental under 500 Hz. It continues the oscillator phases
+ * `cur_mp` carries: this call has no frame history, so it never starts a tone
+ * afresh. The frame process functions start every tone that follows a frame
+ * that is not a tone frame afresh, as a new pulse train; DVSI's decoders start
+ * one so only after a frame with no voiced band and continue a voiced frame's
+ * pulse train into the tone.
  * @param aout_buf Output buffer of 160 float samples.
  * @param ambe_d   AMBE parameter bits (49).
  * @param cur_mp   Current parameter set (tone synthesis state). NULL or invalid tone inputs synthesize silence.
@@ -1160,6 +1200,10 @@ MBE_API void mbe_spectralAmpEnhance(mbe_parms* cur_mp);
 MBE_API void mbe_synthesizeTonef(float* aout_buf, const char* ambe_d, mbe_parms* cur_mp);
 /**
  * @brief Synthesize tone for D-STAR style indices into float PCM.
+ *
+ * Plays the frequencies DVSI's decoders play for the AMBE+2 tone of the same
+ * nominal pair (mbe_synthesizeTonef()), not the nominal ones (since 2.6.13),
+ * continuing the oscillator phases `cur_mp` carries.
  * @param aout_buf Output buffer of 160 float samples.
  * @param ambe_d   AMBE parameter bits (49); the tone volume is read from them.
  * @param cur_mp   Current parameter set. NULL, invalid bits or an unknown index synthesize silence.

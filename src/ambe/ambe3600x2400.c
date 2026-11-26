@@ -1030,16 +1030,21 @@ ambe2400_last_frame_muted(const mbe_parms* prev_mp) {
     return (prev_mp->Vl[0] & MBE_AMBE2400_FRAME_MUTED) != 0;
 }
 
-/* The tone the last frame left sounding, or 0. */
+/* The tone the last frame left sounding, or 0. The only reader of the held
+ * tone (a tone's first frame, a volume ramp, a tail, lost frames after a tone):
+ * it counts only with an index D-STAR plays, the test a tone frame's index
+ * passes (ambe2400_special_frame()). A decoder leaves no other; any other a
+ * caller's state holds is no held tone. */
 static int
 ambe2400_held_tone(const mbe_parms* prev_mp, int* index, int* volume) {
     const int held = prev_mp->Vl[0];
+    float freq1, freq2;
     if ((held & MBE_AMBE2400_TONE_HELD) == 0) {
         return 0;
     }
     *index = held & 0xFF;
     *volume = (held >> 8) & 0xFF;
-    return 1;
+    return mbe_tone_lookup_dstar_freqs(*index, &freq1, &freq2);
 }
 
 /* Crossfade from `outgoing` to the frame in aout_buf over the first
@@ -1101,6 +1106,14 @@ ambe2400_play_tone(float* aout_buf, mbe_process_result* result, int index, int v
 
     if (entering && ambe2400_last_frame_audible(prev_mp)) {
         ambe2400_speech_under_tone(speech, amp, cur_mp, prev_mp, prev_mp_enhanced);
+    }
+    /* A tone after a frame that was not one starts as a fresh pulse train
+     * (mbe_startToneDstar()), as DVSI's decoder starts one after a frame with no
+     * voiced band; after a voiced frame DVSI's decoder continues that frame's
+     * train into the tone, which is not modelled. A tone after a tone goes on
+     * from the phases it left. */
+    if (entering) {
+        mbe_startToneDstar(cur_mp, index);
     }
     /* A tone that goes on at another volume moves to it over the first
      * MBE_AMBE2400_TONE_FADE samples, before the output clips, as on DVSI's

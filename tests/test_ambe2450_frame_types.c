@@ -535,28 +535,30 @@ tone_ad_of(const char tone[49]) {
 /*
  * A tone as the decoder's oscillators play it, before any limit, computed
  * here in double: each component's 32-bit phase accumulator, starting from
- * the phases `phases` holds (swn, tonePhase), moves by round(f / 8000 * 2^32)
- * a sample, and plays the sine of its phase a quarter turn back at the level
+ * the phases `phases` holds (swn, tonePhase), moves by m 2^13 a sample for a
+ * component of m 2^-19 cycle per sample (the frequency DVSI's decoders play,
+ * mbe_tone_played_steps(), which test_tone_played_steps() checks against
+ * values of its own), and plays the sine of its phase a quarter turn back at the level
  * law's amplitude sqrt(2) * 32768 * 10^(dB / 20) / 7, dB = -2.523 +
- * (3.17 + 87.13) / 127 * (AD - 127) (docs/dvsi-parity.md). Frequencies are the
- * tone table's. A build without tones renders none. `envelope` receives the
+ * (3.17 + 87.13) / 127 * (AD - 127) (docs/dvsi-parity.md). A build without
+ * tones renders none. `envelope` receives the
  * sum of the components' amplitudes.
  */
 static void
 tone_oscillator(double out[160], const mbe_parms* phases, int id, int ad, double* envelope) {
-    float f1 = 0.0f, f2 = 0.0f;
+    unsigned m1 = 0u, m2 = 0u;
     uint32_t p1, p2 = phases->tonePhase;
     memcpy(&p1, &phases->swn, sizeof(p1));
     memset(out, 0, 160 * sizeof(double));
     *envelope = 0.0;
-    if (!tones_sound() || !mbe_tone_lookup_freqs(id, &f1, &f2)) {
+    if (!tones_sound() || !mbe_tone_played_steps(id, &m1, &m2)) {
         return;
     }
     const double db = -2.523 + (((3.17 + 87.13) / 127.0) * (double)(ad - 127));
     const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
-    const int dual = (f2 > 0.0f) && (fabs((double)f2 - (double)f1) > 1.0e-6);
-    const uint32_t s1 = (uint32_t)floor((((double)f1 / 8000.0) * 4294967296.0) + 0.5);
-    const uint32_t s2 = dual ? (uint32_t)floor((((double)f2 / 8000.0) * 4294967296.0) + 0.5) : 0u;
+    const int dual = m1 != m2;
+    const uint32_t s1 = (uint32_t)(m1 << 13);
+    const uint32_t s2 = dual ? (uint32_t)(m2 << 13) : 0u;
     *envelope = dual ? 2.0 * amplitude : amplitude;
     for (int n = 0; n < 160; ++n) {
         p1 += s1;
@@ -858,6 +860,10 @@ test_valid_tone_keeps_state(void) {
     mbe_parms tone_state = s.cur;
     mbe_parms unlimited_state = s.cur;
     float expected[160], unlimited[160], speech[160], want[160];
+    /* After a voice frame the tone starts afresh, from the phases
+     * mbe_startToneAmbe2450() gives it (test_tone_start_phase()). */
+    mbe_startToneAmbe2450(&tone_state, 7);
+    mbe_startToneAmbe2450(&unlimited_state, 7);
     mbe_synthesizeTonef(expected, tone, &tone_state);
     mbe_renderToneAmbe2450f(unlimited, &unlimited_state, 7, 127, MBE_OUTPUT_UNLIMITED);
     /* What a lost frame would repeat: the last frame, which fades out under
@@ -2335,6 +2341,7 @@ test_limit_tone_over_speech(void) {
     stream_overloaded(&s);
     const struct stream before = s;
     mbe_parms phases = before.cur;
+    mbe_startToneAmbe2450(&phases, 7);
     mbe_synthesizeTonef(tone_out, tone, &phases);
     repeat_reference_out(speech, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
     repeat_reference_out(limited, &before, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED);
@@ -2538,6 +2545,8 @@ test_loud_tone_first_frame(void) {
         }
         assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == after_mute);
         mbe_parms u = s.cur, l = s.cur;
+        mbe_startToneAmbe2450(&u, ids[k >> 1]);
+        mbe_startToneAmbe2450(&l, ids[k >> 1]);
         mbe_renderToneAmbe2450f(unlimited, &u, ids[k >> 1], 127, MBE_OUTPUT_UNLIMITED);
         mbe_synthesizeTonef(limited, tone, &l);
         if (after_mute) {
@@ -2561,6 +2570,155 @@ test_loud_tone_first_frame(void) {
         mbe_synthesizeTonef(limited, tone, &l);
         stream_frame(&s, tone, 0, 0);
         assert(matches_reference(s.out, limited, 160));
+    }
+}
+
+/*
+ * The frequencies a tone frame plays, in 2^-19 cycle per sample: harmonics l1
+ * and l2 of a dual tone's fundamental n on that grid as DVSI's decoders play
+ * it, TIA-102.BABA-1 Annex J's except for KNOX 145 and 147, whose n are DVSI's
+ * own, 150.80 and 86.47 Hz (n, l1, l2 written out here: DTMF 128 and 129, KNOX
+ * 145 and 147, call progress 161 and 163),
+ * and for a single tone harmonic ID / 16 + 1 of floor(2048 ID / l) (5, 16, 30,
+ * 46, 57, 122). Table 9's nominal frequencies stay what the encoders and the
+ * detector look for.
+ */
+static void
+test_tone_played_steps(void) {
+    static const struct {
+        int id;
+        unsigned upper, lower;
+    } played[] = {
+        {5, 10240u, 10240u},     /* l 1: 156.25 Hz */
+        {16, 32768u, 32768u},    /* l 2 of 16384: 500 Hz */
+        {30, 61440u, 61440u},    /* l 2 of 30720: 937.5 Hz */
+        {46, 94206u, 94206u},    /* l 3 of 31402: 1437.469 Hz, not 1437.5 */
+        {57, 116736u, 116736u},  /* l 4 of 29184: 1781.25 Hz */
+        {122, 249856u, 249856u}, /* l 8 of 31232: 3812.5 Hz */
+        {128, 17u * 5145u, 12u * 5145u},
+        {129, 7u * 11369u, 4u * 11369u}, /* 1214.340 + 693.909 Hz */
+        {145, 7u * 9883u, 4u * 9883u},
+        {147, 15u * 5667u, 7u * 5667u},
+        {161, 7u * 4642u, 6u * 4642u}, /* 495.819 + 424.988 Hz */
+        {163, 7u * 4588u, 5u * 4588u},
+    };
+
+    for (size_t i = 0; i < sizeof(played) / sizeof(played[0]); ++i) {
+        unsigned upper = 0u, lower = 0u;
+        const int has = mbe_tone_played_steps(played[i].id, &upper, &lower);
+        assert(has && upper == played[i].upper && lower == played[i].lower);
+    }
+    unsigned upper = 1u, lower = 1u;
+    for (int id = 0; id < 256; ++id) {
+        float f1, f2;
+        const int has = mbe_tone_played_steps(id, &upper, &lower);
+        const int nominal = mbe_tone_lookup_freqs(id, &f1, &f2);
+        assert(has == nominal);
+        /* Within 0.1 Hz of the nominal single tones, and 20 Hz of the dual ones. */
+        if (has) {
+            const double hz_upper = (double)upper * 8000.0 / 524288.0;
+            const double hz_lower = (double)lower * 8000.0 / 524288.0;
+            const double bound = (id <= 122) ? 0.1 : 20.0;
+            assert(fabs(hz_upper - (double)f1) < bound && fabs(hz_lower - (double)f2) < bound);
+        } else {
+            assert(upper == 0u && lower == 0u);
+        }
+    }
+
+    /* The nominal lookup is Table 9's. */
+    static const struct {
+        int id;
+        int has;
+        float f1;
+        float f2;
+    } nominal[] = {
+        {129, 1, 1209.0f, 697.0f}, {161, 1, 480.0f, 440.0f}, {46, 1, 1437.5f, 1437.5f},
+        {5, 1, 156.25f, 156.25f},  {123, 0, 0.0f, 0.0f},     {164, 0, 0.0f, 0.0f},
+    };
+
+    float f1, f2;
+    for (size_t i = 0; i < sizeof(nominal) / sizeof(nominal[0]); ++i) {
+        const int has = mbe_tone_lookup_freqs(nominal[i].id, &f1, &f2);
+        assert(has == nominal[i].has && float_bits_equal(f1, nominal[i].f1) && float_bits_equal(f2, nominal[i].f2));
+    }
+}
+
+/*
+ * The output high-pass's phase at `hz` in double: a second-order Butterworth
+ * at 100 Hz, pi - atan2(sqrt(2) x, 1 - x^2) with x = hz / 100.
+ */
+static double
+high_pass_phase(double hz) {
+    const double x = hz / 100.0;
+    return M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+}
+
+/*
+ * A tone as the library starts every tone that follows a frame that is not a
+ * tone frame, a fresh pulse train (DVSI's decoders start one so only after a
+ * frame with no voiced band, and continue a voiced frame's train into the
+ * tone), in double: each component (m steps of 2^-19 cycle per sample) at sample t
+ * from the first tone frame's start is amplitude cos(2 pi F (t - 16) + p), F =
+ * m / 2^19 and p the high-pass's phase at it; one component for a single tone.
+ */
+static void
+fresh_tone_reference(double out[160], int first_sample, unsigned upper, unsigned lower, double amplitude) {
+    const unsigned steps[2] = {upper, lower};
+    for (int n = 0; n < 160; ++n) {
+        const double t = (double)(first_sample + n);
+        out[n] = 0.0;
+        for (int k = 0; k < ((upper == lower) ? 1 : 2); ++k) {
+            const double f = (double)steps[k] / 524288.0;
+            out[n] += amplitude * cos((2.0 * M_PI * f * (t - 16.0)) + high_pass_phase(f * 8000.0));
+        }
+    }
+}
+
+/*
+ * A tone after a voice frame starts as a fresh pulse train (the library's
+ * start, a known difference from DVSI's decoders, which continue a voiced
+ * frame's train into the tone): the second half of its first frame (past the
+ * crossfade with the speech) is fresh_tone_reference() within 3e-4 of the
+ * amplitude, for a dual tone (DTMF 129) and a single
+ * tone (46); its second frame continues the phases (the same reference from
+ * sample 160), and so does a tone that changes to another (ID 32).
+ */
+static void
+test_tone_start_phase(void) {
+    static const int ids[2] = {129, 46};
+    if (!tones_sound()) {
+        return;
+    }
+    for (int i = 0; i < 2; ++i) {
+        char tone[49], other[49];
+        struct stream s;
+        double want[160];
+        unsigned upper, lower;
+        const int ad = 100;
+        const double db = -2.523 + (((3.17 + 87.13) / 127.0) * (double)(ad - 127));
+        const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
+        pack_tone_ad(tone, ids[i], ad);
+        const int played = mbe_tone_played_steps(ids[i], &upper, &lower);
+        assert(played);
+        stream_settled(&s, k_voice_next);
+        /* Phases a voice frame could not have left the oscillators: they do not count. */
+        s.cur.swn = 0x5A5A5A5A;
+        s.cur.tonePhase = 0xA5A5A5A5u;
+        for (int f = 0; f < 2; ++f) {
+            stream_frame(&s, tone, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_TONE));
+            fresh_tone_reference(want, 160 * f, upper, lower, amplitude);
+            for (int n = (f == 0) ? 80 : 0; n < 160; ++n) {
+                assert(fabs((double)s.out[n] - want[n]) < 3e-4 * amplitude);
+            }
+        }
+        /* Another tone goes on from the phases the last left. */
+        mbe_parms phases = s.cur;
+        float expected[160];
+        pack_tone_ad(other, 32, ad);
+        mbe_synthesizeTonef(expected, other, &phases);
+        stream_frame(&s, other, 0, 0);
+        assert(matches_reference(s.out, expected, 160));
     }
 }
 
@@ -2724,6 +2882,90 @@ test_noise_generator_through_frame_kinds(void) {
     assert(frames == 12);
 }
 
+/* FNV-1a over 32-bit values, each as four bytes from the least significant.
+ * Not every change of a value moves the result (two 32-bit values can hash
+ * alike from one state); every one-unit change of any entry of the tables
+ * pinned with it was checked to move it. */
+static uint32_t
+fnv1a_add(uint32_t hash, uint32_t value) {
+    for (int byte = 0; byte < 4; ++byte) {
+        hash ^= (value >> (8 * byte)) & 0xFFu;
+        hash *= UINT32_C(16777619);
+    }
+    return hash;
+}
+
+/*
+ * The played tone table pinned: an FNV-1a hash of (found, upper, lower) of
+ * mbe_tone_played_steps() for every ID 0..255, then of (found, first, second)
+ * of mbe_tone_dstar_played_steps() for every index 0..255, 0xE538DD77. A
+ * one-unit change of any of the 36 dual-tone rows' fundamental n or harmonics
+ * l1, l2 moves a component (upper = l2 n, lower = l1 n), and every such change
+ * was checked to move the hash; a change of the single-tone rule or of
+ * D-STAR's DTMF mapping moves components too.
+ */
+#define PLAYED_TONE_TABLE_HASH UINT32_C(0xE538DD77)
+
+static void
+test_played_tone_table_pinned(void) {
+    uint32_t hash = UINT32_C(2166136261);
+    for (int id = 0; id < 256; ++id) {
+        unsigned upper, lower;
+        const int found = mbe_tone_played_steps(id, &upper, &lower);
+        hash = fnv1a_add(fnv1a_add(fnv1a_add(hash, (uint32_t)found), upper), lower);
+    }
+    for (int index = 0; index < 256; ++index) {
+        unsigned first, second;
+        const int found = mbe_tone_dstar_played_steps(index, &first, &second);
+        hash = fnv1a_add(fnv1a_add(fnv1a_add(hash, (uint32_t)found), first), second);
+    }
+    printf("played tones: the table pinned (hash 0x%08X)\n", (unsigned)hash);
+    assert(hash == PLAYED_TONE_TABLE_HASH);
+}
+
+/*
+ * A held-tone word counts only with a tone ID rate 33 plays (the ID test the
+ * decoder applies to a tone frame, mbe_tone_id_is_valid()): a word in the
+ * last synthesized frame that says a tone is held but names an ID with no
+ * tone (255, Table 9's zero-amplitude ID; 0; 123; 164; 127), with or without
+ * the start-afresh bit, plays as the same word without the held tone: the
+ * next tone frame a tone after a frame that was not one (the fade over the
+ * repeated speech, the fresh start), the next voice frame without a tone's
+ * tail, an erasure a plain repeat; bit for bit, the frame after them too, and
+ * the states left.
+ */
+static void
+test_invalid_held_tone(void) {
+    static const int ids[] = {255, 0, 123, 164, 127};
+    char tone[49], voice[49], erasure[49];
+    pack_tone(tone, 129);
+    pack_b(voice, k_voice_loud);
+    pack_b(erasure, k_erasure);
+    const char* nexts[] = {tone, voice, erasure};
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i) {
+        for (int afresh = 0; afresh < 2; ++afresh) {
+            for (size_t k = 0; k < sizeof(nexts) / sizeof(nexts[0]); ++k) {
+                struct stream s, plain;
+                stream_settled(&s, k_voice_next);
+                assert(s.prev_enh.Vl[0] == 0);
+                plain = s;
+                s.prev_enh.Vl[0] = W_TONE_HELD | (afresh ? W_AFRESH : 0) | (127 << 8) | ids[i];
+                plain.prev_enh.Vl[0] = afresh ? W_AFRESH : 0;
+                for (int f = 0; f < 2; ++f) {
+                    const char* d = (f == 0) ? nexts[k] : voice;
+                    stream_frame(&s, d, 0, 0);
+                    stream_frame(&plain, d, 0, 0);
+                    assert(s.result.flags == plain.result.flags);
+                    assert(float_array_bits_equal(s.out, plain.out, 160));
+                }
+                assert(parms_equal(&s.cur, &plain.cur) && parms_equal(&s.prev, &plain.prev)
+                       && parms_equal(&s.prev_enh, &plain.prev_enh));
+            }
+        }
+    }
+    puts("held tones: a word counts only with a tone rate 33 plays");
+}
+
 int
 main(void) {
     test_repeat_preserves_model();
@@ -2766,8 +3008,12 @@ main(void) {
     test_limit_tone_over_speech();
     test_limit_mute_over_speech();
     test_unlimited_tone_rendering();
+    test_tone_played_steps();
+    test_tone_start_phase();
     test_loud_tone_tail();
     test_loud_tone_first_frame();
+    test_invalid_held_tone();
+    test_played_tone_table_pinned();
     printf("test_ambe2450_frame_types: OK\n");
     return 0;
 }

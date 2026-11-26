@@ -8,7 +8,13 @@
  *  - AMBE+2: TIA-102.BABA-1 7.2, 0.711 dB per AD step from +3.17 dBm0 at AD 127,
  *    where +3.17 dBm0 decodes at -2.52 dB per component;
  *  - D-STAR: 3.54 + 0.355 (volume - 255) dB from the 8-bit tone volume.
- * Dual tones carry both components at that level. NOTONES builds output silence.
+ * Dual tones carry both components at that level. The frequencies are the
+ * ones DVSI's decoders play: harmonics l1 and l2 of a fundamental on a grid of
+ * 2^-19 cycle per sample, TIA-102.BABA-1 Annex J's for the dual tones except
+ * IDs 145 and 147, whose fundamentals are DVSI's own (single tones: harmonic
+ * ID / 16 + 1 of a fundamental under 500 Hz, their own rule, not Annex J's
+ * harmonic numbers), not Table 9's nominal pair.
+ * NOTONES builds output silence.
  */
 #include <assert.h>
 #include <math.h>
@@ -22,6 +28,12 @@
 #endif
 
 #define FRAMES 12
+
+/* A call's status, at least 0: the call is made by the caller, outside assert(). */
+static void
+assert_status_ok(int got) {
+    assert(got >= 0);
+}
 
 static void
 put_bits(char* d, int start, int value, int count) {
@@ -136,7 +148,7 @@ play(process_fn process, const char d[49], float* out, unsigned* flags) {
     for (int f = 0; f < FRAMES; ++f) {
         mbe_process_result result;
         mbe_initProcessResult(&result);
-        assert(process(frame, &result, d, &cur, &prev, &enhanced) >= 0);
+        assert_status_ok(process(frame, &result, d, &cur, &prev, &enhanced));
         *flags |= result.flags;
         if (f > 0) {
             memcpy(out + ((size_t)(f - 1) * 160u), frame, sizeof(frame));
@@ -164,8 +176,17 @@ expect_tone(const char* name, process_fn process, const char d[49], double f1, d
     assert(fabs(a - level_db) < 0.1);
     assert(fabs(b - level_db) < 0.1);
     /* Everything else is at least 40 dB down: the components are the whole signal. */
-    assert(residual_db(pcm, n, f1, f2) < -40.0);
+    const double residual = residual_db(pcm, n, f1, f2);
+    assert(residual < -40.0);
 #endif
+}
+
+/* A component of `steps` 2^-19 cycle per sample, in Hz: the tone's played
+ * fundamental on that grid (Annex J's, but for dual tones 145 and 147 and the
+ * single tones' own rule, mbe_tone.h) times its harmonic number. */
+static double
+played_hz(int fundamental, int harmonic) {
+    return (double)fundamental * (double)harmonic * 8000.0 / 524288.0;
 }
 
 static double
@@ -181,32 +202,42 @@ dstar_level(int volume) {
 static void
 test_ambe2450_tones(void) {
     char d[49];
-    pack_ambe2450_tone(d, 30, 111); /* 937.5 Hz */
-    expect_tone("AMBE+2 single AD 111", mbe_processAmbe2450Dataf, d, 937.5, 0.0, ambe2450_level(111));
-    pack_ambe2450_tone(d, 129, 99); /* DTMF 1 */
-    expect_tone("AMBE+2 DTMF 1 AD 99", mbe_processAmbe2450Dataf, d, 697.0, 1209.0, ambe2450_level(99));
-    pack_ambe2450_tone(d, 162, 105); /* busy */
-    expect_tone("AMBE+2 busy AD 105", mbe_processAmbe2450Dataf, d, 480.0, 620.0, ambe2450_level(105));
+    pack_ambe2450_tone(d, 30, 111); /* 937.5 Hz: harmonic 2 of 30720 steps */
+    expect_tone("AMBE+2 single AD 111", mbe_processAmbe2450Dataf, d, played_hz(30720, 2), 0.0, ambe2450_level(111));
+    pack_ambe2450_tone(d, 46, 111); /* 1437.47 Hz: harmonic 3 of 31402 steps, not 1437.5 */
+    expect_tone("AMBE+2 single 46 AD 111", mbe_processAmbe2450Dataf, d, played_hz(31402, 3), 0.0, ambe2450_level(111));
+    pack_ambe2450_tone(d, 129, 99); /* DTMF 1, nominally 697 + 1209 Hz: 693.909 + 1214.340 */
+    expect_tone("AMBE+2 DTMF 1 AD 99", mbe_processAmbe2450Dataf, d, played_hz(11369, 4), played_hz(11369, 7),
+                ambe2450_level(99));
+    pack_ambe2450_tone(d, 162, 105); /* busy, nominally 480 + 620 Hz: 487.976 + 609.970 */
+    expect_tone("AMBE+2 busy AD 105", mbe_processAmbe2450Dataf, d, played_hz(7995, 4), played_hz(7995, 5),
+                ambe2450_level(105));
 }
 
 static void
 test_dstar_tones(void) {
     char d[49];
     pack_dstar_tone(d, 30, 204);
-    expect_tone("D-STAR single vol 204", mbe_processAmbe2400Dataf, d, 937.5, 0.0, dstar_level(204));
-    /* DTMF: index 128 + 4 * column + row over 697/770/852/941 by 1209/1336/1477/1633 Hz. */
+    expect_tone("D-STAR single vol 204", mbe_processAmbe2400Dataf, d, played_hz(30720, 2), 0.0, dstar_level(204));
+    /* DTMF: index 128 + 4 * column + row over 697/770/852/941 by 1209/1336/1477/1633 Hz
+     * nominally, played as the AMBE+2 tone of the same pair (DTMF 1: AMBE+2 129). */
     pack_dstar_tone(d, 128, 206);
-    expect_tone("D-STAR DTMF 1 vol 206", mbe_processAmbe2400Dataf, d, 697.0, 1209.0, dstar_level(206));
+    expect_tone("D-STAR DTMF 1 vol 206", mbe_processAmbe2400Dataf, d, played_hz(11369, 4), played_hz(11369, 7),
+                dstar_level(206));
     /* Volume 0 is a tone too, as on DVSI's decoder, not a reset or a repeat. */
     pack_dstar_tone(d, 128, 0);
-    expect_tone("D-STAR DTMF 1 vol 0", mbe_processAmbe2400Dataf, d, 697.0, 1209.0, dstar_level(0));
-    pack_dstar_tone(d, 128 + 4 * 2 + 3, 181);
-    expect_tone("D-STAR DTMF # vol 181", mbe_processAmbe2400Dataf, d, 941.0, 1477.0, dstar_level(181));
+    expect_tone("D-STAR DTMF 1 vol 0", mbe_processAmbe2400Dataf, d, played_hz(11369, 4), played_hz(11369, 7),
+                dstar_level(0));
+    pack_dstar_tone(d, 128 + 4 * 2 + 3, 181); /* 941 + 1477 Hz nominally: AMBE+2 143 */
+    expect_tone("D-STAR DTMF # vol 181", mbe_processAmbe2400Dataf, d, played_hz(8805, 7), played_hz(8805, 11),
+                dstar_level(181));
     /* Call progress: 144..147 as AMBE+2's 160..163. */
     pack_dstar_tone(d, 146, 203);
-    expect_tone("D-STAR busy vol 203", mbe_processAmbe2400Dataf, d, 480.0, 620.0, dstar_level(203));
+    expect_tone("D-STAR busy vol 203", mbe_processAmbe2400Dataf, d, played_hz(7995, 4), played_hz(7995, 5),
+                dstar_level(203));
     pack_dstar_tone(d, 147, 203);
-    expect_tone("D-STAR 350+490 vol 203", mbe_processAmbe2400Dataf, d, 350.0, 490.0, dstar_level(203));
+    expect_tone("D-STAR 350+490 vol 203", mbe_processAmbe2400Dataf, d, played_hz(4588, 5), played_hz(4588, 7),
+                dstar_level(203));
 }
 
 int

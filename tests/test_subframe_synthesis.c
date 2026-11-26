@@ -152,6 +152,15 @@ pulse_phase(const mbe_parms* mp) {
     return (double)mp->noiseOverlap[PHASE_SLOT];
 }
 
+/* Whether the pulse phase a frame stored lies in [0, 1) as stored, read from
+ * its bits (a comparison modulo a cycle takes 1.0 for 0). */
+static int
+stored_phase_in_range(const mbe_parms* mp) {
+    uint32_t bits;
+    memcpy(&bits, &mp->noiseOverlap[PHASE_SLOT], sizeof(bits));
+    return bits < UINT32_C(0x3F800000); /* +0 up to, not including, 1.0f */
+}
+
 /* a - b in cycles, wrapped to [-0.5, 0.5). */
 static double
 cycles_apart(double a, double b) {
@@ -225,12 +234,12 @@ set_imbe_b0(char imbe_d[88], int b0) {
 /* The frame marks: only an exact stored value counts, and one replaces another. */
 static void
 test_frame_marks(void) {
-    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE, MBE_FRAME_MARK_PITCH_CARRIES,
+    static const enum mbe_frame_mark marks[] = {MBE_FRAME_MARK_NONE,         MBE_FRAME_MARK_PITCH_CARRIES,
                                                 MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PREVIOUS_HELD,
-                                                MBE_FRAME_MARK_LATE_ONSET};
+                                                MBE_FRAME_MARK_TONE,         MBE_FRAME_MARK_LATE_ONSET};
 
     static const uint32_t others[] = {0x7FC00000u, 0x7F800000u, 0xFF800000u, 0x80000000u, 0x3F800001u, 0x40400001u,
-                                      0x40800000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
+                                      0x40A00000u, 0x429E0000u, 0xBF800000u, 0xC0000000u, 0x00000001u};
     mbe_parms mp;
     memset(&mp, 0, sizeof(mp));
     assert(mbe_frame_mark(&mp) == MBE_FRAME_MARK_NONE);
@@ -522,6 +531,14 @@ reference_advance(struct reference_train* train, double start, const struct mbe_
         to = from;
     } else if (!a->any_voiced) {
         from = to;
+    } else if (from / to > 1.6 && from / to < 2.4) {
+        /* The new period about twice the old: the old train an octave down. */
+        train->phase /= 2.0;
+        from /= 2.0;
+    } else if (from / to > 0.4 && from / to < 0.6) {
+        /* About half: an octave up, its phase doubled within a cycle. */
+        train->phase = fmod(2.0 * train->phase, 1.0);
+        from *= 2.0;
     }
     const double first = train->phase;
     const double end = first + (80.0 * from) + ((to - from) * 80.0 * 80.0 / 160.0);
@@ -651,6 +668,10 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
         {120.0, 28, 3, 16.0f, MBE_FRAME_MARK_LATE_ONSET, 1}, /* a late onset from silence */
         {250.0, 14, 0, 8.0f, MBE_FRAME_MARK_PITCH_ABSENT, 0},
         {150.0, 24, 20, 16.0f, MBE_FRAME_MARK_NONE, 1}, /* the marks before do not carry pulses in */
+        {150.0, 24, 20, 16.0f, MBE_FRAME_MARK_NONE, 0},
+        {56.0, 56, 40, 16.0f, MBE_FRAME_MARK_NONE, 0},  /* each subframe's period 1.64 times the last: octaves down */
+        {170.0, 22, 20, 16.0f, MBE_FRAME_MARK_NONE, 0}, /* 0.57 times: octaves up */
+        {70.8, 52, 40, 16.0f, MBE_FRAME_MARK_NONE, 0},  /* 1.55 times: a glide */
     };
 
     const size_t frame_count = sizeof(frames) / sizeof(frames[0]);
@@ -740,6 +761,130 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering) {
     /* The comparison saw speech, at a level that makes the tolerance a thousandth of it. */
     assert(sqrt(energy / (160.0 * (double)frame_count)) > 50.0);
     assert(worst < 0.05);
+}
+
+/* How expected_phase() treats a subframe's step. */
+enum octave_rule {
+    GLIDE,        /* the linear crossing alone */
+    OCTAVE_RULE,  /* the octave step where the period ratio asks for it */
+    OCTAVE_FORCED /* the octave step whatever the ratio: halved for a longer period, doubled for a shorter */
+};
+
+/* The pulse phase a voiced frame at `to` Hz leaves after one at `from` Hz
+ * that left `phase`: two subframes, the mid-frame pitch the geometric mean;
+ * each the octave step first as `octaves` says (the old train halved in phase
+ * and rate when the new period is 1.6 to 2.4 times the old, doubled at 0.4 to
+ * 0.6 times), then the linear crossing. */
+static double
+expected_phase(double phase, double from, double to, enum octave_rule octaves) {
+    const double hz[3] = {from, sqrt(from * to), to};
+    for (int k = 0; k < 2; ++k) {
+        double old_rate = hz[k] / 8000.0;
+        const double new_rate = hz[k + 1] / 8000.0;
+        const double ratio = old_rate / new_rate;
+        const int forced = octaves == OCTAVE_FORCED;
+        if ((octaves == OCTAVE_RULE && ratio > 1.6 && ratio < 2.4) || (forced && ratio > 1.0)) {
+            phase *= 0.5;
+            old_rate *= 0.5;
+        } else if ((octaves == OCTAVE_RULE && ratio > 0.4 && ratio < 0.6) || (forced && ratio < 1.0)) {
+            phase = fmod(2.0 * phase, 1.0);
+            old_rate *= 2.0;
+        }
+        phase += 40.0 * (old_rate + new_rate);
+        phase -= floor(phase);
+    }
+    return phase;
+}
+
+/* About an octave apart the pulse train does not glide: a step whose period
+ * ratio in a subframe lies within 20% of 2 (or of 1/2) takes the old train an
+ * octave down (up) first. Each case steps once between two steady voiced
+ * models whose pitches give each subframe the ratio named; the stored phase is
+ * the rule's where it applies and the glide's elsewhere, the two predictions
+ * far enough apart to tell; and advancing the frame unrendered leaves the
+ * train exactly as rendering it. */
+static void
+test_octave_steps(void) {
+    static const struct {
+        double ratio; /* new period over old, per subframe */
+        double from;  /* Hz */
+        int octave;   /* whether the rule applies */
+    } cases[] = {
+        {1.70, 245.0, 1}, {0.55, 104.0, 1}, {1.55, 245.0, 0}, {2.45, 290.0, 0}, {0.62, 104.0, 0}, {0.39, 61.0, 0},
+    };
+
+    float out[160];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        const double from = cases[i].from;
+        const double to = from / (cases[i].ratio * cases[i].ratio);
+        mbe_parms last, model;
+        fresh_stream(&last);
+        set_model(&model, from, (int)(3800.0 / from) < 56 ? (int)(3800.0 / from) : 56, 9, 16.0f);
+        for (int f = 0; f < 3; ++f) {
+            next_frame(out, &last, &model);
+        }
+        /* A stored phase where an octave step and a glide part far enough:
+         * each steady frame before moves it on. */
+        for (int f = 0; f < 8
+                        && fabs(cycles_apart(expected_phase(pulse_phase(&last), from, to, OCTAVE_FORCED),
+                                             expected_phase(pulse_phase(&last), from, to, GLIDE)))
+                               < 0.05;
+             ++f) {
+            next_frame(out, &last, &model);
+        }
+        const double before = pulse_phase(&last);
+        const double rule = expected_phase(before, from, to, OCTAVE_RULE);
+        const double glide = expected_phase(before, from, to, GLIDE);
+        const double forced = expected_phase(before, from, to, OCTAVE_FORCED);
+        assert(fabs(cycles_apart(forced, glide)) >= 0.05);
+        assert(fabs(cycles_apart(rule, cases[i].octave ? forced : glide)) < 1e-12);
+        mbe_parms step;
+        set_model(&step, to, (int)(3800.0 / to) < 56 ? (int)(3800.0 / to) : 56, 9, 16.0f);
+        mbe_parms advanced = with_model(&last, &step);
+        mbe_advance_subframes(&advanced, &last, 0, MBE_VOICED_SYNTHESIS_DVSI);
+        next_frame(out, &last, &step);
+        const double want = cases[i].octave ? rule : glide;
+        assert(fabs(cycles_apart(pulse_phase(&last), want)) < 1e-5);
+        assert(stored_phase_in_range(&last));
+        assert(all_finite(out, 160));
+        assert(same_bits(last.noiseOverlap, advanced.noiseOverlap, 96));
+        assert(same_bits(&last.PSIl[1], &advanced.PSIl[1], 56) && same_bits(&last.PHIl[1], &advanced.PHIl[1], 56));
+    }
+}
+
+/*
+ * The pulse phase a frame stores lies in [0, 1) as stored: one whose last
+ * interval ends within float's spacing below a whole cycle is stored as the
+ * start of the next (0), whatever precision the arithmetic before the store
+ * kept (x87 may compare the unrounded value with 1 and then store 1.0f). The
+ * case: a voiced frame at w0 0.2 that left a phase of 0.9070417284965515,
+ * then one at w0 0.1 marked MBE_FRAME_MARK_TONE (its own model at mid-frame):
+ * the first interval an octave down (period ratio 2), the train reaches
+ * 0.9999999917 cycle at the frame's end, which rounds to 1.0f. Rendered and
+ * advanced unrendered alike.
+ */
+static void
+test_stored_phase_range(void) {
+    float out[160];
+    mbe_parms last, model, step;
+    fresh_stream(&last);
+    set_model(&model, 100.0, 15, 15, 16.0f);
+    model.w0 = 0.2f;
+    for (int f = 0; f < 3; ++f) {
+        next_frame(out, &last, &model);
+    }
+    last.noiseOverlap[PHASE_SLOT] = 0.9070417284965515f;
+    set_model(&step, 100.0, 31, 31, 16.0f);
+    step.w0 = 0.1f;
+    mbe_set_frame_mark(&step, MBE_FRAME_MARK_TONE);
+    mbe_parms advanced = with_model(&last, &step);
+    mbe_set_frame_mark(&advanced, MBE_FRAME_MARK_TONE);
+    mbe_advance_subframes(&advanced, &last, 0, MBE_VOICED_SYNTHESIS_DVSI);
+    next_frame(out, &last, &step);
+    assert(fabs(cycles_apart(pulse_phase(&last), 0.0)) < 1e-6);
+    assert(stored_phase_in_range(&last));
+    assert(stored_phase_in_range(&advanced));
+    assert(same_bits(last.noiseOverlap, advanced.noiseOverlap, 96));
 }
 
 /* An unvoiced frame marked as carrying its pitch gives the voiced frame after
@@ -2451,6 +2596,8 @@ main(void) {
     test_pitch_step_keeps_the_train();
     test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI);
     test_waveform_through_changes(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_octave_steps();
+    test_stored_phase_range();
     test_unvoiced_pitch_carries();
     test_voicing_persists_without_a_pitch();
     test_mid_model();

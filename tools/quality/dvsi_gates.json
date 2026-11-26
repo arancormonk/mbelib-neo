@@ -5209,5 +5209,419 @@
         "value": 0
       }
     ]
+  },
+  "tone-model-development": {
+    "description": "Tones played as DVSI's AMBE-3000 plays them: rate-33 and D-STAR tone frames at the harmonics of TIA-102.BABA-1 Annex J's fundamentals on a 2^-19 grid of cycles per sample (single tones as harmonic ID / 16 + 1 of the fundamental under 500 Hz), started after a frame that was not a tone frame as a fresh pulse train with the output high-pass's phase; a P25 voice frame whose pitch code and voicing word are those DVSI's encoder sends for a tone, and whose tone harmonics dominate, played as a tone model (the tone's harmonics at one level on eq 46's fundamental cut to the same grid, the frame's own model at mid-frame); and the pulse train taken an octave down or up before a subframe step whose period ratio lies within 20% of 2 or of 1/2, the PR #196 head (fac0111) against the change, development vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0002 less (mean) and 0.001 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.03 dB on any vector, loses no more than 0.001 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, its level against DVSI's moves by at most 0.05 dB, and every encoder's bits are unchanged.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.03
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "tone-model-validation": {
+    "description": "Tones played as DVSI's AMBE-3000 plays them: rate-33 and D-STAR tone frames at the harmonics of TIA-102.BABA-1 Annex J's fundamentals on a 2^-19 grid of cycles per sample (single tones as harmonic ID / 16 + 1 of the fundamental under 500 Hz), started after a frame that was not a tone frame as a fresh pulse train with the output high-pass's phase; a P25 voice frame whose pitch code and voicing word are those DVSI's encoder sends for a tone, and whose tone harmonics dominate, played as a tone model (the tone's harmonics at one level on eq 46's fundamental cut to the same grid, the frame's own model at mid-frame); and the pulse train taken an octave down or up before a subframe step whose period ratio lies within 20% of 2 or of 1/2, the PR #196 head (fac0111) against the change, validation vectors: in every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0002 less (mean) and 0.001 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.03 dB on any vector, loses no more than 0.001 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, its level against DVSI's moves by at most 0.05 dB, and every encoder's bits are unchanged.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.03
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
+  },
+  "tone-model-tones": {
+    "description": "Tones played as DVSI's AMBE-3000 plays them: rate-33 and D-STAR tone frames at the harmonics of TIA-102.BABA-1 Annex J's fundamentals on a 2^-19 grid of cycles per sample (single tones as harmonic ID / 16 + 1 of the fundamental under 500 Hz), started after a frame that was not a tone frame as a fresh pulse train with the output high-pass's phase; a P25 voice frame whose pitch code and voicing word are those DVSI's encoder sends for a tone, and whose tone harmonics dominate, played as a tone model (the tone's harmonics at one level on eq 46's fundamental cut to the same grid, the frame's own model at mid-frame); and the pulse train taken an octave down or up before a subframe step whose period ratio lies within 20% of 2 or of 1/2, the PR #196 head (fac0111) against the change, on the tone vectors: on D-STAR and rate 33 the steady tones' frequency error against DVSI's output falls by at least 0.001 (mean, 95% interval below 0; the head's means are 0.0033 and 0.0016) and rises by no more than 0.0001 on any vector, the detector agrees with DVSI's tone output on no vector less often, plays a wrong tone on no vector more often, and the tone level and the balance of a dual tone's two components move further from DVSI's by no more than 0.05 dB on any vector, and the D-STAR and rate-33 encoders' tone frames agree with DVSI's, and appear where DVSI sends voice, exactly as often as before on every vector; on P25 the balance error falls by at least 1.0 dB (mean, 95% interval below 0; the head's mean is 2.05 dB), the level error does not rise (mean), the frequency error rises by no more than 0.0005 on any vector and the share of windows playing a wrong tone does not rise (mean).",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "decrease",
+        "value": 0.001
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0001
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "decrease",
+        "value": 1.0
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0005
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "no_increase",
+        "value": 0.0
+      }
+    ]
+  },
+  "tone-model-channel": {
+    "description": "Tones played as DVSI's AMBE-3000 plays them: rate-33 and D-STAR tone frames at the harmonics of TIA-102.BABA-1 Annex J's fundamentals on a 2^-19 grid of cycles per sample (single tones as harmonic ID / 16 + 1 of the fundamental under 500 Hz), started after a frame that was not a tone frame as a fresh pulse train with the output high-pass's phase; a P25 voice frame whose pitch code and voicing word are those DVSI's encoder sends for a tone, and whose tone harmonics dominate, played as a tone model (the tone's harmonics at one level on eq 46's fundamental cut to the same grid, the frame's own model at mid-frame); and the pulse train taken an octave down or up before a subframe step whose period ratio lies within 20% of 2 or of 1/2, the PR #196 head (fac0111) against the change, under channel errors (dam at 1.1-10.6% bit errors): in every mode our mute decisions agree with DVSI's no less often on any vector, hard or soft, and on the frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) our output comes no further from DVSI's than 0.01 dB, hard or soft.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "all_no_decrease"
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "tone-model-final": {
+    "description": "Tones played as DVSI's AMBE-3000 plays them: rate-33 and D-STAR tone frames at the harmonics of TIA-102.BABA-1 Annex J's fundamentals on a 2^-19 grid of cycles per sample (single tones as harmonic ID / 16 + 1 of the fundamental under 500 Hz), started after a frame that was not a tone frame as a fresh pulse train with the output high-pass's phase; a P25 voice frame whose pitch code and voicing word are those DVSI's encoder sends for a tone, and whose tone harmonics dominate, played as a tone model (the tone's harmonics at one level on eq 46's fundamental cut to the same grid, the frame's own model at mid-frame); and the pulse train taken an octave down or up before a subframe step whose period ratio lies within 20% of 2 or of 1/2, the PR #196 head (fac0111) against the change set, final vectors (scored once, at the end of the change set): the checks of tone-model-development. In every mode our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0002 less (mean) and 0.001 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.03 dB on any vector, loses no more than 0.001 of envelope correlation with DVSI's decode, comes no further from the input than 0.01 dB, its level against DVSI's moves by at most 0.05 dB, and every encoder's bits are unchanged.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.03
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      }
+    ]
   }
 }

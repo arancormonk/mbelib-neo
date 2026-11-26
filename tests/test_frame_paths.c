@@ -43,6 +43,18 @@ float_array_equal_exact(const float* a, const float* b, size_t count) {
     return 1;
 }
 
+/* A call's status: the call is made by the caller, outside assert(). */
+static void
+assert_status(int got, int want) {
+    assert(got == want);
+}
+
+/* A call's status, at least 0: the call is made by the caller, outside assert(). */
+static void
+assert_status_ok(int got) {
+    assert(got >= 0);
+}
+
 static void
 assert_status_terminated(const char* status, size_t size) {
     int terminated = 0;
@@ -69,7 +81,7 @@ init_params(mbe_parms* cur, mbe_parms* prev, mbe_parms* enh) {
 
 static void
 soft_from_bits(const char* hard, mbe_soft_bit* soft, size_t count) {
-    assert(mbe_softBitsFromHard(hard, soft, count, 255u) == 0);
+    assert_status(mbe_softBitsFromHard(hard, soft, count, 255u), 0);
 }
 
 static void
@@ -435,30 +447,33 @@ test_fixture_validation(void) {
     char saved[184];
     memset(frame, 0x5a, sizeof(frame));
     memcpy(saved, frame, sizeof(saved));
-    assert(mbe_quality_frame_from_data(NULL, data, 88, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert_status(mbe_quality_frame_from_data(NULL, data, 88, frame, sizeof(frame)), MBE_STATUS_INVALID_ARGUMENT);
     assert(memcmp(frame, saved, sizeof(frame)) == 0);
-    assert(mbe_quality_frame_from_data("IMBE7200", data, 88, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert_status(mbe_quality_frame_from_data("IMBE7200", data, 88, frame, sizeof(frame)), MBE_STATUS_INVALID_ARGUMENT);
     assert(memcmp(frame, saved, sizeof(frame)) == 0);
-    assert(mbe_quality_frame_from_data("", data, 88, frame, sizeof(frame)) == MBE_STATUS_INVALID_ARGUMENT);
+    assert_status(mbe_quality_frame_from_data("", data, 88, frame, sizeof(frame)), MBE_STATUS_INVALID_ARGUMENT);
     assert(memcmp(frame, saved, sizeof(frame)) == 0);
     for (int mode = IMBE7200; mode <= AMBE2400; ++mode) {
         const char* codec = fixture_modes[mode].name;
         size_t count = fixture_modes[mode].data_count;
         size_t capacity = fixture_modes[mode].frame_count;
-        assert(mbe_quality_frame_from_data(codec, NULL, count, frame, capacity) == MBE_STATUS_INVALID_ARGUMENT);
+        assert_status(mbe_quality_frame_from_data(codec, NULL, count, frame, capacity), MBE_STATUS_INVALID_ARGUMENT);
         assert(memcmp(frame, saved, sizeof(frame)) == 0);
-        assert(mbe_quality_frame_from_data(codec, data, count, NULL, capacity) == MBE_STATUS_INVALID_ARGUMENT);
-        assert(mbe_quality_frame_from_data(codec, data, 0, frame, capacity) == MBE_STATUS_INVALID_ARGUMENT);
+        assert_status(mbe_quality_frame_from_data(codec, data, count, NULL, capacity), MBE_STATUS_INVALID_ARGUMENT);
+        assert_status(mbe_quality_frame_from_data(codec, data, 0, frame, capacity), MBE_STATUS_INVALID_ARGUMENT);
         assert(memcmp(frame, saved, sizeof(frame)) == 0);
-        assert(mbe_quality_frame_from_data(codec, data, count - 1, frame, capacity) == MBE_STATUS_INVALID_ARGUMENT);
+        assert_status(mbe_quality_frame_from_data(codec, data, count - 1, frame, capacity),
+                      MBE_STATUS_INVALID_ARGUMENT);
         assert(memcmp(frame, saved, sizeof(frame)) == 0);
-        assert(mbe_quality_frame_from_data(codec, data, count + 1, frame, capacity) == MBE_STATUS_INVALID_ARGUMENT);
+        assert_status(mbe_quality_frame_from_data(codec, data, count + 1, frame, capacity),
+                      MBE_STATUS_INVALID_ARGUMENT);
         assert(memcmp(frame, saved, sizeof(frame)) == 0);
-        assert(mbe_quality_frame_from_data(codec, data, count, frame, capacity - 1) == MBE_STATUS_INVALID_ARGUMENT);
+        assert_status(mbe_quality_frame_from_data(codec, data, count, frame, capacity - 1),
+                      MBE_STATUS_INVALID_ARGUMENT);
         assert(memcmp(frame, saved, sizeof(frame)) == 0);
         for (size_t i = 0; i < count; ++i) {
             data[i] = (i & 1u) ? (char)-1 : 2;
-            assert(mbe_quality_frame_from_data(codec, data, count, frame, capacity) == MBE_STATUS_INVALID_BITS);
+            assert_status(mbe_quality_frame_from_data(codec, data, count, frame, capacity), MBE_STATUS_INVALID_BITS);
             assert(memcmp(frame, saved, sizeof(frame)) == 0);
             data[i] = 0;
         }
@@ -567,9 +582,9 @@ assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* r
             tagged_data(parameters[n], fixture_modes[MODE].data_count, (unsigned)n);                                   \
             memset(parameters[n], 0, 6); /* Keep the fundamental in the ordinary speech range. */                      \
             override_parameters(MODE, n, parameters[n]);                                                               \
-            assert(mbe_quality_frame_from_data(fixture_modes[MODE].name, parameters[n],                                \
-                                               fixture_modes[MODE].data_count, frames[n], sizeof(frames[n]))           \
-                   == (int)fixture_modes[MODE].frame_count);                                                           \
+            assert_status(mbe_quality_frame_from_data(fixture_modes[MODE].name, parameters[n],                         \
+                                                      fixture_modes[MODE].data_count, frames[n], sizeof(frames[n])),   \
+                          (int)fixture_modes[MODE].frame_count);                                                       \
             if (n == 4) {                                                                                              \
                 frames[n][(MODE) == IMBE7100 ? 12 : 11] ^= 1;                                                          \
             } else if (n == 5) {                                                                                       \
@@ -830,6 +845,81 @@ assert_ambe2400_tone_spectrum(const float pcm[20][160], double frequency, int to
     }
 }
 
+/*
+ * Whether the library computes its floats as written. With
+ * MBELIB_ENABLE_FAST_MATH, CMake builds the library with fast-math and defines
+ * MBELIB_TEST_LIBRARY_FAST_MATH for this test (the compilers' own macros cover
+ * a test compiled that way itself): the compiler may then compile a function
+ * inlined into one caller otherwise than where this test calls it (MSVC's
+ * link-time code generation), so a reference this test renders through the
+ * library can differ from the library's own samples by a few units in the last
+ * place. Such comparisons are exact in an IEEE build only.
+ */
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define K_LIBRARY_FAST_MATH 1
+#else
+#define K_LIBRARY_FAST_MATH 0
+#endif
+
+/* Library samples against a reference rendered through the library: bit for
+ * bit, or, where `tolerant` (K_LIBRARY_FAST_MATH, passed in so that the bound
+ * is computed in both modes), within 1e-5 * (1 + peak), peak the largest
+ * magnitude the reference holds. */
+static int
+samples_match_reference(const float* out, const float* want, size_t count, int tolerant) {
+    double peak = 0.0;
+    for (size_t i = 0; i < count; ++i) {
+        peak = fmax(peak, fabs((double)want[i]));
+    }
+    const double bound = 1e-5 * (1.0 + peak);
+    for (size_t i = 0; i < count; ++i) {
+        if (!float_array_equal_exact(&out[i], &want[i], 1)
+            && !(tolerant && fabs((double)out[i] - (double)want[i]) <= bound)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Sample t, counted from the first tone frame's start, of the D-STAR single
+ * tone of ID 5..7 at `volume` as the library starts every tone that follows a
+ * frame that is not a tone frame, a fresh pulse train (DVSI's decoders start a
+ * tone so only after a frame with no voiced band, and continue a voiced
+ * frame's train into the tone): A cos(2 pi F (t - 16) + p),
+ * F = 2048 ID / 2^19 cycle per sample (harmonic ID / 16 + 1 = 1 of the
+ * fundamental 2048 ID / 1 steps of 2^-19), p the output high-pass's phase at F
+ * (a second-order Butterworth at 100 Hz: pi - atan2(sqrt(2) x, 1 - x^2), x =
+ * F 8000 / 100), A the amplitude of the volume's level (3.540 + 0.35495
+ * (volume - 255) dB re an rms of 32768, over the output gain of 7). In double,
+ * from the documented formula alone, so that a wrong start phase fails.
+ */
+static double
+ambe2400_fresh_tone(int id, int volume, int t) {
+    const double f = (double)(2048 * id) / 524288.0;
+    const double x = f * 8000.0 / 100.0;
+    const double p = M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+    const double db = 3.540 + (0.35495 * (double)(volume - 255));
+    const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
+    return amplitude * cos((2.0 * M_PI * f * (double)(t - 16)) + p);
+}
+
+/* The tone's amplitude at `volume` (ambe2400_fresh_tone()). */
+static double
+ambe2400_tone_amplitude(int volume) {
+    return sqrt(2.0) * 32768.0 * pow(10.0, (3.540 + (0.35495 * (double)(volume - 255))) / 20.0) / 7.0;
+}
+
+/* The frames after the first, by the linked renderer from the state the
+ * first left: the stream goes on from the phases its first frame set. */
+static void
+ambe2400_tone_oracle(float tone[20][160], const char data[49], int id, const mbe_parms* after_first) {
+    mbe_parms state = *after_first;
+    for (int n = 1; n < 20; ++n) {
+        mbe_synthesizeTonefdstar(tone[n], data, &state, id);
+    }
+}
+
 static void
 test_ambe2400_accepted_tones(void) {
     static const int low_indices[] = {9, 42, 43, 10, 11};
@@ -857,7 +947,7 @@ test_ambe2400_accepted_tones(void) {
         for (int bit = 0; bit < 5; ++bit) {
             data[low_indices[bit]] = (char)((id >> (4 - bit)) & 1);
         }
-        assert(mbe_quality_frame_from_data("ambe2400", data, sizeof(data), frame, sizeof(frame)) == 96);
+        assert_status(mbe_quality_frame_from_data("ambe2400", data, sizeof(data), frame, sizeof(frame)), 96);
 
         init_params(&cur, &prev, &enh);
         double tone_energy = 0.0;
@@ -880,7 +970,7 @@ test_ambe2400_accepted_tones(void) {
                 damaged[24 + 11 + bit] ^= 1;
             }
             int total = cases[c].c0 + cases[c].protected;
-            assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])damaged, decoded, &context) == total);
+            assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])damaged, decoded, &context), total);
             assert(memcmp(decoded, data, sizeof(data)) == 0);
             assert(context.c0_errors == cases[c].c0);
             assert(context.protected_errors == cases[c].protected);
@@ -900,6 +990,9 @@ test_ambe2400_accepted_tones(void) {
                     assert_result_total(&result, ret);
                     assert(ret == total);
                     assert(memcmp(decoded, data, sizeof(data)) == 0);
+                    if (n == 0 && cases[c].accepted) {
+                        ambe2400_tone_oracle(tone, data, id, &cur);
+                    }
                     /* A rejected tone plays as a lost frame: a repeat, muted from the 4th in a
                      * row on, after the 4th's fade-out to DVSI-level noise (int16 0 or +-1). */
                     const unsigned lost = MBE_PROCESS_FLAG_TONE | MBE_PROCESS_FLAG_ERASURE | MBE_PROCESS_FLAG_REPEAT
@@ -907,11 +1000,30 @@ test_ambe2400_accepted_tones(void) {
                     assert(result.flags
                            == (MBE_PROCESS_FLAG_C0_VALID | (cases[c].accepted ? MBE_PROCESS_FLAG_TONE : lost)));
                     assert_float_pcm_sane(pcm[n]);
-                    if (cases[c].accepted) {
+                    if (cases[c].accepted && tones_enabled) {
                         /* The first tone frame fades the tone in over its first 80
-                         * samples (under the last frame's fading speech). */
-                        const size_t from = (n == 0) ? 80u : 0u;
-                        assert(float_array_equal_exact(pcm[n] + from, tone[n] + from, 160 - from));
+                         * samples (under the last frame's fading speech): past them
+                         * the fresh tone, within 3e-4 of its amplitude of the formula
+                         * (computed here in double), then the frames the renderer
+                         * continues. */
+                        const int from = (n == 0) ? 80 : 0;
+                        const double amplitude = ambe2400_tone_amplitude(0);
+                        for (int i = from; i < 160; ++i) {
+                            const double want = ambe2400_fresh_tone(id, 0, (160 * n) + i);
+                            assert(fabs((double)pcm[n][i] - want) < 3e-4 * amplitude);
+                        }
+                        if (n > 0) {
+                            assert(samples_match_reference(pcm[n], tone[n], 160, K_LIBRARY_FAST_MATH));
+                        }
+                    } else if (cases[c].accepted) {
+                        /* No tones: silence past the first frame's fading speech,
+                         * every sample +0 or -0 by its bits. */
+                        const int from = (n == 0) ? 80 : 0;
+                        for (int i = from; i < 160; ++i) {
+                            uint32_t bits;
+                            memcpy(&bits, &pcm[n][i], sizeof(bits));
+                            assert((bits & 0x7FFFFFFFu) == 0u);
+                        }
                     } else if (n >= 4) {
                         short muted[160];
                         (void)short_from_float(AMBE2400, pcm[n], muted);
@@ -985,7 +1097,7 @@ static void
 test_ambe_error_counts(void) {
     char ambe_d[49], clean[4][24], frame[4][24], data[49];
     ambe_voice_bits(ambe_d);
-    assert(mbe_encodeAmbe3600x2450Frame(ambe_d, clean) == 0);
+    assert_status(mbe_encodeAmbe3600x2450Frame(ambe_d, clean), 0);
     for (size_t i = 0; i < sizeof(ambe2450_error_cases) / sizeof(ambe2450_error_cases[0]); ++i) {
         const struct ambe_error_case* c = &ambe2450_error_cases[i];
         memcpy(frame, clean, sizeof(frame));
@@ -1002,20 +1114,21 @@ test_ambe_error_counts(void) {
         mbe_parms cur, prev, enh;
         float pcm[160];
         init_params(&cur, &prev, &enh);
-        assert(mbe_processAmbe3600x2450Framef(pcm, NULL, (const char (*)[24])clean, data, &cur, &prev, &enh) >= 0);
+        assert_status_ok(mbe_processAmbe3600x2450Framef(pcm, NULL, (const char (*)[24])clean, data, &cur, &prev, &enh));
         mbe_initProcessResult(&result);
-        assert(mbe_processAmbe3600x2450Framef(pcm, &result, (const char (*)[24])frame, data, &cur, &prev, &enh) >= 0);
+        assert_status_ok(
+            mbe_processAmbe3600x2450Framef(pcm, &result, (const char (*)[24])frame, data, &cur, &prev, &enh));
         assert(((result.flags & MBE_PROCESS_FLAG_REPEAT) != 0) == (c->want_c0 >= 4));
     }
 
     /* D-STAR counts corrected bits, parity bits included, as 5.5 does: a data
      * bit and a parity bit in C0 count 2. */
-    assert(mbe_encodeAmbe3600x2400Frame(ambe_d, clean) == 0);
+    assert_status(mbe_encodeAmbe3600x2400Frame(ambe_d, clean), 0);
     memcpy(frame, clean, sizeof(frame));
     frame[0][16] ^= 1;
     frame[0][4] ^= 1;
     mbe_process_result result;
-    assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, data, &result) == 2);
+    assert_status(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, data, &result), 2);
     assert(result.c0_errors == 2);
 }
 
@@ -1026,7 +1139,7 @@ test_ambe2450_soft_error_counts(void) {
     char ambe_d[49], clean[4][24], frame[4][24], hard_d[49], soft_d[49];
     mbe_soft_bit soft[4][24];
     ambe_voice_bits(ambe_d);
-    assert(mbe_encodeAmbe3600x2450Frame(ambe_d, clean) == 0);
+    assert_status(mbe_encodeAmbe3600x2450Frame(ambe_d, clean), 0);
     for (size_t i = 0; i < sizeof(ambe2450_error_cases) / sizeof(ambe2450_error_cases[0]); ++i) {
         const struct ambe_error_case* c = &ambe2450_error_cases[i];
         memcpy(frame, clean, sizeof(frame));
@@ -1034,7 +1147,7 @@ test_ambe2450_soft_error_counts(void) {
         mbe_process_result hard, weak;
         int hard_ret = mbe_decodeAmbe3600x2450Frame((const char (*)[24])frame, hard_d, &hard);
         soft_from_bits(&frame[0][0], &soft[0][0], 96u);
-        assert(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, soft_d, &weak) == hard_ret);
+        assert_status(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, soft_d, &weak), hard_ret);
         assert(weak.c0_errors == hard.c0_errors && memcmp(hard_d, soft_d, sizeof(hard_d)) == 0);
         /* The same flips marked unreliable (40 of 255): each counts 0.16,
          * rounded per codeword. */
@@ -1045,7 +1158,7 @@ test_ambe2450_soft_error_counts(void) {
             soft[1][c->c1[k]].reliability = 40u;
         }
         int want = (((c->n0 * 40) + 127) / 255) + (((c->n1 * 40) + 127) / 255);
-        assert(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, soft_d, &weak) == want);
+        assert_status(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, soft_d, &weak), want);
         assert(memcmp(soft_d, ambe_d, sizeof(soft_d)) == 0);
     }
 }
@@ -1070,14 +1183,14 @@ test_ambe2450_counted_codewords(void) {
         for (int use_soft = 0; use_soft < 2; ++use_soft) {
             mbe_process_result result;
             if (use_soft) {
-                assert(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, data, &result) >= 0);
-                assert(mbe_decodeAmbe3600x2400SoftFrame((const mbe_soft_bit(*)[24])soft, dstar, NULL) >= 0);
+                assert_status_ok(mbe_decodeAmbe3600x2450SoftFrame((const mbe_soft_bit(*)[24])soft, data, &result));
+                assert_status_ok(mbe_decodeAmbe3600x2400SoftFrame((const mbe_soft_bit(*)[24])soft, dstar, NULL));
             } else {
-                assert(mbe_decodeAmbe3600x2450Frame((const char (*)[24])frame, data, &result) >= 0);
-                assert(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, dstar, NULL) >= 0);
+                assert_status_ok(mbe_decodeAmbe3600x2450Frame((const char (*)[24])frame, data, &result));
+                assert_status_ok(mbe_decodeAmbe3600x2400Frame((const char (*)[24])frame, dstar, NULL));
             }
             assert(memcmp(data, dstar, sizeof(data)) == 0);
-            assert(mbe_encodeAmbe3600x2450Frame(data, corrected) == 0);
+            assert_status(mbe_encodeAmbe3600x2450Frame(data, corrected), 0);
             int cost[2] = {0, 0};
             for (int i = 0; i < 2; ++i) {
                 for (int j = 0; j < 24 - i; ++j) {
@@ -1109,7 +1222,7 @@ test_ambe2450_ecc_alias(void) {
         }
         memcpy(aliased, frame, sizeof(frame));
         int errors = mbe_eccAmbe3600x2450Data(frame, data);
-        assert(mbe_eccAmbe3600x2450Data(aliased, (char*)aliased) == errors);
+        assert_status(mbe_eccAmbe3600x2450Data(aliased, (char*)aliased), errors);
         assert(memcmp(data, aliased, sizeof(data)) == 0);
     }
 }
