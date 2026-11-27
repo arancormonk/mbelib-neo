@@ -7456,11 +7456,11 @@ hashes moves, scalar, SSE2 or AVX2.
 **Cost.** None: the change is one row of a table. The median complete hard-decision frame decode
 (`bench_replay hard <codec> 60 5` on DVSI's `dam` stream of each codec) and encode (`bench_encode`),
 seven alternating invocations pinned to one CPU, a portable Release build with SIMD, fast-math and LTO,
-`f725a66` against `59dddb3`, taken under load (another agent's builds and this branch's scans running,
-load average 10 to 20): AMBE+2 8.955 → 9.129 us (+1.9%), D-STAR 9.076 → 8.466 (-6.7%), IMBE (unchanged
-code) 9.204 → 8.715 (-5.3%); encoders D-STAR 31.31 → 30.60, AMBE+2 33.12 → 31.74, IMBE 15.96 → 15.41
-us; the invocations' ranges overlap in every case (8.4 to 14.6 us for the decoders): no difference
-resolvable under that load.
+`f725a66` against `59dddb3`, in two runs taken under load (another agent's builds running): in the
+second (load average 5.4 to 8.8) AMBE+2 8.167 → 8.157 us, D-STAR 7.723 → 7.701, IMBE (unchanged code)
+8.094 → 8.057, encoders D-STAR 30.32 → 30.16, AMBE+2 31.55 → 31.42, IMBE 15.18 → 15.16 us, every change
+within 0.5% with the ranges overlapping; the first (load 10 to 20) scattered by -6.7% to +1.9%, IMBE's
+unchanged code by -5.3%: no difference resolvable under that load.
 
 **Gate sets**, declared in the branch's first commit, `956671f`, before any build of the branch was
 scored (the study's scratch build had been measured on the development, validation, tone and channel

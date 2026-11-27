@@ -1216,6 +1216,27 @@ build with SIMD, fast-math and LTO (GCC 16.2.1), `9a101f8` against `0e3463e` (on
 
 The ranges overlap a little in each row; every checksum differs (every decode changes).
 
+### AMBE block lengths at 20 harmonics
+
+The block lengths at 20 harmonics ([DVSI parity](dvsi-parity.md#november-2026-the-ambe-block-lengths-at-20-harmonics))
+change one row of a table and no code. Measured with `bench_replay hard <codec> 60 5` on DVSI's `dam`
+stream of each codec and with `bench_encode`, seven alternating invocations pinned to CPU 6, a portable
+Release build with SIMD, fast-math and LTO (GCC 16.2.1), `f725a66` against `59dddb3` (one-minute load 5.4
+to 8.8 during the run, another agent's builds running):
+
+| Median per frame | `f725a66` | Block lengths | Change |
+| --- | ---: | ---: | ---: |
+| AMBE+2 decode, hard | 8.167 us (8.067 to 8.478) | 8.157 us (8.096 to 8.269) | -0.1% |
+| D-STAR decode, hard | 7.723 us (7.520 to 9.698) | 7.701 us (7.558 to 9.414) | -0.3% |
+| IMBE decode, hard | 8.094 us (7.987 to 12.848) | 8.057 us (7.998 to 11.348) | -0.5% |
+| D-STAR encode | 30.32 us (29.61 to 31.71) | 30.16 us (29.66 to 30.44) | -0.5% |
+| AMBE+2 encode | 31.55 us (30.67 to 31.92) | 31.42 us (30.48 to 31.79) | -0.4% |
+| IMBE encode | 15.18 us (14.77 to 15.25) | 15.16 us (14.75 to 15.19) | -0.1% |
+
+The ranges overlap in every row; the D-STAR and AMBE+2 checksums differ (the `dam` streams hold frames of
+20 harmonics), the IMBE ones are equal. An earlier run under heavier load (10 to 20) scattered by -6.7% to
++1.9%, the unchanged IMBE decode by -5.3%.
+
 ## TETRA Conformance
 
 EN 300 395-4 tests a TETRA speech decoder bit for bit: TE1_46.CHD (138 little-endian 16-bit
