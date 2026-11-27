@@ -6108,6 +6108,43 @@ walk_frame(int b0, int count, int sounds, uint32_t* rng, mbe_parms s[3], struct 
 }
 
 /*
+ * P25's counter through the data path's repeats and its repeat limit's mute,
+ * where it counts the model each frame renders or advances (the library's
+ * choice): three frames at b0 176 (code 48) take it to 3; fifteen frames with
+ * no usable pitch code (b0 220) repeat that model three times (each raising
+ * the capped counter), mute it at the 4th, and then the repeat limit's reset
+ * model (eq 46's nominal pitch of b0 134, outside the table) lowers it frame by
+ * frame to -8; the first eight b0 176 frames after the run are therefore not
+ * read (the counter climbing to 0), the ninth is.
+ */
+static void
+test_p25_counter_through_a_mute(void) {
+    static const int during[15] = {3, 3, 3, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6, -7, -8};
+    uint32_t rng = 0xA11CEu;
+    mbe_parms s[3];
+    struct path_step step;
+    char bits[88];
+    path_stream(PATH_P25, &rng, s);
+    for (int f = 0; f < 3; ++f) {
+        path_unvoiced_b0(PATH_P25, 176, &rng, s, &step, NULL);
+        assert(stored_count_of(&step.after) == f + 1);
+    }
+    for (int f = 0; f < 15; ++f) {
+        memset(bits, 0, sizeof(bits));
+        set_imbe_b0(bits, 220);
+        path_frame(PATH_P25, bits, s, &step);
+        assert(stored_count_of(&step.after) == during[f]);
+    }
+    for (int f = 0; f < 9; ++f) {
+        uint32_t read;
+        path_unvoiced_b0(PATH_P25, 176, &rng, s, &step, NULL);
+        memcpy(&read, &step.after.noiseOverlap[TEST_READ_SLOT], sizeof(read));
+        assert(stored_count_of(&step.after) == -7 + f);
+        assert(read == ((f == 8) ? TEST_ONE_BITS : 0u));
+    }
+}
+
+/*
  * P25's validity counter through its data path (US 7,970,606, FIG. 8), every
  * frame against the rule and the counter it leaves stated here: a fresh
  * stream reads its first code (code 48: both patterns pulse, so every frame
@@ -7071,6 +7108,7 @@ main(void) {
     test_p25_smoothed_onset();
     test_pulsed_codes_through_data_paths();
     test_p25_validity_counter_walk();
+    test_p25_counter_through_a_mute();
     test_untrusted_pulsed_state(MBE_VOICED_SYNTHESIS_DVSI);
     test_untrusted_pulsed_state(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
     test_pulsed_count_steps();
