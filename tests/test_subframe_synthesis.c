@@ -8192,6 +8192,32 @@ test_untrusted_row_words(void) {
         r33_after(&last, &checks[c][1], without_word, &without_state);
         assert(same_bits(with_word, without_word, 160) && same_state_but_mark(&with_state, &without_state));
     }
+    /* A word on a model whose one voiced band is harmonic 1, after a voiced frame at about four times
+     * its pitch: the mid-frame model, at about twice it, has no voiced band (its harmonics fall on
+     * the frame's even ones), so the word's mid-frame mask could pulse it; the frame is no pulsed-row
+     * frame all the same, and plays as with no word. */
+    int b40 = 0;
+    float w40;
+    int L40 = 0;
+    while (L40 < 40) {
+        r33_grid(++b40, &w40, &L40);
+    }
+    mbe_parms high, top, top_plain, high_state, top_state, top_plain_state;
+    float high_out[160], top_out[160], top_plain_out[160];
+    fresh_stream(&high_state);
+    blank_model(&high, 125.0, 10, 10, 8.0f);
+    high.w0 = 4.0f * w40;
+    next_frame_as(high_out, &high_state, &high, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    blank_model(&top, 125.0, L40, 1, 8.0f);
+    top.w0 = w40;
+    top_plain = top;
+    top.PHIl[0] = (float)test_row_word(28, b40, 0);
+    struct mbe_subframe_model mid_of_top;
+    mbe_subframe_mid_model(&high_state, &top, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &mid_of_top);
+    assert(!mid_of_top.any_voiced && mid_of_top.L >= 10);
+    r33_after(&high_state, &top, top_out, &top_state);
+    r33_after(&high_state, &top_plain, top_plain_out, &top_plain_state);
+    assert(same_bits(top_out, top_plain_out, 160) && same_state_but_mark(&top_state, &top_plain_state));
     /* In slot 37 of the last frame's state. */
     mbe_parms stored = state;
     model.PHIl[0] = own_word;
