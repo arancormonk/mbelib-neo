@@ -5715,8 +5715,9 @@ channels its code names. The study that found the rule read the development and 
 DVSI's tone, hard-decision channel-error and D-STAR DTX vectors and the DVstick 30 package of
 [#157](https://github.com/arancormonk/mbelib-neo/issues/157), never `irstia` or `mark`. Its scratch
 build (outside the repository) was measured on those before the gate sets were declared, so the
-development and validation partitions are not out of sample here; the final partition is held out,
-to be scored once, after the review. The candidate is the branch's head at `d3fb70f`, whose
+development and validation partitions are not out of sample here; the final partition was held out
+and scored once, after the two reviews and their fixes ([the final partition](#the-final-partition),
+below). The candidate is the branch's head at `d3fb70f`, whose
 library code is `834d001`'s (the commit after it changes tests only). Both builds aligned freely
 first and were then scored at their joint lags, both runs' encodings decoded by the candidate's
 decoder (Release, SIMD, IEEE arithmetic).
@@ -5938,7 +5939,7 @@ partitions, `74126a3` against `d3fb70f`:
 | `pulsed-state-validation` | passes all 18 checks | the same on the validation vectors, the distance from the input allowed to rise by 0.04 dB on the mean (observed +0.0234 and +0.0258 dB), also read in the study |
 | `pulsed-state-tones` | passes all 18 checks | rate 33's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level over the frames where both send the same tone) unchanged, and D-STAR's and P25's five tone measures within their limits on the vectors both runs measure (observed: unchanged); not that the same tone frames or bits were sent |
 | `pulsed-state-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), D-STAR's and P25's mean distance from DVSI's decode on the loud frames (`lsd_common_db`) not rising past 0.01 dB with a coverage of at least 0.1 (observed: falling on every vector), rate 33's decodes and every encoder's speech rows unchanged |
-| `pulsed-state-final` | not yet scored | declared with the others; to be scored once, after the review |
+| `pulsed-state-final` | passes all 18 checks | scored once, on 2026-11-27, after the two reviews and their fixes, on `irstia` and `mark` ([the final partition](#the-final-partition)): D-STAR's and P25's correlation means rising by at least 0.0003 with intervals above 0 and neither vector falling by more than 0.0005 (observed +0.003707 and +0.003896, both vectors rising in both codecs), the distance from DVSI's decode falling by at least 0.05 dB with its interval below 0 and rising by no more than 0.02 dB on either vector (observed -0.3686 and -0.3406 dB, falling on both), the envelope correlation, the distance from the input (allowed to rise by 0.05 dB; observed +0.0179 and +0.0266 dB) and the level within theirs on the mean; rate 33's decodes and every encoder's rows unchanged |
 
 Notes on the declarations. A check that the mean rises (falls) by at least a value is the
 scoreboard's `increase` (`decrease`) rule, which also requires the 95% interval above (below) 0.
@@ -5986,7 +5987,7 @@ measurements:
 - All five describe the rule as it stood before the review: they do not have P25's validity
   counter (clause 8), added after it, nor do they say that the slots of the subframe state carry a
   read flag and the counter. With the counter no decode of a non-held-out file changes (below), so
-  the scores above stand for the final code; `pulsed-state-final` is to be scored with it.
+  the scores above stand for the final code; `pulsed-state-final` was scored with it (below).
 - The channel set's description says the frames `lsd_common_db` takes have "no muted frame at or
   next to them"; its parenthesis names what the check excludes (a loud frame DVSI mutes, or a frame
   either run muted), and a quiet frame DVSI mutes next to them is admitted (the review found seven
@@ -5996,6 +5997,40 @@ measurements:
   320-sample windows, and the review passed a synthetic step from 3500 to 3531.25 Hz through it as
   steady in the window spanning the step and in the windows beside it. The checks constrain the
   detector's results on the windows it calls steady, no more.
+
+#### The final partition
+
+`pulsed-state-final` was scored once, on 2026-11-27, after the two reviews and their fixes. The
+baseline is the build of `3840d2b`, whose library code is `74126a3`'s (its decodes of the 25
+development and validation vectors are those of the stack's head, in all three modes, 25 of 25
+each); the candidate is the build of `5cfdf37`, whose library code is `43850cc`'s (its decodes of
+the 25 vectors are those of the build scored above, in all three modes, 25 of 25 each). Both builds
+aligned freely first and were then scored at their joint lags on `irstia` and `mark`, both runs'
+encodings decoded by the candidate's decoder. Neither the rule nor any build of it had been measured
+on these two vectors. The set passes all 18 checks (none fails); it required a gain, and the gain is
+there on both vectors in both codecs. The library's decode of DVSI's bits, baseline → candidate:
+
+| Codec | Waveform corr. vs DVSI, sample against sample at lag 0, mean | `irstia` | `mark` | LSD vs DVSI (dB), mean (`irstia`, `mark`) | Envelope corr. vs DVSI, mean | Level vs DVSI (dB), change of the mean | LSD vs input (dB), mean |
+|---|---|---|---|---|---|---|---|
+| D-STAR | 0.985589 → 0.989296 (+0.003707) | 0.980544 → 0.984752 | 0.990634 → 0.993839 | 1.3658 → 0.9971 (-0.3686; 1.4553 → 1.0756, 1.2762 → 0.9187) | 0.97917 → 0.99589 (+0.01673) | -0.0104 | 5.5172 → 5.5351 (+0.0179) |
+| P25 | 0.986919 → 0.990815 (+0.003896) | 0.984030 → 0.988222 | 0.989808 → 0.993407 | 1.3346 → 0.9941 (-0.3406; 1.2989 → 0.9609, 1.3704 → 1.0273) | 0.98461 → 0.99593 (+0.01132) | -0.0118 | 5.3576 → 5.3842 (+0.0266) |
+| Rate 33 | 0.985956, unchanged | 0.982792 | 0.989120 | 1.5074, unchanged | 0.9783, unchanged | 0 | 5.5216, unchanged |
+
+Rate 33's two decodes are the same in both runs (equal PCM hashes), and no encoder row changes in
+any mode; all six entries (`irstia` and `mark` in each mode) carry an encoder-row hash and a PCM
+hash in both reports, as the notes above ask of the identity counters. The baseline's D-STAR figures
+differ from those of the row-17 train change's held-out run ([November 2026: the pulse train through
+a row-17 frame](#november-2026-the-pulse-train-through-a-row-17-frame): 0.980559 for `irstia`, a mean
+of 0.985597, and a distance from DVSI's decode of 1.5116 dB against 1.3658 here) although the decode
+is the same (equal PCM hashes): each run scores both builds at its own joint lags, and the joint lag
+of D-STAR's `irstia` against DVSI's decode is -8 samples there and 0 here (that vector's distance
+from DVSI's decode 1.747 dB there, 1.4553 dB here). The two runs' baselines are not one number.
+
+What this establishes: on two vectors neither the rule nor any build of it was measured on before,
+the gain declared in advance is there, larger than on development and validation (+0.0037 and
++0.0039 of correlation against +0.0008 to +0.0012), and so is the cost against the input (+0.018 and
++0.027 dB of log-spectral distance from it; PESQ was not measured on the held-out vectors). Two
+vectors give no interval beyond what the gate's own rule computes.
 
 ### Scoring history
 
@@ -6143,5 +6178,7 @@ encodings decoded by its own decoder) to record each measure's coverage in the s
 After the review the same four sets were scored again in one
 combined run, `74126a3` against the final code, the validity counter in: 87 of 87 checks, with the
 same figures ([November 2026: the pulsed state](#november-2026-the-pulsed-state)). The final
-partition is held out, to be scored once, with the counter, against `pulsed-state-final`, declared
-in `525d017`.
+partition was scored once for it, on 2026-11-27, after the two reviews and their fixes: the build of
+`3840d2b` (library code `74126a3`'s) against the build of `5cfdf37` (library code `43850cc`'s),
+against `pulsed-state-final`, declared in `525d017`. It passes all 18 checks; the gain it required is
+there on both vectors in both codecs ([the final partition](#the-final-partition)).

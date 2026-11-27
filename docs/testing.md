@@ -1578,7 +1578,8 @@ $SB --tools build/tools-debug --out $Q/candidate --lags-from $JOINT \
   pulses each fail `test_train_through_row17` run alone (the last also
   `test_waveform_through_changes`).
   The gate sets of the pulsed state (`pulsed-state-development`, `-validation`, `-tones`,
-  `-channel` and `-final`, declared in `525d017`) gate D-STAR's and P25's speech, tone and channel
+  `-channel` and `-final`, declared in `525d017`; `-final` scored once, on 2026-11-27, after the
+  two reviews and their fixes: passed, 18 of 18) gate D-STAR's and P25's speech, tone and channel
   measures (a rise of the waveform correlation and a fall of the distance from DVSI's decode on the
   development, validation and final partitions, the distance from the input allowed to rise within
   a limit, the change's measured cost), rate 33's decodes by their hashes and every encoder's rows;
