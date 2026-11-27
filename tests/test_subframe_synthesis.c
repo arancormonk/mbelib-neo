@@ -20,6 +20,8 @@
 #include "ambe_common.h"
 #include "imbe4400_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_math.h"
+#include "mbe_repeat.h"
 #include "mbe_subframe.h"
 #include "mbe_tone.h"
 #include "mbe_unvoiced_fft.h"
@@ -924,9 +926,20 @@ reference_pulse_bands(const struct mbe_subframe_model* model, int code, int mid,
     return any;
 }
 
+/* A pulsed band's magnitude, in the library's arithmetic (pulse_bands()): the
+ * unvoiced factor 0.2046 / sqrt(w0) formed in float and rounded to float, the
+ * model's magnitude divided by it in double, and the result capped at 1e30, the
+ * largest magnitude a model takes. */
+static double
+reference_pulsed_magnitude(const struct mbe_subframe_model* model, int l) {
+    volatile float factor = 0.2046f / sqrtf(model->w0);
+    const double magnitude = (double)model->magnitude[l] / (double)factor;
+    return (magnitude < 1.0e30) ? magnitude : 1.0e30;
+}
+
 /* What a model's pulsed bands play t samples after its pulse: the voiced
- * response, each band at its magnitude with the unvoiced factor 0.2046 /
- * sqrt(w0) taken out. */
+ * response, each band at its magnitude with the unvoiced factor taken out
+ * (reference_pulsed_magnitude()). */
 static double
 reference_pulsed_response(const struct mbe_subframe_model* model, const int pulsed[57], const double phase[57],
                           double t) {
@@ -937,7 +950,7 @@ reference_pulsed_response(const struct mbe_subframe_model* model, const int puls
         if (!pulsed[l] || !below_nyquist(model->w0, l)) {
             continue;
         }
-        const double magnitude = (double)model->magnitude[l] * sqrt((double)model->w0) / 0.2046;
+        const double magnitude = reference_pulsed_magnitude(model, l);
         sum += 2.0 * magnitude * reference_low_band_gain(hz)
                * cos((w * (t - 16.0)) + phase[l] + reference_low_band_phase(hz));
     }
@@ -1765,7 +1778,7 @@ row_wave_frame(int row, int b0, int held, int from_silence, int voiced) {
 
 /* The rows' waveform stream, built frame by frame. */
 struct row_stream {
-    struct wave_frame frames[1400];
+    struct wave_frame frames[3600];
     size_t count;
     int last_row, last_b0; /* the last pulsed-row frame appended (for its repeats) */
     size_t n;              /* how many of each kind so far, for cycling */
@@ -1823,13 +1836,16 @@ row_push_kind(struct row_stream* s, char kind) {
  * The independent rendering through rate 33's pulsed rows
  * (test_waveform_through_changes()'s reference with the rule of
  * docs/dvsi-parity.md, "Rate 33: the pulsed rows"): each of the fourteen rows
- * at codes that put its pulses before their model's window (b0 0: the
- * mid-frame pulse at -0.89, before the frame; the own pulse at 79.11, before
- * its window), in the rising half, at the point (b0 79 and 80), in the falling
- * half and, for an own model, in the next frame (b0 80 and above), b0 0 and
- * 119 among them (L 9 and 56, the grid's two ends), and rows 24 and 25 at
- * every code 0..119, so at every pair of grid indices that occurs, each after
- * and before a frame with no voiced band; plain, own-pulsed, mid-pulsed and
+ * at every code 0..119 (all 1,680 pairs, each after and before a frame with
+ * no voiced band, so that each pair's playback is checked sample for sample,
+ * not only its word), so that the pulses fall before their model's window (b0
+ * 0: the mid-frame pulse at -0.89, before the frame; the own pulse at 79.11,
+ * before its window), in the rising half, on either side of the point (b0 79
+ * puts the single-row pulse 0.626 sample before it and b0 80 0.390 after it:
+ * no legal code puts a pulse exactly on a model's point), in the falling half
+ * and, for an own model, in the next frame (b0 80 and above), b0 0 and 119
+ * among them (L 9 and 56, the grid's two ends), rows 24 and 25 at every pair of
+ * grid indices that occurs; plain, own-pulsed, mid-pulsed and
  * both-pulsed frames in every order of two and three (a de Bruijn sequence);
  * voiced frames before and after each kind (the train exactly as without the
  * word: the reference's train is the one with no pulsed row); silence frames
@@ -1841,7 +1857,6 @@ row_push_kind(struct row_stream* s, char kind) {
  */
 static void
 test_waveform_through_pulsed_rows(enum mbe_voiced_synthesis rendering, int inexact) {
-    static const int every[] = {0, 1, 20, 40, 60, 78, 79, 80, 81, 90, 100, 110, 118, 119};
     static const char* const sequences[] = {
         "PPPOPPMPPBPOOPOMPOBPMOPMMPMBPBOPBMPBBOOOMOOBOMMOMBOBMOBBMMMBMBBBPP",
         "VOVVMVVBVVPVVOOVVMMVVBBVOVMVBVP",
@@ -1854,10 +1869,8 @@ test_waveform_through_pulsed_rows(enum mbe_voiced_synthesis rendering, int inexa
     memset(&stream, 0, sizeof(stream));
     row_push_kind(&stream, 'P');
     for (int row = 18; row <= 31; ++row) {
-        const int grid = row == 24 || row == 25;
-        const int codes = grid ? 120 : (int)(sizeof(every) / sizeof(every[0]));
-        for (int i = 0; i < codes; ++i) {
-            row_push_row(&stream, row, grid ? i : every[i], 0);
+        for (int b0 = 0; b0 < 120; ++b0) {
+            row_push_row(&stream, row, b0, 0);
             row_push_kind(&stream, 'P');
         }
     }
@@ -7790,20 +7803,26 @@ test_r33_rows_decoder_word(void) {
     mbe_parms s[3];
     r33_tone_bits(tone, 130, 64);
     mbe_initMbeParms(&s[0], &s[1], &s[2]);
-    assert((r33_frame(tone, out, s, -1) & MBE_PROCESS_FLAG_TONE) != 0u);
+    const unsigned tone_flags = r33_frame(tone, out, s, -1);
+    assert((tone_flags & MBE_PROCESS_FLAG_TONE) != 0u);
+    (void)tone_flags;
     for (int i = 0; i < 3; ++i) {
         assert(!holds_a_word(&s[i].PHIl[0]));
     }
     set_ambe2450(rejected, 70, 25);
     mbe_initMbeParms(&s[0], &s[1], &s[2]);
-    assert((r33_frame(rejected, out, s, 4) & MBE_PROCESS_FLAG_REPEAT) != 0u);
+    const unsigned rejected_flags = r33_frame(rejected, out, s, 4);
+    assert((rejected_flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+    (void)rejected_flags;
     for (int i = 0; i < 3; ++i) {
         assert(!holds_a_word(&s[i].PHIl[0]));
     }
     set_ambe2450(word, 50, 20);
     mbe_initMbeParms(&s[0], &s[1], &s[2]);
     (void)r33_frame(word, out, s, 0);
-    assert((r33_frame(rejected, out, s, 4) & MBE_PROCESS_FLAG_REPEAT) != 0u);
+    const unsigned repeat_flags = r33_frame(rejected, out, s, 4);
+    assert((repeat_flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+    (void)repeat_flags;
     assert(holds_word(&s[2].PHIl[0], 20, 50, 1) && holds_word(&s[0].PHIl[0], 20, 50, 1));
     assert(holds_word(&s[1].PHIl[0], 20, 50, 0));
 }
@@ -7862,8 +7881,11 @@ test_r33_rows_repeat(void) {
         memcpy(plain, s, sizeof(plain));
         mbe_set_frame_mark(&plain[2], MBE_FRAME_MARK_NONE);
         for (int f = 0; f < 2; ++f) {
-            assert((r33_frame(lost, out[f], s, 0) & MBE_PROCESS_FLAG_REPEAT) != 0u);
-            assert((r33_frame(lost, plain_out[f], plain, 0) & MBE_PROCESS_FLAG_REPEAT) != 0u);
+            const unsigned flags = r33_frame(lost, out[f], s, 0);
+            const unsigned plain_flags = r33_frame(lost, plain_out[f], plain, 0);
+            assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0u && (plain_flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+            (void)flags;
+            (void)plain_flags;
             assert(own ? holds_word(&s[2].PHIl[0], row, b0, 1) : !holds_a_word(&s[2].PHIl[0]));
             assert(stored_row_bits(&s[2]) == (own ? test_row_word_bits(test_row_word(row, b0, 0)) : 0u));
             assert(same_bits(out[f], plain_out[f], 160) == !own);
@@ -7885,10 +7907,13 @@ test_r33_rows_repeat(void) {
  * repeat does: after a frame of row 20, the tone's first frame plays the
  * repeat with the held word under its first 80 samples. Against the same state
  * with the word cleared from the last frame played (no pulse), the tone frame
- * differs in its first 80 samples only, by the repeat's pulse fading out
- * (1 - n / 80 of it); with the held word written there by the caller it is the
- * same bit for bit (the load gives the held form either way). After a frame of
- * row 27 (no own pulse) the three are the same.
+ * differs in its first 80 samples only, and there by 1 - n / 80 of the
+ * difference between the repeat with the held word and the repeat without it
+ * (each rendered here as the tone frame renders its outgoing speech, with the
+ * library's mbe_repeat_load_model() and mbe_synthesizeRepeatedSpeechStartf(),
+ * unlimited: what the test takes from the library); with the held word written
+ * there by the caller it is the same bit for bit (the load gives the held form
+ * either way). After a frame of row 27 (no own pulse) the three are the same.
  */
 static void
 test_r33_rows_under_tone(void) {
@@ -7903,12 +7928,34 @@ test_r33_rows_under_tone(void) {
         memcpy(held, s, sizeof(held));
         mbe_set_frame_mark(&none[2], MBE_FRAME_MARK_NONE);
         held[2].PHIl[0] = (float)test_row_word(rows[r], 30, 1);
-        assert((r33_frame(tone, out, s, 0) & MBE_PROCESS_FLAG_TONE) != 0u);
+        /* The outgoing speech, with the held word and without any. */
+        float speech[2][160];
+        for (int k = 0; k < 2; ++k) {
+            mbe_parms repeated = (k == 0) ? s[0] : none[0];
+            mbe_parms last = (k == 0) ? s[2] : none[2];
+            mbe_repeat_load_model(&repeated, &last);
+            repeated.PHIl[0] = (k == 0 && rows[r] == 20) ? (float)test_row_word(20, 30, 1) : 0.0f;
+            repeated.repeatCount = 0;
+            mbe_synthesizeRepeatedSpeechStartf(speech[k], &repeated, &last, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+                                               MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_UNLIMITED);
+        }
+        const unsigned flags = r33_frame(tone, out, s, 0);
+        assert((flags & MBE_PROCESS_FLAG_TONE) != 0u);
+        (void)flags;
         (void)r33_frame(tone, none_out, none, 0);
         (void)r33_frame(tone, held_out, held, 0);
         assert(same_bits(out, held_out, 160));
         assert(same_bits(out + 80, none_out + 80, 80));
         assert(same_bits(out, none_out, 80) == (rows[r] != 20));
+        double scale = 0.0;
+        for (int n = 0; n < 80; ++n) {
+            scale = fmax(scale, fmax(fabs((double)speech[0][n]), fabs((double)out[n])));
+        }
+        for (int n = 0; n < 80; ++n) {
+            const double want = (1.0 - ((double)n / 80.0)) * ((double)speech[0][n] - (double)speech[1][n]);
+            assert(fabs(((double)out[n] - (double)none_out[n]) - want) <= 1.0e-5 * scale + 1.0e-6);
+        }
+        assert(rows[r] != 20 || scale > 1.0e-3);
     }
 }
 
@@ -8077,21 +8124,25 @@ static const uint32_t k_row_values[] = {
 
 /*
  * Words in a caller's state, by their bit patterns. The reader
- * (mbe_pulsed_row_read()) takes exactly the 3,360 values a frame can carry
- * (rows 18..31, codes 0..119, held or not) with their fields, and neither
- * neighbour of any of them, nor any of k_slot_values and k_row_values that is
+ * (mbe_pulsed_row_read()) takes exactly the 2,640 values a writer gives (rows
+ * 18..31 at codes 0..119 not held, the decoder's 1,680; rows 18..25 held, the
+ * repeat's 960) with their fields, and neither neighbour of any of them, nor a
+ * held form of rows 26..31, nor any of k_slot_values and k_row_values that is
  * not one of them. On a grid model of row 21's code 40 after a plain frame,
  * each of those values in PHIl[0] plays and stores exactly what the frame with
- * no word does, or what it does with the word the value is (a word of a code
- * with the model's L, whose grid model is the same: the model cannot tell the
- * codes apart, and the code's own time plays); a word whose code has another L,
- * a word on the model with a voiced band, a word on a pitch an ulp off the
- * grid's, a held word of rows 26..31 (own mask: nothing) play as no word. In
- * slot 37 of the last frame's state, after a frame of row 21 at code 40 (which
- * stores its word), each value plays the next frame (row 16) as the same state
- * with that word (a word as a frame stores it of a code with that model's L)
- * or with 0 there: a held word, a word of rows 26..31, a word of another L, a
- * state without the subframe mark, all as 0.
+ * no word does, or, a word of a code with the model's L (whose grid model is
+ * the same: the model cannot tell the codes apart), plays otherwise than the
+ * frame with no word and stores the word of its row (that each pair plays as
+ * the rule says is the waveform test's); a word whose code has another L, a
+ * word on the model with a voiced band, on a pitch an ulp off the grid's or on
+ * the grid pitch with another harmonic count, a held word of rows 26..31 play
+ * as no word. In slot 37 of the last frame's state, after a frame of row 21 at
+ * code 40 (which stores its word), each value plays the next frame (row 16) as
+ * with 0 there, but for a word as a frame stores it of a code with that
+ * model's L, whose pulse sounds where its response reaches the frame; the
+ * state each leaves is the one with 0. A held word, a word of rows 26..31, a
+ * word of another L, the stored word with the last model an ulp off its grid
+ * pitch and a state without the subframe mark are all as 0.
  */
 static void
 test_untrusted_row_words(void) {
@@ -8172,10 +8223,15 @@ test_untrusted_row_words(void) {
         model.PHIl[0] = value;
         r33_after(&last, &model, out, &state);
         if (same_L) {
-            /* As the word it is: its own value, canonical. */
-            model.PHIl[0] = (float)test_row_word(word.row, word.b0, word.held);
-            r33_after(&last, &model, canonical, &canonical_state);
-            assert(same_bits(out, canonical, 160) && same_stream_state(&state, &canonical_state));
+            /* The word of a code of the model's L is taken (the grid model is the
+             * same) and plays its pulses, so the frame differs from the one with no
+             * word, and the frame stores the word of a row with an own mask; that
+             * each pair plays as the rule says, its times included, is checked
+             * against the independent rendering in test_waveform_through_pulsed_rows(). */
+            const uint32_t stored_want =
+                (word.row <= 25) ? test_row_word_bits(test_row_word(word.row, word.b0, 0)) : 0u;
+            assert(!same_bits(out, plain_out, 160) && stored_row_bits(&state) == stored_want);
+            (void)stored_want;
         } else {
             assert(same_bits(out, plain_out, 160) && same_state_but_mark(&state, &plain_state));
         }
@@ -8187,7 +8243,7 @@ test_untrusted_row_words(void) {
     int other_L;
     r33_grid(0, &other_w0, &other_L);
     assert(other_L != L);
-    mbe_parms checks[4][2];
+    mbe_parms checks[5][2];
     for (int c = 0; c < 4; ++c) {
         checks[c][0] = model;
         checks[c][0].PHIl[0] = own_word;
@@ -8196,7 +8252,11 @@ test_untrusted_row_words(void) {
     checks[1][0].w0 = nextafterf(w0, 1.0f);
     checks[2][0].PHIl[0] = (float)test_row_word(21, 0, 0);
     checks[3][0].PHIl[0] = (float)test_row_word(28, 40, 1);
-    for (int c = 0; c < 4; ++c) {
+    /* The grid pitch of code 40 with a harmonic count one above its own. */
+    blank_model(&checks[4][0], 125.0, L + 1, 0, 8.0f);
+    checks[4][0].w0 = w0;
+    checks[4][0].PHIl[0] = own_word;
+    for (int c = 0; c < 5; ++c) {
         float with_word[160], without_word[160];
         mbe_parms with_state, without_state;
         checks[c][1] = checks[c][0];
@@ -8262,15 +8322,23 @@ test_untrusted_row_words(void) {
         mbe_parms forged = stored;
         forged.noiseOverlap[TEST_ROW_SLOT] = value;
         r33_after(&forged, &model, out, &state);
-        if (takes) {
-            mbe_parms canonical_last = stored;
-            canonical_last.noiseOverlap[TEST_ROW_SLOT] = (float)test_row_word(word.row, word.b0, 0);
-            r33_after(&canonical_last, &model, canonical, &canonical_state);
-            assert(same_bits(out, canonical, 160) && same_stream_state(&state, &canonical_state));
-        } else {
-            assert(same_bits(out, plain_out, 160) && same_stream_state(&state, &plain_state));
-        }
+        /* A word taken plays the last frame's own pulse, at its time less 160,
+         * through that model's bands: audible where its response reaches the
+         * frame (its time plus the model's period and 16 samples past 0), and
+         * leaving the stored state as it is. */
+        const int sounds =
+            takes && reference_row_time(word.row, word.b0, 0, 0) + (2.0 * M_PI / (double)w0) + 16.0 > 0.0;
+        assert(same_bits(out, plain_out, 160) == !sounds && same_stream_state(&state, &plain_state));
+        (void)sounds;
     }
+    /* A word as a frame stores it, with the last frame's model a unit in the
+     * last place off its code's grid pitch: no slot is read. */
+    mbe_parms off = stored, off_zero = zero;
+    off.w0 = nextafterf(stored.w0, 1.0f);
+    off_zero.w0 = off.w0;
+    r33_after(&off, &model, out, &state);
+    r33_after(&off_zero, &model, canonical, &canonical_state);
+    assert(same_bits(out, canonical, 160) && same_stream_state(&state, &canonical_state));
     /* Without the subframe mark: no slot is read. */
     mbe_parms unmarked = stored, unmarked_zero = zero;
     unmarked.noiseOverlap[MBE_SUBFRAME_STATE_SLOT] = 0.0f;
@@ -8393,6 +8461,313 @@ test_row_words_in_codec_states(void) {
     }
 }
 
+/*
+ * Finding 1 of the review: the repeat loader reads the word only on the
+ * band-grid model of its code. Through mbe_processAmbe2450Dataf(): a frame of
+ * row 16 at b0 40 (a coded pitch, no grid model), a caller's value in the
+ * enhanced model's PHIl[0], then an erasure (b0 121). For each of a word of
+ * row 20 (1320.0f), one of row 28, a held word of row 20, and a word of code
+ * 40 on the grid model of another harmonic count (code 0's, L 9), the three
+ * returned PHIl[0] are the branch point's values, the value itself in cur_mp
+ * and prev_mp_enhanced and 0 in prev_mp ([1320, 0, 1320] for the first), and
+ * the samples and the states but for that word are those of the same stream
+ * without the forged value.
+ */
+static void
+test_r33_repeat_leaves_foreign_words(void) {
+    const float values[4] = {(float)test_row_word(20, 40, 0), (float)test_row_word(28, 40, 0),
+                             (float)test_row_word(20, 40, 1), (float)test_row_word(20, 40, 0)};
+    char frame[49], lost[49];
+    set_ambe2450(frame, 40, 16);
+    set_ambe2450(lost, 121, 0);
+    float grid0_w0;
+    int grid0_L;
+    r33_grid(0, &grid0_w0, &grid0_L);
+    for (int c = 0; c < 4; ++c) {
+        mbe_parms s[3], plain[3];
+        float out[2][160];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        (void)r33_frame(frame, out[0], s, 0);
+        if (c == 3) {
+            s[2].w0 = grid0_w0;
+            s[2].L = grid0_L;
+        }
+        memcpy(plain, s, sizeof(plain));
+        s[2].PHIl[0] = values[c];
+        const unsigned flags = r33_frame(lost, out[0], s, -1);
+        const unsigned plain_flags = r33_frame(lost, out[1], plain, -1);
+        assert(flags == plain_flags && (flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+        (void)flags;
+        (void)plain_flags;
+        assert(same_bits(&s[0].PHIl[0], &values[c], 1) && same_bits(&s[2].PHIl[0], &values[c], 1));
+        assert(test_row_word_bits(0) == 0u);
+        uint32_t history;
+        memcpy(&history, &s[1].PHIl[0], sizeof(history));
+        assert(history == 0u);
+        assert(same_bits(out[0], out[1], 160));
+        for (int i = 0; i < 3; ++i) {
+            assert(same_state_but_mark(&s[i], &plain[i]));
+        }
+    }
+}
+
+/*
+ * What is not promised: a caller's state that holds a word on the band-grid
+ * model of its code, or the word in slot 37 with such a last model, is to the
+ * library the history of a frame of that row, which its bits never held. The
+ * representation cannot tell the two apart (and two codes of one harmonic count
+ * share a grid model). After a frame of row 16 at b0 40, the enhanced model set
+ * to the grid model of code 40 with the word of row 20 at code 40: the erasure
+ * after it repeats a pulsed-row frame (the held word in the returned states,
+ * its samples other than the same stream's without the word: 159 of 160 in
+ * dev-debug); the same grid model with no word but that word in slot 37: the
+ * next frame of row 16 plays the last own model's pulse (14 samples in
+ * dev-debug). Pinned as the limit of the representation.
+ */
+static void
+test_r33_forged_history_plays(void) {
+    char frame[49], lost[49];
+    set_ambe2450(frame, 40, 16);
+    set_ambe2450(lost, 121, 0);
+    float w0;
+    int L;
+    r33_grid(40, &w0, &L);
+    for (int slot = 0; slot < 2; ++slot) {
+        mbe_parms s[3], plain[3];
+        float out[2][160];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        (void)r33_frame(frame, out[0], s, 0);
+        s[2].w0 = w0;
+        s[2].L = L;
+        memcpy(plain, s, sizeof(plain));
+        if (slot) {
+            s[2].noiseOverlap[TEST_ROW_SLOT] = (float)test_row_word(20, 40, 0);
+        } else {
+            s[2].PHIl[0] = (float)test_row_word(20, 40, 0);
+        }
+        (void)r33_frame(slot ? frame : lost, out[0], s, -1);
+        (void)r33_frame(slot ? frame : lost, out[1], plain, -1);
+        int differ = 0;
+        for (int n = 0; n < 160; ++n) {
+            differ += !same_bits(&out[0][n], &out[1][n], 1);
+        }
+        assert(differ > 0);
+        assert(slot || (holds_word(&s[0].PHIl[0], 20, 40, 1) && holds_word(&s[2].PHIl[0], 20, 40, 1)));
+        (void)differ;
+    }
+}
+
+/*
+ * The cap on a pulsed band's magnitude. A grid model of row 24 at code 30
+ * (every channel pulsed in both halves) with every Ml at 1e30, the largest
+ * magnitude a model takes, after a frame of no amplitude: its own model's
+ * pulsed bands take 1e30 divided by the unvoiced factor, over the cap, and so
+ * the cap itself; the mid-frame model, between a silent frame and this one,
+ * has no amplitude. The frame (no unvoiced part) is the independent rendering
+ * of the own model's pulse at the capped magnitude
+ * (reference_pulsed_magnitude(), which states the library's arithmetic), to a
+ * thousandth of its peak; the models are the library's
+ * (mbe_subframe_own_model()), the phases the test's own.
+ */
+static void
+test_r33_pulsed_magnitude_cap(void) {
+    float w0;
+    int L;
+    r33_grid(30, &w0, &L);
+    mbe_parms last, model;
+    float out[160];
+    fresh_stream(&last);
+    blank_model(&model, 125.0, L, 0, 1.0f);
+    model.w0 = w0;
+    for (int l = 1; l <= L; ++l) {
+        model.Ml[l] = 1.0e30f;
+        model.log2Ml[l] = (float)(0.3 * sin(0.9 * l));
+    }
+    model.PHIl[0] = (float)test_row_word(24, 30, 0);
+    struct mbe_subframe_model own;
+    mbe_parms cur = with_model(&last, &model);
+    cur.PHIl[0] = model.PHIl[0];
+    mbe_subframe_own_model(&cur, &own);
+    int pulsed[57];
+    assert(reference_row_bands(&own, 24, 0, pulsed));
+    double phase[57], want[160] = {0.0};
+    reference_own_phases(&cur, phase);
+    reference_row_render(want, &own, pulsed, phase, 2, reference_row_time(24, 30, 0, 2));
+    next_frame_with_word(out, &last, &model, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    double peak = 0.0;
+    for (int n = 0; n < 160; ++n) {
+        peak = fmax(peak, fabs(want[n]));
+    }
+    assert(peak > 1.0e30);
+    for (int n = 0; n < 160; ++n) {
+        assert(fabs((double)out[n] - want[n]) <= 1.0e-3 * peak);
+    }
+}
+
+/*
+ * The pulse times bit for bit (IEEE builds only: elsewhere the library and this
+ * test may round apart). A replica of the library's float rendering of one
+ * pulse (prepare_render(), start_oscillators(), render_pulse() and
+ * response_window() in mbe_subframe.c, op for op), fed the time the rule gives,
+ * formed in double and rounded to float once, reproduces the library's frame
+ * sample for sample. Taken from the library: the three models
+ * (mbe_subframe_own_model(), mbe_subframe_mid_model()), their pulsed bands
+ * chosen here as the rule says, and the helpers the rendering itself calls
+ * (mbe_sincosf(), mbe_low_band_gain(), mbe_low_band_phase()). Every row at every
+ * code after a frame with no voiced band and no pulse, and the plain frame
+ * after it, which plays the rest of an own pulse that falls past the frame;
+ * every pair sounds in one of the two. Computing the grid rows' times in float,
+ * which gives other floats at 132 of rows 24 and 25's 480 time evaluations (and
+ * the single law's at 212 of its 360), moves samples here.
+ */
+struct exact_render {
+    int count;
+    float w0, period;
+    float real[56], imag[56], step_c[56], step_s[56];
+    short harmonic[56];
+};
+
+static void
+exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], struct exact_render* r) {
+    const float hz_per_harmonic = model->w0 * (8000.0f / (2.0f * (float)M_PI));
+    const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
+    r->count = 0;
+    r->w0 = model->w0;
+    r->period = (2.0f * (float)M_PI) / model->w0;
+    for (int l = 1; l <= model->L; l++) {
+        const float w = model->w0 * (float)l;
+        if (!pulsed[l] || !(w < (float)M_PI)) {
+            continue;
+        }
+        const double magnitude = (double)model->magnitude[l] / (double)factor;
+        const float m = (magnitude < (double)1.0e30f) ? (float)magnitude : 1.0e30f;
+        const float hz = hz_per_harmonic * (float)l;
+        const float amplitude = 2.0f * m * 1.0f * mbe_low_band_gain(hz);
+        const int k = r->count++;
+        float sn, cs;
+        mbe_sincosf(model->phase[l] + mbe_low_band_phase(hz), &sn, &cs);
+        r->real[k] = amplitude * cs;
+        r->imag[k] = amplitude * sn;
+        mbe_sincosf(w, &r->step_s[k], &r->step_c[k]);
+        r->harmonic[k] = (short)l;
+    }
+}
+
+static float
+exact_window(float t, float period) {
+    float sn, cs;
+    if (t < 16.0f) {
+        mbe_sincosf((float)M_PI * (t / 16.0f), &sn, &cs);
+        return 0.5f * (1.0f - cs);
+    }
+    if (t < period) {
+        return 1.0f;
+    }
+    mbe_sincosf((float)M_PI * ((t - period) / 16.0f), &sn, &cs);
+    return 0.5f * (1.0f + cs);
+}
+
+static void
+exact_pulse(float* out, const struct exact_render* r, float pulse, int rising) {
+    const float last = pulse + r->period + 16.0f;
+    float real[56], imag[56];
+    int first = (pulse > 0.0f) ? (int)ceilf(pulse) : 0;
+    if (r->count == 0 || !(last > 0.0f) || first >= 80) {
+        return;
+    }
+    float turn_s, turn_c, sn = 0.0f, cs = 1.0f;
+    int harmonic = 0;
+    mbe_sincosf(r->w0 * (((float)first - pulse) - 16.0f), &turn_s, &turn_c);
+    for (int k = 0; k < r->count; k++) {
+        for (; harmonic < r->harmonic[k]; harmonic++) {
+            const float next = (cs * turn_c) - (sn * turn_s);
+            sn = (sn * turn_c) + (cs * turn_s);
+            cs = next;
+        }
+        real[k] = (r->real[k] * cs) - (r->imag[k] * sn);
+        imag[k] = (r->imag[k] * cs) + (r->real[k] * sn);
+    }
+    for (int n = first; n < 80 && (float)n < last; n++) {
+        const float fade = (float)n * (1.0f / 80.0f);
+        float sum = 0.0f;
+        for (int k = 0; k < r->count; k++) {
+            sum += real[k];
+            const float next = (real[k] * r->step_c[k]) - (imag[k] * r->step_s[k]);
+            imag[k] = (imag[k] * r->step_c[k]) + (real[k] * r->step_s[k]);
+            real[k] = next;
+        }
+        out[n] += exact_window((float)n - pulse, r->period) * (rising ? fade : (1.0f - fade)) * sum;
+    }
+}
+
+static void
+test_r33_pulse_times_by_bits(void) {
+    const enum mbe_voiced_synthesis r33 = MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
+    mbe_parms last, plain;
+    float out[160];
+    fresh_stream(&last);
+    blank_model(&plain, 125.0, 30, 0, 8.0f);
+    next_frame_as(out, &last, &plain, 0, r33);
+    int checked = 0, heard = 0;
+    for (int row = 18; row <= 31; ++row) {
+        for (int b0 = 0; b0 < 120; ++b0) {
+            float w0;
+            int L;
+            mbe_parms model, state = last;
+            r33_grid(b0, &w0, &L);
+            blank_model(&model, 125.0, L, 0, 8.0f);
+            model.w0 = w0;
+            shape_model(&model, (size_t)b0);
+            model.PHIl[0] = (float)test_row_word(row, b0, 0);
+            mbe_parms cur = with_model(&last, &model);
+            cur.PHIl[0] = model.PHIl[0];
+            struct mbe_subframe_model models[3];
+            mbe_subframe_mid_model(&last, &cur, 0, r33, &models[1]);
+            mbe_subframe_own_model(&cur, &models[2]);
+            int pulsed[3][57];
+            const int any_mid = reference_row_bands(&models[1], row, 1, pulsed[1]);
+            const int any_own = reference_row_bands(&models[2], row, 0, pulsed[2]);
+            struct exact_render render[3];
+            exact_prepare(&models[1], pulsed[1], &render[1]);
+            exact_prepare(&models[2], pulsed[2], &render[2]);
+            const float t1 = (float)reference_row_time(row, b0, 0, 1);
+            const float t2 = (float)reference_row_time(row, b0, 0, 2);
+            float want[160] = {0.0f};
+            if (any_mid) {
+                exact_pulse(want, &render[1], t1, 1);
+                exact_pulse(want + 80, &render[1], t1 - 80.0f, 0);
+            }
+            if (any_own) {
+                exact_pulse(want + 80, &render[2], t2 - 80.0f, 1);
+            }
+            /* The frame, then a plain frame after it, in which the frame's own
+             * model plays the rest of its pulse falling, at its time less 160
+             * (formed as every time is, in double and rounded once). */
+            float next_want[160] = {0.0f}, next_out[160];
+            if (any_own) {
+                exact_pulse(next_want, &render[2], (float)reference_row_time(row, b0, 0, 0), 0);
+            }
+            next_frame_with_word(out, &state, &model, 0, r33);
+            next_frame_as(next_out, &state, &plain, 0, r33);
+            float peak = 0.0f;
+            for (int n = 0; n < 160; ++n) {
+                if (!MID_PITCH_INEXACT) {
+                    assert(same_bits(&out[n], &want[n], 1) && same_bits(&next_out[n], &next_want[n], 1));
+                } else {
+                    assert(fabsf(out[n] - want[n]) <= 1.0e-3f * (1.0f + fabsf(want[n])));
+                    assert(fabsf(next_out[n] - next_want[n]) <= 1.0e-3f * (1.0f + fabsf(next_want[n])));
+                }
+                peak = fmaxf(peak, fmaxf(fabsf(want[n]), fabsf(next_want[n])));
+            }
+            checked += any_mid || any_own;
+            heard += peak > 1.0f;
+        }
+    }
+    assert(checked == 14 * 120 && heard == 14 * 120);
+    (void)checked;
+    (void)heard;
+}
+
 int
 main(void) {
     test_frame_marks();
@@ -8492,5 +8867,9 @@ main(void) {
     test_untrusted_row_words();
     test_row_slot_between_renderings();
     test_row_words_in_codec_states();
+    test_r33_repeat_leaves_foreign_words();
+    test_r33_forged_history_plays();
+    test_r33_pulsed_magnitude_cap();
+    test_r33_pulse_times_by_bits();
     return 0;
 }
