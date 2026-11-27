@@ -283,6 +283,63 @@ ambe2450_mid_pitch(float a, float b) {
     return (pitch <= (double)FLT_MAX) ? (float)pitch : 0.0f;
 }
 
+/*
+ * P25's mid-frame pitch between two models that both have a voiced band, a
+ * and b (each positive and normal; docs/dvsi-parity.md, "P25 pitch"): not
+ * their geometric mean but a parabola for its square root, floored to the
+ * grid of 2^-19 cycle per sample its frames' own pitches lie on. With
+ * fa fb = y 2^e the product of the two fundamentals in cycles per sample, y
+ * in [1, 2), and q(y) the parabola through sqrt(y) at y = 1, 1.5 and 2,
+ *   q(y) = sqrt(1.5) + (sqrt(2) - 1) (y - 1.5)
+ *          + 2 (sqrt(2) + 1 - 2 sqrt(1.5)) (y - 1.5)^2,
+ * the mid-frame fundamental is floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19:
+ * the geometric mean times q(y) / sqrt(y), which is 1 at the octave's ends
+ * and at y = 1.5 and lies between about -1.2e-3 and +7.7e-4 between them,
+ * then floored. Found on DVSI's decodes of its own P25 encodings, from the
+ * change over a frame of the lag between DVSI's decode and ours read at the
+ * frame's two boundaries, which the mid-frame pitch alone sets: one curve in
+ * the fractional part of log2 of the two periods' product, the same at an
+ * unchanged pitch code as at a step, which the parabola leaves at the
+ * measurement's noise; the floor was told from rounding and from none once
+ * the phase kernel read unvoiced bands as DVSI's decoder does
+ * (phase_log2_amplitudes()). No constant is fitted: the nodes are the
+ * interpolant's and the grid the frames' own. What the decoder computes is
+ * not known beyond that output.
+ * Formed in double from the stored floats: their product is exact in double,
+ * divided by (2 pi)^2 for the fundamentals' product, its mantissa by frexp(),
+ * the square roots from libm in double, the floor in double, and the pitch, 2
+ * pi times the whole number of steps over 2^19, rounded to float once. Over
+ * every ordered pair of the 208 P25 codes (equal codes included) the
+ * unfloored number of steps lies at least 6.3e-6 of a step from a whole
+ * number (b0 8 and 100), about 4.9e-10 of itself, so no build's double
+ * arithmetic (x87's extended one, fast-math's reordering) floors it otherwise;
+ * no product of two codes' fundamentals is an exact power of two (q's ends
+ * meet there: 1 at y = 1 and at y = 2); and 2 pi times any whole number of
+ * steps from 3,000 to 27,000 lies at least 7.6e-13 of itself from a float's
+ * rounding edge. A caller's pitches can put the value anywhere: each build
+ * then floors as its arithmetic gives, the pitch staying within a step.
+ * Its range: the product of two positive normal floats is positive, finite
+ * and normal in double, and so are the fundamentals' product and its square
+ * root; q(y) / sqrt(y) lies within 1 -1.2e-3 .. 1 + 7.7e-4. A pitch whose
+ * steps floor to 0 (a mean under 2^-19 cycle, both pitches near FLT_MIN) is
+ * 0, and one past FLT_MAX (both near it) is 0 too: no pitch, which the caller
+ * rejects (positive_normal()); any other is at least 2 pi 2^-19, normal.
+ */
+static float
+imbe_mid_pitch(float a, float b) {
+    const double turn = 2.0 * M_PI;
+    const double product = ((double)a * (double)b) / (turn * turn);
+    int exponent;
+    const double y = 2.0 * frexp(product, &exponent);
+    const double d = y - 1.5;
+    const double root2 = sqrt(2.0);
+    const double root15 = sqrt(1.5);
+    const double q = root15 + ((root2 - 1.0) * d) + (2.0 * (root2 + 1.0 - (2.0 * root15)) * d * d);
+    const double steps = floor(sqrt(product) * (q / sqrt(y)) * 524288.0);
+    const double pitch = (turn * steps) / 524288.0;
+    return (pitch <= (double)FLT_MAX) ? (float)pitch : 0.0f;
+}
+
 /* ---- the pulsed state of D-STAR and P25 ---- */
 
 /*
@@ -591,8 +648,12 @@ pulsed_mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voi
  * same (the level of everything that is not the mid-frame pitch), and a wave
  * in the two frames' periods with a period of half an octave fits that
  * change. How the decoder comes to it is not known. The same measurement's
- * grouped medians show no such jump at a step in D-STAR or P25. Both pitches
- * are positive and normal here (mbe_subframe_mid_model()). */
+ * grouped medians show no such jump at a step in D-STAR. Between two models
+ * with a voiced band P25's rendering plays the floored parabola of
+ * imbe_mid_pitch(), at an unchanged pitch as at a step (rate 33's wave has the
+ * same shape and period; its decoder shows no deviation at an unchanged code);
+ * ProVoice's and D-STAR's keep the geometric mean. Both pitches are positive
+ * and normal here (mbe_subframe_mid_model()). */
 static float
 mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
     const int prev_voiced = model_has_voiced_band(prev_mp);
@@ -607,9 +668,13 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
     if (!prev_voiced && !cur_voiced && pulsed_mid_pitch(prev_mp, cur_mp, rendering, &pulsed)) {
         return pulsed;
     }
-    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced
-        && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
-        return ambe2450_mid_pitch(prev_mp->w0, cur_mp->w0);
+    if (prev_voiced && cur_voiced) {
+        if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+            return imbe_mid_pitch(prev_mp->w0, cur_mp->w0);
+        }
+        if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
+            return ambe2450_mid_pitch(prev_mp->w0, cur_mp->w0);
+        }
     }
     return sqrtf(prev_mp->w0 * cur_mp->w0);
 }

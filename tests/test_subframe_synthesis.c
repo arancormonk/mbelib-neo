@@ -1402,6 +1402,29 @@ reference_r33_mid_pitch(double a, double b) {
     return sqrt(a * b) * reference_r33_factor() * (1.0 + wave);
 }
 
+/* P25's mid-frame pitch between two voiced frames of pitches a and b (radians
+ * per sample), from its statement: with fa fb = y s the product of the two
+ * fundamentals in cycles per sample, y in [1, 2) and s a power of two (found
+ * here by halving and doubling, not frexp()), the parabola q through sqrt at
+ * 1, 1.5 and 2 stands for sqrt(y), so sqrt(fa fb) becomes q(y) sqrt(s); that
+ * in steps of 2^-19 cycle, floored, as radians per sample. In double. */
+static double
+reference_p25_mid_pitch(double a, double b) {
+    double y = (a / (2.0 * M_PI)) * (b / (2.0 * M_PI));
+    double scale = 1.0;
+    while (y >= 2.0) {
+        y *= 0.5;
+        scale *= 2.0;
+    }
+    while (y < 1.0) {
+        y *= 2.0;
+        scale *= 0.5;
+    }
+    const double d = y - 1.5;
+    const double q = sqrt(1.5) + ((sqrt(2.0) - 1.0) * d) + (2.0 * (sqrt(2.0) + 1.0 - (2.0 * sqrt(1.5))) * d * d);
+    return 2.0 * M_PI * floor(524288.0 * q * sqrt(scale)) / 524288.0;
+}
+
 /* The mid-frame model's harmonic count at its pitch w0, between two frames
  * of L harmonics `shorter` and `longer`: every harmonic up to 0.9254 of
  * Nyquist, in float as the library computes it, held between the two. */
@@ -1449,7 +1472,9 @@ within_an_ulp_of(float a, double b) {
  * mean (in float, sqrtf of the product, as every rendering takes it), which
  * the rate-33 rendering instead forms in double, times the stored factor and
  * the half-octave wave, between two voiced frames of different pitch
- * (reference_r33_mid_pitch(), here rounded to float once). */
+ * (reference_r33_mid_pitch(), here rounded to float once), and P25's replaces
+ * between any two voiced frames by the floored parabola
+ * (reference_p25_mid_pitch(), rounded to float once). */
 static float
 reference_mid_pitch(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced_synthesis rendering,
                     const int codes[2]) {
@@ -1476,6 +1501,9 @@ reference_mid_pitch(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced
             return prev->w0;
         }
         return reference_pattern_pulses(prev_code, 0) ? sqrtf(prev->w0 * cur->w0) : cur->w0;
+    }
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE && prev_voiced && cur_voiced) {
+        return (float)reference_p25_mid_pitch((double)prev->w0, (double)cur->w0);
     }
     const int differ = !same_bits(&prev->w0, &cur->w0, 1);
     return (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced && differ)
@@ -3123,8 +3151,9 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
     assert(same_bits(muted.PSIl, heard.PSIl, 57));
     assert(same_bits(&muted.noiseSeed, &heard.noiseSeed, 1));
     /* The pulses the pitch step leaves: the mid-frame pitch's offset in the
-     * rate-33 rendering (the factor and the half-octave wave) moves them, by
-     * the cycles it takes from the frame. */
+     * rate-33 rendering (the factor and the half-octave wave) and in P25's
+     * (the floored parabola) moves them, by the cycles it takes from the
+     * frame. */
     mbe_parms other = last;
     other.w0 = model.w0;
     other.L = model.L;
@@ -3135,8 +3164,12 @@ test_muted_frame_advances(enum mbe_voiced_synthesis rendering) {
                                                  : MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
     mbe_advance_subframes(&other, &last, 0, others);
     const double wave = 0.5 * (reference_r33_wave((double)w0_of(210.0)) + reference_r33_wave((double)w0_of(190.0)));
-    const double lost = (1.0 - ((1.0 - 3.0e-4) * (1.0 + wave))) * cycles_of(sqrt(210.0 * 190.0), 80.0);
-    const double offset = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) ? -lost : lost;
+    const double geometric = sqrt(210.0 * 190.0);
+    const double r33_hz = geometric * (1.0 - 3.0e-4) * (1.0 + wave);
+    const double p25_hz = reference_p25_mid_pitch((double)w0_of(210.0), (double)w0_of(190.0)) * 8000.0 / (2.0 * M_PI);
+    const double own_hz = (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) ? p25_hz : geometric;
+    const double offset = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) ? cycles_of(r33_hz - geometric, 80.0)
+                                                                            : cycles_of(own_hz - r33_hz, 80.0);
     assert(fabs(cycles_apart(pulse_phase(&advanced), pulse_phase(&other) + offset)) < 1e-6);
 }
 
@@ -3225,8 +3258,10 @@ rate33_code_model(mbe_parms* mp, int b0) {
  * pitch codes a and b: in the rate-33 rendering the formula
  * (reference_r33_mid_pitch(), in double) within an ulp of float, the mean of
  * the two frames' h(P) being near *wave (to 5e-5) where wave is not NULL; in
- * D-STAR's and the IMBE rendering the geometric mean in float, unchanged by
- * the wave (bit for bit in an IEEE build); returns that mean of h. */
+ * D-STAR's and ProVoice's rendering the geometric mean in float, unchanged by
+ * the wave (bit for bit in an IEEE build), in P25's the floored parabola
+ * (bit for bit: the floor lies far from these pitches' edges, see
+ * test_p25_mid_pitch_pairs()); returns that mean of h. */
 static double
 check_code_pair(int a, int b, const double* wave, int tolerant, int inexact) {
     mbe_parms prev, cur;
@@ -3245,14 +3280,21 @@ check_code_pair(int a, int b, const double* wave, int tolerant, int inexact) {
     const float common = sqrtf(prev.w0 * cur.w0);
     mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &model);
     assert(same_or_an_ulp(model.w0, common, tolerant));
-    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &model);
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE, &model);
     assert(same_or_an_ulp(model.w0, common, tolerant));
-    /* Equal pitches: the frame's own pitch, the wave not applied, in every
-     * rendering (sqrtf(w0 * w0), which IEEE arithmetic rounds back to w0, a
-     * fast-math build within an ulp). */
+    /* P25's: the floored parabola, at a step and at equal pitches alike. */
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &model);
+    const float p25 = (float)reference_p25_mid_pitch((double)prev.w0, (double)cur.w0);
+    assert(same_bits(&model.w0, &p25, 1));
+    mbe_subframe_mid_model(&cur, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &model);
+    const float p25_same = (float)reference_p25_mid_pitch((double)cur.w0, (double)cur.w0);
+    assert(same_bits(&model.w0, &p25_same, 1));
+    /* Equal pitches: the frame's own pitch, the wave not applied, in the
+     * other renderings (sqrtf(w0 * w0), which IEEE arithmetic rounds back to
+     * w0, a fast-math build within an ulp). */
     for (int r = 0; r < 3; ++r) {
         static const enum mbe_voiced_synthesis renderings[3] = {
-            MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_IMBE, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450};
+            MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450};
 
         mbe_subframe_mid_model(&cur, &cur, 0, renderings[r], &model);
         assert(same_or_an_ulp(model.w0, cur.w0, tolerant));
@@ -3453,7 +3495,7 @@ test_ambe2450_mid_pitch_codes(int tolerant, int inexact) {
             const float common = sqrtf(prev->w0 * cur->w0);
             mbe_subframe_mid_model(prev, cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &model);
             assert(same_or_an_ulp(model.w0, common, tolerant));
-            mbe_subframe_mid_model(prev, cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &model);
+            mbe_subframe_mid_model(prev, cur, 0, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE, &model);
             assert(same_or_an_ulp(model.w0, common, tolerant));
         }
     }
@@ -5252,25 +5294,44 @@ set_pitch_bits(mbe_parms* mp, uint32_t bits) {
 }
 
 /* A P25 pitch step whose mid-frame harmonic lies just under halfway between
- * two harmonics of the frame before: b0 134, word 000000000010, then b0 161,
- * word 111111111101, at the pitches the decoder played for them before the
- * grid (the half-octave law: 0x3D9441C4 and 0x3D806171, now a caller's
- * pitches; at the grid pitches no ordered pair of different codes puts a
- * mid-frame harmonic there with the geometric mean). The mid-frame model's
- * harmonic 36 lies at 33.4999986 of the first frame's harmonics (nearest 33,
- * voiced) and 38.69 of the second's (39, voiced): voiced in both, it stays
- * voiced. (A float quotient rounds the first position to 33.5 and took
- * harmonic 34, unvoiced, for it, and the columns silenced the band.) */
+ * two harmonics of a frame. At P25's grid pitches with its floored parabola:
+ * b0 109 then b0 163, both with band 1 alone voiced (harmonics 1 to 3), the
+ * mid-frame model's harmonic 3 lies at 3.49999997 of the second frame's
+ * harmonics (nearest 3, voiced; harmonic 4 is not), so voiced in both frames,
+ * it stays voiced. A float quotient rounds the position to 3.5 and takes
+ * harmonic 4, unvoiced, and the columns would decide the band. Of the ordered
+ * pairs of different codes, 54 put a mid-frame harmonic where the float and
+ * the double quotient take different nearest harmonics (one at an exact
+ * half: b0 22 then 206, harmonic 13 at 6.5 of the first frame's, which the
+ * tie rule gives harmonic 7). Then, in ProVoice's rendering (the geometric
+ * mean), the case the rule was found on: b0 134, word 000000000010, then b0
+ * 161, word 111111111101, at the pitches P25's decoder played for them before
+ * the grid (0x3D9441C4 and 0x3D806171, now a caller's pitches), where harmonic
+ * 36 lies at 33.4999986 of the first frame's harmonics (nearest 33, voiced)
+ * and 38.69 of the second's (39, voiced). */
 static void
 test_p25_nearest_harmonic_across_a_step(void) {
     mbe_parms prev, cur;
     struct mbe_subframe_model mid;
     int want[57];
+    p25_frame(&prev, 109, "100000000000");
+    p25_frame(&cur, 163, "100000000000");
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
+    const double grid_position = (double)mid.w0 * 3.0 / (double)cur.w0;
+    assert(grid_position > 3.4999 && grid_position < 3.5);
+    assert(cur.Vl[3] == 1 && cur.Vl[4] == 0);
+    assert(mid.voiced[3] == 1);
+    p25_rule_states(&prev, "100000000000", &cur, "100000000000", (double)mid.w0, mid.L, want);
+    for (int l = 1; l <= mid.L; ++l) {
+        assert(mid.voiced[l] == want[l]);
+    }
+
+    const enum mbe_voiced_synthesis provoice = MBE_VOICED_SYNTHESIS_DVSI_PROVOICE;
     p25_frame(&prev, 134, "000000000010");
     p25_frame(&cur, 161, "111111111101");
     set_pitch_bits(&prev, UINT32_C(0x3D9441C4));
     set_pitch_bits(&cur, UINT32_C(0x3D806171));
-    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
+    mbe_subframe_mid_model(&prev, &cur, 0, provoice, &mid);
     const double position = (double)mid.w0 * 36.0 / (double)prev.w0;
     assert(position > 33.4999 && position < 33.5);
     assert(prev.Vl[33] == 1 && prev.Vl[34] == 0 && cur.Vl[39] == 1);
@@ -5278,6 +5339,100 @@ test_p25_nearest_harmonic_across_a_step(void) {
     p25_rule_states(&prev, "000000000010", &cur, "111111111101", (double)mid.w0, mid.L, want);
     for (int l = 1; l <= mid.L; ++l) {
         assert(mid.voiced[l] == want[l]);
+    }
+}
+
+/* A voiced P25 model at the pitch the decoder gives code b0 (every band
+ * voiced). */
+static void
+p25_voiced_code(mbe_parms* mp, int b0) {
+    p25_frame(mp, b0, "111111111111");
+}
+
+/* The mid-frame pitch of `rendering` between two models. */
+static float
+mid_pitch_of(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced_synthesis rendering) {
+    struct mbe_subframe_model mid;
+    mbe_subframe_mid_model(prev, cur, 0, rendering, &mid);
+    return mid.w0;
+}
+
+/*
+ * P25's mid-frame pitch between two voiced models, against the floored
+ * parabola formed here from its statement (reference_p25_mid_pitch(): the
+ * mantissa found by halving and doubling, sqrt(fa fb) as q(y) times the root
+ * of the power of two), bit for bit in every build, over every ordered pair of
+ * the 208 codes, each code against itself included: the unfloored value lies
+ * at least 6.3e-6 of a grid step from a whole number at every pair (b0 8 and
+ * 100) and no product of two codes' fundamentals is an exact power of two, so
+ * no build's double arithmetic floors it otherwise. At equal pitches the
+ * parabola's deviation is there (it moves most codes off their own pitch).
+ * D-STAR's, ProVoice's and rate 33's renderings keep their own rules on the
+ * same pairs (the geometric mean in float; rate 33's wave between different
+ * pitches, its own pitch at equal ones). At an onset and an offset the voiced
+ * model's own pitch stands. A caller's pitch that is no positive normal float
+ * gives no pitch and no voiced band, and two pitches whose parabola floors to
+ * zero steps or whose result passes FLT_MAX give none either.
+ */
+static void
+test_p25_mid_pitch_pairs(int tolerant) {
+    static mbe_parms codes[208];
+    for (int b0 = 0; b0 < 208; ++b0) {
+        p25_voiced_code(&codes[b0], b0);
+    }
+    int own = 0;
+    for (int a = 0; a < 208; ++a) {
+        for (int b = 0; b < 208; ++b) {
+            const mbe_parms* prev = &codes[a];
+            const mbe_parms* cur = &codes[b];
+            const float want = (float)reference_p25_mid_pitch((double)prev->w0, (double)cur->w0);
+            const float got = mid_pitch_of(prev, cur, MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+            assert(same_bits(&got, &want, 1));
+            /* On the grid: 2 pi times a whole number of steps of 2^-19, to the
+             * float's rounding (an ulp is up to 1.6e-3 of a step here). */
+            const double steps = (double)got * 524288.0 / (2.0 * M_PI);
+            assert(fabs(steps - floor(steps + 0.5)) < 4.0e-3);
+            own += (a == b) && same_bits(&got, &cur->w0, 1);
+            if ((a % 13) == 0 || a == b) {
+                const float common = sqrtf(prev->w0 * cur->w0);
+                const float dstar = mid_pitch_of(prev, cur, MBE_VOICED_SYNTHESIS_DVSI);
+                const float provoice = mid_pitch_of(prev, cur, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE);
+                assert(same_or_an_ulp(dstar, common, tolerant) && same_or_an_ulp(provoice, common, tolerant));
+                const float r33 = mid_pitch_of(prev, cur, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+                assert((a == b) ? same_or_an_ulp(r33, common, tolerant) : !same_or_an_ulp(r33, common, 0));
+            }
+        }
+    }
+    /* At equal pitches the parabola keeps the code's own pitch at a few codes
+     * only (the mantissa of its square near 1, 1.5 or 2). */
+    assert(own < 20);
+
+    /* An onset and an offset: the voiced model's own pitch. */
+    mbe_parms unvoiced;
+    p25_frame(&unvoiced, 25, "");
+    float w = mid_pitch_of(&unvoiced, &codes[80], MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    assert(same_bits(&w, &codes[80].w0, 1));
+    w = mid_pitch_of(&codes[80], &unvoiced, MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    assert(same_bits(&w, &codes[80].w0, 1));
+
+    /* Pitches that are no positive normal float, and pairs at the float
+     * range's ends: no pitch, no voiced band. */
+    static const uint32_t bad[] = {0x00000000u, 0x80000000u, 0x00000001u, 0x007FFFFFu,
+                                   0x7F800000u, 0x7FC00000u, 0xFFC00000u, 0xBF800000u};
+    static const uint32_t ends[][2] = {
+        {0x7F7FFFFFu, 0x7F7FFFFFu}, {0x7F7FFFFFu, 0x7F7FFFFEu}, {0x00800000u, 0x00800000u}, {0x00800000u, 0x3F800000u}};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]) + sizeof(ends) / sizeof(ends[0]); ++i) {
+        mbe_parms prev = codes[60], cur = codes[90];
+        if (i < sizeof(bad) / sizeof(bad[0])) {
+            set_pitch_bits(((i % 2) == 0) ? &prev : &cur, bad[i]);
+        } else {
+            set_pitch_bits(&prev, ends[i - sizeof(bad) / sizeof(bad[0])][0]);
+            set_pitch_bits(&cur, ends[i - sizeof(bad) / sizeof(bad[0])][1]);
+        }
+        struct mbe_subframe_model mid;
+        mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
+        const float none = 0.0f;
+        assert(same_bits(&mid.w0, &none, 1) && !mid.any_voiced && mid.L >= 1 && mid.L <= 56);
     }
 }
 
@@ -5305,12 +5460,11 @@ p25_sweep_word(int K, int pattern, char word[13]) {
  * pairs of a code with itself left out (3,797 pairs, steps of up to 205 codes
  * up and 206 down), each with four voicing words in each frame (16 pairs of words:
  * 60,752 frame pairs; about a second in a Debug build), the frames decoded by
- * the P25 decoder. Before the grid pitch, among all ordered pairs of
- * different P25 codes only 134 and 161, in either order, put a mid-frame
- * harmonic where the float quotient and the double one take different nearest
- * harmonics (harmonic 36: test_p25_nearest_harmonic_across_a_step, which now
- * sets those pitches itself); at the grid pitches with the geometric mean, no
- * pair does. The sweep keeps both codes. The
+ * the P25 decoder. At P25's grid pitches and its floored parabola, 54 ordered
+ * pairs of different codes put a mid-frame harmonic where the float quotient
+ * and the double one take different nearest harmonics (among them 109 and
+ * 163, in either order: test_p25_nearest_harmonic_across_a_step); before the
+ * grid only 134 and 161 did, which the sweep keeps. The
  * voicing words are set from each band's parameter bit, found once per code. */
 static void
 test_p25_mid_columns_across_steps(void) {
@@ -9368,12 +9522,13 @@ test_low_cut_knee(void) {
 }
 
 /*
- * The cut's level: a steady fully voiced 100 Hz stream in each of D-STAR's,
- * P25's and rate 33's renderings, its tracker forced before every frame to
+ * The cut's level: a steady fully voiced 100 Hz stream (125 Hz in P25's) in
+ * each of D-STAR's, P25's and rate 33's renderings, its tracker forced before every frame to
  * 150 Hz (and the stored corner with it), against the same stream forced to
  * 50 Hz, under every harmonic. Harmonic 1, under the corner, plays at
  * (f / 150)^2 of its uncut level (f as the renderer forms it), measured by the
- * component at 100 Hz over eight frames, 1280 samples, 16 periods (a measure
+ * component at its frequency over eight frames, 1280 samples, 16 periods (20
+ * at 125 Hz; a measure
  * whose leakage from the other harmonics is nil, the window holding whole
  * periods of each: within 1e-6 here), to 1e-4; every other harmonic, at
  * 200 Hz or above, is untouched bit for bit: with harmonic 1's amplitude 0,
@@ -9384,7 +9539,13 @@ static void
 test_low_cut_level(enum mbe_voiced_synthesis rendering) {
     static float out[2][2][10 * 160];
     mbe_parms model;
-    blank_model(&model, 100.0, 37, 37, 12.0f);
+    /* P25's at 125 Hz, 2^-6 cycle per sample, whose square's mantissa is 1:
+     * there its floored parabola gives the frame's own pitch back at
+     * mid-frame (2^19 times the root is 8192 and 2.3e-4), so that the stream
+     * stays steady; 20 periods in the 1280 samples. */
+    const int p25 = rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    const double hz = p25 ? 125.0 : 100.0;
+    blank_model(&model, hz, p25 ? 29 : 37, p25 ? 29 : 37, 12.0f);
     for (int quiet = 0; quiet < 2; ++quiet) {
         mbe_parms frame = model;
         if (quiet) {
@@ -9404,8 +9565,8 @@ test_low_cut_level(enum mbe_voiced_synthesis rendering) {
     }
     const double f = (double)reference_knee_hz(model.w0, 1);
     const double want = (f / 150.0) * (f / 150.0);
-    const double cut = component_amplitude(out[0][1] + 320, 1280, 100.0);
-    const double uncut = component_amplitude(out[0][0] + 320, 1280, 100.0);
+    const double cut = component_amplitude(out[0][1] + 320, 1280, hz);
+    const double uncut = component_amplitude(out[0][0] + 320, 1280, hz);
     assert(uncut > 1.0 && fabs(cut / uncut - want) < 1.0e-4);
     assert(same_bits(out[1][0], out[1][1], 10 * 160));
     assert(!same_bits(out[0][0], out[0][1], 10 * 160));
@@ -9786,6 +9947,7 @@ main(void) {
     test_p25_onset_columns_only_at_onsets();
     test_p25_onset_edges();
     test_p25_code_tests_on_the_grid();
+    test_p25_mid_pitch_pairs(MID_PITCH_FAST_MATH);
     test_dstar_mid_columns_by_words();
     test_dstar_mid_columns_table();
     test_p25_mid_columns_by_words();
