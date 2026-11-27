@@ -15,7 +15,7 @@
  * single pulse (docs/dvsi-parity.md, "D-STAR and P25: the pulsed state"). The
  * patterns are Table 2 of US 7,970,606, read; that D-STAR's codes carry the
  * same patterns at b0 - 64, and that DVSI's decoders play them, were measured
- * on DVSI's decodes. The synthesizer (mbe_subframe.c) holds the patterns and
+ * on DVSI's decodes of its own encodings. The synthesizer (mbe_subframe.c) holds the patterns and
  * renders the state; it asks the codec whose rendering it serves which code,
  * if any, a model's pitch is, through the functions below (and, for P25's
  * validity counter, which reads a code only while it stands at 0 or more,

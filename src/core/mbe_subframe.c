@@ -296,7 +296,7 @@ ambe2450_mid_pitch(float a, float b) {
  * subframe's, channel k (k = 0..7, 500 k to 500 (k + 1) Hz, the last open
  * above) lowest first, 'P' pulsed. That D-STAR's codes carry the same
  * patterns, and that DVSI's decoders play them so, are measurements on DVSI's
- * decodes (a DVMEGA DVstick 30's full-band curves corroborate them at one
+ * decodes of its own encodings (a DVMEGA DVstick 30's full-band curves corroborate them at one
  * D-STAR code, no more); the codes whose own subframe has a
  * pulsed channel (0..7, 24..39, 48..55) are those of D-STAR's
  * MBE_FRAME_MARK_PITCH_CARRIES.
@@ -357,10 +357,15 @@ pulsed_code(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
                                                          : mbe_ambe2400_pulsed_code(mp->w0);
 }
 
-/* Whether a state with this rendering's subframe mark holds exactly `value` in
+/* Whether a state with the subframe renderings' mark (MBE_SUBFRAME_STATE_MARK,
+ * which every subframe rendering writes alike) holds exactly `value` in
  * noiseOverlap[slot], by its bit pattern: anything else a caller's state holds
  * there (not a number, an infinity, a subnormal, a negative zero, a near
- * value), and any value in a state the other rendering wrote, is not it. */
+ * value), and any value in a state without that mark (one the TIA-102.BABA
+ * rendering wrote, or a fresh one), is not it. The mark does not say which
+ * subframe rendering wrote the state: D-STAR's and P25's both write a marked
+ * 1.0f in PULSED_SLOT, and the other subframe renderings 0 in all three
+ * slots. */
 static int
 stored_exactly(const mbe_parms* mp, int slot, float value) {
     uint32_t bits, want;
@@ -526,13 +531,15 @@ pulse_bands(struct mbe_subframe_model* model, int code, int pattern) {
 
 /*
  * The mid-frame pitch between two frames with no voiced band of which at least
- * one has a code that is read (read_code(), last_read_code()), as DVSI's
- * decoders play it: in P25 this
+ * one has a code that is read (read_code(), last_read_code()): in P25 this
  * frame's; in D-STAR the frame before's, unless this frame's own-subframe
  * pattern has a pulsed channel, and then this frame's, or the geometric mean of
  * the two if the frame before's own-subframe pattern has one too. Measured on
- * DVSI's decodes of the development and validation vectors against the
- * geometric mean everywhere and against each codec's rule in the other. Returns
+ * DVSI's decodes of the development and validation vectors (DVSI's own
+ * encodings, on which P25's counter never falls below 0, so that every code is
+ * read) against the geometric mean everywhere and against each codec's rule in
+ * the other; that a code which is not read takes no part is this library's
+ * reading of the published description of the counter, not a measurement. Returns
  * 0, and leaves *w0, where neither frame has a code that is read: between two
  * frames with no voiced band and no such code the geometric mean stays (DVSI's
  * default-code frames all share one pitch, so nothing there was measured).
@@ -1428,11 +1435,11 @@ frame_accepted(const mbe_parms* cur_mp, const mbe_parms* prev_mp) {
 }
 
 /* Whether the mid-frame model of the frame a state holds emitted its pulse of
- * the pulsed state (PULSED_SLOT): only a state with this rendering's subframe
+ * the pulsed state (PULSED_SLOT): only a state with the subframe renderings'
  * mark holding exactly PULSED_EMITTED there, by its bit pattern (0x3F800000);
  * anything else a caller's state holds (not a number, an infinity, a
  * subnormal, a negative value, 0.5, 2.0) is "not emitted", and so is a state
- * the other rendering wrote. */
+ * without the mark (one the TIA-102.BABA rendering wrote). */
 static int
 mid_model_emitted(const mbe_parms* prev_mp) {
     return stored_exactly(prev_mp, PULSED_SLOT, PULSED_EMITTED);
@@ -1447,7 +1454,10 @@ mid_model_emitted(const mbe_parms* prev_mp) {
  * pulsed_code(), where the rendering reads them: in P25's only while the
  * validity counter allows, read_code(), and the last frame's code only where
  * that frame read it, last_read_code(); a code that is not read is no code,
- * and the frame renders as it would at another pitch with no voiced band). The
+ * and the frame renders at its own pitch as at the branch point, in every state
+ * a stream reaches). The counter's step for the next frame is computed here too
+ * (next_count()); the mid-frame model's pitch, built before, consulted the read
+ * state through pulsed_mid_pitch(). The
  * mid-frame model that a frame marked
  * MBE_FRAME_MARK_PREVIOUS_HELD or MBE_FRAME_MARK_TONE puts in place (the
  * previous model held, or a tone frame's own model) takes no pattern. A model
