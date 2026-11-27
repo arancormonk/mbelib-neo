@@ -1296,6 +1296,12 @@ p25_fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_
     double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
     float envelope[57] = {0};
 
+    /* The caller has checked them (mbe_subframe_mid_model()); stated again
+     * here, where the arrays are indexed by them. */
+    if (!mbe_harmonic_count_is_valid(prev_mp->L) || !mbe_harmonic_count_is_valid(cur_mp->L)
+        || !mbe_harmonic_count_is_valid(model->L)) {
+        return;
+    }
     common_log2_magnitudes(prev_mp, prev_log2);
     common_log2_magnitudes(cur_mp, cur_log2);
     p25_phase_log2_inputs(prev_mp, prev_phase_log2);
