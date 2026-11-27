@@ -2385,8 +2385,9 @@ rate_of(float w0) {
 static double
 first_pulse_of(const mbe_parms* mp) {
     const float stored = mp->noiseOverlap[0];
-    assert(stored >= 1.0f && stored < (float)MBE_PULSE_HISTORY && floorf(stored) == stored);
+    assert(stored >= 1.0f && stored < (float)MBE_PULSE_HISTORY);
     const int count = (int)stored;
+    assert(float_bits_equal((float)count, stored));
     return (double)mp->noiseOverlap[count] + 160.0;
 }
 
