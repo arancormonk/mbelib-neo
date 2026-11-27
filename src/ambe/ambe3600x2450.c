@@ -26,6 +26,7 @@
 #include "mbe_compiler.h"
 #include "mbe_math.h"
 #include "mbe_pcm_convert.h"
+#include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
@@ -266,13 +267,20 @@ ambe2450_vuv_mark(int b1) {
 
 /* The frame's voicing, and its mark: a silence frame is marked
  * MBE_FRAME_MARK_PREVIOUS_HELD (ambe2450_set_silence_model()), a voice frame
- * by its row (ambe2450_vuv_mark()). */
+ * by its row (ambe2450_vuv_mark()), and a voice frame of V/UV rows 18 to 31,
+ * rate 33's form of the pulsed state, carries the word of its row and pitch
+ * code instead (mbe_set_pulsed_row_word(); docs/dvsi-parity.md, "Rate 33: the
+ * pulsed rows"), which the rate-33 rendering alone reads. */
 static void
 ambe2450_decode_vuv(const char* ambe_d, mbe_parms* cur_mp, int L, float f0, int silence, int b0) {
-    (void)b0;
     int b1 = ambe2450_field(ambe_d, 1);
 
-    mbe_set_frame_mark(cur_mp, silence ? MBE_FRAME_MARK_PREVIOUS_HELD : ambe2450_vuv_mark(b1));
+    if (!silence && b1 >= MBE_PULSED_ROW_FIRST) {
+        const struct mbe_pulsed_row word = {b1, b0, 0};
+        mbe_set_pulsed_row_word(cur_mp, &word);
+    } else {
+        mbe_set_frame_mark(cur_mp, silence ? MBE_FRAME_MARK_PREVIOUS_HELD : ambe2450_vuv_mark(b1));
+    }
     for (int l = 1; l <= L; l++) {
         if (silence == 0) {
             cur_mp->Vl[l] = mbe_ambe2450_harmonic_voiced(AmbeVuv[b1], l, f0);
@@ -617,6 +625,32 @@ ambe2450_set_silence_model(mbe_parms* cur_mp, int* L, float* f0, int* silence) {
 #define MBE_AMBE2450_GRID_FIRST_ROW 18
 #define MBE_AMBE2450_GRID_SPAN      2.81f
 
+/*
+ * The band-grid model of pitch code b0 (0..119): its harmonic count and w0 =
+ * MBE_AMBE2450_GRID_SPAN / L, rounded to float (also under x87 excess
+ * precision, where it is otherwise rounded only when stored). One body, not
+ * inlined, serves the decode and mbe_ambe2450_pulsed_row_model(), which asks
+ * whether a model carrying a pulsed-row word is the grid model of the word's
+ * code, so that the two round alike in every build; the arithmetic is the one
+ * the decode has used since the grid.
+ */
+static MBE_NOINLINE void
+ambe2450_grid_model(int b0, int* L, float* w0) {
+    *L = mbe_ambe2450_harmonic_count(b0);
+    *w0 = mbe_round_to_float(MBE_AMBE2450_GRID_SPAN / (float)*L);
+}
+
+int
+mbe_ambe2450_pulsed_row_model(float w0, int L, int b0) {
+    int grid_L;
+    float grid_w0;
+    uint32_t bits, grid_bits;
+    ambe2450_grid_model(b0, &grid_L, &grid_w0);
+    memcpy(&bits, &w0, sizeof(bits));
+    memcpy(&grid_bits, &grid_w0, sizeof(grid_bits));
+    return L == grid_L && bits == grid_bits;
+}
+
 static int
 ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* L, float* f0, int* silence) {
     const int kind = ambe2450_classify_frame(ambe_d);
@@ -634,7 +668,8 @@ ambe2450_setup_frame_model(const char* ambe_d, mbe_parms* cur_mp, int* b0, int* 
         *L = mbe_ambe2450_harmonic_count(*b0);
         cur_mp->L = *L;
         if (ambe2450_field(ambe_d, 1) >= MBE_AMBE2450_GRID_FIRST_ROW) {
-            cur_mp->w0 = MBE_AMBE2450_GRID_SPAN / (float)*L;
+            ambe2450_grid_model(*b0, L, &cur_mp->w0);
+            cur_mp->L = *L;
             *f0 = cur_mp->w0 / (2.0f * (float)M_PI);
         }
     }
@@ -1111,12 +1146,45 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
  * of V/UV rows 13, 15 and 17 belongs to a decoded frame, between the frame
  * before it and its own model: a frame that repeats one plays the repeated
  * model's own voicing through, from that model to itself, so the row's mark
- * does not go with the repeated model (any other mark does). Not in
+ * does not go with the repeated model (any other mark does). A repeated model
+ * of V/UV rows 18 to 31 plays the state of its last subframe again: a word of
+ * rows 18 to 25 (either form) becomes the held form, which the rate-33
+ * rendering plays with the row's own mask in both halves, each model emitting
+ * its pulse at the own pulse's position relative to its point; a word of rows
+ * 26 to 31, whose own mask pulses nothing, is cleared (docs/dvsi-parity.md,
+ * "Rate 33: the pulsed rows": observed on six lost frames of DVSI's
+ * hard-decision channel-error vectors, rows 19, 26 and 27; the held position
+ * of rows 24 and 25 is the rule's extension, not observed). This is the second
+ * place the word is read (the rate-33 rendering is the first), and it acts on
+ * the word only where the loaded model is the band-grid model of the word's
+ * code (mbe_ambe2450_pulsed_row_model(), the decoder's own grid function): on
+ * any other model a caller's value in PHIl[0] is no word, and the repeat leaves
+ * it as it stands, as it did before the word existed, so that no caller state
+ * on a model that fails this grid test (pitch by bit pattern, harmonic count)
+ * comes back changed. Voicing is not tested here: a decoded pulsed-row frame
+ * whose adaptive smoothing voiced a band keeps its word in the enhanced model,
+ * its repeat takes the held form, and the rendering refuses a word on a voiced
+ * model either way. So on the grid model of its code a caller's word is read
+ * whatever the voicing: given the held form or cleared, while the samples and
+ * slot 37 are those of the stream without it. Not in
  * TIA-102.BABA-1, which knows no mid-frame model.
  */
 static void
 ambe2450_load_repeat(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
+    struct mbe_pulsed_row word;
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
+    if (mbe_pulsed_row_word(cur_mp, &word)) {
+        if (!mbe_ambe2450_pulsed_row_model(cur_mp->w0, cur_mp->L, word.b0)) {
+            return;
+        }
+        word.held = 1;
+        if (word.row <= MBE_PULSED_ROW_OWN_LAST) {
+            mbe_set_pulsed_row_word(cur_mp, &word);
+        } else {
+            mbe_set_frame_mark(cur_mp, MBE_FRAME_MARK_NONE);
+        }
+        return;
+    }
     const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
     if (mark == MBE_FRAME_MARK_LATE_ONSET || mark == MBE_FRAME_MARK_MID_COLUMNS_0_1
         || mark == MBE_FRAME_MARK_MID_COLUMN_0) {

@@ -71,4 +71,21 @@ int mbe_imbe4400_pitch_code(float w0);
  */
 int mbe_ambe2400_pulsed_code(float w0);
 
+/**
+ * @brief Whether a model is the rate-33 band-grid model of pitch code @p b0.
+ *
+ * Rate 33's form of the pulsed state lives in V/UV rows 18 to 31, whose
+ * frames the decoder plays on the band grid: L = mbe_ambe2450_harmonic_count(b0)
+ * bands and w0 = MBE_AMBE2450_GRID_SPAN / L (ambe3600x2450.c). A pulsed-row
+ * word (mbe_adaptive.h) counts only on such a model (mbe_subframe.c): the
+ * harmonic count equal and the pitch equal by bit pattern to what the decoder's
+ * own grid function (ambe2450_grid_model(), the one body, not inlined, the decode
+ * stores the model with) gives for @p b0.
+ * @param w0 The model's pitch.
+ * @param L  The model's harmonic count.
+ * @param b0 A pitch code, 0..119 (the caller checks).
+ * @return 1 for the grid model of @p b0, 0 otherwise.
+ */
+int mbe_ambe2450_pulsed_row_model(float w0, int L, int b0);
+
 #endif /* MBEINT_MBE_PULSED_H */

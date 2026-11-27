@@ -68,6 +68,12 @@
  * the AMBE+2 sequence's row-17 frame (frame 11) into the frame after it, moved
  * the AMBE+2 float and int16 hashes (scalar, SSE2 and AVX2; the same under
  * glibc 2.39 and 2.44); the D-STAR and public hashes did not move.
+ * Rate 33's pulsed rows (V/UV rows 18-31 played as rate 33's form of the
+ * pulsed state: the row's pulsed channels, a pulse at the time the pitch code
+ * gives) moved the AMBE+2 float and int16 hashes (scalar, SSE2 and AVX2): its
+ * frames of those rows, 1 (row 27), 2 (20), 3 (22), 4 (28), 6 (26), 8 (27), 10
+ * (28), 16 (20) and 20 (22), and the frames after them; the D-STAR and public
+ * hashes did not move.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -84,13 +90,13 @@ golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x6BFCF247u;
-        e.ambe2450_s16 = 0xC95A9138u;
+        e.ambe2450_f32 = 0x570F290Eu;
+        e.ambe2450_s16 = 0xB514B5D3u;
         e.ambe2400_f32 = 0x8A37B0D7u;
         e.ambe2400_s16 = 0x4FB4B896u;
     } else {
-        e.ambe2450_f32 = 0x8A108D11u;
-        e.ambe2450_s16 = 0x31E73523u;
+        e.ambe2450_f32 = 0x622FC3CBu;
+        e.ambe2450_s16 = 0x174E3EA0u;
         e.ambe2400_f32 = 0xD1702F7Bu;
         e.ambe2400_s16 = 0x4FB4B896u;
     }

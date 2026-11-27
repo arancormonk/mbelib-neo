@@ -347,6 +347,64 @@ void mbe_set_frame_mark(mbe_parms* mp, enum mbe_frame_mark mark);
 /** @brief The mark of @p mp; MBE_FRAME_MARK_NONE for any other stored value. */
 enum mbe_frame_mark mbe_frame_mark(const mbe_parms* mp);
 
+/*
+ * The word a rate-33 voice frame of V/UV rows 18 to 31 carries in PHIl[0] in
+ * place of a mark (docs/dvsi-parity.md, "Rate 33: the pulsed rows"): its row,
+ * its pitch code b0 (0..119) and whether a lost frame's repeat carries it
+ * (held), as the float MBE_PULSED_ROW_WORD_BASE + MBE_PULSED_ROW_WORD_HELD held +
+ * MBE_PULSED_ROW_WORD_ROW (row - MBE_PULSED_ROW_FIRST) + b0, every one a
+ * whole number a float holds exactly: 2,640 values, the 1,680 words of rows 18
+ * to 31 (1024 to 2807), which the decoder writes, and the 960 held words of
+ * rows 18 to 25 (3072 to 4087), which the repeat loader writes; a held form of
+ * rows 26 to 31 is written by nothing and is no word. It is no enum
+ * mbe_frame_mark value: mbe_frame_mark() reads it as MBE_FRAME_MARK_NONE, so
+ * that every reader of marks treats such a frame as it did before the word
+ * (rows 18 to 31 carried no mark). The rate-33 decoder writes it
+ * (ambe2450_decode_vuv()). It is read in two places, each against the model it
+ * sits in (the band-grid model of the word's code, mbe_pulsed.h): the repeat
+ * loader (ambe2450_load_repeat()), which turns it into the held form or clears
+ * it, and the rate-33 rendering (mbe_subframe.c), which also requires no voiced
+ * band. The same value without the held part is what that rendering stores in
+ * the stream's subframe state for the next frame (MBE_PULSED_ROW_SLOT,
+ * mbe_subframe.h).
+ */
+#define MBE_PULSED_ROW_FIRST     18
+#define MBE_PULSED_ROW_LAST      31
+/* Rows 18 to 25 pulse their own subframe (26 to 31 only the mid-frame one). */
+#define MBE_PULSED_ROW_OWN_LAST  25
+#define MBE_PULSED_ROW_CODES     120
+#define MBE_PULSED_ROW_WORD_BASE 1024
+#define MBE_PULSED_ROW_WORD_HELD 2048
+#define MBE_PULSED_ROW_WORD_ROW  128
+
+/** A rate-33 pulsed-row word's fields: row 18..31, b0 0..119, held 0 or 1. */
+struct mbe_pulsed_row {
+    int row;
+    int b0;
+    int held;
+};
+
+/** @brief The word of @p row (18..31), @p b0 (0..119) and @p held as the float stored. */
+float mbe_pulsed_row_value(const struct mbe_pulsed_row* word);
+
+/**
+ * @brief Read a pulsed-row word from a stored float, by its bit pattern.
+ *
+ * Only a value a writer gives (a whole number whose row is 18..31 and whose
+ * code is 0..119, held only for rows 18..25: 2,640 values from 1024 to 4087)
+ * is a word; anything else (not a number, an infinity, a negative value, a
+ * fraction, a neighbouring float, a code of 120 to 127, a held form of rows 26
+ * to 31) is none.
+ * @return 1 with @p word set for a word, 0 for none.
+ */
+int mbe_pulsed_row_read(const float* stored, struct mbe_pulsed_row* word);
+
+/** @brief Give @p mp a pulsed-row word in PHIl[0], replacing any mark it had. */
+void mbe_set_pulsed_row_word(mbe_parms* mp, const struct mbe_pulsed_row* word);
+
+/** @brief The pulsed-row word of @p mp (mbe_pulsed_row_read() on PHIl[0]). */
+int mbe_pulsed_row_word(const mbe_parms* mp, struct mbe_pulsed_row* word);
+
 /**
  * @brief Regenerate harmonic phases from a spectral envelope (US 5,701,390).
  * @param Ml  Amplitudes, [1..L] read.

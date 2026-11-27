@@ -147,6 +147,140 @@ The CTest suite includes:
   configurations, compares rate 33's and ProVoice's data paths, `mbe_synthesizeSpeechf()` and the
   three encoders byte for byte over streams whose caller states hold reserved pitches, every mark
   and values in the slots ([DVSI parity](dvsi-parity.md#november-2026-the-pulsed-state)).
+- rate 33's pulsed rows (`test_subframe_synthesis`; [DVSI parity](dvsi-parity.md#rate-33-the-pulsed-rows)):
+  the waveform test's independent rendering has the rule from its statement: the fourteen masks of
+  V/UV rows 18 to 31 typed as the document prints them, the word a frame carries in `PHIl[0]` and
+  the one it stores in slot 37 formed in the test (`test_row_word()`), the frame's model checked
+  against the band-grid model of the word's code by bit pattern, the bands by their 500 Hz channel
+  and that of 250 Hz more in double, the pulse times computed in thousandths of a sample and rounded
+  to float once (`reference_row_time()`), and each pulse rendered through its own model's pulsed
+  bands only, under that model's crossfade weight, rising in the interval that ends at its point and
+  falling in the one that starts there, from its time or the interval's start
+  (`reference_row_render()`), with the voiced response of the pulsed state's reference (its window,
+  the unvoiced factor taken out in the library's arithmetic, `reference_pulsed_magnitude()`: the
+  factor in float rounded to float, the quotient in double rounded to float and capped at `1e30f`,
+  which a fast-math build of the library may evaluate otherwise; the low-band roll-off in the test's
+  own arithmetic). What it takes
+  from the library for the rows: the band-grid model of each code (its w0 and L) as the public
+  decoder, `mbe_decodeAmbe2450Parms()`, gives it, and the three models as the pulsed state's
+  reference takes them (`mbe_subframe_own_model()` and `mbe_subframe_mid_model()`, the mid-frame
+  model's pitch, harmonic count and voicing checked against the test's own). It plays every row at
+  every code 0..119 (all 1,680 pairs, so that each pair's playback, not only its word, is checked;
+  rows 24 and 25 at every pair of grid indices that occurs) between frames with no voiced band, so
+  that pulses fall before their model's window, in its rising half, on either side of its point (b0
+  79 puts a single-row pulse 0.626 sample before it, b0 80 0.390 after it; no legal code puts a pulse
+  exactly on a model's point), in its falling half and (own models) in the next frame, L 9 and 56
+  among them; plain, own-pulsed, mid-pulsed and
+  both-pulsed frames in every order of two and three (a de Bruijn sequence); voiced frames before and
+  after each kind; silence frames after pulsed ones; repeats (held words) of each kind, twice for
+  own-only and both-pulsed rows, and the frame after; frames from silence of each kind and after
+  pulsed frames; and words on models with a voiced band
+  (`test_waveform_through_pulsed_rows`), sample for sample in rate 33's rendering and in D-STAR's,
+  P25's and ProVoice's, which play no pulsed row at the same frames, every frame's stored slot
+  37 compared with the test's own word. Through the data path and the decoder: every row 0..31 at
+  every code 0..119 decoded by the public decoder and through `mbe_processAmbe2450Dataf()` from a
+  fresh state, a word in all three returned states exactly for rows 18..31, none for silence
+  frames, erasures, a tone frame or a rejected repeat from a fresh state, and a rejected repeat
+  after a word frame holding the repeated frame's held word (`test_r33_rows_decoder_word`); the
+  repeat of rows 19, 24 and 27, twice, and the frame after, against the same stream with the word
+  cleared (`test_r33_rows_repeat`); the repeat under a tone's first frame, rows 20 and 27, its
+  first 80 samples differing from the stream without the word by 1 - n / 80 of the difference
+  between the two repeats (each rendered with the library's repeat loader and its repeated-speech
+  synthesis, unlimited) (`test_r33_rows_under_tone`); a frame advanced unrendered storing what rendering stores
+  (`test_r33_rows_advance`); adaptive smoothing that voices a band making the frame no pulsed-row
+  frame, rendered and, muted by the error rate, advanced (`test_r33_rows_smoothing`); fully pulsed
+  frames playing no noise (`test_r33_pulsed_bands_play_no_noise`, with and without the unvoiced
+  synthesis); the 2,640 values that are words (the decoder's 1,680, rows 18..31 not held, and the
+  repeat's 960, rows 18..25 held; a held form of rows 26..31 is none) and both float neighbours of
+  each, 78 bit patterns of every class (`k_slot_values` and `k_row_values`, 77 distinct, three of
+  them words; 4088.0f, held row 25 with the code 120, and 4096.0f, held row 26 code 0, among the
+  others), words of every row, code and held form in `PHIl[0]` on a grid model and in slot 37 of
+  the last frame's state, a word on a model with a voiced band (harmonic 1 only, its mid-frame model
+  unvoiced), on a pitch an ulp off the grid, on the grid pitch with another harmonic count, of a
+  code of another L, a held word of row 28, the stored word with the last model an ulp off its grid
+  pitch, and a state without the subframe mark, each playing and storing as the state with no word,
+  or, taken, playing otherwise than it and storing in slot 37 its word for rows 18..25 and 0 for
+  rows 26..31, whose own mask is empty (`test_untrusted_row_words`); the
+  repeat loader leaving a caller's word on a model that is not its code's grid model (a word of row
+  20, one of row 28, a held word of row 20, and row 20's word of code 40 on code 0's grid model)
+  through `mbe_processAmbe2450Dataf()`: an erasure returning the branch point's `PHIl[0]` in all
+  three states (the value in `cur_mp` and `prev_mp_enhanced`, 0 in `prev_mp`), and the samples and
+  the states but for that word of the same stream without the value
+  (`test_r33_repeat_leaves_foreign_words`); the scope of that guarantee: on the grid model of code 40
+  with harmonic 1 voiced, a word of row 20 or of row 28, then three repeats and the repeat limit's
+  mute, the loader, which tests the grid and not voicing, returning the held form 3368.0f in
+  `cur_mp` and `prev_mp_enhanced` (row 20) or clearing the word (row 28) where the branch point
+  returned the value, while the samples, slot 37 and every other field of the three states are
+  those of the stream without the word, its mute noise seeded alike
+  (`test_r33_repeat_on_a_voiced_grid_model`); what is not
+  promised, as the limit of the representation: a caller's word on the grid model of its code plays
+  as the history of a frame of that row, in `PHIl[0]` before an erasure and in slot 37 before a frame
+  of row 16 (`test_r33_forged_history_plays`); a pulsed band at the cap, every `Ml` at 1e30, against
+  the independent rendering at the capped magnitude (`test_r33_pulsed_magnitude_cap`); and every
+  pair's pulse times by their bits, a float replica of the library's pulse rendering fed the times
+  in double rounded once reproducing the library's frame and the frame after it sample for sample
+  (`test_r33_pulse_times_by_bits`): the times in float differ at 132 of rows 24 and 25's 480
+  evaluations (and the single law's at 212 of 360). It compares bit for bit where the test can
+  reproduce the library's arithmetic (`PULSE_REPLICA_EXACT`: the library built without fast-math,
+  float expressions in float or, unoptimized, stored at each statement as the library stores them,
+  and no contracted multiply-adds where the target fuses them, which CMake states for the private
+  tests with `MBELIB_TEST_FP_CONTRACT_OFF` in GCC's and Clang's Debug builds), and elsewhere within
+  a thousandth of the two frames' peak, a tolerance that cannot tell the times formed in float from
+  those formed in double. Of the ten local configurations, dev-debug, asan-ubsan-debug,
+  notones-debug, the Debug build with SIMD, the Debug `-march=x86-64-v3` build and the 32-bit Debug
+  build compare bit for bit, and the float-times mutation fails in each; dev-release, the two Clang
+  fast-math LTO builds and the 32-bit Release build take the tolerance, and the mutation passes in
+  each: it is caught only in the former six. P25's slots 34 to 36 not read as a row by rate 33's
+  rendering, and slot 37 not read by D-STAR's, P25's or ProVoice's rendering, each writing 0 there
+  (`test_row_slot_between_renderings`); and words in each of the three states' `PHIl[0]` and in slot
+  37 of D-STAR's, P25's and ProVoice's streams through their own entry points, then a lost frame and
+  a voiced frame, playing as the same state with no mark there, the returned states alike but for
+  the mark word (`test_row_words_in_codec_states`). A word of another code with the model's L is
+  taken, with that code's times: the band grid's pitch depends on L alone. Mutations checked to
+  fail them, in throwaway builds outside the repository (`test_subframe_synthesis`, and
+  `test_golden_pcm` where marked G; the test named is the one that fails first in the suite's
+  order): the slope 1.0 and 1.03, every single-row pulse one sample early and late, rows 24 and 25
+  with `mod` and `div` swapped, with a grid step of 11 and of 12 samples and a grid of 12 positions,
+  on the single law, row 23 on the grid law, the own and mid-frame masks swapped (G), the table
+  shifted by one row (G), one channel of row 21 flipped, alternation (G), a pulse played through
+  the neighbouring model too, a pulse cut at its model's point (G), a pulse ringing past its model's
+  window, the carried pulse dropped at the frame boundary (G), the voiced train through pulsed bands
+  (G), the reach 0 and 500 Hz (G), the word honoured in D-STAR's, P25's and ProVoice's renderings,
+  the repeat literal, the repeat's mid-frame pulse missing, the last frame's pulse played from
+  silence, a smoothed-voiced frame still pulsed (the waveform stream: its stored word, with words on
+  voiced models) (`test_waveform_through_pulsed_rows`); `mbe_advance_subframes()` not storing the
+  slot (`test_r33_rows_advance`); pulsed bands also playing noise (G;
+  `test_r33_pulsed_bands_play_no_noise` when the rows' tests run first, the pulsed state's data
+  paths in the suite's order); a word accepted on a model of another L, on an off-grid pitch, on a
+  model with a voiced band, and a neighbour of the stored word accepted (`test_untrusted_row_words`);
+  the repeat dropping the state (`test_r33_rows_decoder_word`); a repeat of rows 26..31 pulsed
+  (`test_r33_rows_repeat`); and, found surviving by the review and caught since, the harmonic-count
+  test dropped (`test_untrusted_row_words`, the grid pitch with another L), row 21 at code 41
+  ignored (`test_waveform_through_pulsed_rows`, every pair), the last model's pitch test dropped
+  (`test_untrusted_row_words`, the stored word an ulp off), the grid times computed in float
+  (`test_r33_pulse_times_by_bits`) and the pulsed magnitude's cap removed
+  (`test_r33_pulsed_magnitude_cap`); and the fix round's own two, the repeat loader acting on a word
+  on any model (`test_r33_repeat_leaves_foreign_words`) and the reader taking a held form of rows
+  26..31 (`test_untrusted_row_words`), the latter as the reader was before the fix (the range
+  bound back at 4855, the last value of the old form, and the row test of a held word removed): the
+  bound at 4087 and the row test each reject those values alone, so restoring the old bound alone,
+  or removing the row test alone, leaves the reader as it is and survives, an equivalent mutation
+  (removing the bound altogether was not run: it would accept 5120.0f as row 18 code 0 with a held
+  field of 2 and give out-of-range floats to the integer conversion); and the second fix round's
+  own, the loader testing voicing too (`test_r33_repeat_on_a_voiced_grid_model`), which the loader
+  acting on any model leaves passing (on the grid model it acts as the library does) and the
+  foreign-word test catches. The word accepted on a model with a voiced band passed the tests until
+  the case of a model voiced at harmonic 1 alone was added (`pulse_bands()` refuses a model with a
+  voiced band itself, so only a mid-frame model left unvoiced shows it). The shared pulsed state's
+  mutations (the voiced train through pulsed bands, the reach, pulsed bands playing noise) fail the
+  D-STAR and P25 tests first in the suite's order and the rows' tests when those run first. A scratch
+  harness outside the repository, built against the baseline's and the head's libraries in each of
+  the ten local configurations, compares D-STAR's, P25's, rate 33's and ProVoice's paths,
+  `mbe_synthesizeSpeechf()` and the three encoders byte for byte over streams whose caller states
+  hold reserved pitches, every mark, pulsed-row words and values in the slots, rate 33's as well as
+  the other paths' (rate 33's own stream holding no frame of rows 18..31; its first form gave rate
+  33's states no word and did not say so, which hid the repeat loader's defect) ([DVSI
+  parity](dvsi-parity.md#november-2026-rate-33s-pulsed-rows)).
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1 and as DVSI's decoder plays it: frame classification, silence history freeze, silence frames on 15 bands at their level with the previous model held to mid-frame, repeats, erasures (tone ID 255 among them, on the hard, soft and parameter-bit paths, and the all-ones frame of DVSI's DTX vectors, a tone frame with the unusable index 180), tones (including unverified tone frames; the components a tone ID plays, in 2^-19 cycle per sample, against values written out for DTMF, KNOX, call-progress and single tones, within 0.1 Hz of the nominal single tones and 20 Hz of the nominal dual ones, Table 9's nominal lookup unchanged; a tone after a voice frame starting as a fresh pulse train against an independent rendering in double, its second frame and a tone changed to another going on from the phases), muting (the mute noise level, the last frame fading out against an independent rendering, the model kept, without a row's mark after erasures, and the noise generator's single frame through every kind of mute), V/UV rows 13, 15 and 17 (each row's own voicing and its mid-frame voicing after a voiced and after an unvoiced frame, row 10 as the control; row 15 after a voiced frame leaving the pulse phase at the phase before plus 80 samples at each frame's pitch, row 17 then row 15 starting the train at mid-frame, and row 17 then row 16 launching no pulse; the pulse train running on through a row-17 frame (`test_train_through_row17`, every mid-frame voicing and pitch stated by the test itself, not read from the library's mid-frame model: after a voiced frame the row-17 frame leaving the phase before plus 160 samples at that frame's pitch; row 13, row 5 at another pitch and another row-17 frame after it launching their first pulse (1 - p) / g samples in, p the phase the row-17 frame stored and g the mid-frame pitch, and leaving p + 80 g + 40 (g + f') cycles (80 g for the row-17 frame's unvoiced end in place of the last term), each case first shown to differ from a fresh start by more than 0.01 cycle, and the pulses the row-17 frame left sounding in them, the same stream with those pulses dropped and their phase kept playing other samples before its first new pulse; row 15 after it starting a new train at mid-frame, its first pulse at sample 80, the dropped pulses changing nothing; after a tone the row-17 frame from silence launching a new train at its first sample, which the frame after it takes on; under an error-rate mute, at one pitch code, the unheard row-17 frame storing the phase before plus 160 samples at that pitch whatever its end voicing, and the frame that ends the mute starting from silence, its first pulse at its first sample (row 15: at sample 80); advancing, started from fields no frame leaves, leaving the same pulse state, `PSIl`, `PHIl` and mark as rendering, compared as the file's fast-math rule asks); a lost frame after each of them repeating the model with its own voicing through and leaving no mark, and a tone frame right after each playing as after the same frame without its mark, the speech it fades out repeating the model's own voicing; each as the first frame after a mute and after a tone through `mbe_processAmbe2450Dataf()`, its first pulse at the frame's start for rows 13 and 17 and at sample 80 for row 15, which pins what the library does; P25's onset mark in a caller's state playing as none before an erasure or a tone), the frame after a mute or a tone rendered from silence from the kept model (plus a tone's tail), and lost frames repeating a tone bit for bit until the repeat limit fades it out; a held-tone word in the caller's state that names an ID with no tone playing, frame after frame and state after state, as the word without the held tone; and the played tone table pinned (every AMBE+2 ID's and D-STAR index's components, by an FNV-1a hash that every one-unit change of a dual-tone row's fundamental or harmonics was checked to move) (`test_ambe2450_frame_types`)
 - D-STAR voicing: every b1 value at four pitches, each voiced band reaching 250 Hz into the band below (`test_ambe2400_frame_types`)
 - D-STAR frame classes outside plain voice: b0 125, tone frames without a tone and b0 127 frames repeating like error repeats through the hard, soft and parameter-bit APIs and sharing the repeat limit, the null frame and b0 120..124 as voice (b0 124 with the AMBE+2 silence model, all 16 b1 values playing alike on every API and committed to the prediction history), zero-volume tones, C0 words with four errors (every pattern of weight 4 and none lighter, hard and soft) playing as lost frames whose decode the next frame predicts from, through a lost frame or a tone after them, runs of such frames playing sample for sample as lost frames (the repeated model rendered with its own `log2Ml`: the last synthesized frame holding the repeated model's `log2Ml` and the prediction history the held one's, and the frame's phases those of the first, not the held history's nor those of the `Ml` it renders), a lost frame or a tone right after such a frame playing sample for sample as after a lost frame in its place (the speech under the tone's first frame included), the same with one state as `cur_mp` and `prev_mp_enhanced` as with three (`test_one_state_held_history`: sequences of voice, lost and uncorrectable-C0 frames, single and dual tones and the repeat-limit mute, none with channel errors, each playing sample for sample as its copy with lost frames in place of the uncorrectable ones up to the first voice frame after an uncorrectable one, every repeat after a repeat-limit frame up to the next voice or tone frame at the mute noise's level, and the prediction history, `log2Ml`, L, w0 and the voicing, the same after every frame in both arrangements; `test_repeat_limit_mute_holds`: the repeats after the repeat limit's mute at the mute noise with one state as with three), corrections repeating no frame and tones with corrections playing, lost frames after a single tone (the tail fading out, then silence) and after a dual tone (the tone going on until the repeat limit), tones muted with the error level, the repeat-limit mute (fade-out, DVSI-level noise, prediction kept), the voice after it starting from the prediction history (against a reference that takes the history's `log2Ml`, the stream's silent last frame given other `log2Ml` first; that frame alone changing; a held or initial history fading in from silence; a b0 124 or still-muted frame after it) and the error-level mute and its noise level, and the all-ones DV frame as a lost frame for runs of 1, 3 and 20, the 80-sample crossfades into and out of a tone against a stream with a lost frame in its place, a tone's volume step ramping over 80 samples before the clip while a new index starts at once, and D-STAR tones at the frequencies of the AMBE+2 tone of the same nominal pair (the DTMF row tone first, call progress 144..147 as 160..163, single tones as AMBE+2's), started as a fresh pulse train after a frame that was not a tone frame, a held-tone word in the caller's state that names an index with no tone playing as no held tone (the next tone frame, voice frame or lost frame and the frame after it bit for bit as without it), and the other codecs' frame marks in a caller's history or last frame played (P25's onset columns, rate 33's rows 13 and 17) playing as none before a lost frame and a tone's first frame and in the voice frame after, the late onset acting only after a frame with no voiced band, as before those marks (`test_foreign_marks_in_history`) (`test_ambe2400_frame_types`)
@@ -979,6 +1113,26 @@ in IMBE the first run has it 1.5% above with the ranges apart (7.100 to 7.146 ag
 7.252 us) and the second 0.5% above with them overlapping (7.109 to 7.190 against 7.162 to 7.318
 us): these give no bound on the counter's own cost. The checksums of `d3fb70f` and the final code are the
 same in all three codecs.
+
+### Rate 33's pulsed rows
+
+Rate 33's pulsed rows ([DVSI parity](dvsi-parity.md#november-2026-rate-33s-pulsed-rows)) read a
+frame's word and the last frame's slot, test the band-grid model, and render up to three pulses
+where a frame of V/UV rows 18 to 31 has them; every subframe rendering runs `pulsed_rows()` and the
+slot's store. Measured with `bench_replay hard <codec> 60 5` on DVSI's `dam` stream of each codec
+(`mbe_quality_reframe --from-dvsi`), seven alternating invocations pinned to CPU 6, a portable
+Release build with SIMD, fast-math and LTO (GCC 16.2.1), `2b6b6c2` against `1bc657f`, twice, with a
+browser open (one-minute load 1.2 to 1.5). Medians, with the range of the seven invocations' medians:
+
+| Complete frame decode | `2b6b6c2` | Pulsed rows | Change |
+| --- | ---: | ---: | ---: |
+| AMBE+2, hard | 7.308 us (7.162 to 7.592); 7.153 us (7.126 to 7.544) | 7.420 us (7.369 to 7.533); 7.411 us (7.358 to 7.792) | +1.5%; +3.6% |
+| D-STAR, hard | 6.847 us (6.801 to 6.890); 6.893 us (6.815 to 7.102) | 6.906 us (6.826 to 7.094); 6.882 us (6.808 to 7.084) | +0.9%; -0.2% |
+| IMBE, hard | 7.479 us (7.337 to 7.785); 7.392 us (7.353 to 7.571) | 7.390 us (7.305 to 7.823); 7.366 us (7.308 to 7.493) | -1.2%; -0.4% |
+
+The ranges overlap in every row; D-STAR's and IMBE's checksums are the same in both builds (their
+outputs equal), AMBE+2's differ (its decode changes). The runs give no bound tighter than that
+spread on the change's cost.
 
 ## TETRA Conformance
 

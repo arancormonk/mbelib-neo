@@ -36,13 +36,13 @@
 
 /* Samples from a pitch pulse to the peak of the response it plays, and the
  * length of each raised-cosine end of the response's window. */
-#define MBE_PULSE_PEAK                16
+#define MBE_PULSE_PEAK                 16
 
 /* An unvoiced band's amplitude is its magnitude times this over sqrt(w0); the
  * mid-frame model's magnitudes are interpolated with that factor taken out,
  * so that a band voiced in one frame and unvoiced in the other moves between
  * like quantities. */
-#define MBE_UNVOICED_MAGNITUDE_FACTOR 0.2046f
+#define MBE_UNVOICED_MAGNITUDE_FACTOR  0.2046f
 
 /* Pulses a stream keeps from one frame to the next (those whose responses can
  * still sound), and where: element 0 of noiseOverlap holds their count, the
@@ -61,19 +61,56 @@
  * (MBE_SUBFRAME_STATE_MARK); any value a frame does not store reads as a fresh
  * stream's (not emitted, not read, a count of 0). The TIA-102.BABA rendering
  * keeps its noise overlap in all these elements instead. */
-#define MBE_PULSE_HISTORY             32
-#define MBE_PULSED_SLOT               (MBE_PULSE_HISTORY + 2)
-#define MBE_PULSED_EMITTED            1.0f
-#define MBE_PULSED_READ_SLOT          (MBE_PULSE_HISTORY + 3)
-#define MBE_PULSED_READ               1.0f
-#define MBE_PULSED_COUNT_SLOT         (MBE_PULSE_HISTORY + 4)
-#define MBE_PULSED_COUNT_MIN          (-10)
-#define MBE_PULSED_COUNT_MAX          3
+#define MBE_PULSE_HISTORY              32
+#define MBE_PULSED_SLOT                (MBE_PULSE_HISTORY + 2)
+#define MBE_PULSED_EMITTED             1.0f
+#define MBE_PULSED_READ_SLOT           (MBE_PULSE_HISTORY + 3)
+#define MBE_PULSED_READ                1.0f
+#define MBE_PULSED_COUNT_SLOT          (MBE_PULSE_HISTORY + 4)
+#define MBE_PULSED_COUNT_MIN           (-10)
+#define MBE_PULSED_COUNT_MAX           3
+/* In the rate-33 rendering alone, the element after those holds rate 33's
+ * pulsed-row state (docs/dvsi-parity.md, "Rate 33: the pulsed rows"): the
+ * word (mbe_pulsed_row_value(), mbe_adaptive.h, not held: a row 18..25 and a
+ * pitch code) of a frame whose own model had a pulsed band, 0 otherwise, so
+ * that the next frame plays that model's pulsed bands and pulse again. Every
+ * other subframe rendering (D-STAR's, P25's, ProVoice's) writes 0 there and
+ * reads it not; the TIA-102.BABA rendering keeps its noise overlap in this
+ * element as in all the others, reading and writing it. It is read by its bit
+ * pattern, only in a state with the subframe rendering's mark, and only when
+ * the last frame's model is the band-grid model of the word's code; any value
+ * no frame stores (a held word, a row 26..31, anything that is no word) reads
+ * as none. A caller's word of rows 18..25 there with such a last model is, to
+ * the library, the state of a stream that had such a frame (two codes of one
+ * harmonic count share a grid model). */
+#define MBE_PULSED_ROW_SLOT            (MBE_PULSE_HISTORY + 5)
 
 /* Samples from a model's point (0, 80 or 160 in its frame) to the one pulse a
  * model with pulsed bands emits (docs/dvsi-parity.md, "D-STAR and P25: the
  * pulsed state"). */
-#define MBE_PULSED_DELAY              24
+#define MBE_PULSED_DELAY               24
+
+/* Rate 33's pulse times (docs/dvsi-parity.md, "Rate 33: the pulsed rows"): a
+ * model of a frame of V/UV rows 18 to 23 or 26 to 31 with a pulsed band emits
+ * its pulse at point + MBE_AMBE2450_PULSE_SLOPE b0 - MBE_AMBE2450_PULSE_OFFSET
+ * samples, point being 80 for the mid-frame model and 160 for the frame's own;
+ * rows 24 and 25, which pulse both subframes, code two positions on a grid of
+ * MBE_AMBE2450_PULSE_GRID in b0, the mid-frame model's pulse at 80 -
+ * MBE_AMBE2450_PULSE_GRID_ORIGIN + MBE_AMBE2450_PULSE_GRID_STEP (b0 mod
+ * MBE_AMBE2450_PULSE_GRID) and the own model's at 160 - ORIGIN + STEP (b0 div
+ * MBE_AMBE2450_PULSE_GRID). Each time is formed in double from the integers and
+ * these constants and rounded to float once. All are fits to DVSI's rate-33
+ * decodes of the development and validation vectors, not values from a
+ * document: slopes from 1.012 to 1.024 with the pulse of b0 87 between 7.25 and
+ * 8.0 samples after its model's point (here 7.50), offsets from 80.29 to 81.34,
+ * measured alike, so neither is known more finely than those ranges; for the grid,
+ * origins of 75.1 and 76.1 measured a little worse than 75.6, and no finer
+ * variation of the origin or of the step (11.875) was tried. */
+#define MBE_AMBE2450_PULSE_SLOPE       1.016
+#define MBE_AMBE2450_PULSE_OFFSET      80.89
+#define MBE_AMBE2450_PULSE_GRID        11
+#define MBE_AMBE2450_PULSE_GRID_STEP   11.875
+#define MBE_AMBE2450_PULSE_GRID_ORIGIN 75.6
 
 /** One subframe's model. */
 struct mbe_subframe_model {
@@ -294,6 +331,29 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * the train (MBE_PULSED_SLOT), and in P25's rendering whether the code was
  * read and the counter, each read exactly by its bits.
  *
+ * In the rate-33 rendering (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) alone, rate
+ * 33's form of the pulsed state (docs/dvsi-parity.md, "Rate 33: the pulsed
+ * rows"): a model with no voiced band (after the core's adaptive smoothing)
+ * carrying the pulsed-row word of a V/UV row 18..31 and pitch code b0
+ * (mbe_adaptive.h) in PHIl[0], on the band-grid model of that code
+ * (mbe_ambe2450_pulsed_row_model(), mbe_pulsed.h), is a pulsed-row frame: the
+ * row's mid-frame mask applies to the mid-frame model (its own mask for a
+ * repeat's held word), its own mask to the frame's own model, and the own mask
+ * of the row the frame before stored (MBE_PULSED_ROW_SLOT, read only when
+ * @p prev_mp is the grid model of that word's code) to the frame before's own
+ * model. Pulsed bands are chosen as above (the channel of the harmonic's
+ * frequency or of 250 Hz more, in a model with no voiced band) and play no
+ * noise. Each model with a pulsed band emits exactly one pulse, at the time
+ * the row and code give (MBE_AMBE2450_PULSE_SLOPE and the constants after it),
+ * played by that model alone, as the voiced pulse response through its pulsed
+ * bands under its crossfade weight, rising in the interval that ends at its
+ * point and falling in the one that starts there; no alternation, no pulse
+ * shared between two models. The voiced train, the mid-frame voicing and the
+ * mid-frame pitch are as without the word. From silence the frame before's own
+ * model has no pulsed band. A frame whose own model has a pulsed band stores
+ * its word (not held) for the next; any other stores 0, as every other
+ * rendering does.
+ *
  * In P25's rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE, and ProVoice's) the frame is first
  * marked by the voicing it is rendered with (after the adaptive smoothing of
  * the synthesis core): MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band
@@ -321,8 +381,9 @@ void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parm
  * generator run on (the pulses still sounding are kept for the next frame),
  * and no unvoiced overlap is left for it. @p from_silence starts the train as
  * mbe_synthesize_subframes() does, so that the pulse train, the noise
- * generator and the pulsed state (the stored emission, MBE_PULSED_SLOT, and
- * in P25's rendering the code read and the validity counter) end where
+ * generator and the pulsed state (the stored emission, MBE_PULSED_SLOT, in
+ * P25's rendering the code read and the validity counter, and in rate 33's the
+ * pulsed-row word, MBE_PULSED_ROW_SLOT) end where
  * rendering the frame leaves them; so does @p rendering,
  * which must be the one the stream renders with (and marks the frame as
  * rendering it does). The state is not the one a
