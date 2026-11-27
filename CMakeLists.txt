@@ -1488,6 +1488,18 @@ if(MBELIB_BUILD_TESTS)
                 PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
             )
         endif()
+        # Debug builds compile the library and the tests with
+        # -ffp-contract=off (above), so a test can reproduce the library's
+        # float arithmetic bit for bit on a target that fuses multiply-adds.
+        if(
+            CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+            AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+        )
+            target_compile_definitions(
+                ${_mbelib_private_test}
+                PRIVATE $<$<CONFIG:Debug>:MBELIB_TEST_FP_CONTRACT_OFF=1>
+            )
+        endif()
         if(_SAN_CFLAGS)
             target_compile_options(
                 ${_mbelib_private_test}

@@ -55,6 +55,24 @@
 #define MID_PITCH_INEXACT 0
 #endif
 
+/* Whether this test can reproduce the library's float rendering of a pulse op
+ * for op and so compare it bit for bit (test_r33_pulse_times_by_bits()): the
+ * library built without fast-math, float expressions evaluated in float
+ * (FLT_EVAL_METHOD 0), or, in an unoptimized build, wider but stored at each
+ * statement as the library stores them, and no multiply-add contracted where
+ * the target fuses them (CMake defines MBELIB_TEST_FP_CONTRACT_OFF where it
+ * builds library and tests with -ffp-contract=off, the Debug builds of GCC and
+ * Clang). Elsewhere the test compares within a tolerance, which cannot tell
+ * the pulse times formed in double from the same times formed in float. */
+#if MID_PITCH_FAST_MATH || !defined(FLT_EVAL_METHOD)
+#define PULSE_REPLICA_EXACT 0
+#elif (FLT_EVAL_METHOD == 0 || (FLT_EVAL_METHOD == 2 && !defined(__OPTIMIZE__)))                                       \
+    && (!defined(__FP_FAST_FMA) || defined(MBELIB_TEST_FP_CONTRACT_OFF))
+#define PULSE_REPLICA_EXACT 1
+#else
+#define PULSE_REPLICA_EXACT 0
+#endif
+
 /* Whether float expressions may be evaluated wider than float (x87 excess
  * precision, or an evaluation method left open), so that a float quotient the
  * library forms need not be rounded to float before it is used. */
@@ -927,14 +945,17 @@ reference_pulse_bands(const struct mbe_subframe_model* model, int code, int mid,
 }
 
 /* A pulsed band's magnitude, in the library's arithmetic (pulse_bands()): the
- * unvoiced factor 0.2046 / sqrt(w0) formed in float and rounded to float, the
- * model's magnitude divided by it in double, and the result capped at 1e30, the
- * largest magnitude a model takes. */
+ * unvoiced factor MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) in float, rounded to
+ * float (mbe_round_to_float()), the model's magnitude divided by it in double,
+ * the quotient rounded to float, and the result capped at 1e30f, the largest
+ * magnitude a model takes. Under fast-math the library may evaluate this
+ * otherwise; the tests that use it compare within a tolerance there. */
 static double
 reference_pulsed_magnitude(const struct mbe_subframe_model* model, int l) {
-    volatile float factor = 0.2046f / sqrtf(model->w0);
+    const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
     const double magnitude = (double)model->magnitude[l] / (double)factor;
-    return (magnitude < 1.0e30) ? magnitude : 1.0e30;
+    const float capped = (magnitude < (double)1.0e30f) ? (float)magnitude : 1.0e30f;
+    return (double)capped;
 }
 
 /* What a model's pulsed bands play t samples after its pulse: the voiced
@@ -8110,7 +8131,8 @@ static const uint32_t k_row_values[] = {
     0x447FC000u, /* 1023.0 */
     0x457F7000u, /* 4087.0, the last word (held row 25, code 119) */
     0x457F7001u, /* just over it */
-    0x457F8000u, /* 4088.0: held row 26, code 0, which nothing writes */
+    0x457F8000u, /* 4088.0: held row 25 with code 120, which is no code */
+    0x45800000u, /* 4096.0: held row 26, code 0, which nothing writes */
     0x4597B800u, /* 4855.0: held row 31, code 119, which nothing writes */
     0x4597C000u, /* 4856.0 */
     0x459C4000u, /* 5000.0 */
@@ -8512,6 +8534,63 @@ test_r33_repeat_leaves_foreign_words(void) {
 }
 
 /*
+ * The repeat loader tests the grid model (pitch by bit pattern, harmonic
+ * count), not voicing: on the grid model of the word's code the word is read
+ * whatever the voicing, as it is for a decoded frame whose adaptive smoothing
+ * voiced a band. Through mbe_processAmbe2450Dataf(): a frame of row 16 at b0
+ * 40, the enhanced model given code 40's grid pitch and harmonic count with
+ * harmonic 1 voiced, a word of row 20 (1320.0f) or of row 28 in its PHIl[0],
+ * then four erasures (three repeats and the repeat limit's mute). The returned
+ * words are the library's (row 20: its held form, 3368.0f, in cur_mp and
+ * prev_mp_enhanced, 0 in prev_mp; row 28: cleared, where the branch point
+ * returned the value itself), and the samples, slot 37 and every other field
+ * of the three states are those of the same stream without the word (the mute
+ * noise's generator seeded alike for both streams).
+ */
+static void
+test_r33_repeat_on_a_voiced_grid_model(void) {
+    const float values[2] = {(float)test_row_word(20, 40, 0), (float)test_row_word(28, 40, 0)};
+    const float returned[2] = {(float)test_row_word(20, 40, 1), 0.0f};
+    char frame[49], lost[49];
+    set_ambe2450(frame, 40, 16);
+    set_ambe2450(lost, 121, 0);
+    float w0;
+    int L;
+    r33_grid(40, &w0, &L);
+    for (int c = 0; c < 2; ++c) {
+        mbe_parms s[3], plain[3];
+        float out[2][160];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        (void)r33_frame(frame, out[0], s, 0);
+        s[2].w0 = w0;
+        s[2].L = L;
+        s[2].Vl[1] = 1;
+        memcpy(plain, s, sizeof(plain));
+        s[2].PHIl[0] = values[c];
+        for (int f = 0; f < 4; ++f) {
+            mbe_setThreadRngSeed(12345u);
+            const unsigned flags = r33_frame(lost, out[0], s, -1);
+            mbe_setThreadRngSeed(12345u);
+            const unsigned plain_flags = r33_frame(lost, out[1], plain, -1);
+            assert(flags == plain_flags && (flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+            assert(f < 3 || (flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+            (void)flags;
+            (void)plain_flags;
+            assert(same_bits(&s[0].PHIl[0], &returned[c], 1) && same_bits(&s[2].PHIl[0], &returned[c], 1));
+            uint32_t history;
+            memcpy(&history, &s[1].PHIl[0], sizeof(history));
+            assert(history == 0u);
+            (void)history;
+            assert(same_bits(out[0], out[1], 160));
+            assert(same_bits(&s[2].noiseOverlap[TEST_ROW_SLOT], &plain[2].noiseOverlap[TEST_ROW_SLOT], 1));
+            for (int i = 0; i < 3; ++i) {
+                assert(same_state_but_mark(&s[i], &plain[i]));
+            }
+        }
+    }
+}
+
+/*
  * What is not promised: a caller's state that holds a word on the band-grid
  * model of its code, or the word in slot 37 with such a last model, is to the
  * library the history of a frame of that row, which its bits never held. The
@@ -8589,7 +8668,9 @@ test_r33_pulsed_magnitude_cap(void) {
     cur.PHIl[0] = model.PHIl[0];
     mbe_subframe_own_model(&cur, &own);
     int pulsed[57];
-    assert(reference_row_bands(&own, 24, 0, pulsed));
+    const int any_pulsed = reference_row_bands(&own, 24, 0, pulsed);
+    assert(any_pulsed);
+    (void)any_pulsed;
     double phase[57], want[160] = {0.0};
     reference_own_phases(&cur, phase);
     reference_row_render(want, &own, pulsed, phase, 2, reference_row_time(24, 30, 0, 2));
@@ -8605,8 +8686,10 @@ test_r33_pulsed_magnitude_cap(void) {
 }
 
 /*
- * The pulse times bit for bit (IEEE builds only: elsewhere the library and this
- * test may round apart). A replica of the library's float rendering of one
+ * The pulse times bit for bit, where the test can reproduce the library's
+ * arithmetic (PULSE_REPLICA_EXACT; elsewhere the library and this test may
+ * round apart, and a tolerance cannot tell the times in float from the times
+ * in double). A replica of the library's float rendering of one
  * pulse (prepare_render(), start_oscillators(), render_pulse() and
  * response_window() in mbe_subframe.c, op for op), fed the time the rule gives,
  * formed in double and rounded to float once, reproduces the library's frame
@@ -8677,7 +8760,8 @@ exact_pulse(float* out, const struct exact_render* r, float pulse, int rising) {
     }
     float turn_s, turn_c, sn = 0.0f, cs = 1.0f;
     int harmonic = 0;
-    mbe_sincosf(r->w0 * (((float)first - pulse) - 16.0f), &turn_s, &turn_c);
+    const float t = (float)first - pulse;
+    mbe_sincosf(r->w0 * (t - 16.0f), &turn_s, &turn_c);
     for (int k = 0; k < r->count; k++) {
         for (; harmonic < r->harmonic[k]; harmonic++) {
             const float next = (cs * turn_c) - (sn * turn_s);
@@ -8749,15 +8833,16 @@ test_r33_pulse_times_by_bits(void) {
             }
             next_frame_with_word(out, &state, &model, 0, r33);
             next_frame_as(next_out, &state, &plain, 0, r33);
-            /* Elsewhere (fast-math, x87, fused multiply-adds) the library may
-             * order the oscillators' sums otherwise: within a thousandth of the
-             * pair's peak, a tolerance relative to the parts. */
+            /* Elsewhere (fast-math, optimized x87, contracted multiply-adds)
+             * the library may order or round the oscillators' sums otherwise:
+             * within a thousandth of the pair's peak, a tolerance relative to
+             * the parts, which the float-times mutation passes. */
             float peak = 0.0f;
             for (int n = 0; n < 160; ++n) {
                 peak = fmaxf(peak, fmaxf(fabsf(want[n]), fabsf(next_want[n])));
             }
             for (int n = 0; n < 160; ++n) {
-                if (!MID_PITCH_INEXACT) {
+                if (PULSE_REPLICA_EXACT) {
                     assert(same_bits(&out[n], &want[n], 1) && same_bits(&next_out[n], &next_want[n], 1));
                 } else {
                     assert(fabsf(out[n] - want[n]) <= 1.0e-3f * peak
@@ -8873,6 +8958,7 @@ main(void) {
     test_row_slot_between_renderings();
     test_row_words_in_codec_states();
     test_r33_repeat_leaves_foreign_words();
+    test_r33_repeat_on_a_voiced_grid_model();
     test_r33_forged_history_plays();
     test_r33_pulsed_magnitude_cap();
     test_r33_pulse_times_by_bits();
