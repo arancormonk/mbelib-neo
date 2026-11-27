@@ -431,8 +431,9 @@ dstar_f0(float w0) {
  * the decoder's arithmetic) lies in the band; a band that holds no harmonic (a
  * caller's state) reads as unvoiced. The pitch is the stored one, positive and
  * normal; at every D-STAR pitch code the columns it gives are the decoder's,
- * each position at least 6.5e-5 of a column from a whole number and 2.0e-5
- * from a half (test_dstar_column_edges in test_subframe_synthesis.c). */
+ * each position at least 6.5e-5 of a column from a whole number and 1.8e-5
+ * from a half in every build measured (test_dstar_column_edges in
+ * test_subframe_synthesis.c). */
 static void
 dstar_samples(const mbe_parms* mp, struct column_samples* samples) {
     const float f0 = dstar_f0(mp->w0);

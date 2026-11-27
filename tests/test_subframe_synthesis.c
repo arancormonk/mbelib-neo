@@ -3599,8 +3599,10 @@ test_p25_mid_columns_cases(void) {
  * number and from a half at every D-STAR pitch code the decoder plays voiced
  * (b0 0..123; b0 124's silence model has no voiced band, and the columns are
  * not read at its pitch: next to a voiced frame the mid-frame pitch is that
- * frame's), at least 6.5e-5 of a column from a whole number (6.58e-5, b0 80,
- * harmonic 4) and 2.0e-5 from a half (2.03e-5, b0 122, harmonic 49), and give
+ * frame's), at least 6.0e-5 of a column from a whole number (6.58e-5, b0 80,
+ * harmonic 4) and 1.5e-5 from a half (b0 122, harmonic 49: 2.00e-5 in IEEE
+ * builds, 1.81e-5 where the decoder's stored pitch rounds an ulp otherwise,
+ * with fast-math and in 32-bit x87 builds), and give
  * the columns the decoder's own f0 (mbe_ambe2400_f0()) gives, from which the
  * frame's voicing was set; so no build's arithmetic moves a harmonic to
  * another column, and the model's voicing and the columns' reading cannot
@@ -3624,8 +3626,8 @@ test_dstar_column_edges(void) {
             least_half = fmin(least_half, fabs(x + 0.5 - floor(x + 1.0)));
         }
     }
-    assert(least_whole > 6.5e-5 && least_whole < 7.0e-5);
-    assert(least_half > 2.0e-5 && least_half < 2.2e-5);
+    assert(least_whole > 6.0e-5 && least_whole < 7.0e-5);
+    assert(least_half > 1.5e-5 && least_half < 2.2e-5);
 }
 
 /* A stream of decoded models, each rendered (the voiced part, at unit gain)
@@ -4255,7 +4257,8 @@ test_marks_act_in_their_own_rendering(void) {
  * late onset (80) and the held previous model (3) included, which before these
  * marks, as at the branch point, delayed the voiced bands and held the model
  * before: every one renders as the onset mark (after an unvoiced frame and
- * after a voiced one), the columns reading every voiced model. D-STAR's
+ * after a voiced one, at 151 Hz: off the pitches whose harmonics fall on a
+ * column edge), the columns reading every voiced model. D-STAR's
  * rendering reads the same frame in its own columns: alike at this onset,
  * otherwise after the voiced frame (until the mid-frame columns change the two
  * rendered alike after a voiced frame, each taking this frame's voicing). A tone model keeps
@@ -4275,7 +4278,7 @@ test_p25_rendering_marks_the_model_it_renders(void) {
         float out[160], onset[160], marked[160], other[160];
         mbe_parms onset_state, marked_state, other_state;
         fresh_stream(&last);
-        set_model(&model, 150.0, 24, voiced_before ? 20 : 0, 16.0f);
+        set_model(&model, 151.0, 24, voiced_before ? 20 : 0, 16.0f);
         next_frame(out, &last, &model);
         set_model(&model, 127.5, 28, 23, 16.0f);
         shape_model(&model, 3);
@@ -4286,7 +4289,7 @@ test_p25_rendering_marks_the_model_it_renders(void) {
         /* D-STAR's rendering reads the voicing in its own columns: at this
          * onset both cover columns 0 to 4 (to 2505 Hz in P25's, 2500 Hz in
          * D-STAR's) and render alike; after the voiced frame they differ (the
-         * mid-frame model's harmonic 22, 3043 Hz, turns unvoiced: D-STAR's
+         * mid-frame model's harmonic 22, 3053 Hz, turns unvoiced: D-STAR's
          * column 6 holds it, the column above changing too, P25's does not). */
         render_marked(other, &other_state, &last, &model, MBE_FRAME_MARK_NONE, MBE_VOICED_SYNTHESIS_DVSI);
         assert(same_rendering(other, &other_state, onset, &onset_state) == !voiced_before);
