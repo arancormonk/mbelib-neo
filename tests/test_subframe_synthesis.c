@@ -3429,7 +3429,11 @@ p25_band(const mbe_parms* mp, int n) {
  * word for none), unvoiced past L. */
 static int
 p25_word_voiced(const mbe_parms* mp, const char* word, int n) {
-    return n >= 1 && n <= mp->L && (size_t)p25_band(mp, n) <= strlen(word) && word[p25_band(mp, n) - 1] == '1';
+    if (n < 1 || n > mp->L) {
+        return 0;
+    }
+    const int band = p25_band(mp, n);
+    return band >= 1 && (size_t)band <= strlen(word) && word[band - 1] == '1';
 }
 
 /* A P25 frame's column samples from its word: harmonic 1, then the harmonic
