@@ -1416,13 +1416,20 @@ render_emitted_pulse(float* out, const struct rendered_model* from, const struct
  * response or the interval ends. So a pulse sounds within its model's window and
  * no further, and no pulse plays through a neighbouring model or a voiced band. */
 /* render_pulse() reached through a pointer the compiler must load (a const
- * volatile object): the rows' two calls are then no direct calls, and the
- * compiler's inlining and cloning of render_pulse() into the voiced train and
- * the pulsed state's pulse stay as they were before the rows. With direct
- * calls GCC stopped inlining it into the train (cloning it instead), and in
- * the 32-bit Release build (x87, -std=gnu99, so excess precision kept as the
- * registers allow) that moved samples of D-STAR's, P25's and ProVoice's voiced
- * frames by an ulp. */
+ * volatile object): the rows' two calls are then no direct calls, and GCC's
+ * inlining and cloning of render_pulse() into the voiced train and the pulsed
+ * state's pulse stay as they were before the rows. With direct calls GCC
+ * stopped inlining it into the train (cloning it instead), and in the 32-bit
+ * Release build (x87, -std=gnu99, so excess precision kept as the registers
+ * allow) the voiced frames of every path moved, D-STAR's, P25's and ProVoice's
+ * included: on a scratch harness's random streams most frames, by 1 to tens of
+ * thousands of ulps of the sample (samples near zero), at most 3 ulps of the
+ * frame's peak, no 16-bit sample. The C arithmetic is the same either way, but
+ * the rows' own samples are not: against direct calls, the pointer moves them
+ * by up to about an ulp of the frame's peak in the 32-bit Release build and in
+ * the native GCC fast-math LTO Release build. That was checked in ten configurations of one x86-64 host
+ * with GCC and Clang (none moved in Debug, the 32-bit Debug build included, or
+ * with Clang); MSVC and macOS were not, and nothing here binds a compiler. */
 static void (*const volatile row_render_pulse)(float*, const struct rendered_model*, float, int) = render_pulse;
 
 static void

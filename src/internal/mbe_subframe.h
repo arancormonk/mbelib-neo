@@ -74,11 +74,15 @@
  * word (mbe_pulsed_row_value(), mbe_adaptive.h, not held: a row 18..25 and a
  * pitch code) of a frame whose own model had a pulsed band, 0 otherwise, so
  * that the next frame plays that model's pulsed bands and pulse again. Every
- * other rendering leaves 0 there and reads it not. It is read by its bit
+ * other subframe rendering (D-STAR's, P25's, ProVoice's) writes 0 there and
+ * reads it not; the TIA-102.BABA rendering keeps its noise overlap in this
+ * element as in all the others, reading and writing it. It is read by its bit
  * pattern, only in a state with the subframe rendering's mark, and only when
  * the last frame's model is the band-grid model of the word's code; any value
  * no frame stores (a held word, a row 26..31, anything that is no word) reads
- * as none. */
+ * as none. A caller's word of rows 18..25 there with such a last model is, to
+ * the library, the state of a stream that had such a frame (two codes of one
+ * harmonic count share a grid model). */
 #define MBE_PULSED_ROW_SLOT            (MBE_PULSE_HISTORY + 5)
 
 /* Samples from a model's point (0, 80 or 160 in its frame) to the one pulse a
@@ -98,8 +102,8 @@
  * these constants and rounded to float once. All are fits to DVSI's rate-33
  * decodes of the development and validation vectors, not values from a
  * document: slopes from 1.012 to 1.024 with the pulse of b0 87 between 7.25 and
- * 8.0 samples after its model's point (here 7.50) measured alike, so the slope
- * and the offset are known to about 0.004 and 0.3 sample; for the grid,
+ * 8.0 samples after its model's point (here 7.50), offsets from 80.29 to 81.34,
+ * measured alike, so neither is known more finely than those ranges; for the grid,
  * origins of 75.1 and 76.1 measured a little worse than 75.6, and no finer
  * variation of the origin or of the step (11.875) was tried. */
 #define MBE_AMBE2450_PULSE_SLOPE       1.016

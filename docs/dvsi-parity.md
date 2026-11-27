@@ -3247,13 +3247,16 @@ known only through their output.
 
 TIA-102.BABA-1's Annex B decodes V/UV rows 16 to 31 (`b1`) as "no band voiced". Before this change
 the library played rows 18 to 31 on the band grid ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)),
-every band as noise. DVSI's rate-33 decoder plays them in rate 33's form of the pulsed state of
-[D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state): the row names the pulsed
-500 Hz channels of the frame's own subframe and of its mid-frame subframe, the pitch code `b0`
-(0..119 on a voice frame) carries the time of the pulse (two times, on a coarser grid, for the two
-rows that pulse both subframes), and every pulsed model plays its own pulse through its own bands
-only. There is no alternation between neighbouring models and no pulse shared between two models,
-where rate 33 differs from P25 and D-STAR. All of it was measured on DVSI's decodes of its own
+every band as noise. On DVSI's rate-33 decodes of its own encodings these rows sound like rate
+33's form of the pulsed state of [D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state):
+in the 500 Hz channels each row names, of the frame's own subframe and of its mid-frame subframe, a
+pulse in place of noise, its time moving with the pitch code `b0` (0..119 on a voice frame; two
+times, on a coarser grid, for the two rows that pulse both subframes). The library plays them by a
+rule fitted to those decodes (below), in which every pulsed model plays its own pulse through its
+own bands only, with no alternation between neighbouring models and no pulse shared between two
+models, where the rule differs from P25's and D-STAR's. It is a fit, not DVSI's decoder: what that
+decoder computes is not known, the fit leaves a residual (**What is not known or not matched**,
+below), and the repeat rule rests on six frames. All of it was measured on DVSI's decodes of its own
 encodings; no document was read for the pulse times, the two-position code or the repeat rule.
 
 **The masks**, measured on DVSI's rate-33 decodes (channel k = 500 k to 500 (k + 1) Hz, the last
@@ -3329,19 +3332,31 @@ point - 80 to its point + 80, rising, then falling, linearly.
    (mid-frame model and own model), each of the two models emitting its pulse at the own pulse's
    position relative to its point (rows 18..23: `point + 1.016 b0 - 80.89` for both; rows 24 and
    25: `point - 75.6 + 11.875 (b0 div 11)` for both). A repeat of rows 26..31, whose own mask is
-   empty, has no pulsed band. This rests on six frames of two files (below).
+   empty, has no pulsed band. The repeat reads the repeated model's word only when that model is
+   the band-grid model of the word's code (clause 1's test, but for the voicing, which the rendering
+   checks); on any other model it leaves the word as the branch point did. This rests on six frames
+   of two files (below), repeats of rows 19, 26 and 27: for the other rows of 18..25 it is the
+   rule's extension, unobserved, and rows 24 and 25's held position (`b0 div 11` at both points)
+   above all, since there the repeat moves the mid-frame pulse to a position the frame's own code
+   gives its own model.
 8. **Other frames.** A silence frame (`MBE_FRAME_MARK_PREVIOUS_HELD`) is no pulsed-row frame: its
    mid-frame model, the copy of the model before, takes no pulsed band, while the last frame's own
-   model keeps its own (clause 6). Tone frames, mutes and their fades change only through clause 6
-   (the mute's fade, a repeat toward a silent copy that carries no word, plays the last own model's
-   pulse out).
+   model keeps its own (clause 6). Tone frames, mutes and their fades change only through clauses 6
+   and 7: the mute's fade, a repeat toward a silent copy that carries no word, plays the last own
+   model's pulse out (clause 6), and the repeat a tone's first frame fades out under its first 80
+   samples is loaded as a lost frame's repeat, held word and all (clause 7).
 9. **Nothing else changes**: D-STAR, P25, ProVoice, the public `mbe_synthesizeSpeechf()`, every
-   encoder, and rate 33 on any stream that holds no frame of rows 18..31.
+   encoder, and rate 33 on any stream that holds no frame of rows 18..31. For rate 33 that holds of
+   the states the decoder writes and of a caller's word on a model that fails clause 1's test (in
+   `PHIl[0]`, or in the subframe state with a last model that fails it). A caller's state holding
+   a word on the band-grid model of its code, or that word in the subframe state with such a last
+   model, is to the library the state of a stream that had such a frame, and plays as one; two
+   codes of one harmonic count share a grid model, so the test cannot tell them apart.
 
 **The constants are fits.** In the study's alternatives (below) slopes 1.012 to 1.024 with the
-pulse of b0 87 between 7.25 and 8.0 samples after its model's point (the rule puts it at 7.50)
-measure alike (shares of class (a), below, 0.00070 to 0.00074, eleven variants): the slope and the
-offset are known to about 0.004 and 0.3 sample. For the grid, origins of 75.1 and 76.1 measured a
+pulse of b0 87 between 7.25 and 8.0 samples after its model's point (the rule puts it at 7.50; the
+eleven variants' offsets 80.29 to 81.34) measure alike (shares of class (a), below, 0.00070 to
+0.00074): neither the slope nor the offset is known more finely than those ranges. For the grid, origins of 75.1 and 76.1 measured a
 little worse than 75.6; no finer step of the origin or of the step (11.875 a position) was tried.
 The two-position code of rows 24 and 25 was found by fitting a pulse time per pitch code on DVSI's
 decodes: b0 66, 67 and 69, for instance, give mid-frame pulses at 4.75, 16.6 and 40.0 samples with
@@ -3364,10 +3379,10 @@ arithmetic, as the scoreboard builds them), decoding DVSI's bits. Selections and
   A frame's row is its `b1`.
 - "Residual share" of a class of frames: per vector, the energy of (our decode - DVSI's decode) at
   lag 0 over the class's frames divided by the energy of DVSI's decode over the whole vector; then
-  the mean of the 22 ratios. The classes, over frames 1 to n - 1 of each vector: (a) voice frames
-  with no voiced band of rows 18..31; (b) other frames with no voiced band right after a voice
-  frame of rows 18..25 (a pulsed own subframe); (c) frames with a voiced band right after one; (d)
-  the other frames with no voiced band; (e) the rest.
+  the mean of the 22 ratios. The classes (a) to (d), over frames 1 to n - 1 of each vector: (a)
+  voice frames with no voiced band of rows 18..31; (b) other frames with no voiced band right after
+  a voice frame of rows 18..25 (a pulsed own subframe); (c) frames with a voiced band right after
+  one; (d) the other frames with no voiced band; (e) the rest, frame 0 of each vector included.
 - "Residual over the frames' own signal": the residual energy over a set of frames divided by
   DVSI's energy over the same frames, the energies pooled over the 22 vectors (or, for a named
   file, over that file's frames).
@@ -3391,16 +3406,19 @@ to the digits printed, except where said):
 - The same by the frame's neighbours (class (a), frames 1 to n - 2): both neighbours voice frames of
   row 16 with no voiced band: 1,417 frames, 0.19 → 0.08; at least one neighbour that is not a voice
   frame with no voiced band (a voiced frame, or a silence, tone or lost frame): 1,560 frames, 0.55 →
-  0.22; the others (both neighbours voice frames with no voiced band, at least one of another row
-  than 16): 2,687 frames, 0.59 → 0.24. The isolated frame is matched best; what is left sits where
-  pulsed frames follow one another or border voiced speech.
+  0.22; the others, selected as both neighbours voice frames with no voiced band, at least one of
+  another row than 16: 2,687 frames, 0.59 → 0.24 (30 of them have neighbours of rows 16 and 17 only,
+  no pulsed-row frame among them). Of the three selections the frame between two frames of row 16
+  is matched best.
 - PESQ-NB (pesq 0.0.4; the mean change ± its standard error with the vectors clustered by recording,
-  [Method](#method)) on the 25 vectors: against DVSI's decode 4.244 → 4.331 (+0.0867 ± 0.0075, 25 of
-  25 up); against the input 2.959 → 2.950 (-0.0094 ± 0.0071, 9 of 25 up); DVSI's own decode against
-  the input scores 2.980. The change moves the decode toward DVSI's and costs a little spectral
-  distance from the input (+0.008 and +0.016 dB, the scoreboard's, [November 2026: rate 33's pulsed
-  rows](#november-2026-rate-33s-pulsed-rows)) with no PESQ change beyond its error; no equivalence
-  was tested.
+  [Method](#method); the 25 vectors come from 12 recordings, so a 95% interval takes t with 11
+  degrees of freedom, 2.201 standard errors) on the 25 vectors: against DVSI's decode 4.244 → 4.331
+  (+0.0867 ± 0.0075, interval +0.0702 to +0.1032, 25 of 25 up); against the input 2.959 → 2.950
+  (-0.0094 ± 0.0071, interval -0.0250 to +0.0062, 9 of 25 up); DVSI's own decode against the input
+  scores 2.980. The change moves the decode toward DVSI's and costs a little spectral distance from
+  the input (+0.008 and +0.016 dB, the scoreboard's, [November 2026: rate 33's pulsed
+  rows](#november-2026-rate-33s-pulsed-rows)); PESQ against the input establishes neither a fall
+  nor its absence (the interval holds both 0 and a fall of 0.025), and no equivalence was tested.
 - Other vectors (hard-decision decodes unless said; "changed frames" are the frames whose samples
   differ between the two builds; the residual over the frames' own signal on them). Tone vectors:
   `alert` 22 of 483 frames, 0.6014 → 0.5939; `alltone` 320 of 950, 0.0635 → 0.0576; `cp0` 2 of 50,
@@ -3412,10 +3430,11 @@ to the digits printed, except where said):
   `dam_e1_sd` 175, 0.4142 → 0.2132; `dam_e2_sd` 175, 0.3804 → 0.1891; `dam_e5_sd` 176, 0.4033 →
   0.2286; `dam_e10_sd` 213, 1.1661 → 1.1599. DTX: `clean_dtx` 374 of 3,700, 0.6022 → 0.2260;
   `dam_dtx` 111 of 1,275, 0.4137 → 0.2101; `noisy_dtx` 154 of 3,588, 0.4124 → 0.1556. Of these the
-  study's scratch build gave other figures for `alltone` (325 frames, 0.0917 → 0.0861), `cp0` and
-  `cp1` (3 frames each), `dtmf` (461, 0.3419 → 0.3357), `dtmfvbad` (475, 0.2055 → 0.1142) and
-  `dam_e10_hd` (252, 1.7500 → 1.7340): it changed, besides, the voiced frames that start from silence
-  after a tone or a mute, where the library changes nothing (below).
+  study's scratch build gave other figures for five tone vectors, `alltone` (325 frames, 0.0917 →
+  0.0861), `cp0` and `cp1` (3 frames each), `dtmf` (461, 0.3419 → 0.3357) and `dtmfvbad` (475,
+  0.2055 → 0.1142), and for `dam_e10_hd` (252, 1.7500 → 1.7340): it changed, besides, the voiced
+  frames that start from silence after a tone or a mute, where the library changes nothing, and the
+  frames those reach, and its `cp0` and `cp1` frame 0 (below).
 
 Alternatives, each one switch away from the rule on the study's scratch build (correlation
 development / validation; class (a)'s residual share; the rule itself 0.993226 / 0.993591, 0.00071):
@@ -3485,10 +3504,13 @@ repeats, frame 1027 and frame 351, the one after the repeat at 350), none with s
 
 **The library against the study's scratch build**, 16-bit samples, file for file, the 88 rate-33
 vectors the scratch build decoded (25 development and validation, 52 tone, 4 hard- and 4
-soft-decision channel-error and 3 DTX vectors; the soft-decision ones decoded as soft): 43 are
-identical (every KNOX and dual-tone vector, and the tone vectors `cp2`, `cp31`, `dtmf4`, `dtmf4r`,
-`dtmf8`, `dtmf8r`, `dtmf15n`, `dtmf15p`, `dtmf25`, `dtmf50` and `dtmf100`, which the change leaves
-alone), and 24,776 samples differ in the others, for three reasons, each checked:
+soft-decision channel-error and 3 DTX vectors; the soft-decision ones decoded as soft): 60 are
+identical. 43 of them the change leaves as the branch point decodes them (every KNOX and dual-tone
+vector, and the tone vectors `cp2`, `cp31`, `dtmf4`, `dtmf4r`, `dtmf8`, `dtmf8r`, `dtmf15n`,
+`dtmf15p`, `dtmf25`, `dtmf50` and `dtmf100`); the other 17 the change moves alike in both (`alert`,
+`dam`, `dam10`, `dam20`, `dam40`, `dam80`, `dam_e1_hd`, `dam_e1_sd`, `dam_e2_hd`, `dam_e2_sd`,
+`damcar`, `dtmf180`, `fambf22c`, `noisy_dtx`, `t01`, `t03`, `tambf32e`). 24,776 samples differ in
+the remaining 28, for three reasons, each checked:
 
 - The scratch build computed the pulse times in float; the library forms them in double and rounds
   once. That moves samples by one unit in frames of rows 18..31, repeats of them and frames right
@@ -3496,11 +3518,16 @@ alone), and 24,776 samples differ in the others, for three reasons, each checked
 - From silence (the first frame heard after a mute or a tone) the scratch build let the voiced train
   of its first subframe glide from the kept model's pitch as if that model were voiced (it kept the
   model's voicing from before `MBE_SYNTHESIS_FROM_SILENCE` silenced it); the library's train there is
-  the branch point's, as clause 5 asks. That changes the voiced frames after the mutes of
-  `dam_e10_hd` (130 of its 134 frames that differ; the other four are rows 18..31 frames right after
-  them, or a one-unit difference) and after tones in `alltone`, `dtmf` and `dtmfvbad` (all their
-  frames that differ by more than one unit, the frames of rows 18..31 right after such frames
-  included, whose first interval falls from them). A scratch copy of the library with that one
+  the branch point's, as clause 5 asks. A difference of this kind starts in a voiced frame right
+  after a mute or a tone and reaches the frames after it that the train or the state carries it
+  to. Of `dam_e10_hd`'s 133 frames that differ by more than one unit, 22 are voiced frames right
+  after a mute, where it starts; it reaches 83 voiced frames after a voiced frame, 13 muted frames,
+  7 repeats and 8 frames with no voiced band. `alltone`'s six such frames are two voiced frames
+  right after a tone (229, 235), where it starts, and frames 230 and 236 to 238 after them, 238 a
+  tone frame after a voiced frame (302 units: the speech its first 80 samples fade out); `dtmf`'s
+  52 are 20 voiced frames right after a tone and 12 voiced frames, 12 tone frames and 8 frames with
+  no voiced band after those; `dtmfvbad`'s four are two voiced frames right after a tone and the
+  frame with no voiced band after each. A scratch copy of the library with that one
   behaviour switched in decodes all 88 files as the scratch build does but for 117 samples of 26
   files that differ by one unit, in 104 frames, each a frame of rows 18..31, a repeat of one or the
   frame right after one that pulses its own subframe (the first reason), and the 118 samples of
@@ -3508,15 +3535,18 @@ alone), and 24,776 samples differ in the others, for three reasons, each checked
 - The scratch build kept its pulsed-row state in process-wide variables, which `mbe_quality_eval`'s
   second (int16) pass inherited from the end of its first: in the four files whose last speech frame
   pulses its own subframe (`fambm22a` row 25, `noisy` row 18, and `cp0` and `cp1`, row 20 before
-  their closing tones), frame 0 of the written decode carries that frame's pulse (at most 47 units).
-  The library's frame 0 there equals the baseline's.
+  their closing tones), frame 0 of the written decode carries that frame's pulse (at most 47 units;
+  in `cp0` and `cp1` it is the scratch build's third changed frame, the only one that differs from
+  the library by more than a unit). The library's frame 0 there equals the baseline's.
 
 No difference is left unexplained; none is a difference in the rule as written.
 
 **How the library carries it.** The rate-33 decoder (`ambe2450_decode_vuv()`) writes, on a voice
 frame of rows 18..31, a word in `PHIl[0]` in place of a mark: `1024 + 2048 held + 128 (row - 18) +
-b0` as a float (1024 to 4855, all exact; `mbe_set_pulsed_row_word()`, `mbe_pulsed_row_word()` in
-`src/internal/mbe_adaptive.h`), which `mbe_frame_mark()` reads as no mark, so that every reader of
+b0` as a float (all exact; `mbe_set_pulsed_row_word()`, `mbe_pulsed_row_word()` in
+`src/internal/mbe_adaptive.h`): 2,640 values are words, the 1,680 the decoder writes (1024 to 2807)
+and the 960 held words of rows 18..25 the repeat writes (3072 to 4087); a held form of rows 26..31
+is none, as no writer gives one. `mbe_frame_mark()` reads a word as no mark, so that every reader of
 marks treats such a frame as before (rows 18..31 carried no mark). The reader works on the bit
 pattern (a range check on the bits, the conversion, the float rebuilt and compared by its bits, the
 fields' ranges): any value no frame carries, a neighbouring float included, is no word. The public
@@ -3526,12 +3556,17 @@ pulsed-row frame: the rate-33 rendering, a word, no voiced band, a positive norm
 band-grid model of the word's code (`L` equal to the code's harmonic count and the pitch equal by
 bit pattern to the grid pitch the decoder computes, through `mbe_ambe2450_pulsed_row_model()` in
 `src/internal/mbe_pulsed.h`, implemented in `ambe3600x2450.c` on the non-inlined function the
-decode itself stores the grid model with). A word that fails plays as no word. The grid pitch
+decode itself stores the grid model with). A word that fails plays as no word. The word is read in
+one other place, the repeat loader (clause 7), which applies the same grid-model test before it
+writes the held form, so that a caller's word on any other model is copied as the branch point
+copied it. The grid pitch
 depends on L alone, so two codes of one L have the same model and the test cannot tell them apart: a
 word of another code of the model's L is taken (with that code's times). The last frame's own model
 takes its row from the new slot of the subframe state (`noiseOverlap[37]`, `MBE_PULSED_ROW_SLOT`:
-the word, not held, of a frame whose own model had a pulsed band, 0 otherwise; every other rendering
-leaves 0 there), read by its bit pattern, only in a state with the subframe mark, only a word as a
+the word, not held, of a frame whose own model had a pulsed band, 0 otherwise; every other subframe
+rendering, D-STAR's, P25's and ProVoice's, writes 0 there and reads it not, while the public
+TIA-102.BABA rendering keeps its noise overlap in this element as in the others, reading and writing
+it), read by its bit pattern, only in a state with the subframe mark, only a word as a
 frame stores it (not held, rows 18..25), and only when the last frame's model passes the same test
 with it; no mark of the previous model is read for any of it. A lost frame's repeat
 (`ambe2450_load_repeat()`) writes the held form of a word of rows 18..25 and clears one of rows
@@ -3541,10 +3576,29 @@ pulsed state's `BAND_PULSED`, `pulse_bands()` (given a mask) and `prepare_render
 `pulsed_rows()` gives the three models their bands and times beside `pulsed_frame()` (which stays
 P25's and D-STAR's and finds no code in the rate-33 rendering), `render_row_pulses()` plays each
 pulse through its own model in the two intervals where the model has weight (with `render_pulse()`,
-reached through a const volatile function pointer: with two more direct calls GCC stopped inlining
-`render_pulse()` into the voiced train, and in the 32-bit Release build, x87 with `-std=gnu99`, that
-moved D-STAR's, P25's and ProVoice's voiced samples by an ulp), and `mbe_advance_subframes()` stores
-the slot and renders nothing.
+reached through a const volatile function pointer, below), and `mbe_advance_subframes()` stores the
+slot and renders nothing.
+
+**The pointer.** With two more direct calls of `render_pulse()` GCC stopped inlining it into the voiced
+train (it cloned it instead), and in the 32-bit Release build (x87, `-std=gnu99`, so excess precision
+kept as the registers allow) that moved the voiced samples of every path: on a scratch harness's
+random streams (3,000 frames each of D-STAR's, P25's and rate 33's data paths and of ProVoice's,
+rate 33's holding no frame of rows 18..31) 2,791, 2,846, 2,735 and 2,939 frames, by 1 to 74,898
+ulps of the sample's own value (the large counts at samples near zero), at most 3 ulps of the
+frame's peak (9.8e-4 at the most, on samples up to 4,447), no 16-bit sample by each path's own
+conversion; the other nine configurations did not differ. Reached through the pointer the voiced
+train compiles as before: the harness gives the branch point's output byte for byte in all ten
+configurations ([November 2026: rate 33's pulsed
+rows](#november-2026-rate-33s-pulsed-rows)). The C arithmetic is the same either way, but the rows'
+own samples are not: over all 1,680 pairs of row and code, each between two frames of row 16, through
+the three entry points (parameter bits, hard and soft frames, alike), the pointer moves them against
+direct calls in the 32-bit Release build (654 pairs, 1,624 samples per entry point, all in the
+pair's frame) and in dev-release, GCC with fast-math, LTO and `-march=native` (1,544 pairs, 9,206
+samples, 3,046 of them in the frame after), at most 1.8e-7 of the frame's peak, no 16-bit sample;
+the other eight configurations, the 32-bit Debug build and both Clang ones among them, are
+identical. (The review that found it counted 644 pairs and 1,714 samples on its own streams.) Only
+the ten configurations of one x86-64 machine were checked; MSVC and macOS were not, and the
+construction binds no future compiler.
 
 **What is not known or not matched.** Rows 29, 24, 28 and 26 stay at 0.41, 0.29, 0.29 and 0.22 of
 their own signal and row 20 at 0.19 (the others 0.07 to 0.18), where D-STAR's pulsed frames reach
@@ -3552,10 +3606,59 @@ their own signal and row 20 at 0.19 (the others 0.07 to 0.18), where D-STAR's pu
 another selection); what DVSI's decoder plays where pulsed frames follow one another or border a
 voiced, silence, tone or lost frame, beyond this rule (0.24 and 0.22 of those frames' own signal,
 against 0.08 for a frame between two frames of row 16); why the change costs against the
-input; what the decoder does on a lost frame beyond the six frames above; from-silence starts on
-such frames (no vector holds one that the scoreboard reads); and whether an AMBE-3000 treats other
-encoders' rows 18..31 alike (DVSI's own encodings only were compared; this library's encoder never
-sends these rows).
+input; what the decoder does on a lost frame beyond the six frames above (repeats of rows 19,
+26 and 27 only: the held position of the other rows, of rows 24 and 25 above all, is the rule's
+extension); what it plays on a frame of these rows that starts from silence, which the rule plays
+as any frame of its row but that the last frame's own model plays nothing (clause 6), not studied
+as a case of its own, no alternative tried (below); and whether an
+AMBE-3000 treats other encoders' rows 18..31 alike (DVSI's own encodings only were compared; this
+library's encoder never sends these rows).
+
+**From silence.** By the library's own rule (the frame before left its start-afresh word: a muted
+frame, a played tone frame or a tone repeat, read from the decoder's state before each frame), 822
+voice frames (as defined above: no flag of `0x1F0`) of rows 18..31 with no voiced band, frames 1 to
+n - 1 of each vector, start from silence in the scoreboard's 85 rate-33 vectors, 817 right after a tone frame in the tone
+vectors and 5 right after a muted frame in the channel-error vectors, and 29 in the three DTX
+vectors, each right after a muted frame. Residual over those frames' own signal, the baseline →
+this change: after a tone frame 0.0433 → 0.0397, after a muted frame 0.4243 → 0.3145 (channel
+errors) and 0.9703 → 0.4265 (DTX). A count by the flags of the frame before alone, not the
+library's rule, adds frames that do not start from silence: 47 after an unmuted repeat (8 in the
+channel-error vectors, 0.2944 → 0.2821, and 39 in DTX, 1.1852 → 0.2641) and 30 after a silence
+frame in DTX (0.2823 → 0.1628).
+
+**The pulses' fit**, measured on the library's decodes (the 22 vectors; "isolated one-pulse frames":
+voice frames with no voiced band of rows 18..23 or 26..31 whose two neighbours are voice frames of
+row 16 with no voiced band, where DVSI's signal in the row's pulsed channels over the model's
+window, the 160 samples around its point, has an rms of 20 or more; 371 frames): the residual in
+those channels over DVSI's energy there, by the frame's code, mid-frame pulses (rows 26..31) 0.098
+(b0 0..19, 12 frames), 0.262 (20..39, 15), 0.167 (40..59, 27), 0.161 (60..79, 44), 0.087 (80..99, 46)
+and 0.046 (100..119, 43); own pulses (rows 18..23) 0.761 (14), 0.513 (12), 0.520 (21), 0.178 (37),
+0.180 (60) and 0.116 (40). At own codes 0..19, where the pulse falls 54.7 samples before its model's
+point, playing no pulse there leaves less, 0.674. Each range's least-squares gain of the rule's
+pulse against DVSI's estimated pulse (DVSI's decode less the library's without its pulse; a numpy
+rendering of the rule, which matches the library's decodes to 0.0001 of the pulse's energy, from
+two scratch decodes that differ only in the pulse's gain) is 1.42, 1.37, 1.89, 1.19, 1.22 and 1.19
+for the mid-frame pulses and, for the own pulses, none at codes 0..19 (the two uncorrelated, -0.11),
+then 1.46, 1.04, 1.22, 1.03 and 1.04: DVSI's pulses are louder than the rule's, the mid-frame ones
+most, and what DVSI plays for an own pulse at the lowest codes is not this pulse.
+
+**Onsets.** On the voiced frame after a voice frame with no voiced band (the 22 vectors, the onset
+frame's DVSI rms 100 or more), the residual over the onset frame's own signal, by the row of the
+frame before, is 0.0186 after row 16 (955 onsets), 0.0747 after rows 18..23 (258; 0.3430 before
+the change), 0.2027 after rows 24 and 25 (111; 0.3334) and 0.0689 after rows 26..31 (263, unchanged):
+the onsets after a pulsed row hold 0.00024 of all the signal's residual energy against 0.000055 after
+row 16. Onset frames of row 15 make most of them: 772, 213, 63 and 192 at 0.018, 0.075, 0.257 and
+0.093. The lag of ours against DVSI's over the run's frames 1 to 3 stays near 0 in every class
+(medians +0.007, -0.006, -0.022, -0.008 sample): what is left is not a shift. After rows 24 and 25
+one onset holds most of it: `lvl` frame 460 (row 15 after row 25 at b0 92) 58% of the class's
+residual energy, and `dam_10ov` frame 460, the same speech, 15% more.
+
+**The noise beside a pulsed own subframe.** In a pulsed own mask's channels, over the samples where the
+next frame's mid-frame noise dominates, DVSI's noise is lower than the library's after a frame of
+rows 18..23 when the frame is of row 15 (least-squares gain 0.834 over 143 frames; residual 0.0856
+at gain 1, 0.0478 at that gain and 0.0470 at the square root of the pulsed frame's unvoiced factor)
+and about the same when it is of row 16 (0.986, 157 frames) or when a frame of row 16 comes before
+the pulsed frame (1.054, 297 frames). Neither the gain nor a reason for it was looked for further.
 
 ### Tones as harmonics of a fundamental
 
@@ -4204,11 +4307,20 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   DVSI's decoder plays where pulsed frames follow one another or border a voiced, silence, tone or
   lost frame, beyond the rule (0.24 and 0.22 of those frames' own signal, against 0.08 for a frame
   between two frames of row 16); why the change costs a little against the input (+0.008 and +0.016 dB of log-spectral
-  distance from it on development and validation; PESQ against the input -0.0094 ± 0.0071, within
-  its error); what the decoder does on a lost frame beyond the six frames of the channel-error
-  vectors the repeat rule rests on; from-silence starts on such frames (no vector holds one that the
-  scoreboard reads); and whether an AMBE-3000 treats other encoders' rows 18..31 alike (DVSI's own
-  encodings only were compared; this library's encoder never sends these rows).
+  distance from it on development and validation; PESQ against the input -0.0094 ± 0.0071, a 95%
+  interval of -0.0250 to +0.0062 over the 12 recordings, which establishes neither a cost nor its
+  absence); the pulses' level (DVSI's louder than the rule's, least-squares gains 1.19 to 1.89 for
+  the mid-frame pulses, 1.03 to 1.46 for the own ones) and DVSI's own pulse at the lowest codes
+  (rows 18..23 at b0 0..19 leave 0.761 of DVSI's in-channel energy, more than no pulse, 0.674);
+  the onsets after a pulsed row (0.0747, 0.2027 and 0.0689 of the onset frame's own signal after
+  rows 18..23, 24 and 25, and 26..31, against 0.0186 after row 16), which are no shift; what the
+  decoder does on a lost frame beyond the six frames of the channel-error vectors the repeat rule
+  rests on (rows 19, 26 and 27: the held position of the other rows, of rows 24 and 25 above all,
+  is the rule's extension); what it plays on a frame of these rows that starts from silence (822
+  such frames in the scoreboard's 85 rate-33 vectors, 817 after tone frames, and 29 in the DTX
+  vectors; not studied as a case of its own, no alternative tried); and whether an AMBE-3000 treats
+  other encoders' rows 18..31 alike (DVSI's own encodings only were compared; this library's encoder
+  never sends these rows). The figures are in [Rate 33: the pulsed rows](#rate-33-the-pulsed-rows).
   The study of these rows before the change, on the band grid's decodes, kept as it was measured
   (what follows describes DVSI's output against noise on the grid, and its "not determined" is what
   the pulsed rows now model): putting DVSI's samples in place of ours on the frames of rows 17 to 31
@@ -6387,15 +6499,20 @@ branch's library code at `a1398df`; the branch's later library commit, `1bc657f`
 the compiler builds the voiced train in the 32-bit Release build (below, **Other modes and the
 encoders**), and its rate-33 decodes of the 88 vectors of [Rate 33: the pulsed
 rows](#rate-33-the-pulsed-rows), the scoreboard's 85 rate-33 vectors among them, equal `a1398df`'s
-file for file (the other commits change tests and documents only); both
+file for file; the review's fix, `326c89c` (a lost frame's repeat reads the word only on its code's
+band-grid model, and a held form of rows 26..31 is no word), decodes all 315 bit files below as
+`1bc657f` does, in every sample, every frame's flags and every frame's decoded, predicted and
+synthesized model (the scoreboard's Release configuration, both builds from `git archive`), so the
+scores below stand for the final code (the other commits change tests and documents only); both
 aligned freely first and were then scored at their joint lags, both runs' encodings decoded by the
 candidate's decoder (Release, SIMD, IEEE arithmetic).
 
 **The library against the study's scratch build** is in [Rate 33: the pulsed
-rows](#rate-33-the-pulsed-rows): equal but for one-unit differences from the pulse times' rounding,
-the scratch build's voiced train from silence and its frame 0 carried over between
-`mbe_quality_eval`'s two passes; the figures of the development and validation vectors are the
-study's to the digits printed, those of six tone vectors and of `dam_e10_hd` are not.
+rows](#rate-33-the-pulsed-rows): 60 of the 88 vectors identical, the others equal but for one-unit
+differences from the pulse times' rounding, the scratch build's voiced train from silence (and the
+frames it reaches) and its frame 0 carried over between `mbe_quality_eval`'s two passes; the figures
+of the development and validation vectors are the study's to the digits printed, those of five tone
+vectors (`alltone`, `cp0`, `cp1`, `dtmf`, `dtmfvbad`) and of `dam_e10_hd` are not.
 
 **Speech**, rate 33 decoding DVSI's bits, on the scoreboard: the waveform correlation with DVSI's
 decode sample against sample at lag 0 (`vs_dvsi.waveform_corr_unshifted`, over the frames where
@@ -6410,9 +6527,12 @@ log-spectral distance from the input (`ours.lsd_db`), partition means, the libra
 | validation | 0.992142 → 0.993595 (+0.001452, interval 0.000473 to 0.002828; all 5 rise, the least `t03` +0.000090, the most `t04` +0.003740) | 1.0641 → 0.9878 (-0.0764; all 5 fall, by 0.0309 at the least, `t03`, and 0.1252 at the most, `t04`) | 0.98840 → 0.99172 (+0.00331) | -0.0403 → -0.0468 | 4.8352 → 4.8515 (+0.0163; all 5 rise, the most `t04` +0.0357) |
 
 These are the figures the gate sets' descriptions give for the study's scratch build, to the digits
-given there. **The distance from the input rises** on every vector: it is this change's cost, with
-PESQ against the input -0.0094 ± 0.0071 (9 of 25 vectors up, within its error) and against DVSI's
-decode +0.0867 ± 0.0075 (25 of 25 up; [Rate 33: the pulsed rows](#rate-33-the-pulsed-rows)). D-STAR's
+given there. **The distance from the input rises** on every vector (by +0.000408 at the least on
+development, `lvl`, and +0.0076 on validation, `tambf32b`): it is this change's cost. PESQ against
+the input moves by -0.0094 ± 0.0071 (9 of 25 vectors up; a 95% interval over the 12 recordings, t
+with 11 degrees of freedom, -0.0250 to +0.0062, so neither a cost nor its absence is established)
+and against DVSI's decode by +0.0867 ± 0.0075 (+0.0702 to +0.1032, 25 of 25 up; [Rate 33: the pulsed
+rows](#rate-33-the-pulsed-rows)). D-STAR's
 and P25's partition means and decodes are unchanged, and so is every encoder's bits.
 
 **Tones.** By the scoreboard's hashes 9 of the 52 rate-33 tone decodes change (`alert`, `alltone`,
@@ -6422,8 +6542,11 @@ Of the five tone measures the gates check, the frequency, level and balance erro
 windows playing a wrong tone do not move on any vector; the detector's agreement moves on one,
 `alltone` (+0.003175; +0.00006 in the mean, no vector down); the encoders' tone statistics do not
 move. `tone.alignment_corr`, which no gate checks, moves on the nine vectors (from -0.003136, `cpvbad`,
-to +0.005765, `cp1`). The checks see the windows the detector calls steady, not the voice frames
-between and around the tones, where the change acts.
+to +0.005765, `cp1`). The frequency, level, balance and wrong-tone checks see only the windows where
+both decodes hold a tone the detector recognises; the detector's agreement also counts the windows
+where DVSI's decode and its two neighbours hold none, voice frames between and around the tones
+among them (`compare_tones()` takes three consecutive windows without a tone as steady), so it does
+see some of the frames where the change acts, and no more of them than those.
 
 **Channel errors.** No mute decision changes, frame for frame: the flags of every frame of the 24
 channel-error decodes (8 vectors in each of the three codecs) are the same in both builds, as are
@@ -6447,9 +6570,11 @@ channel-error and DTX vector, the nine tone vectors above, and the synthetic `gr
 all 106 the same. All 285 encodings (95 input files, `irstia` and `mark` not among them, three
 encoders) are identical between the two builds; the 95 rate-33 encodings hold no voice frame of
 rows 18 to 31 (94,928 frames) and decode identically with both builds' decoders.
-In each of the ten local configurations (dev-debug, dev-release, asan-ubsan-debug, notones-debug, a
-Debug build with SIMD, a Debug `-march=x86-64-v3` build, Clang with fast-math and LTO, portable and
-`-march=x86-64-v3`, and 32-bit Release and Debug), a differential harness outside the repository,
+In each of the ten local configurations (dev-debug; dev-release, GCC Release with SIMD, fast-math,
+LTO and `-march=native`, the preset's `MBELIB_ENABLE_NATIVE=ON`; asan-ubsan-debug; notones-debug; a
+Debug build with SIMD; a Debug `-march=x86-64-v3` build; Clang Release with SIMD, fast-math and LTO,
+once with `MBELIB_ENABLE_NATIVE=ON`, so `-march=native`, and once with `-march=x86-64-v3` and
+`MBELIB_ENABLE_NATIVE=OFF`; and 32-bit Release and Debug), a differential harness outside the repository,
 built against the baseline's library and the head's, gives the same output byte for byte: the pitch
 and harmonic count every D-STAR and P25 code decodes to and every rate-33 code at rows 16 and 18,
 and hashes of the output and of all three returned states of D-STAR's, P25's, rate 33's and
@@ -6457,12 +6582,18 @@ ProVoice's paths (3,000 frames each) and `mbe_synthesizeSpeechf()`, and of the t
 and `cur_mp` (1,500 frames), over constructed streams whose caller states hold reserved pitches,
 every frame mark, pulsed-row words (held or not, with and without an own mask, and values beside
 them), values in slots 34 to 37 and states without the subframe mark; rate 33's own stream holds no
-voice frame of rows 18 to 31 and no word in its states (a word there would be such a frame's). At
-`a1398df` the 32-bit Release build differed there in D-STAR's, P25's, rate 33's and ProVoice's
-paths: the two new direct calls of `render_pulse()` made GCC clone it out of the voiced train, and
-x87's excess precision then moved voiced samples by an ulp (from the second frame of the D-STAR
-stream; the states were equal); `1bc657f` reaches it through a const volatile pointer, and the ten
-configurations agree since. The golden PCM hashes that moved (rate 33's, scalar, SSE2 and AVX2; the
+voice frame of rows 18 to 31. As first run the harness gave rate 33's caller states no word (a word
+there on a band-grid model would be such a frame's), and its report did not say so: that hid the
+repeat loader's reading of a word on any model, which the review found and the fix round
+corrected (a word is read only on its band-grid model, clause 7). Run again with the exclusion
+removed, rate 33's states holding the same words as the other paths' (on these coded pitches no
+word is a band-grid model's), against `2b6b6c2` with the head's library, every configuration gives
+the same output byte for byte. At `a1398df` the 32-bit Release build differed there in D-STAR's,
+P25's, rate 33's and ProVoice's paths: the two new direct calls of `render_pulse()` made GCC clone it
+out of the voiced train, and x87's excess precision then moved most voiced frames' samples (by up to
+3 ulps of the frame's peak, no 16-bit sample; the states were equal); `1bc657f` reaches it through a
+const volatile pointer, and the ten configurations agree since (the pointer's own effect on the
+rows' samples: [Rate 33: the pulsed rows](#rate-33-the-pulsed-rows), **The pointer**). The golden PCM hashes that moved (rate 33's, scalar, SSE2 and AVX2; the
 dispatched AVX2 equal to a `-march=x86-64-v3` build's) pass under glibc 2.39 (an `ubuntu:24.04`
 container) as under the local 2.44.
 
@@ -6508,8 +6639,19 @@ or the measurements:
   not the voice frames between and around the tones, which is where this change acts in these
   vectors". As the pulsed state's notes on its declarations say, the selection is three adjacent
   acoustic classifications of overlapping 320-sample windows, which does not guarantee that a
-  window holds no voice frame; the checks constrain the detector's results on the windows it calls
-  steady, no more.
+  window holds no voice frame; and the detector's agreement counts three consecutive windows with
+  no tone as steady too, so it covers some voice frames by design. The checks constrain the
+  detector's results on the windows it calls steady, no more.
+- All five say "on the tone partition the five tone metrics unchanged (tone.detector_agreement
+  +0.00006 in the mean, no vector down)": four were unchanged; the detector's agreement moved, on
+  `alltone`.
+- All five say "The distance from the input speech rising is the change's measured cost, which these
+  checks allow within their limits and do not hide". The development and validation sets check it
+  (`ours.lsd_db` on the mean); the tones and channel sets have no check on the distance from the
+  input, so there the sentence bounds nothing.
+- "No build was measured on the held-out partition" is true of this change's builds (the study's
+  scratch build and the branch's); earlier changes' builds were scored on it, once each, as their
+  sections record.
 
 ### Scoring history
 

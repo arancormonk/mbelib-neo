@@ -157,15 +157,18 @@ The CTest suite includes:
   bands only, under that model's crossfade weight, rising in the interval that ends at its point and
   falling in the one that starts there, from its time or the interval's start
   (`reference_row_render()`), with the voiced response of the pulsed state's reference (its window,
-  the unvoiced factor taken out, the low-band roll-off in the test's own arithmetic). What it takes
+  the unvoiced factor taken out in the library's arithmetic, a float factor and the cap at 1e30,
+  `reference_pulsed_magnitude()`, the low-band roll-off in the test's own arithmetic). What it takes
   from the library for the rows: the band-grid model of each code (its w0 and L) as the public
   decoder, `mbe_decodeAmbe2450Parms()`, gives it, and the three models as the pulsed state's
   reference takes them (`mbe_subframe_own_model()` and `mbe_subframe_mid_model()`, the mid-frame
   model's pitch, harmonic count and voicing checked against the test's own). It plays every row at
-  the codes 0, 1, 20, 40, 60, 78 to 81, 90, 100, 110, 118 and 119 (rows 24 and 25 at every code
-  0..119, so at every pair of grid indices that occurs) between frames with no voiced band, so that
-  pulses fall before their model's window, in its rising half, at its point, in its falling half
-  and (own models) in the next frame, L 9 and 56 among them; plain, own-pulsed, mid-pulsed and
+  every code 0..119 (all 1,680 pairs, so that each pair's playback, not only its word, is checked;
+  rows 24 and 25 at every pair of grid indices that occurs) between frames with no voiced band, so
+  that pulses fall before their model's window, in its rising half, on either side of its point (b0
+  79 puts a single-row pulse 0.626 sample before it, b0 80 0.390 after it; no legal code puts a pulse
+  exactly on a model's point), in its falling half and (own models) in the next frame, L 9 and 56
+  among them; plain, own-pulsed, mid-pulsed and
   both-pulsed frames in every order of two and three (a de Bruijn sequence); voiced frames before and
   after each kind; silence frames after pulsed ones; repeats (held words) of each kind, twice for
   own-only and both-pulsed rows, and the frame after; frames from silence of each kind and after
@@ -178,17 +181,35 @@ The CTest suite includes:
   frames, erasures, a tone frame or a rejected repeat from a fresh state, and a rejected repeat
   after a word frame holding the repeated frame's held word (`test_r33_rows_decoder_word`); the
   repeat of rows 19, 24 and 27, twice, and the frame after, against the same stream with the word
-  cleared (`test_r33_rows_repeat`); the repeat under a tone's first frame, rows 20 and 27
-  (`test_r33_rows_under_tone`); a frame advanced unrendered storing what rendering stores
+  cleared (`test_r33_rows_repeat`); the repeat under a tone's first frame, rows 20 and 27, its
+  first 80 samples differing from the stream without the word by 1 - n / 80 of the difference
+  between the two repeats (each rendered with the library's repeat loader and its repeated-speech
+  synthesis, unlimited) (`test_r33_rows_under_tone`); a frame advanced unrendered storing what rendering stores
   (`test_r33_rows_advance`); adaptive smoothing that voices a band making the frame no pulsed-row
   frame, rendered and, muted by the error rate, advanced (`test_r33_rows_smoothing`); fully pulsed
   frames playing no noise (`test_r33_pulsed_bands_play_no_noise`, with and without the unvoiced
-  synthesis); every value a frame can carry and both its float neighbours, 75 bit patterns of every class
-  (`k_slot_values` and `k_row_values`, 74 distinct, three of them words), words of every row, code and held form in `PHIl[0]` on a grid
-  model and in slot 37 of the last frame's state, a word on a model with a voiced band (harmonic 1
-  only, its mid-frame model unvoiced), on a pitch an ulp off the grid, of a code of another L, a held
-  word of row 28, and a state without the subframe mark, each playing and storing as the state with
-  no word or as the word the value is (`test_untrusted_row_words`); P25's slots 34 to 36 not read as a
+  synthesis); the 2,640 values that are words (the decoder's 1,680, rows 18..31 not held, and the
+  repeat's 960, rows 18..25 held; a held form of rows 26..31 is none) and both float neighbours of
+  each, 77 bit patterns of every class (`k_slot_values` and `k_row_values`, 76 distinct, three of
+  them words), words of every row, code and held form in `PHIl[0]` on a grid model and in slot 37 of
+  the last frame's state, a word on a model with a voiced band (harmonic 1 only, its mid-frame model
+  unvoiced), on a pitch an ulp off the grid, on the grid pitch with another harmonic count, of a
+  code of another L, a held word of row 28, the stored word with the last model an ulp off its grid
+  pitch, and a state without the subframe mark, each playing and storing as the state with no word,
+  or, taken, playing otherwise than it and storing its word (`test_untrusted_row_words`); the
+  repeat loader leaving a caller's word on a model that is not its code's grid model (a word of row
+  20, one of row 28, a held word of row 20, and row 20's word of code 40 on code 0's grid model)
+  through `mbe_processAmbe2450Dataf()`: an erasure returning the branch point's `PHIl[0]` in all
+  three states (the value in `cur_mp` and `prev_mp_enhanced`, 0 in `prev_mp`) and the samples and
+  states of the same stream without the value (`test_r33_repeat_leaves_foreign_words`); what is not
+  promised, as the limit of the representation: a caller's word on the grid model of its code plays
+  as the history of a frame of that row, in `PHIl[0]` before an erasure and in slot 37 before a frame
+  of row 16 (`test_r33_forged_history_plays`); a pulsed band at the cap, every `Ml` at 1e30, against
+  the independent rendering at the capped magnitude (`test_r33_pulsed_magnitude_cap`); and every
+  pair's pulse times by their bits, a float replica of the library's pulse rendering fed the times
+  in double rounded once reproducing the library's frame sample for sample in IEEE builds (within
+  1e-3 of each sample elsewhere): the times in float differ at 132 of rows 24 and 25's 480
+  evaluations (and the single law's at 212 of 360) (`test_r33_pulse_times_by_bits`); P25's slots 34 to 36 not read as a
   row by rate 33's rendering, and slot 37 neither read nor stored by D-STAR's, P25's or ProVoice's
   (`test_row_slot_between_renderings`); and words in each of the three states' `PHIl[0]` and in slot
   37 of D-STAR's, P25's and ProVoice's streams through their own entry points, then a lost frame and
@@ -212,7 +233,14 @@ The CTest suite includes:
   paths in the suite's order); a word accepted on a model of another L, on an off-grid pitch, on a
   model with a voiced band, and a neighbour of the stored word accepted (`test_untrusted_row_words`);
   the repeat dropping the state (`test_r33_rows_decoder_word`); a repeat of rows 26..31 pulsed
-  (`test_r33_rows_repeat`). The word accepted on a model with a voiced band passed the tests until
+  (`test_r33_rows_repeat`); and, found surviving by the review and caught since, the harmonic-count
+  test dropped (`test_untrusted_row_words`, the grid pitch with another L), row 21 at code 41
+  ignored (`test_waveform_through_pulsed_rows`, every pair), the last model's pitch test dropped
+  (`test_untrusted_row_words`, the stored word an ulp off), the grid times computed in float
+  (`test_r33_pulse_times_by_bits`) and the pulsed magnitude's cap removed
+  (`test_r33_pulsed_magnitude_cap`); and the fix round's own two, the repeat loader acting on a word
+  on any model (`test_r33_repeat_leaves_foreign_words`) and the reader taking a held form of rows
+  26..31 (`test_untrusted_row_words`). The word accepted on a model with a voiced band passed the tests until
   the case of a model voiced at harmonic 1 alone was added (`pulse_bands()` refuses a model with a
   voiced band itself, so only a mid-frame model left unvoiced shows it). The shared pulsed state's
   mutations (the voiced train through pulsed bands, the reach, pulsed bands playing noise) fail the
@@ -220,8 +248,10 @@ The CTest suite includes:
   harness outside the repository, built against the baseline's and the head's libraries in each of
   the ten local configurations, compares D-STAR's, P25's, rate 33's and ProVoice's paths,
   `mbe_synthesizeSpeechf()` and the three encoders byte for byte over streams whose caller states
-  hold reserved pitches, every mark, pulsed-row words and values in the slots (rate 33's own stream
-  holding no frame of rows 18..31) ([DVSI parity](dvsi-parity.md#november-2026-rate-33s-pulsed-rows)).
+  hold reserved pitches, every mark, pulsed-row words and values in the slots, rate 33's as well as
+  the other paths' (rate 33's own stream holding no frame of rows 18..31; its first form gave rate
+  33's states no word and did not say so, which hid the repeat loader's defect) ([DVSI
+  parity](dvsi-parity.md#november-2026-rate-33s-pulsed-rows)).
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1 and as DVSI's decoder plays it: frame classification, silence history freeze, silence frames on 15 bands at their level with the previous model held to mid-frame, repeats, erasures (tone ID 255 among them, on the hard, soft and parameter-bit paths, and the all-ones frame of DVSI's DTX vectors, a tone frame with the unusable index 180), tones (including unverified tone frames; the components a tone ID plays, in 2^-19 cycle per sample, against values written out for DTMF, KNOX, call-progress and single tones, within 0.1 Hz of the nominal single tones and 20 Hz of the nominal dual ones, Table 9's nominal lookup unchanged; a tone after a voice frame starting as a fresh pulse train against an independent rendering in double, its second frame and a tone changed to another going on from the phases), muting (the mute noise level, the last frame fading out against an independent rendering, the model kept, without a row's mark after erasures, and the noise generator's single frame through every kind of mute), V/UV rows 13, 15 and 17 (each row's own voicing and its mid-frame voicing after a voiced and after an unvoiced frame, row 10 as the control; row 15 after a voiced frame leaving the pulse phase at the phase before plus 80 samples at each frame's pitch, row 17 then row 15 starting the train at mid-frame, and row 17 then row 16 launching no pulse; the pulse train running on through a row-17 frame (`test_train_through_row17`, every mid-frame voicing and pitch stated by the test itself, not read from the library's mid-frame model: after a voiced frame the row-17 frame leaving the phase before plus 160 samples at that frame's pitch; row 13, row 5 at another pitch and another row-17 frame after it launching their first pulse (1 - p) / g samples in, p the phase the row-17 frame stored and g the mid-frame pitch, and leaving p + 80 g + 40 (g + f') cycles (80 g for the row-17 frame's unvoiced end in place of the last term), each case first shown to differ from a fresh start by more than 0.01 cycle, and the pulses the row-17 frame left sounding in them, the same stream with those pulses dropped and their phase kept playing other samples before its first new pulse; row 15 after it starting a new train at mid-frame, its first pulse at sample 80, the dropped pulses changing nothing; after a tone the row-17 frame from silence launching a new train at its first sample, which the frame after it takes on; under an error-rate mute, at one pitch code, the unheard row-17 frame storing the phase before plus 160 samples at that pitch whatever its end voicing, and the frame that ends the mute starting from silence, its first pulse at its first sample (row 15: at sample 80); advancing, started from fields no frame leaves, leaving the same pulse state, `PSIl`, `PHIl` and mark as rendering, compared as the file's fast-math rule asks); a lost frame after each of them repeating the model with its own voicing through and leaving no mark, and a tone frame right after each playing as after the same frame without its mark, the speech it fades out repeating the model's own voicing; each as the first frame after a mute and after a tone through `mbe_processAmbe2450Dataf()`, its first pulse at the frame's start for rows 13 and 17 and at sample 80 for row 15, which pins what the library does; P25's onset mark in a caller's state playing as none before an erasure or a tone), the frame after a mute or a tone rendered from silence from the kept model (plus a tone's tail), and lost frames repeating a tone bit for bit until the repeat limit fades it out; a held-tone word in the caller's state that names an ID with no tone playing, frame after frame and state after state, as the word without the held tone; and the played tone table pinned (every AMBE+2 ID's and D-STAR index's components, by an FNV-1a hash that every one-unit change of a dual-tone row's fundamental or harmonics was checked to move) (`test_ambe2450_frame_types`)
 - D-STAR voicing: every b1 value at four pitches, each voiced band reaching 250 Hz into the band below (`test_ambe2400_frame_types`)
 - D-STAR frame classes outside plain voice: b0 125, tone frames without a tone and b0 127 frames repeating like error repeats through the hard, soft and parameter-bit APIs and sharing the repeat limit, the null frame and b0 120..124 as voice (b0 124 with the AMBE+2 silence model, all 16 b1 values playing alike on every API and committed to the prediction history), zero-volume tones, C0 words with four errors (every pattern of weight 4 and none lighter, hard and soft) playing as lost frames whose decode the next frame predicts from, through a lost frame or a tone after them, runs of such frames playing sample for sample as lost frames (the repeated model rendered with its own `log2Ml`: the last synthesized frame holding the repeated model's `log2Ml` and the prediction history the held one's, and the frame's phases those of the first, not the held history's nor those of the `Ml` it renders), a lost frame or a tone right after such a frame playing sample for sample as after a lost frame in its place (the speech under the tone's first frame included), the same with one state as `cur_mp` and `prev_mp_enhanced` as with three (`test_one_state_held_history`: sequences of voice, lost and uncorrectable-C0 frames, single and dual tones and the repeat-limit mute, none with channel errors, each playing sample for sample as its copy with lost frames in place of the uncorrectable ones up to the first voice frame after an uncorrectable one, every repeat after a repeat-limit frame up to the next voice or tone frame at the mute noise's level, and the prediction history, `log2Ml`, L, w0 and the voicing, the same after every frame in both arrangements; `test_repeat_limit_mute_holds`: the repeats after the repeat limit's mute at the mute noise with one state as with three), corrections repeating no frame and tones with corrections playing, lost frames after a single tone (the tail fading out, then silence) and after a dual tone (the tone going on until the repeat limit), tones muted with the error level, the repeat-limit mute (fade-out, DVSI-level noise, prediction kept), the voice after it starting from the prediction history (against a reference that takes the history's `log2Ml`, the stream's silent last frame given other `log2Ml` first; that frame alone changing; a held or initial history fading in from silence; a b0 124 or still-muted frame after it) and the error-level mute and its noise level, and the all-ones DV frame as a lost frame for runs of 1, 3 and 20, the 80-sample crossfades into and out of a tone against a stream with a lost frame in its place, a tone's volume step ramping over 80 samples before the clip while a new index starts at once, and D-STAR tones at the frequencies of the AMBE+2 tone of the same nominal pair (the DTMF row tone first, call progress 144..147 as 160..163, single tones as AMBE+2's), started as a fresh pulse train after a frame that was not a tone frame, a held-tone word in the caller's state that names an index with no tone playing as no held tone (the next tone frame, voice frame or lost frame and the frame after it bit for bit as without it), and the other codecs' frame marks in a caller's history or last frame played (P25's onset columns, rate 33's rows 13 and 17) playing as none before a lost frame and a tone's first frame and in the voice frame after, the late onset acting only after a frame with no voiced band, as before those marks (`test_foreign_marks_in_history`) (`test_ambe2400_frame_types`)
