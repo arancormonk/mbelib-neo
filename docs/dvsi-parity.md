@@ -6466,6 +6466,16 @@ configurations agree since. The golden PCM hashes that moved (rate 33's, scalar,
 dispatched AVX2 equal to a `-march=x86-64-v3` build's) pass under glibc 2.39 (an `ubuntu:24.04`
 container) as under the local 2.44.
 
+**Cost.** The median complete hard-decision frame decode of AMBE+2 moves by +1.5% (7.308 → 7.420
+us; the seven invocations' medians 7.162 to 7.592 and 7.369 to 7.533 us) and, run again, +3.6%
+(7.153 → 7.411 us; 7.126 to 7.544 and 7.358 to 7.792), the ranges overlapping both times; D-STAR
+and IMBE, whose timed paths run the changed code too (`pulsed_rows()` and the slot's store) and whose
+outputs are the same (equal checksums), move by +0.9% and -1.2%, then -0.2% and -0.4%. `2b6b6c2`
+against `1bc657f`, `bench_replay hard <codec> 60 5` on DVSI's `dam` stream of each codec (its bits
+reframed), seven alternating invocations pinned to one CPU, a portable Release build with SIMD,
+fast-math and LTO, on a machine with a browser open (one-minute load 1.2 to 1.5): the change's cost
+is within that spread ([benchmarks](testing.md#rate-33s-pulsed-rows)).
+
 **Gate sets**, declared in the branch's first commit, `5af6391`, before any build of the branch was
 scored (the study's scratch build had been measured on the development, validation, tone, channel and
 rate-33 DTX vectors before that, and the baseline's own scoreboard of the four partitions, a build of

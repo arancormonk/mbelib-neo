@@ -1055,6 +1055,26 @@ in IMBE the first run has it 1.5% above with the ranges apart (7.100 to 7.146 ag
 us): these give no bound on the counter's own cost. The checksums of `d3fb70f` and the final code are the
 same in all three codecs.
 
+### Rate 33's pulsed rows
+
+Rate 33's pulsed rows ([DVSI parity](dvsi-parity.md#november-2026-rate-33s-pulsed-rows)) read a
+frame's word and the last frame's slot, test the band-grid model, and render up to three pulses
+where a frame of V/UV rows 18 to 31 has them; every subframe rendering runs `pulsed_rows()` and the
+slot's store. Measured with `bench_replay hard <codec> 60 5` on DVSI's `dam` stream of each codec
+(`mbe_quality_reframe --from-dvsi`), seven alternating invocations pinned to CPU 6, a portable
+Release build with SIMD, fast-math and LTO (GCC 16.2.1), `2b6b6c2` against `1bc657f`, twice, with a
+browser open (one-minute load 1.2 to 1.5). Medians, with the range of the seven invocations' medians:
+
+| Complete frame decode | `2b6b6c2` | Pulsed rows | Change |
+| --- | ---: | ---: | ---: |
+| AMBE+2, hard | 7.308 us (7.162 to 7.592); 7.153 us (7.126 to 7.544) | 7.420 us (7.369 to 7.533); 7.411 us (7.358 to 7.792) | +1.5%; +3.6% |
+| D-STAR, hard | 6.847 us (6.801 to 6.890); 6.893 us (6.815 to 7.102) | 6.906 us (6.826 to 7.094); 6.882 us (6.808 to 7.084) | +0.9%; -0.2% |
+| IMBE, hard | 7.479 us (7.337 to 7.785); 7.392 us (7.353 to 7.571) | 7.390 us (7.305 to 7.823); 7.366 us (7.308 to 7.493) | -1.2%; -0.4% |
+
+The ranges overlap in every row; D-STAR's and IMBE's checksums are the same in both builds (their
+outputs equal), AMBE+2's differ (its decode changes). The runs give no bound tighter than that
+spread on the change's cost.
+
 ## TETRA Conformance
 
 EN 300 395-4 tests a TETRA speech decoder bit for bit: TE1_46.CHD (138 little-endian 16-bit
