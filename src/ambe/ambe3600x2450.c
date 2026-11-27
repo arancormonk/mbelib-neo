@@ -594,9 +594,8 @@ ambe2450_classify_frame(const char* ambe_d) {
  * marked MBE_FRAME_MARK_PREVIOUS_HELD, whose rules in the synthesizer hold
  * the previous model to mid-frame and run the train on. A silence frame still
  * never becomes the prediction history (4.3). D-STAR's b0 124 keeps
- * MBE_AMBE_SILENCE_L.
+ * MBE_AMBE_SILENCE_L; rate 33's MBE_AMBE2450_SILENCE_L is in ambe_common.h.
  */
-#define MBE_AMBE2450_SILENCE_L    15
 #define MBE_AMBE2450_SILENCE_GAIN 0.2046f
 
 static void

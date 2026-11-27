@@ -100,6 +100,11 @@ int mbe_eccAmbe3600DataSoftCounted_common(mbe_soft_bit fr[4][24], char* out49);
  *  decodes with it; rate 33 plays its silence frames on 15 bands, as DVSI's
  *  decoder does (MBE_AMBE2450_SILENCE_L in ambe3600x2450.c). */
 #define MBE_AMBE_SILENCE_L            14
+/** Rate 33's silence-frame harmonic count: 15 bands, as DVSI's decoder plays
+ *  them (ambe2450_set_silence_model() in ambe3600x2450.c). The silence model of
+ *  each codec, this pitch with its harmonic count, does not move the adaptive
+ *  low cut's tracker (mbe_low_band.h). */
+#define MBE_AMBE2450_SILENCE_L        15
 
 /*
  * Initial AMBE model. TIA-102.BABA-1 fixes only the initial prediction state:
