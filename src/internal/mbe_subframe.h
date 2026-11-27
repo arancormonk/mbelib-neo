@@ -128,19 +128,20 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * MBE_VOICED_SYNTHESIS_DVSI_IMBE) a band's voicing comes from 500 Hz columns
  * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"): a
  * band in the same state in both frames, each read at its harmonic nearest the
- * band's frequency, keeps it; one that differs is voiced if and only if the
- * column of its frequency, or of 250 Hz more, is voiced at mid-frame, a column
- * being voiced there when it is voiced in both frames, or when it changes and
- * the column above it changes too (the two frames' voicing sampled at the
- * columns: D-STAR's 500 k Hz, both columns of each 1 kHz band taking the band's
+ * band's frequency (l w0 / w0' in double, ties to the upper harmonic), keeps
+ * it; one that differs is voiced if and only if M holds at the column of its
+ * frequency or at the column of 250 Hz more, M(k) = (Sp(k) and Sc(k)) or
+ * (Sp(k) != Sc(k) and Sp(k + 1) != Sc(k + 1)) over the two frames' column
+ * samples Sp and Sc, the sample past the last column unvoiced (the
+ * samples: D-STAR's 500 k Hz, both columns of each 1 kHz band taking the band's
  * lowest harmonic; P25's from 505 Hz, read at harmonic 1 and at the harmonic
  * at or next above each edge, an isolated voiced last band of a frame of more
  * than 36 harmonics read as unvoiced). A frame with no voiced band counts as
  * unvoiced; a band with no state (a voicing that is neither 0 nor 1) in either
  * frame has none. The columns do not apply, and the current frame's voicing at
  * the band's frequency stands, when the current frame has no voiced band and is
- * not marked MBE_FRAME_MARK_PITCH_ABSENT, and in P25's rendering after a tone
- * model (MBE_FRAME_MARK_TONE). In the rate-33 rendering a band takes the
+ * not marked MBE_FRAME_MARK_PITCH_ABSENT; no mark of the previous frame is
+ * read for them. In the rate-33 rendering a band takes the
  * current frame's voicing at its frequency, or the previous frame's when the
  * current frame has no voiced band, is marked MBE_FRAME_MARK_PITCH_ABSENT
  * (which no rate-33 decoder writes) and the previous frame is voiced at its
@@ -217,9 +218,10 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * marked by the voicing it is rendered with (after the adaptive smoothing of
  * the synthesis core): MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band
  * and is not a tone model (MBE_FRAME_MARK_TONE), that mark cleared when it
- * has none; mbe_advance_subframes() marks it alike. The mark itself is read
- * nowhere (the columns apply to every voiced model of that rendering); it
- * replaces any other mark a voiced model carries.
+ * has none; mbe_advance_subframes() marks it alike. The mark chooses no band
+ * (the columns apply to every voiced model of that rendering, and to a frame
+ * after a tone model as after any); it replaces any other mark a voiced model
+ * carries.
  *
  * @param aout_buf     160 samples.
  * @param cur_mp       Current frame: enhanced, smoothed amplitudes without render gains.

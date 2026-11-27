@@ -229,17 +229,22 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * at most, in the otherwise unused element 0 of PHIl, stored as the mark's
  * value in float. The marks of the mid-frame voicing (MID_COLUMN_0,
  * MID_COLUMNS_0_1, and LATE_ONSET's reading whatever the frame before) act
- * only in the rendering of the codec whose decoder writes them, so that a mark
- * a caller's state holds changes no other codec's stream: in D-STAR's
+ * only in the rendering of the codec whose decoder writes them: in D-STAR's
  * rendering 5, 6 and 7 play as none and LATE_ONSET acts as it did before them,
- * only after a frame with no voiced band; in rate 33's 5 plays as none.
- * ONSET_COLUMNS is read in no rendering now (P25's reads every voiced model in
- * its columns). P25's rendering gives the model it renders a mark of its own
- * (MBE_FRAME_MARK_ONSET_COLUMNS on any model with a voiced band that is not
- * a tone model), so there a caller's mark on a voiced model, LATE_ONSET and
- * PREVIOUS_HELD included, is overwritten and has no effect; on a model with
- * no voiced band PITCH_ABSENT, PREVIOUS_HELD and PITCH_CARRIES still act,
- * and LATE_ONSET, 6 and 7 change nothing.
+ * only after a frame with no voiced band; in rate 33's 5 plays as none. Other
+ * marks in a caller's state are read as marks in every rendering:
+ * PREVIOUS_HELD and TONE on the current model give the mid-frame model before
+ * any rendering is told apart (the previous model, or the frame's own);
+ * PITCH_ABSENT on a current model with no voiced band gives the columns' hold
+ * in D-STAR's and P25's renderings and the 505 Hz hold in rate 33's;
+ * PITCH_CARRIES, PITCH_ABSENT and PREVIOUS_HELD on the previous model act on
+ * the mid-frame pitch and the pulse train. No mark of the previous model
+ * chooses the columns' bands. P25's rendering gives the model it renders a
+ * mark of its own (MBE_FRAME_MARK_ONSET_COLUMNS on any model with a voiced
+ * band that is not a tone model), so there a caller's mark on a voiced model,
+ * LATE_ONSET and PREVIOUS_HELD included, is overwritten and has no effect; on a
+ * model with no voiced band PITCH_ABSENT, PREVIOUS_HELD and PITCH_CARRIES still
+ * act, and LATE_ONSET, 6 and 7 change nothing.
  */
 enum mbe_frame_mark {
     MBE_FRAME_MARK_NONE = 0,
@@ -249,7 +254,11 @@ enum mbe_frame_mark {
     /* No voiced band, at a pitch code other than those DVSI's encoders keep
      * for such frames: the voicing of the frame before it lasts to mid-frame,
      * in D-STAR's and P25's renderings in the 500 Hz columns that frame covers
-     * (mbe_subframe_mid_model()), and the pulse train runs on through it. */
+     * (mbe_subframe_mid_model()), the pulse train running on through the frame
+     * when a band is held and starting afresh when none is (a P25 frame voiced
+     * in isolated bands only, b0 97 word 10000000000, covers no column); in the
+     * rate-33 rendering all of it when it is voiced at its harmonic at or next
+     * above MBE_VOICING_REACH_HZ. */
     MBE_FRAME_MARK_PITCH_ABSENT = 2,
     /* No voiced band, and the previous frame's model, as it stands at that
      * frame's end, stands at this frame's mid-frame too: DVSI's rate-33
@@ -269,8 +278,9 @@ enum mbe_frame_mark {
      * renders so whenever, after adaptive smoothing, it has a voiced band and
      * is not a tone model, whatever its decoded mark (smoothing can voice
      * harmonics of a frame decoded with none), and clears the mark from one
-     * with no voiced band. Since the mid-frame columns change it is read
-     * nowhere: P25's rendering reads the mid-frame voicing of every model in
+     * with no voiced band. Since the mid-frame columns change it chooses no
+     * band (mark_rendered_model() still reads it, to clear it from a model with
+     * no voiced band): P25's rendering reads the mid-frame voicing of every model in
      * 500 Hz columns ([0, 505), [505, 1005), ... [3005, 3505) Hz and one
      * above; docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by
      * columns"), whatever its mark, and the marking only replaces any other

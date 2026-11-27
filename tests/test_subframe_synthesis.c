@@ -829,18 +829,26 @@ reference_state_at(const mbe_parms* mp, double w) {
     return (mp->Vl[nearest] == 0) ? 0 : ((mp->Vl[nearest] == 1) ? 1 : 2);
 }
 
+/* The rate-33 rendering's hold through a frame lacking a pitch: whether the
+ * frame before is voiced at its harmonic at or next above 505 Hz, a harmonic
+ * past L read at L (as the library takes it). */
+static int
+reference_holds_505(const mbe_parms* prev) {
+    const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev->w0);
+    return prev->Vl[(n > prev->L) ? prev->L : ((n < 1) ? 1 : n)] == 1;
+}
+
 /* Whether D-STAR's and P25's mid-frame rule of 500 Hz columns sets the
  * mid-frame model's voicing: in their renderings, for a frame with a voiced
- * band or marked as lacking a pitch, except after a tone model in P25's. */
+ * band or marked as lacking a pitch, whatever the frame before (a tone model
+ * included). */
 static int
 reference_by_columns(const mbe_parms* prev, const mbe_parms* cur, enum mbe_voiced_synthesis rendering) {
     if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) {
         return 0;
     }
-    if (!reference_voiced(cur) && mbe_frame_mark(cur) != MBE_FRAME_MARK_PITCH_ABSENT) {
-        return 0;
-    }
-    return !(rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE && mbe_frame_mark(prev) == MBE_FRAME_MARK_TONE);
+    (void)prev;
+    return reference_voiced(cur) || mbe_frame_mark(cur) == MBE_FRAME_MARK_PITCH_ABSENT;
 }
 
 /* The state of the mid-frame model's band at angular frequency w by the
@@ -887,8 +895,7 @@ reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, in
     const int by_columns = reference_by_columns(prev, cur, rendering);
     const mbe_parms* source = cur;
     if (rate33 && mark == MBE_FRAME_MARK_PITCH_ABSENT && !reference_voiced(cur)) {
-        const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev->w0);
-        source = (n <= prev->L && prev->Vl[n] == 1) ? prev : cur;
+        source = reference_holds_505(prev) ? prev : cur;
     }
     for (int l = 1; l <= L; ++l) {
         const double w = w0 * l;
@@ -3340,8 +3347,7 @@ test_dstar_mid_columns_by_words(void) {
                 for (int l = 1; l <= mid.L; ++l) {
                     assert(mid.voiced[l] == dstar_rule_state(&prev, before, &cur, now, 1, (double)mid.w0, l));
                 }
-                const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev.w0);
-                const int held = pitch_absent && n <= prev.L && prev.Vl[n] == 1;
+                const int held = pitch_absent && reference_holds_505(&prev);
                 for (int l = 1; l <= r33.L; ++l) {
                     const double w = (double)r33.w0 * l;
                     assert(r33.voiced[l]
@@ -3537,9 +3543,8 @@ test_p25_mid_columns_by_words(void) {
         }
         assert(mid.any_voiced == k_p25_pairs[i].any);
         mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &r33);
-        const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev.w0);
-        const int held = !reference_voiced(&cur) && mbe_frame_mark(&cur) == MBE_FRAME_MARK_PITCH_ABSENT && n <= prev.L
-                         && prev.Vl[n] == 1;
+        const int held = !reference_voiced(&cur) && mbe_frame_mark(&cur) == MBE_FRAME_MARK_PITCH_ABSENT
+                         && reference_holds_505(&prev);
         const mbe_parms* source = held ? &prev : &cur;
         const char* word = held ? k_p25_pairs[i].word[0] : k_p25_pairs[i].word[1];
         for (int l = 1; l <= r33.L; ++l) {
@@ -3555,10 +3560,10 @@ test_p25_mid_columns_by_words(void) {
  * covered, so harmonic 29 (2909 Hz, column 5) sounds at mid-frame and 30 to
  * 34 (from 3009 Hz) do not; with band 11 voiced too it reads its last band,
  * column 6 is covered, and harmonics 30 to 34 sound; a frame of 36 (b0 116,
- * 103.1 Hz) reads it, and harmonic 30 (3093 Hz) sounds. After a tone model the
- * frame's own voicing stands at mid-frame, also for a frame lacking a pitch,
- * which there holds nothing; and a frame with no voiced band that does not
- * lack a pitch holds nothing. */
+ * 103.1 Hz) reads it, and harmonic 30 (3093 Hz) sounds. A frame after a tone
+ * model takes the rule as after any model (the mark of the model before is
+ * caller state, and no rendering reads it), and a frame with no voiced band that
+ * does not lack a pitch holds nothing. */
 static void
 test_p25_mid_columns_cases(void) {
     mbe_parms prev, cur, tone;
@@ -3574,25 +3579,32 @@ test_p25_mid_columns_cases(void) {
     mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
     assert(cur.L == 36 && mid.voiced[30] == 1);
 
+    /* The frame before marked as a tone model is read in the columns as any
+     * model: a voiced frame after it, and a frame lacking a pitch (held by the
+     * columns the model covers), take the mid-frame model of the same pair
+     * with the mark not there, and the rule's voicing. */
     p25_frame(&tone, 86, "1111110000");
+    mbe_parms plain = tone;
     mbe_set_frame_mark(&tone, MBE_FRAME_MARK_TONE);
-    p25_frame(&cur, 86, "1111111100");
-    mbe_subframe_mid_model(&tone, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
-    mbe_subframe_own_model(&cur, &own);
-    assert(mid.L == own.L);
-    for (int l = 1; l <= mid.L; ++l) {
-        assert(mid.voiced[l] == own.voiced[l]);
+
+    static const struct {
+        int b0;
+        const char* word;
+    } after[3] = {{86, "1111111100"}, {25, ""}, {150, ""}};
+
+    for (int i = 0; i < 3; ++i) {
+        int want[57];
+        p25_frame(&cur, after[i].b0, after[i].word);
+        mbe_subframe_mid_model(&tone, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
+        mbe_subframe_mid_model(&plain, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &own);
+        assert(same_model(&mid, &own));
+        p25_rule_states(&plain, "1111110000", &cur, after[i].word, (double)mid.w0, mid.L, want);
+        const int by_columns = i < 2; /* b0 150 is a code kept for frames with no voiced band */
+        for (int l = 1; l <= mid.L; ++l) {
+            assert(!by_columns || mid.voiced[l] == want[l]);
+        }
+        assert(mid.any_voiced == by_columns);
     }
-    p25_frame(&cur, 25, "");
-    assert(mbe_frame_mark(&cur) == MBE_FRAME_MARK_PITCH_ABSENT);
-    mbe_subframe_mid_model(&tone, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
-    assert(!mid.any_voiced);
-    mbe_set_frame_mark(&tone, MBE_FRAME_MARK_ONSET_COLUMNS);
-    mbe_subframe_mid_model(&tone, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
-    assert(mid.any_voiced);
-    p25_frame(&cur, 150, "");
-    mbe_subframe_mid_model(&tone, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
-    assert(!mid.any_voiced);
 }
 
 /* The positions D-STAR's columns are read at, l 16 f0 with f0 the stored
@@ -3786,8 +3798,9 @@ test_mid_columns_bands_with_no_state(void) {
  * frame or in both, in each subframe rendering, over pairs of frames the
  * columns read (a voiced run with bands turning on and off and a pitch step;
  * an onset; a frame with no voiced band after a voiced one; a P25-like frame of
- * 37 harmonics with an isolated last band), and with pitches at the edges of
- * what a float holds: the mid-frame voicing is the reference's
+ * 37 harmonics with an isolated last band), at pitches from 101.3 to 183 Hz
+ * (pitches at the edges of what a float holds are test_untrusted_mid_voicing_marks'
+ * and test_mid_columns_bands_with_no_state's): the mid-frame voicing is the reference's
  * (reference_mid_voicing(); a frame marked as a tone model or as holding the
  * previous model takes a frame's own model), and the frame renders finite
  * samples and state, rendered and advanced alike (the sanitizer build runs
@@ -3890,8 +3903,14 @@ set_ambe2450(char ambe_d[49], int b0, int row) {
 /* Every mark (and a stored value that is none) in each of a stream's three
  * states (cur_mp, prev_mp, prev_mp_enhanced), through each codec's data path:
  * after voiced frames, a frame with no voiced band lacking a pitch (D-STAR and
- * P25) or of V/UV row 16 (rate 33), then a voiced frame, play finite samples;
- * a mark in cur_mp, which the decoder replaces, changes nothing. */
+ * P25) or of V/UV row 16 (rate 33), then a voiced frame, play finite samples,
+ * and play exactly as the stream with no mark there, in every slot. Here no
+ * mark can act: the decoder replaces cur_mp's mark, prev_mp's is read only by a
+ * repeat, and the last frame played is voiced, so its mark of an unvoiced frame
+ * (PITCH_ABSENT, PITCH_CARRIES, PREVIOUS_HELD) does not change how the train
+ * loads or the mid-frame pitch, and no rendering reads a tone mark or the
+ * others on the model before (a forged MBE_FRAME_MARK_TONE there changed P25's
+ * columns before the rule was applied after a tone model). */
 static void
 test_marks_in_codec_states(void) {
     static const float marks[] = {0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 80.0f, 5.5f};
@@ -3921,9 +3940,228 @@ test_marks_in_codec_states(void) {
                     codec_frame(codec, unvoiced[codec], out[k], &s[k][0], &s[k][1], &s[k][2]);
                     codec_frame(codec, after[codec], out[k] + 160, &s[k][0], &s[k][1], &s[k][2]);
                 }
-                assert(state != 0 || same_bits(out[0], out[1], 320));
+                assert(same_bits(out[0], out[1], 320));
             }
         }
+    }
+}
+
+/* A P25 pitch step whose mid-frame harmonic lies just under halfway between
+ * two harmonics of the frame before: b0 134, word 000000000010, then b0 161,
+ * word 111111111101. The mid-frame model's harmonic 36 lies at 33.4999986 of
+ * the first frame's harmonics (nearest 33, voiced) and 38.69 of the second's
+ * (39, voiced): voiced in both, it stays voiced. (A float quotient rounds the
+ * first position to 33.5 and took harmonic 34, unvoiced, for it, and the
+ * columns silenced the band.) */
+static void
+test_p25_nearest_harmonic_across_a_step(void) {
+    mbe_parms prev, cur;
+    struct mbe_subframe_model mid;
+    int want[57];
+    p25_frame(&prev, 134, "000000000010");
+    p25_frame(&cur, 161, "111111111101");
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
+    const double position = (double)mid.w0 * 36.0 / (double)prev.w0;
+    assert(position > 33.4999 && position < 33.5);
+    assert(prev.Vl[33] == 1 && prev.Vl[34] == 0 && cur.Vl[39] == 1);
+    assert(mid.voiced[36] == 1);
+    p25_rule_states(&prev, "000000000010", &cur, "111111111101", (double)mid.w0, mid.L, want);
+    for (int l = 1; l <= mid.L; ++l) {
+        assert(mid.voiced[l] == want[l]);
+    }
+}
+
+/* The voicing words of the P25 sweep for a frame of K bands (at most 12
+ * characters and the terminator). */
+static void
+p25_sweep_word(int K, int pattern, char word[13]) {
+    for (int band = 0; band < K; ++band) {
+        int voiced = 0;
+        switch (pattern) {
+            case 0: voiced = 1; break;                  /* every band */
+            case 1: voiced = band < (K + 1) / 2; break; /* the lower half */
+            case 2: voiced = (band % 2) == 0; break;    /* alternate bands */
+            default: voiced = (band % 3) != 1 || band == K - 1; break;
+        }
+        word[band] = voiced ? '1' : '0';
+    }
+    word[K] = '\0';
+}
+
+/* P25's columns across pitch steps, against the rule's statement on the
+ * voicing words (p25_rule_states(): each frame's nearest harmonic in double,
+ * ties upward): every pair of a code among every third from 0, with 134 and 161
+ * (72 codes), before one among every fourth from 1, with 134 (53 codes), the 19
+ * pairs of a code with itself left out (3,797 pairs, steps from 1 to 206 codes
+ * either way), each with four voicing words in each frame (16 pairs of words:
+ * 60,752 frame pairs; about a second in a Debug build), the frames decoded by
+ * the P25 decoder. Among all ordered pairs of different P25 codes, only 134 and
+ * 161, in either order, put a mid-frame harmonic where the float quotient and
+ * the double one take different nearest harmonics (harmonic 36:
+ * test_p25_nearest_harmonic_across_a_step), so the sweep holds both. The
+ * voicing words are set from each band's parameter bit, found once per code. */
+static void
+test_p25_mid_columns_across_steps(void) {
+    static int band_bits[208][13];
+    static mbe_parms frames[208][4];
+    static char words[208][4][13];
+    static int ready[208];
+    long pairs = 0;
+    for (int b0 = 0; b0 < 208; ++b0) {
+        if (b0 % 3 != 0 && b0 % 4 != 1 && b0 != 134) {
+            continue;
+        }
+        mbe_parms probe;
+        p25_frame(&probe, b0, "");
+        for (int band = 1; band <= probe.K; ++band) {
+            band_bits[b0][band] = imbe_band_bit(b0, band);
+            assert(band_bits[b0][band] >= 0);
+        }
+        for (int w = 0; w < 4; ++w) {
+            char imbe_d[88] = {0};
+            mbe_parms prev, enhanced;
+            p25_sweep_word(probe.K, w, words[b0][w]);
+            set_imbe_b0(imbe_d, b0);
+            for (int band = 1; band <= probe.K; ++band) {
+                imbe_d[band_bits[b0][band]] = (char)(words[b0][w][band - 1] == '1');
+            }
+            mbe_initMbeParms(&frames[b0][w], &prev, &enhanced);
+            const int kind = mbe_decodeImbe4400Parms(imbe_d, &frames[b0][w], &prev);
+            assert(kind == 0);
+            (void)kind;
+        }
+        ready[b0] = 1;
+    }
+    for (int a = 0; a < 208; ++a) {
+        for (int b = 0; b < 208; ++b) {
+            const int first = (a % 3 == 0) || a == 134 || a == 161;
+            const int second = (b % 4 == 1) || b == 134;
+            if (a == b || !first || !second) {
+                continue;
+            }
+            assert(ready[a] && ready[b]);
+            ++pairs;
+            for (int wa = 0; wa < 4; ++wa) {
+                for (int wb = 0; wb < 4; ++wb) {
+                    struct mbe_subframe_model mid;
+                    int want[57];
+                    const mbe_parms* prev = &frames[a][wa];
+                    const mbe_parms* cur = &frames[b][wb];
+                    mbe_subframe_mid_model(prev, cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
+                    p25_rule_states(prev, words[a][wa], cur, words[b][wb], (double)mid.w0, mid.L, want);
+                    for (int l = 1; l <= mid.L; ++l) {
+                        assert(mid.voiced[l] == want[l]);
+                    }
+                }
+            }
+        }
+    }
+    assert(pairs == 3797);
+}
+
+/* The state of a stream (all three states and the frame's samples) as bits. */
+static int
+same_stream_state(const mbe_parms* a, const mbe_parms* b) {
+    int same = same_bits(&a->w0, &b->w0, 1) && a->L == b->L && a->K == b->K && a->swn == b->swn
+               && a->tonePhase == b->tonePhase && a->amplitudeThreshold == b->amplitudeThreshold
+               && a->errorCountTotal == b->errorCountTotal && a->errorCount4 == b->errorCount4
+               && a->repeatCount == b->repeatCount;
+    for (int l = 0; l < 57; ++l) {
+        same &= a->Vl[l] == b->Vl[l];
+    }
+    same &= same_bits(a->Ml, b->Ml, 57) && same_bits(a->log2Ml, b->log2Ml, 57) && same_bits(a->PHIl, b->PHIl, 57);
+    same &= same_bits(a->PSIl, b->PSIl, 57) && same_bits(&a->gamma, &b->gamma, 1)
+            && same_bits(&a->localEnergy, &b->localEnergy, 1) && same_bits(&a->errorRate, &b->errorRate, 1)
+            && same_bits(&a->mutingThreshold, &b->mutingThreshold, 1);
+    same &= same_bits(a->previousUw, b->previousUw, 256) && same_bits(&a->noiseSeed, &b->noiseSeed, 1)
+            && same_bits(a->noiseOverlap, b->noiseOverlap, 96);
+    return same;
+}
+
+/* A tone mark forged in a caller's P25 state changes nothing: three frames of
+ * b0 86, word 0011110000, then a frame with no voiced band at b0 25 (lacking a
+ * pitch), through mbe_processImbe4400Dataf(), P25 and ProVoice. With
+ * MBE_FRAME_MARK_TONE in prev_mp_enhanced (the last frame played), in prev_mp
+ * or in cur_mp before the last frame, its samples and all three states after it
+ * are exactly those of the stream without the mark. (Before the rule was
+ * applied after a tone model, the mark in prev_mp_enhanced changed 159 of the
+ * 160 samples and the pulse phase.) */
+static void
+test_p25_forged_tone_in_state(void) {
+    char voiced[88], unvoiced[88] = {0};
+    const float tone = 4.0f;
+    set_imbe_voicing(voiced, 86, "0011110000");
+    set_imbe_b0(unvoiced, 25);
+    for (int provoice = 0; provoice < 2; ++provoice) {
+        for (int slot = 0; slot < 3; ++slot) {
+            mbe_parms s[2][3];
+            float out[2][160];
+            mbe_initMbeParms(&s[0][0], &s[0][1], &s[0][2]);
+            for (int f = 0; f < 3; ++f) {
+                mbe_process_result result;
+                mbe_initProcessResult(&result);
+                result.flags |= provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
+                const int rc = mbe_processImbe4400Dataf(out[0], &result, voiced, &s[0][0], &s[0][1], &s[0][2]);
+                assert(rc >= 0);
+                (void)rc;
+            }
+            memcpy(s[1], s[0], sizeof(s[1]));
+            memcpy(&s[1][slot].PHIl[0], &tone, sizeof(tone));
+            for (int k = 0; k < 2; ++k) {
+                mbe_process_result result;
+                mbe_initProcessResult(&result);
+                result.flags |= provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
+                const int rc = mbe_processImbe4400Dataf(out[k], &result, unvoiced, &s[k][0], &s[k][1], &s[k][2]);
+                assert(rc >= 0);
+                (void)rc;
+            }
+            assert(same_bits(out[0], out[1], 160));
+            for (int i = 0; i < 3; ++i) {
+                assert(same_stream_state(&s[0][i], &s[1][i]));
+            }
+        }
+    }
+}
+
+/* A D-STAR harmonic exactly on a column edge belongs to the upper column, as
+ * the decoder's whole part takes it: at 250 Hz (w0 2 pi / 32, so f0 is 1/32
+ * and harmonic l lies at l / 2 columns exactly), 14 harmonics, 1 to 3 voiced,
+ * after a frame with no voiced band, harmonic 2 at 500 Hz lies in column 1,
+ * which the onset does not cover (its band, 0 to 1 kHz, is covered in column 0
+ * only: column 1 is the top of the voiced region), and is unvoiced at
+ * mid-frame; harmonic 1 sounds, and harmonic 3 (750 Hz, column 1) does not. */
+static void
+test_dstar_exact_column_edge(void) {
+    mbe_parms prev, cur;
+    struct mbe_subframe_model mid;
+    set_model(&prev, 250.0, 14, 0, 16.0f);
+    set_model(&cur, 250.0, 14, 3, 16.0f);
+    prev.w0 = (2.0f * (float)M_PI) / 32.0f;
+    cur.w0 = prev.w0;
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI, &mid);
+    const float f0 = cur.w0 / (2.0f * (float)M_PI);
+    const float position = 2.0f * 16.0f * f0;
+    assert(same_bits(&position, &(const float){1.0f}, 1));
+    assert(mid.voiced[1] == 1 && mid.voiced[2] == 0 && mid.voiced[3] == 0);
+}
+
+/* The rate-33 rendering keeps the hold through a frame lacking a pitch at the
+ * harmonic at or next above 505 Hz, a harmonic past L taken at L: a frame of
+ * one harmonic at 100 Hz, voiced, holds (its 6th harmonic, past L, read at
+ * harmonic 1), and the reference agrees. */
+static void
+test_rate33_hold_past_l(void) {
+    mbe_parms prev, cur;
+    struct mbe_subframe_model mid;
+    unsigned char want[57] = {0};
+    set_model(&prev, 100.0, 1, 1, 16.0f);
+    set_model(&cur, 100.0, 10, 0, 16.0f);
+    mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PITCH_ABSENT);
+    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &mid);
+    assert(mid.any_voiced && mid.voiced[1] == 1);
+    reference_mid_voicing(&prev, &cur, (double)mid.w0, mid.L, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, want);
+    for (int l = 1; l <= mid.L; ++l) {
+        assert(mid.voiced[l] == want[l]);
     }
 }
 
@@ -4541,6 +4779,11 @@ main(void) {
     test_mid_columns_bands_with_no_state();
     test_marks_with_columns();
     test_marks_in_codec_states();
+    test_p25_nearest_harmonic_across_a_step();
+    test_p25_mid_columns_across_steps();
+    test_p25_forged_tone_in_state();
+    test_dstar_exact_column_edge();
+    test_rate33_hold_past_l();
     test_p25_muted_onset_advances();
     test_untrusted_mid_voicing_marks();
     test_p25_voicing_persists();

@@ -249,7 +249,7 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
  *  - voiced bands: MBE_FRAME_MARK_ONSET_COLUMNS, which P25's rendering gives
  *    every voiced model it renders but a tone model, after adaptive smoothing
  *    (the model played for a P25 tone sent as voice frames is marked
- *    MBE_FRAME_MARK_TONE instead, imbe4400_play_tone()). No rendering reads it
+ *    MBE_FRAME_MARK_TONE instead, imbe4400_play_tone()). It chooses no band
  *    since the mid-frame columns change: P25's reads the mid-frame voicing of
  *    every model in 500 Hz columns (mbe_subframe.c; docs/dvsi-parity.md,
  *    "D-STAR and P25: mid-frame voicing by columns"), which contains the onset

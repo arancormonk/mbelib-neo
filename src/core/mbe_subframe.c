@@ -306,26 +306,27 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
 /* ---- the mid-frame voicing of D-STAR and P25: 500 Hz columns ---- */
 
 /*
- * DVSI's D-STAR and P25 decoders voice the mid-frame model by one rule
- * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"; a fit
- * to their decodes of DVSI's test vectors, corroborated on a DVMEGA DVstick 30;
- * what makes it in the decoders is not known). A band in the same state in
- * both frames keeps it. One whose state differs is voiced at mid-frame if and
- * only if M(k) or M(k') holds, k the 500 Hz column of the band's frequency and
- * k' the column 250 Hz higher:
+ * The mid-frame model of D-STAR's and P25's renderings is voiced by one rule
+ * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"). It
+ * was fitted to per-harmonic labels of DVSI's decodes of its development and
+ * validation vectors (each label says which of two test decodes is nearer
+ * DVSI's in a harmonic's band), and the DVMEGA DVstick 30's single-band step
+ * curves of #157 come closer with it; it is not taken from a document, and what
+ * DVSI's decoders compute is not known. A band in the same state in both
+ * frames (each read at its harmonic nearest the band, nearest_harmonic())
+ * keeps it. One whose state differs is voiced at mid-frame if and only if M(k)
+ * or M(k') holds, k the 500 Hz column of the band's frequency and k' the
+ * column of the frequency 250 Hz higher:
  *
  *     M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k + 1) != Sc(k + 1))
  *
- * with Sp and Sc the two frames' voicing sampled at the columns, unvoiced past
- * the last: a column voiced in both frames is voiced, and a column that changes
- * is voiced unless the column above it does not change (the top column of a
- * run of changing columns takes the unvoiced state, whatever stands above it).
- * A frame with no voiced band is unvoiced in every band and sample; a band
- * that plays nothing in either frame (BAND_NONE, a caller's state) plays
- * nothing (column_band_state()). At an onset this reduces to M(k) = Sc(k) and Sc(k + 1), the bands of this frame's
- * covered columns starting with the frame; through a frame marked
- * MBE_FRAME_MARK_PITCH_ABSENT to M(k) = Sp(k) and Sp(k + 1), the frame
- * before's covered columns holding through the first 10 ms.
+ * with Sp and Sc the two frames' voicing sampled at the columns (the samples,
+ * not the bands' states), the sample past the last column unvoiced in both. A
+ * frame with no voiced band is unvoiced in every band and sample; a band that
+ * plays nothing in either frame (BAND_NONE, a caller's state) plays nothing
+ * (column_band_state()). At an onset M(k) reduces to Sc(k) and Sc(k + 1); at a
+ * frame marked MBE_FRAME_MARK_PITCH_ABSENT with no voiced band, to Sp(k) and
+ * Sp(k + 1).
  */
 
 /* Columns 0..7, and the sample past the last, always unvoiced. */
@@ -457,9 +458,10 @@ struct column_rule {
 };
 
 /* Whether the mid-frame model's bands are voiced by the columns: in D-STAR's
- * and P25's renderings, not after a P25 tone model (MBE_FRAME_MARK_TONE: this
- * frame's voicing stands at mid-frame), and for a frame with no voiced band
- * only when it is marked MBE_FRAME_MARK_PITCH_ABSENT. Sets the samples. */
+ * and P25's renderings, for a frame with a voiced band, or with none when it is
+ * marked MBE_FRAME_MARK_PITCH_ABSENT. No mark of the previous model is read
+ * (that model is caller state: a P25 tone model before this frame is read in
+ * the columns as any model is). Sets the samples. */
 static int
 column_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering,
             struct column_rule* rule) {
@@ -467,9 +469,6 @@ column_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_s
         return 0;
     }
     if (!model_has_voiced_band(cur_mp) && mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_PITCH_ABSENT) {
-        return 0;
-    }
-    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE && mbe_frame_mark(prev_mp) == MBE_FRAME_MARK_TONE) {
         return 0;
     }
     rule->dstar = rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE;
@@ -510,16 +509,41 @@ columns_voice(const struct column_rule* rule, float w0, int l) {
     return column_voiced(rule, p25_column(hz)) || column_voiced(rule, p25_column(hz + COLUMN_REACH_HZ));
 }
 
-/* The state of the mid-frame model's band l at angular frequency w by the
- * columns: each frame's state at its harmonic nearest w; a band that plays
+/* A frame's harmonic nearest harmonic l of the mid-frame model of pitch w0
+ * (both pitches positive and normal), 1..L, for the columns' rule: the
+ * position l w0 / mp->w0 formed in double from the stored pitches, a half
+ * added and its whole part taken, so that a position exactly halfway between
+ * two harmonics (a tie) takes the upper one. In double because the float
+ * quotient harmonic_at() forms rounds a position just under a half (33.4999986
+ * of a P25 frame's harmonics at b0 134, its mid-frame harmonic 36 after a
+ * frame at b0 161) to the half itself, and so to the wrong neighbour: a band
+ * voiced in both frames was taken for one that changes. The index is made on
+ * the bit pattern, positive doubles ordering as their patterns do. */
+static int
+nearest_harmonic(const mbe_parms* mp, float w0, int l) {
+    const double position = (((double)w0 * (double)l) / (double)mp->w0) + 0.5;
+    const double first = 1.0;
+    const double last = (double)mp->L;
+    uint64_t bits, first_bits, last_bits;
+    memcpy(&bits, &position, sizeof(bits));
+    memcpy(&first_bits, &first, sizeof(first_bits));
+    memcpy(&last_bits, &last, sizeof(last_bits));
+    if (bits < first_bits) {
+        return 1;
+    }
+    return (bits >= last_bits) ? mp->L : (int)position;
+}
+
+/* The state of the mid-frame model's band l by the columns: each frame's state
+ * at its harmonic nearest the band (nearest_harmonic()); a band that plays
  * nothing in either frame (BAND_NONE: a caller's voicing that is neither 0 nor
  * 1) plays nothing; one in the same state in both keeps it; else the columns
  * decide. */
 static int
 column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struct column_rule* rule,
-                  const struct mbe_subframe_model* model, int l, float w) {
-    const int before = band_state(prev_mp, harmonic_at(prev_mp, w));
-    const int now = band_state(cur_mp, harmonic_at(cur_mp, w));
+                  const struct mbe_subframe_model* model, int l) {
+    const int before = band_state(prev_mp, nearest_harmonic(prev_mp, model->w0, l));
+    const int now = band_state(cur_mp, nearest_harmonic(cur_mp, model->w0, l));
     if (before == BAND_NONE || now == BAND_NONE) {
         return BAND_NONE;
     }
@@ -615,7 +639,7 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parm
     phase_log2_amplitudes(cur_mp, cur_phase_log2);
     for (int l = 1; l <= model->L; l++) {
         const float w = model->w0 * (float)l;
-        int state = (columns != NULL) ? column_band_state(prev_mp, cur_mp, columns, model, l, w)
+        int state = (columns != NULL) ? column_band_state(prev_mp, cur_mp, columns, model, l)
                                       : band_state(voicing, harmonic_at(voicing, w));
         if (late_onset && state == BAND_VOICED) {
             state = BAND_UNVOICED;
@@ -1075,8 +1099,9 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
  * there is overwritten and has no effect; with no voiced band, not that mark
  * (none instead), any other mark kept. The rendering reads its voiced models'
  * bands in the 500 Hz columns whatever their mark (column_rule()), so
- * MBE_FRAME_MARK_ONSET_COLUMNS itself is read nowhere now; what the marking
- * still decides is that no other mark acts on such a model. The prediction history the data path
+ * MBE_FRAME_MARK_ONSET_COLUMNS no longer chooses bands; this function still
+ * reads it (to clear it from a model with no voiced band) and writes it, and
+ * the marking still decides that no other mark acts on a voiced model. The prediction history the data path
  * committed before keeps the decoded model and its mark. Other renderings
  * leave the mark as it is. Called only on a frame the synthesis accepts
  * (frame_accepted()), so that a rejected call leaves the state untouched. */
