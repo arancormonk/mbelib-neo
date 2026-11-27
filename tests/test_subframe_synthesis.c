@@ -798,9 +798,11 @@ reference_code(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
  * P25's validity counter (US 7,970,606, FIG. 8): 0 for a fresh stream; a
  * model with a voiced band leaves it, one with no voiced band at the pitch of
  * the default code b0 25 or of a reserved code raises it by one to 3 at most,
- * one with no voiced band at any other pitch lowers it by one to -10 at
- * least; P25 reads a frame's code only while the counter the frame before
- * left is 0 or more. D-STAR reads every code and keeps no counter.
+ * one with no voiced band at the pitch of any other P25 code (b0 0..207, as
+ * the public decoder gives it) lowers it by one to -10 at least, and one at a
+ * pitch no code decodes to leaves it; P25 reads a frame's code only while the
+ * counter the frame before left is 0 or more. D-STAR reads every code and
+ * keeps no counter.
  */
 struct reference_stream {
     int emitted, read, count;
@@ -826,14 +828,37 @@ reference_read_codes(const mbe_parms* last, const mbe_parms* cur, enum mbe_voice
     codes[1] = (!p25 || stream->count >= 0) ? reference_code(cur, rendering) : -1;
 }
 
+/* The P25 pitch code (0..207) whose pitch, as the public decoder gives it,
+ * w0 is bit for bit, or -1. */
+static int
+reference_p25_pitch_code(float w0) {
+    static float pitches[208];
+    static int filled = 0;
+    if (!filled) {
+        for (int b0 = 0; b0 < 208; ++b0) {
+            pitches[b0] = decoded_pitch(0, b0);
+        }
+        filled = 1;
+    }
+    for (int b0 = 0; b0 < 208; ++b0) {
+        if (same_bits(&pitches[b0], &w0, 1)) {
+            return b0;
+        }
+    }
+    return -1;
+}
+
 /* The counter a P25 frame leaves after `count`. */
 static int
 reference_next_count(const mbe_parms* cur, int count) {
-    const float default_pitch = p25_default_pitch();
     if (reference_voiced(cur)) {
         return count;
     }
-    if (reference_code(cur, MBE_VOICED_SYNTHESIS_DVSI_IMBE) >= 0 || same_bits(&cur->w0, &default_pitch, 1)) {
+    const int b0 = reference_p25_pitch_code(cur->w0);
+    if (b0 < 0) {
+        return count;
+    }
+    if (b0 == 25 || (b0 >= 128 && b0 <= 183)) {
         return (count < 3) ? count + 1 : 3;
     }
     return (count > -10) ? count - 1 : -10;
@@ -1277,13 +1302,17 @@ struct wave_frame {
  * harmonic lies at 749.999964 Hz, under the 750 Hz a float product rounds
  * it to) and 0x3E3D3C19 (its 17th harmonic is under pi in double, at pi in
  * float), -3 the codec's default code for a frame with no voiced band (P25 b0
- * 25, D-STAR b0 34), as its public decoder gives it. */
+ * 25, D-STAR b0 34) and -4 the code this library's encoder sends such a frame
+ * with (P25 b0 127, D-STAR b0 123), as its public decoder gives them. */
 static float
 edge_pitch(enum mbe_voiced_synthesis rendering, int which) {
     const uint32_t bits = (which == -1) ? UINT32_C(0x3E490FDA) : UINT32_C(0x3E3D3C19);
     float w0;
     if (which == -3) {
         return decoded_pitch(!reference_imbe(rendering), reference_imbe(rendering) ? 25 : 34);
+    }
+    if (which == -4) {
+        return decoded_pitch(!reference_imbe(rendering), reference_imbe(rendering) ? 127 : 123);
     }
     memcpy(&w0, &bits, sizeof(w0));
     return w0;
@@ -1373,9 +1402,11 @@ static const int k_both_codes[] = {48, 49, 50, 51, 52, 53, 54, 55};
 
 /* A frame of kind `kind` for the pulsed state's waveform stream: 0 a frame
  * with no voiced band and no code (lacking a pitch, as its decoder marks
- * one), 1 to 3 a frame with a code whose own pattern only, mid-frame pattern
- * only or both pulse (the `n`th of its kind, cycling), 4 a voiced frame, 5 a
- * tone model, 6 a frame of kind 3 marked as a tone model. A
+ * one; at a pitch no code decodes to), 1 to 3 a frame with a code whose own
+ * pattern only, mid-frame pattern only or both pulse (the `n`th of its kind,
+ * cycling), 4 a voiced frame, 5 a tone model, 6 a frame of kind 3 marked as a
+ * tone model, 7 a frame at the default code, 8 a frame with no voiced band at
+ * the code this library's encoder sends such a frame with. A
  * frame with a code is marked as D-STAR's decoder marks it in D-STAR's
  * rendering (MBE_FRAME_MARK_PITCH_CARRIES when its own pattern pulses) and
  * carries no mark elsewhere. */
@@ -1421,6 +1452,14 @@ pulsed_wave_frame(enum mbe_voiced_synthesis rendering, int kind, size_t n, int f
         frame.mark = MBE_FRAME_MARK_TONE;
         return frame;
     }
+    if (kind == 8) {
+        /* An ordinary code's pitch, outside the table: P25's counter falls. */
+        const int L = (int)floor(0.9254 * M_PI / (double)edge_pitch(rendering, -4));
+        frame.L = (L > 56) ? 56 : L;
+        frame.mark = MBE_FRAME_MARK_NONE;
+        frame.reserved = -4;
+        return frame;
+    }
     if (kind == 7) {
         /* The default code: no pattern, but P25's validity counter counts it. */
         frame.L = 14;
@@ -1448,9 +1487,10 @@ pulsed_wave_frame(enum mbe_voiced_synthesis rendering, int kind, size_t n, int f
  * with codes, a caller's tone mark on a frame with a code (its mid-frame model
  * takes no pattern), and frames from silence; frames at the default code
  * (kind 7) first and with P25's validity counter walked down to its floor by
- * frames with no voiced band at another pitch, up through the codes it does
- * not read and to its ceiling by default-code frames (the reference keeps the
- * counter, reference_next_count()). In rate 33's rendering and in ProVoice's
+ * frames with no voiced band at an ordinary code's pitch (kind 8), up through
+ * the codes it does not read and to its ceiling by default-code frames, and
+ * kept where it stands by frames at a pitch no code decodes to (kind 0; the
+ * reference keeps the counter, reference_next_count()). In rate 33's rendering and in ProVoice's
  * the same pitches have no code, and the reference plays no pulsed band
  * there. */
 static void
@@ -1458,7 +1498,8 @@ test_waveform_through_pulsed_codes(enum mbe_voiced_synthesis rendering, int inex
     static const char kinds[] = "777000100200301101201302102202303103203311121131221231321332223233300"
                                 "4140441140424044224043404433404"
                                 "1515525535051615262536361"
-                                "000000000003333333333300000000000777777777723";
+                                "888888888883333333333388888888888777777777723"
+                                "8880000000000032";
     static const int silent[][2] = {{1, 1}, {3, 1}, {4, 1}, {2, 0}, {3, 1}, {2, 1}, {0, 0}};
     struct wave_frame frames[sizeof(kinds) + sizeof(silent) / sizeof(silent[0])];
     size_t count = 0;
@@ -6107,40 +6148,84 @@ walk_frame(int b0, int count, int sounds, uint32_t* rng, mbe_parms s[3], struct 
     assert(sounds ? energy > 1.0 : energy <= 0.0);
 }
 
+/* One P25 frame of pitch code b0 with no voiced band (b0 220: no usable
+ * code) through the data path, every log2 amplitude 5 (level, so that the
+ * adaptive smoothing an error rate brings voices no band), the error rate set
+ * to `error_rate` before it (1 mutes the frame, 0 does not); returns whether
+ * the frame was muted. */
+static int
+p25_frame_at_rate(int b0, float error_rate, mbe_parms s[3]) {
+    char bits[88] = {0};
+    float out[160];
+    mbe_process_result result;
+    if (b0 > 207) {
+        set_imbe_b0(bits, b0);
+    } else {
+        const unsigned char bands[12] = {0};
+        float logm[57];
+        for (int l = 0; l < 57; ++l) {
+            logm[l] = 5.0f;
+        }
+        mbe_imbe4400_quantize_amplitudes(b0, bands, logm, &s[1], 0, bits);
+    }
+    mbe_initProcessResult(&result);
+    s[1].errorRate = error_rate;
+    const int status = mbe_processImbe4400Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+    assert(status >= 0);
+    (void)status;
+    return (result.flags & MBE_PROCESS_FLAG_MUTE) != 0u;
+}
+
+/* Whether the state says its frame's code was read. */
+static int
+stored_read(const mbe_parms* mp) {
+    uint32_t read;
+    memcpy(&read, &mp->noiseOverlap[TEST_READ_SLOT], sizeof(read));
+    return read == TEST_ONE_BITS;
+}
+
 /*
- * P25's counter through the data path's repeats and its repeat limit's mute,
- * where it counts the model each frame renders or advances (the library's
- * choice): three frames at b0 176 (code 48) take it to 3; fifteen frames with
+ * P25's counter where the data path repeats and mutes frames. It counts the
+ * model each frame renders or advances, and moves only for a model at the
+ * pitch some P25 code decodes to (the document counts received frames). Lost
+ * frames: three frames at b0 176 (code 48) take it to 3; fifteen frames with
  * no usable pitch code (b0 220) repeat that model three times (each raising
- * the capped counter), mute it at the 4th, and then the repeat limit's reset
- * model (eq 46's nominal pitch of b0 134, outside the table) lowers it frame by
- * frame to -8; the first eight b0 176 frames after the run are therefore not
- * read (the counter climbing to 0), the ninth is.
+ * the capped counter), mute at the 4th, and then advance the repeat limit's
+ * reset model, at eq 46's nominal pitch of b0 134, which no code decodes to:
+ * the counter stays at 3, and the first b0 176 frame after the run is read.
+ * Frames muted by the error rate are decoded and advanced as rendered: three
+ * muted frames at b0 127 (with level amplitudes, which the smoothing leaves
+ * unvoiced) lower the counter from 1 to -2, so the next two b0 176 frames are
+ * not read and the third is.
  */
 static void
 test_p25_counter_through_a_mute(void) {
-    static const int during[15] = {3, 3, 3, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6, -7, -8};
     uint32_t rng = 0xA11CEu;
     mbe_parms s[3];
-    struct path_step step;
-    char bits[88];
     path_stream(PATH_P25, &rng, s);
     for (int f = 0; f < 3; ++f) {
-        path_unvoiced_b0(PATH_P25, 176, &rng, s, &step, NULL);
-        assert(stored_count_of(&step.after) == f + 1);
+        assert(!p25_frame_at_rate(176, 0.0f, s));
+        assert(stored_count_of(&s[2]) == f + 1 && stored_read(&s[2]));
     }
+    int muted = 0;
     for (int f = 0; f < 15; ++f) {
-        memset(bits, 0, sizeof(bits));
-        set_imbe_b0(bits, 220);
-        path_frame(PATH_P25, bits, s, &step);
-        assert(stored_count_of(&step.after) == during[f]);
+        muted += p25_frame_at_rate(220, 0.0f, s);
+        assert(stored_count_of(&s[2]) == 3);
     }
-    for (int f = 0; f < 9; ++f) {
-        uint32_t read;
-        path_unvoiced_b0(PATH_P25, 176, &rng, s, &step, NULL);
-        memcpy(&read, &step.after.noiseOverlap[TEST_READ_SLOT], sizeof(read));
-        assert(stored_count_of(&step.after) == -7 + f);
-        assert(read == ((f == 8) ? TEST_ONE_BITS : 0u));
+    assert(muted > 0 && s[2].repeatCount >= 0);
+    assert(!p25_frame_at_rate(176, 0.0f, s));
+    assert(stored_count_of(&s[2]) == 3 && stored_read(&s[2]));
+
+    path_stream(PATH_P25, &rng, s);
+    assert(!p25_frame_at_rate(176, 0.0f, s));
+    assert(stored_count_of(&s[2]) == 1);
+    for (int f = 0; f < 3; ++f) {
+        assert(p25_frame_at_rate(127, 1.0f, s));
+        assert(stored_count_of(&s[2]) == -f && !stored_read(&s[2]));
+    }
+    for (int f = 0; f < 3; ++f) {
+        assert(!p25_frame_at_rate(176, 0.0f, s));
+        assert(stored_count_of(&s[2]) == -1 + f && stored_read(&s[2]) == (f == 2));
     }
 }
 
@@ -6371,7 +6456,9 @@ test_untrusted_pulsed_state(enum mbe_voiced_synthesis rendering) {
 /* A model of a kind the counter steps on, in P25's codec: 0 a voiced model,
  * 1 a tone model (MBE_FRAME_MARK_TONE, two voiced harmonics), 2 no voiced band
  * at the default code b0 25's pitch, 3 at a reserved code's (48), 4 at b0
- * 127's, 5 at an ulp above code 48's. */
+ * 127's, 5 at an ulp above code 48's (no code's), 6 at the pitch of the
+ * initial state and the repeat limit's reset model (eq 46's nominal pitch of
+ * b0 134, no code's). */
 static void
 count_kind_model(mbe_parms* mp, int kind) {
     if (kind == 0 || kind == 1) {
@@ -6388,6 +6475,10 @@ count_kind_model(mbe_parms* mp, int kind) {
         mp->L = 37;
     } else if (kind == 5) {
         mp->w0 = nextafterf(mp->w0, 1.0f);
+    } else if (kind == 6) {
+        mbe_parms prev, enhanced, initial;
+        mbe_initMbeParms(&initial, &prev, &enhanced);
+        mp->w0 = initial.w0;
     }
 }
 
@@ -6396,8 +6487,10 @@ count_kind_model(mbe_parms* mp, int kind) {
  * it can hold (a state that stored it), rendered and advanced alike (a muted
  * frame, mbe_advance_subframes()): a voiced model and a tone model leave it,
  * a model with no voiced band at the default code's pitch or a reserved
- * code's raises it by one to 3 at most, one at any other pitch (b0 127's, an
- * ulp off a code's) lowers it by one to -10 at least; the reserved code is
+ * code's raises it by one to 3 at most, one at another code's pitch (b0
+ * 127's) lowers it by one to -10 at least, one at a pitch no code decodes to
+ * (an ulp off a code's, the initial state's and the reset model's) leaves
+ * it; the reserved code is
  * read (stored as read, and its pulses sound) only from 0 up. The advanced
  * state stores exactly what the rendered one does. D-STAR's rendering, from
  * the same states, stores no counter and no read flag, and reads the code
@@ -6405,14 +6498,14 @@ count_kind_model(mbe_parms* mp, int kind) {
  */
 static void
 test_pulsed_count_steps(void) {
-    static const int expected_step[6] = {0, 0, 1, 1, -1, -1};
+    static const int expected_step[7] = {0, 0, 1, 1, -1, 0, 0};
     for (int count = -10; count <= 3; ++count) {
         mbe_parms base, out_state;
         float out[160];
         fresh_stream(&base);
         code48_after(&base, MBE_VOICED_SYNTHESIS_DVSI_IMBE, out, &out_state);
         out_state.noiseOverlap[TEST_COUNT_SLOT] = (float)count;
-        for (int kind = 0; kind < 6; ++kind) {
+        for (int kind = 0; kind < 7; ++kind) {
             mbe_parms model;
             count_kind_model(&model, kind);
             mbe_parms rendered = out_state;
