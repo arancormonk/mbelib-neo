@@ -462,19 +462,32 @@ next_count(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_sy
     return (count > MBE_PULSED_COUNT_MIN) ? count - 1 : MBE_PULSED_COUNT_MIN;
 }
 
-/* Whether a code's pattern (PULSED_OWN or PULSED_MID) has a pulsed channel;
- * none for no code (-1). */
+/* A code's pattern (PULSED_OWN or PULSED_MID) as a mask of eight channels,
+ * or NULL for no code (-1). */
+static const char*
+code_mask(int code, int pattern) {
+    return (code < 0) ? NULL : pulsed_patterns[code][pattern];
+}
+
+/* Whether a mask of eight channels (NULL: none) has a pulsed channel. */
 static int
-pattern_pulses(int code, int pattern) {
-    if (code < 0) {
+mask_pulses(const char* mask) {
+    if (mask == NULL) {
         return 0;
     }
     for (int k = 0; k < 8; k++) {
-        if (pulsed_patterns[code][pattern][k] == 'P') {
+        if (mask[k] == 'P') {
             return 1;
         }
     }
     return 0;
+}
+
+/* Whether a code's pattern (PULSED_OWN or PULSED_MID) has a pulsed channel;
+ * none for no code (-1). */
+static int
+pattern_pulses(int code, int pattern) {
+    return mask_pulses(code_mask(code, pattern));
 }
 
 /* The channel (0..7) of a frequency in Hz (finite, not negative): its 500 Hz
@@ -491,9 +504,10 @@ pulsed_channel(double hz) {
 }
 
 /*
- * A model's pulsed bands under a code's pattern: in a model with no voiced
- * band, each unvoiced harmonic l, at f = l w0 4000 / pi Hz, whose channel, or
- * the channel of f + 250 Hz, is pulsed. A pulsed band takes its magnitude as a
+ * A model's pulsed bands under a mask of eight channels (a code's pattern,
+ * code_mask(), or a rate-33 row's, row_mask(); NULL for none): in a model with
+ * no voiced band, each unvoiced harmonic l, at f = l w0 4000 / pi Hz, whose
+ * channel, or the channel of f + 250 Hz, is pulsed. A pulsed band takes its magnitude as a
  * voiced one (the unvoiced factor MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) of
  * that model taken out: the pulse is the voiced pulse response) and plays no
  * noise (unvoiced_subframe()). A band with no state keeps none. The channels
@@ -508,13 +522,12 @@ pulsed_channel(double hz) {
  * pulsed band, so that the two excitations never meet in one model.
  */
 static void
-pulse_bands(struct mbe_subframe_model* model, int code, int pattern) {
-    if (!pattern_pulses(code, pattern) || model->any_voiced || !positive_normal(&model->w0)) {
+pulse_bands(struct mbe_subframe_model* model, const char* channels) {
+    if (!mask_pulses(channels) || model->any_voiced || !positive_normal(&model->w0)) {
         return;
     }
     /* As a float, also under x87 excess precision. */
     const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
-    const char* channels = pulsed_patterns[code][pattern];
     for (int l = 1; l <= model->L; l++) {
         const double hz = (double)l * (double)model->w0 * (4000.0 / M_PI);
         if (model->voiced[l] != BAND_UNVOICED
@@ -1204,18 +1217,26 @@ advance_interval(struct pulse_train* train, float start, const struct mbe_subfra
 
 /* What a frame's pulsed state leaves the next (pulsed_frame()): which of the
  * first two models emit, whether this frame's code was read, and P25's
- * validity counter (0 in the other renderings). */
+ * validity counter (0 in the other renderings); and, in the rate-33 rendering
+ * alone (pulsed_rows()), which of the three models emit a pulse of rate 33's
+ * pulsed rows, when (in samples from the frame's start), and the word the
+ * frame leaves the next (MBE_PULSED_ROW_SLOT; 0 for none). */
 struct pulsed_reading {
     int emits[2];
     int read;
     int count;
+    int row_emits[3];
+    float row_time[3];
+    float row_slot;
 };
 
 /* What the frame leaves the next: the pulse phase and the pulses of the last
  * frame's length, most recent first, in noiseOverlap, with its pulsed state
  * (`pulsed`, pulsed_frame()): whether its mid-frame model emitted a pulse
  * (PULSED_SLOT) and, in P25's rendering, whether its code was read
- * (PULSED_READ_SLOT) and the validity counter (PULSED_COUNT_SLOT); and, as
+ * (PULSED_READ_SLOT) and the validity counter (PULSED_COUNT_SLOT), and, in
+ * rate 33's, the pulsed-row word of a frame whose own model had a pulsed band
+ * (MBE_PULSED_ROW_SLOT, pulsed_rows(); 0 in every other case); and, as
  * the TIA-102.BABA rendering leaves
  * them, harmonic l's phase at the frame's end before the regenerated phase
  * (PSIl) and with it (PHIl). Element 0 of PSIl and PHIl is not touched (the
@@ -1250,6 +1271,7 @@ store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const
     cur_mp->noiseOverlap[PULSED_SLOT] = pulsed->emits[1] ? PULSED_EMITTED : 0.0f;
     cur_mp->noiseOverlap[PULSED_READ_SLOT] = pulsed->read ? PULSED_READ : 0.0f;
     cur_mp->noiseOverlap[PULSED_COUNT_SLOT] = (float)pulsed->count;
+    cur_mp->noiseOverlap[MBE_PULSED_ROW_SLOT] = pulsed->row_slot;
     mbe_subframe_state_mark(cur_mp);
 }
 
@@ -1385,6 +1407,25 @@ render_emitted_pulse(float* out, const struct rendered_model* from, const struct
     render_pulse(out, to, (float)MBE_PULSED_DELAY, 1);
 }
 
+/* The pulses of rate 33's pulsed rows in interval k (pulsed_rows()): each is
+ * played by its own model alone, the voiced pulse response (render_pulse())
+ * through that model's pulsed bands under that model's crossfade weight,
+ * falling in the interval that starts at its point (model k) and rising in the
+ * one that ends there (model k + 1), from the pulse's time (or the interval's
+ * start, where it falls before it, its response already running) until its
+ * response or the interval ends. So a pulse sounds within its model's window and
+ * no further, and no pulse plays through a neighbouring model or a voiced band. */
+static void
+render_row_pulses(float* out, int k, const struct pulsed_reading* reading, const struct rendered_model pulsed[3]) {
+    const float start = (float)(k * SUBFRAME);
+    if (reading->row_emits[k]) {
+        render_pulse(out, &pulsed[k], reading->row_time[k] - start, 0);
+    }
+    if (reading->row_emits[k + 1]) {
+        render_pulse(out, &pulsed[k + 1], reading->row_time[k + 1] - start, 1);
+    }
+}
+
 /* ---- the unvoiced part ---- */
 
 static void
@@ -1481,15 +1522,170 @@ pulsed_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_
              struct mbe_subframe_model models[3], struct pulsed_reading* pulsed) {
     const int code = read_code(cur_mp, prev_mp, rendering);
     const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
-    pulse_bands(&models[0], last_read_code(prev_mp, rendering), PULSED_OWN);
+    pulse_bands(&models[0], code_mask(last_read_code(prev_mp, rendering), PULSED_OWN));
     if (mark != MBE_FRAME_MARK_PREVIOUS_HELD && mark != MBE_FRAME_MARK_TONE) {
-        pulse_bands(&models[1], code, PULSED_MID);
+        pulse_bands(&models[1], code_mask(code, PULSED_MID));
     }
-    pulse_bands(&models[2], code, PULSED_OWN);
+    pulse_bands(&models[2], code_mask(code, PULSED_OWN));
     pulsed->emits[0] = models[0].any_pulsed && !mid_model_emitted(prev_mp);
     pulsed->emits[1] = models[1].any_pulsed && !pulsed->emits[0];
     pulsed->read = (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) && code >= 0;
     pulsed->count = next_count(cur_mp, prev_mp, rendering);
+}
+
+/* ---- rate 33's pulsed rows ---- */
+
+/*
+ * Rate 33's form of the pulsed state (docs/dvsi-parity.md, "Rate 33: the
+ * pulsed rows"): a voice frame of V/UV rows 18 to 31 (Annex B: no band voiced)
+ * carries a word of its row and pitch code (mbe_adaptive.h), and the row names
+ * the pulsed 500 Hz channels of the frame's own subframe ([row - 18][0]) and
+ * of its mid-frame subframe ([row - 18][1]), channel k from 500 k to
+ * 500 (k + 1) Hz (the last open above 3500 Hz), lowest first, 'P' pulsed. The
+ * fourteen pairs are measurements of DVSI's rate-33 decodes of the
+ * development and validation vectors. Checked afterwards, as an observation
+ * and not as their source: each pair equals one entry of pulsed_patterns[]
+ * (Table 2 of US 7,970,606), those at indices 24, 28, 32, 36, 0, 4, 48, 52, 8,
+ * 12, 40, 44, 16 and 20 for rows 18 to 31.
+ */
+static const char row_masks[MBE_PULSED_ROW_LAST - MBE_PULSED_ROW_FIRST + 1][2][9] = {
+    {"PUUUUUUU", "UUUUUUUU"}, {"PPUUUUUU", "UUUUUUUU"}, {"PPPPPPPP", "UUUUUUUU"}, /* 18 */
+    {"UUPUUUUU", "UUUUUUUU"}, {"UUUUUUUP", "UUUUUUUU"}, {"UUUUUPPP", "UUUUUUUU"}, /* 21 */
+    {"PPPPPPPP", "PPPPPPPP"}, {"UUPPPPPP", "UUPPPPPP"},                           /* 24 */
+    {"UUUUUUUU", "PUUUUUUU"}, {"UUUUUUUU", "UUPUUUUU"}, {"UUUUUUUU", "PPPPPPPP"}, /* 26 */
+    {"UUUUUUUU", "PPUUUUUU"}, {"UUUUUUUU", "UUUUUUUP"}, {"UUUUUUUU", "UUUUUUPP"}, /* 29 */
+};
+
+/* The two rows that pulse both subframes and code two pulse positions. */
+#define ROW_GRID_FIRST 24
+#define ROW_GRID_LAST  25
+
+/* A row's mask (PULSED_OWN or PULSED_MID). */
+static const char*
+row_mask(const struct mbe_pulsed_row* word, int pattern) {
+    return row_masks[word->row - MBE_PULSED_ROW_FIRST][pattern];
+}
+
+/* Whether a model is a frame of `word`'s row and code: no voiced band (as the
+ * synthesis renders it, after adaptive smoothing, which can voice a harmonic:
+ * then it is not), a pitch that is positive and normal, and the band-grid
+ * model of the word's code by the decoder's own grid function
+ * (mbe_ambe2450_pulsed_row_model(), mbe_pulsed.h): the harmonic count equal
+ * and the pitch equal by bit pattern. A word on any other model (another code's
+ * L, a voiced model, a pitch a unit in the last place off) plays as no word. */
+static int
+row_model(const mbe_parms* mp, const struct mbe_pulsed_row* word) {
+    return !model_has_voiced_band(mp) && positive_normal(&mp->w0)
+           && mbe_ambe2450_pulsed_row_model(mp->w0, mp->L, word->b0);
+}
+
+/* The current frame's pulsed row, read in one place: in the rate-33 rendering
+ * alone, a word in its PHIl[0] (mbe_pulsed_row_word()) on the model it is the
+ * word of (row_model()). In every other rendering the word plays as no mark
+ * does (mbe_frame_mark() reads it as none). */
+static int
+current_row(const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering, struct mbe_pulsed_row* word) {
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && mbe_pulsed_row_word(cur_mp, word)
+           && row_model(cur_mp, word);
+}
+
+/* The last frame's pulsed row, from the state it stored (MBE_PULSED_ROW_SLOT):
+ * in the rate-33 rendering alone, only in a state with the subframe mark, a
+ * word as a frame stores it (not held, rows 18 to 25, whose own mask pulses),
+ * by its bit pattern, and only when the last frame's model (prev_mp, as it was
+ * synthesized) is the model of that word (row_model()). No mark of the
+ * previous model is read. Anything else, a word another rendering's state could
+ * never hold included, is none. */
+static int
+last_row(const mbe_parms* prev_mp, enum mbe_voiced_synthesis rendering, struct mbe_pulsed_row* word) {
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && mbe_subframe_state_is_marked(prev_mp)
+           && mbe_pulsed_row_read(&prev_mp->noiseOverlap[MBE_PULSED_ROW_SLOT], word) && !word->held
+           && word->row <= MBE_PULSED_ROW_OWN_LAST && row_model(prev_mp, word);
+}
+
+/*
+ * The time of the pulse of model `index` (0: the last frame's own model, at
+ * sample 0; 1: the mid-frame model, at 80; 2: this frame's own model, at 160),
+ * in samples from the frame's start: point + MBE_AMBE2450_PULSE_SLOPE b0 -
+ * MBE_AMBE2450_PULSE_OFFSET for rows 18 to 23 and 26 to 31; for rows 24 and 25
+ * point - MBE_AMBE2450_PULSE_GRID_ORIGIN + MBE_AMBE2450_PULSE_GRID_STEP i, i
+ * being b0 mod MBE_AMBE2450_PULSE_GRID for the mid-frame model and b0 div
+ * MBE_AMBE2450_PULSE_GRID for an own model. A repeat (the held word) plays the
+ * own position at both points, so its mid-frame model takes b0 div 11 too. The
+ * last frame's own model takes its pulse at its time in that frame less 160
+ * (its point 0 plus the same offset). Formed in double from the integers and
+ * the constants and rounded to float once: each exact time is n / 1000 samples
+ * for a whole number n, never 0 and never halfway between two floats (a multiple
+ * of 1/8 is a float; any other n / 1000 lies at least 2e-10 of its own
+ * magnitude from such a halfway point), far beyond what double arithmetic (or
+ * x87's, or fast-math's reordering) can move it, so every build rounds it
+ * alike.
+ */
+static float
+row_pulse_time(const struct mbe_pulsed_row* word, int index) {
+    const double point = (double)(SUBFRAME * index);
+    double time;
+    if (word->row >= ROW_GRID_FIRST && word->row <= ROW_GRID_LAST) {
+        const int grid =
+            (index == 1 && !word->held) ? (word->b0 % MBE_AMBE2450_PULSE_GRID) : (word->b0 / MBE_AMBE2450_PULSE_GRID);
+        time = point - MBE_AMBE2450_PULSE_GRID_ORIGIN + (MBE_AMBE2450_PULSE_GRID_STEP * (double)grid);
+    } else {
+        time = point + (MBE_AMBE2450_PULSE_SLOPE * (double)word->b0) - MBE_AMBE2450_PULSE_OFFSET;
+    }
+    return mbe_round_to_float((float)time);
+}
+
+/* Model `index`'s pulse, where it has a pulsed band (pulse_bands()). */
+static void
+row_emits(const struct mbe_subframe_model models[3], const struct mbe_pulsed_row* word, int index,
+          struct pulsed_reading* pulsed) {
+    if (models[index].any_pulsed) {
+        pulsed->row_emits[index] = 1;
+        pulsed->row_time[index] = row_pulse_time(word, index);
+    }
+}
+
+/*
+ * The pulsed rows of a frame's three models, in the rate-33 rendering
+ * (docs/dvsi-parity.md, "Rate 33: the pulsed rows"; nothing in any other): the
+ * last frame's own model under the own mask of the row its frame stored
+ * (last_row()); for a pulsed-row frame (current_row()) the mid-frame model under
+ * the row's mid-frame mask (the own mask for a repeat's held word: a lost
+ * frame's repeat plays the state of the last subframe again) and this frame's
+ * own model under its own mask (pulse_bands(): no band of a model with a voiced
+ * band, so the two excitations never meet). Each model with a pulsed band
+ * emits exactly one pulse, at row_pulse_time(): there is no alternation between
+ * neighbouring models, and its own model alone plays it (render_row_pulses()).
+ * Starting from silence the last frame's own model plays nothing, so it has no
+ * pulsed band and no pulse. A frame whose own model has a pulsed band leaves
+ * its word (not held) for the next; any other leaves none. A silence frame
+ * carries no word, so the model its mark holds at mid-frame takes no pulsed
+ * band, while the last frame's own model keeps its own.
+ */
+static void
+pulsed_rows(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence, enum mbe_voiced_synthesis rendering,
+            struct mbe_subframe_model models[3], struct pulsed_reading* pulsed) {
+    struct mbe_pulsed_row last, cur;
+    for (int i = 0; i < 3; i++) {
+        pulsed->row_emits[i] = 0;
+        pulsed->row_time[i] = 0.0f;
+    }
+    pulsed->row_slot = 0.0f;
+    if (!from_silence && last_row(prev_mp, rendering, &last)) {
+        pulse_bands(&models[0], row_mask(&last, PULSED_OWN));
+        row_emits(models, &last, 0, pulsed);
+    }
+    if (!current_row(cur_mp, rendering, &cur)) {
+        return;
+    }
+    pulse_bands(&models[1], row_mask(&cur, cur.held ? PULSED_OWN : PULSED_MID));
+    pulse_bands(&models[2], row_mask(&cur, PULSED_OWN));
+    row_emits(models, &cur, 1, pulsed);
+    row_emits(models, &cur, 2, pulsed);
+    if (models[2].any_pulsed) {
+        const struct mbe_pulsed_row stored = {cur.row, cur.b0, 0};
+        pulsed->row_slot = mbe_pulsed_row_value(&stored);
+    }
 }
 
 /* A frame's three models (the last frame's own, mid-frame, this frame's own),
@@ -1528,6 +1724,7 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
         load_pulse_train(prev_mp, &models[0], rendering, train);
     }
     pulsed_frame(cur_mp, prev_mp, rendering, models, pulsed);
+    pulsed_rows(cur_mp, prev_mp, from_silence, rendering, models, pulsed);
     return 1;
 }
 
@@ -1588,6 +1785,7 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
         if (reading.emits[k]) {
             render_emitted_pulse(&aout_buf[(size_t)k * SUBFRAME], &pulsed[k], &pulsed[k + 1]);
         }
+        render_row_pulses(&aout_buf[(size_t)k * SUBFRAME], k, &reading, pulsed);
     }
     unvoiced_subframe(&models[1], &noise[0]);
     unvoiced_subframe(&models[2], &noise[1]);

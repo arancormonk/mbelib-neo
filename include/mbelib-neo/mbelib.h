@@ -655,7 +655,15 @@ MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
  * DVSI's decoder voices that column in the first half of the frame, and
  * gives rows 13 and 15 first halves of their own (columns 0 and 1; no band);
  * `cur_mp` carries that as a frame mark in `PHIl[0]`, which the AMBE
- * 3600x2450 process functions read and mbe_synthesizeSpeechf() does not. Tone
+ * 3600x2450 process functions read and mbe_synthesizeSpeechf() does not. A
+ * voice frame of rows 18 to 31 carries in `PHIl[0]` instead a word of its row
+ * and pitch code, the float 1024 + 128 (b1 - 18) + b0 (1024 to 2807): the
+ * AMBE 3600x2450 process functions play such a frame in a pulsed state fitted
+ * to DVSI's decodes of its own encodings, the row naming 500 Hz channels of
+ * each half of the frame that sound one pulse each instead of noise, the pitch
+ * code the pulse's time; a lost frame that repeats one carries the word with 2048 added
+ * (rows 18 to 25) or none (rows 26 to 31). mbe_synthesizeSpeechf() and the
+ * other codecs' functions treat the word as no mark. Tone
  * ID 255 returns `MBE_AMBE2450_FRAME_ERASURE`, as any unusable tone index
  * does. A caller managing its own state should copy `cur_mp` into `prev_mp`
  * only when `mbe_classifyAmbe2450Frame()` reports `MBE_AMBE2450_FRAME_VOICE`;
