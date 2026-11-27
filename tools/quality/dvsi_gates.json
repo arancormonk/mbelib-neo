@@ -7509,5 +7509,516 @@
         "every_vector": true
       }
     ]
+  },
+  "pulsed-state-development": {
+    "description": "DVSI's pulsed voicing state on a P25 or D-STAR voice frame with no voiced band at one of the 56 pitch codes DVSI's encoders keep for such frames (P25 b0 128..183, D-STAR b0 64..119): each code names, for the frame's own subframe and for its mid-frame subframe, which of eight 500 Hz channels are pulsed (the patterns are Table 2 of US 7,970,606, read; that D-STAR's codes carry the same 56 patterns at b0 - 64 and that DVSI's decoders play them are measurements). A model the synthesis renders (after adaptive smoothing) that has no voiced band and the pitch a reserved code decodes to (compared by bit pattern with the decoder's own pitch function) has that code, the frame before's model as this frame's; no frame mark selects a pattern. Its unvoiced harmonic at f Hz is pulsed when the channel of f or the channel of f + 250 Hz (channel k from 500 k Hz, the eighth open above 3500 Hz) is pulsed in the mask that applies (the code's own-subframe mask for the frame's own model, its mid-frame mask for its mid-frame model) and plays no noise. A model with a pulsed band emits one pulse 24 samples after its point (the last frame's own model at sample 24 of the frame, the mid-frame model at sample 104) unless the model before it emitted one (a voiced model never counts as having emitted), played with the voiced pulse response through the emitting model's pulsed bands under its falling crossfade and through the next model's pulsed bands under its rising one, over that 80-sample interval only, each band's magnitude taken as a voiced one (the unvoiced factor 0.2046 / sqrt(w0) taken out). The voiced pulse train never plays through pulsed bands, nor a pulsed model's pulse through voiced bands, and the train itself is unchanged: a model with pulsed bands and no voiced band counts as one with no voiced band for every rule of the train and of the mid-frame voicing. Between two frames with no voiced band of which at least one has a code, the mid-frame pitch is this frame's in P25, and in D-STAR the frame before's unless this frame's own-subframe mask has a pulsed channel (then this frame's, or the geometric mean of the two if the frame before's own-subframe mask has one too); between two with no code it stays the geometric mean. Whether the mid-frame model emitted travels with the stream in the subframe state. Rate 33, ProVoice, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are unchanged. Each clause was chosen against its alternatives on DVSI's decodes of the development and validation vectors by a scratch build of the library (outside the repository), before this set was declared; that build was also run on DVSI's tone vectors, its hard-decision channel-error vectors and D-STAR's DTX vectors, and on the DVMEGA DVstick 30 streams of issue #157, and the baseline's own scoreboard of the development, validation, tone and channel partitions was read for coverage before the declaration. So the development and validation partitions are not out of sample for the rule; the final partition (irstia and mark) is. The scratch build's figures, head of fix/ambe2450-row17-train (74126a3) against the rule, from which the limits were set: the whole-file correlation of our decode with DVSI's at lag 0 (the study's own script, not the scoreboard), P25 development +0.000862 and validation +0.001234, D-STAR +0.000949 and +0.001218, all 25 vectors rising in both codecs; mbe_quality_eval's log-spectral distance from DVSI's decode (each file aligned freely), development / validation, P25 -0.1606 / -0.1878 dB and D-STAR -0.1693 / -0.1908 dB, all 25 vectors falling in both codecs; the envelope correlation with it +0.0051 / +0.0051 (P25) and +0.0087 / +0.0086 (D-STAR); the level against it -0.0034 / -0.0056 dB (P25) and -0.0023 / -0.0056 dB (D-STAR); and the cost against the input speech: the log-spectral distance from the input P25 +0.0080 / +0.0258 dB and D-STAR -0.0007 / +0.0140 dB, and PESQ-NB against the input on the 25 vectors P25 -0.0230 and D-STAR -0.0198 (3.040 -> 3.017 and 2.952 -> 2.932, where DVSI's own decode scores 3.026 and 2.933). The distance from the input is allowed to rise within its limit: that is the change's measured cost, not hidden by these checks. The head of fix/ambe2450-row17-train (74126a3) against the change, development vectors: rate 33's decode of DVSI's bits is unchanged (no speech vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), and for D-STAR and for P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.0005 more (mean, 95% interval above 0) and by no more than 0.0005 less on any vector, comes nearer DVSI's decode in log-spectral distance by at least 0.10 dB (mean, 95% interval below 0) and goes further from it by no more than 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), goes further from the input by no more than 0.02 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). Coverage, read on the baseline's own scoreboard of the four partitions (a build of git archive 74126a3 decoding its own encodings, aligned freely) before this set was declared: every paired metric checked here is measured in D-STAR and in P25 on all 20 vectors of the partition, so each paired check requires every vector (every_vector), and all 20 vectors of each mode carry a speech PCM hash and an encoder-row hash there (as do the validation partition's). What the checks do not establish: a check on a mean limits no single vector (only the checks on any vector do); the increase and decrease rules are the scoreboard's (the mean paired change at least the value and its bootstrap 95% interval, resampling whole recordings, on that side of 0), on the frames the scoreboard measures; the identity counters compare hashes of the speech vectors in the run (development and validation together): the PCM counter counts a hash missing on either side as a change, while the encoder-row counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be checked and stated with the result; they say nothing of other inputs or of which frames moved; and the gains are in sample.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.1,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
+  },
+  "pulsed-state-validation": {
+    "description": "DVSI's pulsed voicing state on a P25 or D-STAR voice frame with no voiced band at one of the 56 pitch codes DVSI's encoders keep for such frames (P25 b0 128..183, D-STAR b0 64..119): each code names, for the frame's own subframe and for its mid-frame subframe, which of eight 500 Hz channels are pulsed (the patterns are Table 2 of US 7,970,606, read; that D-STAR's codes carry the same 56 patterns at b0 - 64 and that DVSI's decoders play them are measurements). A model the synthesis renders (after adaptive smoothing) that has no voiced band and the pitch a reserved code decodes to (compared by bit pattern with the decoder's own pitch function) has that code, the frame before's model as this frame's; no frame mark selects a pattern. Its unvoiced harmonic at f Hz is pulsed when the channel of f or the channel of f + 250 Hz (channel k from 500 k Hz, the eighth open above 3500 Hz) is pulsed in the mask that applies (the code's own-subframe mask for the frame's own model, its mid-frame mask for its mid-frame model) and plays no noise. A model with a pulsed band emits one pulse 24 samples after its point (the last frame's own model at sample 24 of the frame, the mid-frame model at sample 104) unless the model before it emitted one (a voiced model never counts as having emitted), played with the voiced pulse response through the emitting model's pulsed bands under its falling crossfade and through the next model's pulsed bands under its rising one, over that 80-sample interval only, each band's magnitude taken as a voiced one (the unvoiced factor 0.2046 / sqrt(w0) taken out). The voiced pulse train never plays through pulsed bands, nor a pulsed model's pulse through voiced bands, and the train itself is unchanged: a model with pulsed bands and no voiced band counts as one with no voiced band for every rule of the train and of the mid-frame voicing. Between two frames with no voiced band of which at least one has a code, the mid-frame pitch is this frame's in P25, and in D-STAR the frame before's unless this frame's own-subframe mask has a pulsed channel (then this frame's, or the geometric mean of the two if the frame before's own-subframe mask has one too); between two with no code it stays the geometric mean. Whether the mid-frame model emitted travels with the stream in the subframe state. Rate 33, ProVoice, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are unchanged. Each clause was chosen against its alternatives on DVSI's decodes of the development and validation vectors by a scratch build of the library (outside the repository), before this set was declared; that build was also run on DVSI's tone vectors, its hard-decision channel-error vectors and D-STAR's DTX vectors, and on the DVMEGA DVstick 30 streams of issue #157, and the baseline's own scoreboard of the development, validation, tone and channel partitions was read for coverage before the declaration. So the development and validation partitions are not out of sample for the rule; the final partition (irstia and mark) is. The scratch build's figures, head of fix/ambe2450-row17-train (74126a3) against the rule, from which the limits were set: the whole-file correlation of our decode with DVSI's at lag 0 (the study's own script, not the scoreboard), P25 development +0.000862 and validation +0.001234, D-STAR +0.000949 and +0.001218, all 25 vectors rising in both codecs; mbe_quality_eval's log-spectral distance from DVSI's decode (each file aligned freely), development / validation, P25 -0.1606 / -0.1878 dB and D-STAR -0.1693 / -0.1908 dB, all 25 vectors falling in both codecs; the envelope correlation with it +0.0051 / +0.0051 (P25) and +0.0087 / +0.0086 (D-STAR); the level against it -0.0034 / -0.0056 dB (P25) and -0.0023 / -0.0056 dB (D-STAR); and the cost against the input speech: the log-spectral distance from the input P25 +0.0080 / +0.0258 dB and D-STAR -0.0007 / +0.0140 dB, and PESQ-NB against the input on the 25 vectors P25 -0.0230 and D-STAR -0.0198 (3.040 -> 3.017 and 2.952 -> 2.932, where DVSI's own decode scores 3.026 and 2.933). The distance from the input is allowed to rise within its limit: that is the change's measured cost, not hidden by these checks. The head of fix/ambe2450-row17-train (74126a3) against the change, validation vectors: rate 33's decode of DVSI's bits is unchanged (no speech vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), and for D-STAR and for P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.0005 more (mean, 95% interval above 0) and by no more than 0.0005 less on any vector, comes nearer DVSI's decode in log-spectral distance by at least 0.10 dB (mean, 95% interval below 0) and goes further from it by no more than 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), goes further from the input by no more than 0.04 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). Coverage, read on the baseline's own scoreboard of the four partitions (a build of git archive 74126a3 decoding its own encodings, aligned freely) before this set was declared: every paired metric checked here is measured in D-STAR and in P25 on all 5 vectors of the partition, so each paired check requires every vector (every_vector), and all 5 vectors of each mode carry a speech PCM hash and an encoder-row hash there (as do the development partition's). What the checks do not establish: a check on a mean limits no single vector (only the checks on any vector do); the increase and decrease rules are the scoreboard's (the mean paired change at least the value and its bootstrap 95% interval, resampling whole recordings, on that side of 0), on the frames the scoreboard measures; the identity counters compare hashes of the speech vectors in the run (development and validation together): the PCM counter counts a hash missing on either side as a change, while the encoder-row counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be checked and stated with the result; they say nothing of other inputs or of which frames moved; and the gains are in sample.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.1,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.04,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
+  },
+  "pulsed-state-tones": {
+    "description": "DVSI's pulsed voicing state on a P25 or D-STAR voice frame with no voiced band at one of the 56 pitch codes DVSI's encoders keep for such frames (P25 b0 128..183, D-STAR b0 64..119): each code names, for the frame's own subframe and for its mid-frame subframe, which of eight 500 Hz channels are pulsed (the patterns are Table 2 of US 7,970,606, read; that D-STAR's codes carry the same 56 patterns at b0 - 64 and that DVSI's decoders play them are measurements). A model the synthesis renders (after adaptive smoothing) that has no voiced band and the pitch a reserved code decodes to (compared by bit pattern with the decoder's own pitch function) has that code, the frame before's model as this frame's; no frame mark selects a pattern. Its unvoiced harmonic at f Hz is pulsed when the channel of f or the channel of f + 250 Hz (channel k from 500 k Hz, the eighth open above 3500 Hz) is pulsed in the mask that applies (the code's own-subframe mask for the frame's own model, its mid-frame mask for its mid-frame model) and plays no noise. A model with a pulsed band emits one pulse 24 samples after its point (the last frame's own model at sample 24 of the frame, the mid-frame model at sample 104) unless the model before it emitted one (a voiced model never counts as having emitted), played with the voiced pulse response through the emitting model's pulsed bands under its falling crossfade and through the next model's pulsed bands under its rising one, over that 80-sample interval only, each band's magnitude taken as a voiced one (the unvoiced factor 0.2046 / sqrt(w0) taken out). The voiced pulse train never plays through pulsed bands, nor a pulsed model's pulse through voiced bands, and the train itself is unchanged: a model with pulsed bands and no voiced band counts as one with no voiced band for every rule of the train and of the mid-frame voicing. Between two frames with no voiced band of which at least one has a code, the mid-frame pitch is this frame's in P25, and in D-STAR the frame before's unless this frame's own-subframe mask has a pulsed channel (then this frame's, or the geometric mean of the two if the frame before's own-subframe mask has one too); between two with no code it stays the geometric mean. Whether the mid-frame model emitted travels with the stream in the subframe state. Rate 33, ProVoice, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are unchanged. Each clause was chosen against its alternatives on DVSI's decodes of the development and validation vectors by a scratch build of the library (outside the repository), before this set was declared; that build was also run on DVSI's tone vectors, its hard-decision channel-error vectors and D-STAR's DTX vectors, and on the DVMEGA DVstick 30 streams of issue #157, and the baseline's own scoreboard of the development, validation, tone and channel partitions was read for coverage before the declaration. So the development and validation partitions are not out of sample for the rule; the final partition (irstia and mark) is. The scratch build's figures, head of fix/ambe2450-row17-train (74126a3) against the rule, from which the limits were set: the whole-file correlation of our decode with DVSI's at lag 0 (the study's own script, not the scoreboard), P25 development +0.000862 and validation +0.001234, D-STAR +0.000949 and +0.001218, all 25 vectors rising in both codecs; mbe_quality_eval's log-spectral distance from DVSI's decode (each file aligned freely), development / validation, P25 -0.1606 / -0.1878 dB and D-STAR -0.1693 / -0.1908 dB, all 25 vectors falling in both codecs; the envelope correlation with it +0.0051 / +0.0051 (P25) and +0.0087 / +0.0086 (D-STAR); the level against it -0.0034 / -0.0056 dB (P25) and -0.0023 / -0.0056 dB (D-STAR); and the cost against the input speech: the log-spectral distance from the input P25 +0.0080 / +0.0258 dB and D-STAR -0.0007 / +0.0140 dB, and PESQ-NB against the input on the 25 vectors P25 -0.0230 and D-STAR -0.0198 (3.040 -> 3.017 and 2.952 -> 2.932, where DVSI's own decode scores 3.026 and 2.933). The distance from the input is allowed to rise within its limit: that is the change's measured cost, not hidden by these checks. The head of fix/ambe2450-row17-train (74126a3) against the change, on the tone vectors: rate 33's decodes are unchanged, the speech vectors' as well as the tone vectors' (no vector's PCM changes); the D-STAR and rate-33 encoders' tone statistics are exactly as before on every vector that has the figure: the agreement of their tone frames with DVSI's, the rate of tone frames sent where DVSI sends voice, and the level error over the frames where both send the same tone (the tones group holds no encoder-row hashes, so the encoders are compared here through those statistics, not bit for bit; the development, validation and channel sets compare the bits of the speech encodings); and for D-STAR and for P25 the steady tones' frequency error against DVSI's output rises by no more than 0.0005 on any vector that has the figure, the tone level and the balance of a dual tone's two components move further from DVSI's by no more than 0.02 dB (mean), the share of windows playing a wrong tone rises on no vector that has the figure, and the detector's agreement with DVSI's tone output, over its steady windows with a tone or with none, falls by no more than 0.005 on any vector. D-STAR's and P25's tone decodes are not required to stay as they are: the scratch build changed some of them in frames at a tone's edge. Coverage, read on the baseline's own scoreboard of this partition (a build of git archive 74126a3 decoding its own encodings) before this set was declared: D-STAR's and P25's detector agreement and the D-STAR and rate-33 encoders' extra-tone rates are measured on all 52 tone vectors, so those checks require every vector; in P25 the frequency, level and wrong-tone figures are measured on all but cp1, cpvbad and dtmfvbad, whose DVSI decode has no steady window holding a tone, and the balance on all but those three and alert, a single tone; in D-STAR the frequency, level and wrong-tone figures on all but cp1, cpvbad, dtmfvbad, knox_2, knox_3, knox_5, knox_7 and knox_14, and the balance on all but those eight and alert; D-STAR's encoder agreement and volume error on all but cpvbad and the 16 KNOX vectors (D-STAR codes KNOX tones as voice); the rate-33 encoder's agreement and level error on all but cpvbad; all 52 vectors of each mode carry a PCM hash. A check on a metric that applies to part of the partition cannot require every vector, so a vector on which the figure is missing in both runs passes it unnoticed; a vector on which one run alone has the figure fails it as unpaired. What the checks do not establish: the tone measures are an acoustic detector's, on windows where DVSI's output is steady, and do not see a tone's first and last frames; the scoreboard does not compare tone frames sample for sample; the level and balance checks are on means and limit no single vector; equal encoder statistics do not show that the same frames or bits were sent; and the speech PCM counter compares the speech vectors' hashes, the tone counter the tone vectors', counting a hash missing on either side as a change.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0005
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.005,
+        "every_vector": true
+      }
+    ]
+  },
+  "pulsed-state-channel": {
+    "description": "DVSI's pulsed voicing state on a P25 or D-STAR voice frame with no voiced band at one of the 56 pitch codes DVSI's encoders keep for such frames (P25 b0 128..183, D-STAR b0 64..119): each code names, for the frame's own subframe and for its mid-frame subframe, which of eight 500 Hz channels are pulsed (the patterns are Table 2 of US 7,970,606, read; that D-STAR's codes carry the same 56 patterns at b0 - 64 and that DVSI's decoders play them are measurements). A model the synthesis renders (after adaptive smoothing) that has no voiced band and the pitch a reserved code decodes to (compared by bit pattern with the decoder's own pitch function) has that code, the frame before's model as this frame's; no frame mark selects a pattern. Its unvoiced harmonic at f Hz is pulsed when the channel of f or the channel of f + 250 Hz (channel k from 500 k Hz, the eighth open above 3500 Hz) is pulsed in the mask that applies (the code's own-subframe mask for the frame's own model, its mid-frame mask for its mid-frame model) and plays no noise. A model with a pulsed band emits one pulse 24 samples after its point (the last frame's own model at sample 24 of the frame, the mid-frame model at sample 104) unless the model before it emitted one (a voiced model never counts as having emitted), played with the voiced pulse response through the emitting model's pulsed bands under its falling crossfade and through the next model's pulsed bands under its rising one, over that 80-sample interval only, each band's magnitude taken as a voiced one (the unvoiced factor 0.2046 / sqrt(w0) taken out). The voiced pulse train never plays through pulsed bands, nor a pulsed model's pulse through voiced bands, and the train itself is unchanged: a model with pulsed bands and no voiced band counts as one with no voiced band for every rule of the train and of the mid-frame voicing. Between two frames with no voiced band of which at least one has a code, the mid-frame pitch is this frame's in P25, and in D-STAR the frame before's unless this frame's own-subframe mask has a pulsed channel (then this frame's, or the geometric mean of the two if the frame before's own-subframe mask has one too); between two with no code it stays the geometric mean. Whether the mid-frame model emitted travels with the stream in the subframe state. Rate 33, ProVoice, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are unchanged. Each clause was chosen against its alternatives on DVSI's decodes of the development and validation vectors by a scratch build of the library (outside the repository), before this set was declared; that build was also run on DVSI's tone vectors, its hard-decision channel-error vectors and D-STAR's DTX vectors, and on the DVMEGA DVstick 30 streams of issue #157, and the baseline's own scoreboard of the development, validation, tone and channel partitions was read for coverage before the declaration. So the development and validation partitions are not out of sample for the rule; the final partition (irstia and mark) is. The scratch build's figures, head of fix/ambe2450-row17-train (74126a3) against the rule, from which the limits were set: the whole-file correlation of our decode with DVSI's at lag 0 (the study's own script, not the scoreboard), P25 development +0.000862 and validation +0.001234, D-STAR +0.000949 and +0.001218, all 25 vectors rising in both codecs; mbe_quality_eval's log-spectral distance from DVSI's decode (each file aligned freely), development / validation, P25 -0.1606 / -0.1878 dB and D-STAR -0.1693 / -0.1908 dB, all 25 vectors falling in both codecs; the envelope correlation with it +0.0051 / +0.0051 (P25) and +0.0087 / +0.0086 (D-STAR); the level against it -0.0034 / -0.0056 dB (P25) and -0.0023 / -0.0056 dB (D-STAR); and the cost against the input speech: the log-spectral distance from the input P25 +0.0080 / +0.0258 dB and D-STAR -0.0007 / +0.0140 dB, and PESQ-NB against the input on the 25 vectors P25 -0.0230 and D-STAR -0.0198 (3.040 -> 3.017 and 2.952 -> 2.932, where DVSI's own decode scores 3.026 and 2.933). The distance from the input is allowed to rise within its limit: that is the change's measured cost, not hidden by these checks. The head of fix/ambe2450-row17-train (74126a3) against the change, under channel errors (dam at 1.1-10.6% bit errors, hard and soft decisions): rate 33's decodes are unchanged, the speech vectors' as well as the channel-error vectors' (no vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), the mute statistics are unchanged in every mode (on every vector, hard and soft, the share of loud frames muted, the agreement with DVSI's mutes and the false and missed mute rates exactly as before), and for D-STAR and for P25 the log-spectral distance from DVSI's decode, lsd_common_db, rises by no more than 0.01 dB (mean over the four vectors of each kind, hard and soft decisions), with a coverage of at least 0.1 on each vector. lsd_common_db is taken over the frames loud in DVSI's decode of the clean bits that DVSI does not mute, with no muted frame at or next to them (neither a loud frame DVSI mutes nor a frame either run muted, mapped at that run's lag) and with a spectrum measured in both runs; its coverage is their share of the loud frames DVSI leaves unmuted; it is formed at comparison time from both runs' frames. D-STAR's and P25's channel-error decodes are not required to stay as they are, and no channel vector is gated on waveform correlation, as in the earlier change sets (the scratch build's residual against DVSI's decode, over DVSI's signal in the frames that change, fell at all four hard-decision rates in both codecs, least in D-STAR's dam_e10_hd, 2.1739 -> 2.1727; soft decisions were not measured in the study). Coverage, read on the baseline's own scoreboard of this partition (a build of git archive 74126a3 decoding its own encodings) before this set was declared: each hard-decision mute figure is measured on the four hard-decision vectors and each soft-decision one on the four soft-decision ones, in every mode, and all eight vectors of each mode carry a PCM hash; the baseline's frames paired with themselves give lsd_common_db a coverage of 0.937 at the least in D-STAR and P25 (D-STAR's dam_e10_sd). None of these checks can require all eight vectors, and none requires the four of a kind: a figure missing in both runs on a vector would pass. What the checks do not establish: the mute figures are statistics per vector, which two changes of opposite sign could leave as they were, so they do not show by themselves that no frame's mute decision changed (that is a separate frame-by-frame comparison); the distance is a mean over the vectors of each kind and limits no single vector; and the identity counters rest on hashes as in the speech sets (the encoder-row counter skipping a vector whose baseline holds no row hash).",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "pulsed-state-final": {
+    "description": "DVSI's pulsed voicing state on a P25 or D-STAR voice frame with no voiced band at one of the 56 pitch codes DVSI's encoders keep for such frames (P25 b0 128..183, D-STAR b0 64..119): each code names, for the frame's own subframe and for its mid-frame subframe, which of eight 500 Hz channels are pulsed (the patterns are Table 2 of US 7,970,606, read; that D-STAR's codes carry the same 56 patterns at b0 - 64 and that DVSI's decoders play them are measurements). A model the synthesis renders (after adaptive smoothing) that has no voiced band and the pitch a reserved code decodes to (compared by bit pattern with the decoder's own pitch function) has that code, the frame before's model as this frame's; no frame mark selects a pattern. Its unvoiced harmonic at f Hz is pulsed when the channel of f or the channel of f + 250 Hz (channel k from 500 k Hz, the eighth open above 3500 Hz) is pulsed in the mask that applies (the code's own-subframe mask for the frame's own model, its mid-frame mask for its mid-frame model) and plays no noise. A model with a pulsed band emits one pulse 24 samples after its point (the last frame's own model at sample 24 of the frame, the mid-frame model at sample 104) unless the model before it emitted one (a voiced model never counts as having emitted), played with the voiced pulse response through the emitting model's pulsed bands under its falling crossfade and through the next model's pulsed bands under its rising one, over that 80-sample interval only, each band's magnitude taken as a voiced one (the unvoiced factor 0.2046 / sqrt(w0) taken out). The voiced pulse train never plays through pulsed bands, nor a pulsed model's pulse through voiced bands, and the train itself is unchanged: a model with pulsed bands and no voiced band counts as one with no voiced band for every rule of the train and of the mid-frame voicing. Between two frames with no voiced band of which at least one has a code, the mid-frame pitch is this frame's in P25, and in D-STAR the frame before's unless this frame's own-subframe mask has a pulsed channel (then this frame's, or the geometric mean of the two if the frame before's own-subframe mask has one too); between two with no code it stays the geometric mean. Whether the mid-frame model emitted travels with the stream in the subframe state. Rate 33, ProVoice, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are unchanged. Each clause was chosen against its alternatives on DVSI's decodes of the development and validation vectors by a scratch build of the library (outside the repository), before this set was declared; that build was also run on DVSI's tone vectors, its hard-decision channel-error vectors and D-STAR's DTX vectors, and on the DVMEGA DVstick 30 streams of issue #157, and the baseline's own scoreboard of the development, validation, tone and channel partitions was read for coverage before the declaration. So the development and validation partitions are not out of sample for the rule; the final partition (irstia and mark) is. The scratch build's figures, head of fix/ambe2450-row17-train (74126a3) against the rule, from which the limits were set: the whole-file correlation of our decode with DVSI's at lag 0 (the study's own script, not the scoreboard), P25 development +0.000862 and validation +0.001234, D-STAR +0.000949 and +0.001218, all 25 vectors rising in both codecs; mbe_quality_eval's log-spectral distance from DVSI's decode (each file aligned freely), development / validation, P25 -0.1606 / -0.1878 dB and D-STAR -0.1693 / -0.1908 dB, all 25 vectors falling in both codecs; the envelope correlation with it +0.0051 / +0.0051 (P25) and +0.0087 / +0.0086 (D-STAR); the level against it -0.0034 / -0.0056 dB (P25) and -0.0023 / -0.0056 dB (D-STAR); and the cost against the input speech: the log-spectral distance from the input P25 +0.0080 / +0.0258 dB and D-STAR -0.0007 / +0.0140 dB, and PESQ-NB against the input on the 25 vectors P25 -0.0230 and D-STAR -0.0198 (3.040 -> 3.017 and 2.952 -> 2.932, where DVSI's own decode scores 3.026 and 2.933). The distance from the input is allowed to rise within its limit: that is the change's measured cost, not hidden by these checks. The head of fix/ambe2450-row17-train (74126a3) against the change, final vectors (irstia and mark, held out: to be scored once, after the review): rate 33's decode of DVSI's bits is unchanged (no vector's PCM changes), every encoder's bits are unchanged (no vector's encoder rows change, in any mode), and for D-STAR and for P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.0003 more (mean, 95% interval above 0, which with two vectors of two recordings needs both to rise) and by no more than 0.0005 less on either vector, comes nearer DVSI's decode in log-spectral distance by at least 0.05 dB (mean, 95% interval below 0, so both falling) and goes further from it by no more than 0.02 dB on either vector, loses no more than 0.001 of envelope correlation with DVSI's decode (mean), goes further from the input by no more than 0.05 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). This is a prediction: it requires a gain on two vectors neither the rule nor its scratch build was measured on, and a failure is to be reported as declared. Every paired check requires every vector (every_vector); the coverage of this partition was not looked at, it being held out, and every one of these figures is measured in D-STAR and in P25 on every development and validation vector of the baseline's own scoreboard. What the checks do not establish: they rest on two vectors, so their means say little beyond the sign; a check on a mean limits neither vector by itself (only the checks on either vector do); and 'no encoder row changes' rests on both vectors carrying a row hash in both runs, which is to be checked and stated with the result.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0003,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.05,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.05,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
   }
 }

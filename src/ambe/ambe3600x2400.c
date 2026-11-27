@@ -25,6 +25,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
 #include "mbe_pcm_convert.h"
+#include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_tone.h"
@@ -195,6 +196,21 @@ ambe2400_special_frame(const char* ambe_d, int b0) {
 }
 
 /*
+ * The fundamental of voice pitch code b0 (0..123) as the decoder stores it:
+ * f0 by the pitch law (mbe_ambe2400_f0(), cycles per sample) and w0 = f0 2 pi.
+ * One body, not inlined, serves the decode and mbe_ambe2400_pulsed_code(),
+ * which asks a model's pitch for its code, so that the two round alike in
+ * every build (fast-math, x87 excess precision); the expression is the one the
+ * decode has always used. The encoder keeps its own copy of the law
+ * (ambe3600x2400_enc.c), as before.
+ */
+static MBE_NOINLINE void
+ambe2400_code_pitch(int b0, float* f0, float* w0) {
+    *f0 = mbe_ambe2400_f0(b0);
+    *w0 = *f0 * (float)2 * M_PI;
+}
+
+/*
  * The fundamental and harmonic count of b0. DVSI's AMBE-3000 plays b0 124 with
  * every band unvoiced (b1 ignored), its amplitudes decoded and predicted as a
  * voice frame's; it decodes here with TIA-102.BABA-1 4.1's AMBE+2 silence
@@ -212,22 +228,58 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
         cur_mp->L = *L;
         return;
     }
-    *f0 = mbe_ambe2400_f0(b0);
-    cur_mp->w0 = *f0 * (float)2 * M_PI;
+    ambe2400_code_pitch(b0, f0, &cur_mp->w0);
     *L = mbe_ambe2400_harmonic_count(*f0);
     cur_mp->L = *L;
 }
 
 /* The pitch codes DVSI's D-STAR encoder gives a frame with no voiced band:
  * b0 34 (a period of 32 samples) for most, and b0 64..119 for the rest. */
-#define AMBE2400_UNVOICED_CODES_FIRST 64
-#define AMBE2400_UNVOICED_CODES_LAST  119
+#define AMBE2400_UNVOICED_CODES_FIRST MBE_PULSED_DSTAR_FIRST
+#define AMBE2400_UNVOICED_CODES_LAST  (MBE_PULSED_DSTAR_FIRST + MBE_PULSED_CODES - 1)
+
+/*
+ * The reserved code (b0 64..119) whose pitch w0 is, as mbe_pulsed.h asks: the
+ * pitch ambe2400_code_pitch() gives that code, the function the decode stores
+ * it with, compared by bit pattern. The one code that can match is the one
+ * nearest the pitch law's inverse, (OFFSET - log2 f0) / SLOPE - 0.5, f0 =
+ * w0 / 2 pi, in double: the stored pitch is the law evaluated in float and
+ * rounded more than once, and its relative error against the law evaluated in
+ * double with the decoder's float constants depends on the build, in size and
+ * in sign (at b0 92 2.35e-7 below it in the local IEEE Debug builds, 1.29e-7
+ * above it in the fast-math, LTO and 32-bit x87 ones); over the 56 codes it
+ * stays within 2.4e-7 in each of the ten local builds, so the inverse lies
+ * within 2e-5 of the code (1.56e-5 at most), while neighbouring codes' pitches
+ * lie 1.5% apart (SLOPE = 0.0218 of log2 f0). What decides is the comparison
+ * of the bits, whatever the build. w0 is
+ * positive and normal, so the quotient is finite; it is bounded before it is
+ * converted.
+ */
+int
+mbe_ambe2400_pulsed_code(float w0) {
+    const double position =
+        (((double)MBE_AMBE2400_LOG2_F0_OFFSET - log2((double)w0 / (2.0 * M_PI))) / (double)MBE_AMBE2400_LOG2_F0_SLOPE)
+        - 0.5;
+    if (!(position > (double)AMBE2400_UNVOICED_CODES_FIRST - 0.5
+          && position < (double)AMBE2400_UNVOICED_CODES_LAST + 0.5)) {
+        return -1;
+    }
+    const int b0 = (int)floor(position + 0.5);
+    float f0, pitch;
+    ambe2400_code_pitch(b0, &f0, &pitch);
+    uint32_t want, have;
+    memcpy(&want, &pitch, sizeof(want));
+    memcpy(&have, &w0, sizeof(have));
+    return (want == have) ? b0 - AMBE2400_UNVOICED_CODES_FIRST : -1;
+}
 
 /*
  * What the pitch code of a frame with no voiced band tells DVSI's decoder
  * (docs/dvsi-parity.md, "Voiced onsets and offsets"):
  *  - b0 64..119, which DVSI's encoder sends only with such frames: the voicing
- *    of the frame before ends where this frame starts. Of these, b0 64..71,
+ *    of the frame before ends where this frame starts, and each code names a
+ *    pattern of the pulsed state, which the synthesizer reads from the model's
+ *    pitch (mbe_ambe2400_pulsed_code(), mbe_pulsed.h). Of these, b0 64..71,
  *    88..103 and 112..119 carry their pitch into a voiced frame after them,
  *    whose first 10 ms then run at the geometric mean of the two pitches (253
  *    onsets of 253 on DVSI's vectors); after the others they run at the
