@@ -20,6 +20,7 @@
 #include "ambe_common.h"
 #include "imbe4400_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_low_band.h"
 #include "mbe_math.h"
 #include "mbe_repeat.h"
 #include "mbe_subframe.h"
@@ -308,11 +309,34 @@ same_bits(const float* a, const float* b, int n) {
     return 1;
 }
 
-/* The low-band roll-off every subframe rendering plays, from its statement
- * (mbe_adaptive.h): a second-order high-pass at 100 Hz, H(s) = s^2 / (s^2 +
- * sqrt2 s + 1) at s = j hz / 100, its gain and its phase, in double. */
+/* The low band every subframe rendering plays, from its statement
+ * (mbe_low_band.h, mbe_adaptive.h; docs/dvsi-parity.md, "DVSI's low band"), in
+ * double. D-STAR's, P25's and rate 33's renderings: a third-order Butterworth
+ * high-pass at 75 Hz, H(s) = s^3 / ((s + 1)(s^2 + s + 1)) at s = j hz / 75, and
+ * the adaptive cut, (f / corner)^2 on a band under the corner; ProVoice's
+ * (and every other value's): a second-order Butterworth high-pass at 100 Hz,
+ * H(s) = s^2 / (s^2 + sqrt2 s + 1) at s = j hz / 100, and no cut. */
+struct reference_band {
+    int dvsi;      /* DVSI's filter and the cut */
+    double corner; /* the cut's corner, Hz; 0 for none */
+};
+
+static int
+reference_dvsi_band(enum mbe_voiced_synthesis rendering) {
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI || rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE
+           || rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
+}
+
+/* A rendering's low band with no cut (a stream whose corner lies under every
+ * harmonic the test reads). */
+static struct reference_band
+reference_band_of(enum mbe_voiced_synthesis rendering) {
+    const struct reference_band band = {reference_dvsi_band(rendering), 0.0};
+    return band;
+}
+
 static double
-reference_low_band_gain(double hz) {
+reference_second_order_gain(double hz) {
     if (!(hz > 0.0)) {
         return 0.0;
     }
@@ -321,12 +345,141 @@ reference_low_band_gain(double hz) {
 }
 
 static double
-reference_low_band_phase(double hz) {
+reference_second_order_phase(double hz) {
     if (!(hz > 0.0)) {
         return 0.0;
     }
     const double x = hz / 100.0;
     return M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+}
+
+/* The third-order filter from its pole-zero form, |H| and arg H as the
+ * product of its three factors (not the library's closed form). */
+static double
+reference_third_order_gain(double hz) {
+    if (!(hz > 0.0)) {
+        return 0.0;
+    }
+    const double x = hz / 75.0;
+    const double first = sqrt(1.0 + (x * x));                                  /* |j x + 1| */
+    const double second = sqrt(((1.0 - (x * x)) * (1.0 - (x * x))) + (x * x)); /* |(j x)^2 + j x + 1| */
+    return (x * x * x) / (first * second);
+}
+
+static double
+reference_third_order_phase(double hz) {
+    if (!(hz > 0.0)) {
+        return 0.0;
+    }
+    const double x = hz / 75.0;
+    return (1.5 * M_PI) - atan2(x, 1.0) - atan2(x, 1.0 - (x * x));
+}
+
+/* A harmonic's frequency as the library's low band compares it with the
+ * corner (the arithmetic its rule states: w0 times 8000 / (2 pi) in float,
+ * rounded to float, times l, rounded again). */
+static float
+reference_knee_hz(float w0, int l) {
+    volatile float per_harmonic = w0 * (8000.0f / (2.0f * (float)M_PI));
+    volatile float hz = per_harmonic * (float)l;
+    return hz;
+}
+
+/* The cut's scale on harmonic l of pitch w0: (f / corner)^2 under the corner
+ * (f compared as the library forms it), 1 at or above it or with no cut. */
+static double
+reference_cut(const struct reference_band* band, float w0, int l) {
+    const double hz = (double)reference_knee_hz(w0, l);
+    if (!band->dvsi || !(band->corner > 0.0) || !(hz < band->corner)) {
+        return 1.0;
+    }
+    return (hz / band->corner) * (hz / band->corner);
+}
+
+static double
+reference_band_gain(const struct reference_band* band, double hz) {
+    return band->dvsi ? reference_third_order_gain(hz) : reference_second_order_gain(hz);
+}
+
+static double
+reference_band_phase(const struct reference_band* band, double hz) {
+    return band->dvsi ? reference_third_order_phase(hz) : reference_second_order_phase(hz);
+}
+
+/* The adaptive low cut's tracker, from its statement (mbe_low_band.h): 110 Hz
+ * at a stream's start; one frame on, a frame whose model has every band 1..L
+ * voiced, a positive pitch and no tone mark moves it toward its fundamental,
+ * T + 0.043 (f0 - T), in double and unrounded here; the corner a frame applies
+ * is min(T, 200) of the tracker the frame before left, its own model and its
+ * mid-frame model at that corner, the last frame's own model at the corner
+ * that frame applied. */
+struct reference_tracker {
+    double track;  /* the tracker; 0 before the stream's first frame (110 then) */
+    double corner; /* the corner the last frame applied; 0 before the first frame */
+};
+
+static double
+reference_track(const struct reference_tracker* tracker) {
+    return (tracker->track > 0.0) ? tracker->track : 110.0;
+}
+
+static double
+reference_corner_now(const struct reference_tracker* tracker) {
+    return fmin(reference_track(tracker), 200.0);
+}
+
+/* Whether a frame's model, as the synthesis renders it, moves the tracker. */
+static int
+reference_moves_tracker(const mbe_parms* mp) {
+    if (!(mp->w0 > 0.0f) || mbe_frame_mark(mp) == MBE_FRAME_MARK_TONE || mp->L < 1) {
+        return 0;
+    }
+    for (int l = 1; l <= mp->L; ++l) {
+        if (mp->Vl[l] != 1) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* The three models' bands of a frame in `rendering` (the last frame's own, the
+ * mid-frame one, this frame's own), then the tracker one frame on. */
+static void
+reference_tracker_frame(struct reference_tracker* tracker, const mbe_parms* cur, enum mbe_voiced_synthesis rendering,
+                        struct reference_band band[3]) {
+    const double now = reference_corner_now(tracker);
+    const int dvsi = reference_dvsi_band(rendering);
+    band[0].dvsi = band[1].dvsi = band[2].dvsi = dvsi;
+    band[0].corner = dvsi ? ((tracker->corner > 0.0) ? tracker->corner : now) : 0.0;
+    band[1].corner = band[2].corner = dvsi ? now : 0.0;
+    if (!dvsi) {
+        return;
+    }
+    double track = reference_track(tracker);
+    if (reference_moves_tracker(cur)) {
+        const double f0 = (double)cur->w0 * 8000.0 / (2.0 * M_PI);
+        track = fmin(fmax(track + (0.043 * (f0 - track)), 50.0), 500.0);
+    }
+    tracker->track = track;
+    tracker->corner = now;
+}
+
+/* Whether a frame stored the tracker and corner the reference holds: within a
+ * hundred-thousandth (the library rounds the tracker to float once a frame,
+ * the reference does not: the two drift apart by under a millionth), and 0 in
+ * both slots in a rendering without the low cut. */
+static int
+stored_tracker_as(const mbe_parms* mp, const struct reference_tracker* tracker, enum mbe_voiced_synthesis rendering) {
+    const double track = (double)mp->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT];
+    const double corner = (double)mp->noiseOverlap[MBE_LOW_CUT_CORNER_SLOT];
+    if (!reference_dvsi_band(rendering)) {
+        uint32_t a, b;
+        memcpy(&a, &mp->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], sizeof(a));
+        memcpy(&b, &mp->noiseOverlap[MBE_LOW_CUT_CORNER_SLOT], sizeof(b));
+        return a == 0u && b == 0u;
+    }
+    return fabs(track - tracker->track) <= 1.0e-5 * tracker->track
+           && fabs(corner - tracker->corner) <= 1.0e-5 * tracker->corner;
 }
 
 /* P25 parameter bits with pitch code b0. */
@@ -388,14 +541,18 @@ test_steady_model_is_its_harmonics(void) {
     for (int f = 0; f < 10; ++f) {
         next_frame(out + ((size_t)f * 160u), &last, &model);
     }
-    /* Thirty periods from the third frame on. */
+    /* Thirty periods from the third frame on. The low cut's corner stays under
+     * the fundamental (the tracker rises toward 187.5 Hz from 110 and never
+     * reaches it), so no harmonic is cut: D-STAR's filter alone. */
+    const struct reference_band band = reference_band_of(MBE_VOICED_SYNTHESIS_DVSI);
+    assert(last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] < 187.0f);
     for (int l = 1; l <= model.L; ++l) {
         const double hz = 187.5 * l;
-        const double want = 2.0 * (double)model.Ml[l] * reference_low_band_gain(hz);
+        const double want = 2.0 * (double)model.Ml[l] * reference_band_gain(&band, hz);
         const double got = component_amplitude(out + 320, 1280, hz);
         assert(fabs(got / want - 1.0) < 2e-3);
         const double phase = component_phase(&out[1344], 256, hz, 256); /* the last 256 samples */
-        const double stored = (double)last.PHIl[l] + reference_low_band_phase(hz);
+        const double stored = (double)last.PHIl[l] + reference_band_phase(&band, hz);
         assert(fabs(atan2(sin(phase - stored), cos(phase - stored))) < 0.02);
     }
     /* The gain argument scales the voiced part. */
@@ -644,9 +801,11 @@ reference_mid_phases(const mbe_parms* prev, const mbe_parms* cur, double w0, int
     reference_phases(envelope, L, phase);
 }
 
-/* What a model plays t samples after a pulse, its harmonics at `phase`. */
+/* What a model plays t samples after a pulse, its harmonics at `phase`, under
+ * its low band (`band`: the filter, and the cut at the model's corner). */
 static double
-reference_response(const struct mbe_subframe_model* model, const double phase[57], double t) {
+reference_response(const struct mbe_subframe_model* model, const struct reference_band* band, const double phase[57],
+                   double t) {
     double sum = 0.0;
     if (!model->any_voiced) {
         return 0.0;
@@ -657,8 +816,8 @@ reference_response(const struct mbe_subframe_model* model, const double phase[57
         if (model->voiced[l] != 1 || !below_nyquist(model->w0, l)) {
             continue;
         }
-        sum += 2.0 * (double)model->magnitude[l] * reference_low_band_gain(hz)
-               * cos((w * (t - 16.0)) + phase[l] + reference_low_band_phase(hz));
+        sum += 2.0 * (double)model->magnitude[l] * reference_band_gain(band, hz) * reference_cut(band, model->w0, l)
+               * cos((w * (t - 16.0)) + phase[l] + reference_band_phase(band, hz));
     }
     return reference_window(t, 2.0 * M_PI / (double)model->w0) * sum;
 }
@@ -709,13 +868,15 @@ reference_advance(struct reference_train* train, double start, const struct mbe_
  * and model b coming in, at their phases. */
 static void
 reference_render(double* out, double start, const struct reference_train* train, const struct mbe_subframe_model* a,
-                 const double a_phase[57], const struct mbe_subframe_model* b, const double b_phase[57]) {
+                 const struct reference_band* a_band, const double a_phase[57], const struct mbe_subframe_model* b,
+                 const struct reference_band* b_band, const double b_phase[57]) {
     for (int n = 0; n < 80; ++n) {
         const double fade = (double)n / 80.0;
         double sum = 0.0;
         for (int i = 0; i < train->count; ++i) {
             const double t = start + (double)n - train->time[i];
-            sum += ((1.0 - fade) * reference_response(a, a_phase, t)) + (fade * reference_response(b, b_phase, t));
+            sum += ((1.0 - fade) * reference_response(a, a_band, a_phase, t))
+                   + (fade * reference_response(b, b_band, b_phase, t));
         }
         out[n] = sum;
     }
@@ -962,8 +1123,8 @@ reference_pulsed_magnitude(const struct mbe_subframe_model* model, int l) {
  * response, each band at its magnitude with the unvoiced factor taken out
  * (reference_pulsed_magnitude()). */
 static double
-reference_pulsed_response(const struct mbe_subframe_model* model, const int pulsed[57], const double phase[57],
-                          double t) {
+reference_pulsed_response(const struct mbe_subframe_model* model, const struct reference_band* band,
+                          const int pulsed[57], const double phase[57], double t) {
     double sum = 0.0;
     for (int l = 1; l <= model->L; ++l) {
         const double w = (double)model->w0 * l;
@@ -972,8 +1133,8 @@ reference_pulsed_response(const struct mbe_subframe_model* model, const int puls
             continue;
         }
         const double magnitude = reference_pulsed_magnitude(model, l);
-        sum += 2.0 * magnitude * reference_low_band_gain(hz)
-               * cos((w * (t - 16.0)) + phase[l] + reference_low_band_phase(hz));
+        sum += 2.0 * magnitude * reference_band_gain(band, hz) * reference_cut(band, model->w0, l)
+               * cos((w * (t - 16.0)) + phase[l] + reference_band_phase(band, hz));
     }
     return reference_window(t, 2.0 * M_PI / (double)model->w0) * sum;
 }
@@ -982,14 +1143,14 @@ reference_pulsed_response(const struct mbe_subframe_model* model, const int puls
  * through its pulsed bands going out and model b's coming in, within the
  * interval's 80 samples. */
 static void
-reference_pulsed_render(double* out, const struct mbe_subframe_model* a, const int a_pulsed[57],
-                        const double a_phase[57], const struct mbe_subframe_model* b, const int b_pulsed[57],
-                        const double b_phase[57]) {
+reference_pulsed_render(double* out, const struct mbe_subframe_model* a, const struct reference_band* a_band,
+                        const int a_pulsed[57], const double a_phase[57], const struct mbe_subframe_model* b,
+                        const struct reference_band* b_band, const int b_pulsed[57], const double b_phase[57]) {
     for (int n = 24; n < 80; ++n) {
         const double fade = (double)n / 80.0;
         const double t = (double)n - 24.0;
-        out[n] += ((1.0 - fade) * reference_pulsed_response(a, a_pulsed, a_phase, t))
-                  + (fade * reference_pulsed_response(b, b_pulsed, b_phase, t));
+        out[n] += ((1.0 - fade) * reference_pulsed_response(a, a_band, a_pulsed, a_phase, t))
+                  + (fade * reference_pulsed_response(b, b_band, b_pulsed, b_phase, t));
     }
 }
 
@@ -1121,8 +1282,8 @@ reference_row_time(int row, int b0, int held, int index) {
  * its point (index - 1), falling in the one that starts there (index), from
  * its time (or the interval's start) until its response or the interval ends. */
 static void
-reference_row_render(double out[160], const struct mbe_subframe_model* model, const int pulsed[57],
-                     const double phase[57], int index, double time) {
+reference_row_render(double out[160], const struct mbe_subframe_model* model, const struct reference_band* band,
+                     const int pulsed[57], const double phase[57], int index, double time) {
     for (int k = index - 1; k <= index; ++k) {
         if (k < 0 || k > 1) {
             continue;
@@ -1134,7 +1295,8 @@ reference_row_render(double out[160], const struct mbe_subframe_model* model, co
             if (t < 0.0) {
                 continue;
             }
-            out[(80 * k) + n] += (rising ? fade : (1.0 - fade)) * reference_pulsed_response(model, pulsed, phase, t);
+            out[(80 * k) + n] +=
+                (rising ? fade : (1.0 - fade)) * reference_pulsed_response(model, band, pulsed, phase, t);
         }
     }
 }
@@ -2000,6 +2162,7 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
     double energy = 0.0, pulsed_energy = 0.0, worst = 0.0;
     struct reference_stream stream = {0, 0, 0};
     struct reference_rows rows = {0, 0};
+    struct reference_tracker tracker = {0.0, 0.0};
 
     fresh_stream(&last);
     for (size_t f = 0; f < frame_count; ++f) {
@@ -2136,20 +2299,27 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
             }
         }
         train.count = kept;
+        /* The low band: the filter of the rendering, and the cut at each
+         * model's corner, from the reference's own tracker. */
+        struct reference_band band[3];
+        reference_tracker_frame(&tracker, &cur, rendering, band);
         reference_advance(&train, start, &models[0], &models[1]);
-        reference_render(want, start, &train, &models[0], phases[0], &models[1], phases[1]);
+        reference_render(want, start, &train, &models[0], &band[0], phases[0], &models[1], &band[1], phases[1]);
         reference_advance(&train, start + 80.0, &models[1], &models[2]);
-        reference_render(want + 80, start + 80.0, &train, &models[1], phases[1], &models[2], phases[2]);
+        reference_render(want + 80, start + 80.0, &train, &models[1], &band[1], phases[1], &models[2], &band[2],
+                         phases[2]);
         double pulses[160] = {0.0};
         if (emits[0]) {
-            reference_pulsed_render(pulses, &models[0], pulsed[0], phases[0], &models[1], pulsed[1], phases[1]);
+            reference_pulsed_render(pulses, &models[0], &band[0], pulsed[0], phases[0], &models[1], &band[1], pulsed[1],
+                                    phases[1]);
         }
         if (emits[1]) {
-            reference_pulsed_render(pulses + 80, &models[1], pulsed[1], phases[1], &models[2], pulsed[2], phases[2]);
+            reference_pulsed_render(pulses + 80, &models[1], &band[1], pulsed[1], phases[1], &models[2], &band[2],
+                                    pulsed[2], phases[2]);
         }
         for (int i = 0; i < 3; ++i) {
             if (row_emits[i]) {
-                reference_row_render(pulses, &models[i], row_pulsed[i], phases[i], i, row_time[i]);
+                reference_row_render(pulses, &models[i], &band[i], row_pulsed[i], phases[i], i, row_time[i]);
             }
         }
         for (int n = 0; n < 160; ++n) {
@@ -2171,6 +2341,7 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
         assert(fabs(cycles_apart(pulse_phase(&last), train.phase)) < 1e-4);
         assert(stored_as(&last, &stream, rendering));
         assert(stored_row_as(&last, &rows));
+        assert(stored_tracker_as(&last, &tracker, rendering));
     }
     assert(worst < 0.05);
     const struct waveform_levels levels = {sqrt(energy / (160.0 * (double)frame_count)),
@@ -2594,13 +2765,16 @@ test_phases_follow_decoded_amplitudes(void) {
     assert(same_bits(own[0].magnitude, own[2].magnitude, 57) && !same_bits(own[0].phase, own[2].phase, 57));
     assert(same_bits(last[0].PHIl, last[1].PHIl, 57));
 
+    /* D-STAR's filter; the corner stays under 187.5 Hz, so no harmonic is cut. */
+    const struct reference_band band = reference_band_of(MBE_VOICED_SYNTHESIS_DVSI);
     double moved = 0.0;
     for (int l = 1; l <= 18; ++l) {
         const double hz = 187.5 * l;
         for (int k = 0; k < 3; ++k) {
-            const double want = 2.0 * (double)model[k].Ml[l] * reference_low_band_gain(hz);
+            assert(last[k].noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] < 187.0f);
+            const double want = 2.0 * (double)model[k].Ml[l] * reference_band_gain(&band, hz);
             assert(fabs(component_amplitude(out[k] + 320, 1280, hz) / want - 1.0) < 2e-3);
-            const double stored = (double)last[k].PHIl[l] + reference_low_band_phase(hz);
+            const double stored = (double)last[k].PHIl[l] + reference_band_phase(&band, hz);
             assert(phase_apart(end_phase(out[k], hz), stored) < 0.02);
         }
         assert(phase_apart(end_phase(out[0], hz), end_phase(out[1], hz)) < 0.02);
@@ -3368,7 +3542,18 @@ test_from_silence(void) {
     }
     assert(fabsf(rising[0]) < 1e-6f);
     assert(same_bits(rising, other, 160));
-    assert(same_bits(carried.noiseOverlap, emptied.noiseOverlap, 96));
+    /* The train is dropped from silence; the low cut's tracker, no part of it,
+     * goes on from the state's (its corner under the fundamental in both, so
+     * the samples are the same). */
+    mbe_parms carried_train = carried, emptied_train = emptied;
+    for (int i = MBE_LOW_CUT_TRACK_SLOT; i <= MBE_LOW_CUT_CORNER_SLOT; ++i) {
+        carried_train.noiseOverlap[i] = 0.0f;
+        emptied_train.noiseOverlap[i] = 0.0f;
+    }
+    assert(same_bits(carried_train.noiseOverlap, emptied_train.noiseOverlap, 96));
+    assert(last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] > 110.5f);
+    assert(carried.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] > last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT]);
+    assert(emptied.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] < last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT]);
     assert(same_bits(carried.PSIl, emptied.PSIl, 57));
     assert(fabs(cycles_apart(pulse_phase(&carried), cycles_of(187.5, 160.0))) < 1e-5);
 
@@ -6332,11 +6517,22 @@ reference_path_frame(const mbe_parms* last, const mbe_parms* cur, float seed, en
             phase[i][l] = (double)models[i].phase[l];
         }
     }
+    /* The low band: the rendering's filter and, in D-STAR's and P25's, the cut
+     * at the corner of the tracker the state before stored (its rule is
+     * test_low_cut_tracker()'s; a frame with no voiced band leaves it, so the
+     * last frame's own model takes the same corner). */
+    struct reference_band band = reference_band_of(rendering);
+    if (band.dvsi) {
+        const double track =
+            mbe_subframe_state_is_marked(last) ? (double)last->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] : 0.0;
+        band.corner = fmin((track >= 50.0 && track <= 500.0) ? track : 110.0, 200.0);
+    }
     if (emits[0]) {
-        reference_pulsed_render(pulses, &models[0], pulsed[0], phase[0], &models[1], pulsed[1], phase[1]);
+        reference_pulsed_render(pulses, &models[0], &band, pulsed[0], phase[0], &models[1], &band, pulsed[1], phase[1]);
     }
     if (emits[1]) {
-        reference_pulsed_render(pulses + 80, &models[1], pulsed[1], phase[1], &models[2], pulsed[2], phase[2]);
+        reference_pulsed_render(pulses + 80, &models[1], &band, pulsed[1], phase[1], &models[2], &band, pulsed[2],
+                                phase[2]);
     }
     struct mbe_unvoiced_subframe sub[2];
     memset(sub, 0, sizeof(sub));
@@ -6344,6 +6540,8 @@ reference_path_frame(const mbe_parms* last, const mbe_parms* cur, float seed, en
         const struct mbe_subframe_model* model = &models[k + 1];
         sub[k].w0 = model->w0;
         sub[k].L = model->L;
+        sub[k].dvsi_low_band = band.dvsi;
+        sub[k].cut_hz = (float)band.corner;
         for (int l = 1; l <= model->L; ++l) {
             if (model->voiced[l] == 0 && !pulsed[k + 1][l]) {
                 sub[k].amplitude[l] = MBE_UNVOICED_SUBFRAME_SCALE * model->magnitude[l];
@@ -8673,7 +8871,9 @@ test_r33_pulsed_magnitude_cap(void) {
     (void)any_pulsed;
     double phase[57], want[160] = {0.0};
     reference_own_phases(&cur, phase);
-    reference_row_render(want, &own, pulsed, phase, 2, reference_row_time(24, 30, 0, 2));
+    /* A fresh stream's corner, 110 Hz, and rate 33's filter. */
+    const struct reference_band band = {1, 110.0};
+    reference_row_render(want, &own, &band, pulsed, phase, 2, reference_row_time(24, 30, 0, 2));
     next_frame_with_word(out, &last, &model, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
     double peak = 0.0;
     for (int n = 0; n < 160; ++n) {
@@ -8690,13 +8890,15 @@ test_r33_pulsed_magnitude_cap(void) {
  * arithmetic (PULSE_REPLICA_EXACT; elsewhere the library and this test may
  * round apart, and a tolerance cannot tell the times in float from the times
  * in double). A replica of the library's float rendering of one
- * pulse (prepare_render(), start_oscillators(), render_pulse() and
+ * pulse (prepare_render_dvsi(), start_oscillators(), render_pulse() and
  * response_window() in mbe_subframe.c, op for op), fed the time the rule gives,
  * formed in double and rounded to float once, reproduces the library's frame
  * sample for sample. Taken from the library: the three models
  * (mbe_subframe_own_model(), mbe_subframe_mid_model()), their pulsed bands
  * chosen here as the rule says, and the helpers the rendering itself calls
- * (mbe_sincosf(), mbe_low_band_gain(), mbe_low_band_phase()). Every row at every
+ * (mbe_sincosf(), mbe_low_band_dvsi_gain(), mbe_low_band_dvsi_phase(),
+ * mbe_low_cut_gain(), at a fresh stream's corner, 110 Hz: no frame of these
+ * streams has a voiced band, so the tracker stays where it starts). Every row at every
  * code after a frame with no voiced band and no pulse, and the plain frame
  * after it, which plays the rest of an own pulse that falls past the frame;
  * every pair sounds in one of the two. Computing the grid rows' times in float,
@@ -8710,9 +8912,10 @@ struct exact_render {
     short harmonic[56];
 };
 
+/* prepare_render_dvsi() op for op, at the corner `corner`. */
 static void
-exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], struct exact_render* r) {
-    const float hz_per_harmonic = model->w0 * (8000.0f / (2.0f * (float)M_PI));
+exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], float corner, struct exact_render* r) {
+    const float hz_per_harmonic = mbe_round_to_float(model->w0 * (8000.0f / (2.0f * (float)M_PI)));
     const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
     r->count = 0;
     r->w0 = model->w0;
@@ -8724,11 +8927,12 @@ exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], stru
         }
         const double magnitude = (double)model->magnitude[l] / (double)factor;
         const float m = (magnitude < (double)1.0e30f) ? (float)magnitude : 1.0e30f;
-        const float hz = hz_per_harmonic * (float)l;
-        const float amplitude = 2.0f * m * 1.0f * mbe_low_band_gain(hz);
+        const float hz = mbe_round_to_float(hz_per_harmonic * (float)l);
+        const float cut = mbe_low_cut_gain(hz, corner);
+        const float amplitude = 2.0f * m * 1.0f * mbe_low_band_dvsi_gain(hz) * cut;
         const int k = r->count++;
         float sn, cs;
-        mbe_sincosf(model->phase[l] + mbe_low_band_phase(hz), &sn, &cs);
+        mbe_sincosf(model->phase[l] + mbe_low_band_dvsi_phase(hz), &sn, &cs);
         r->real[k] = amplitude * cs;
         r->imag[k] = amplitude * sn;
         mbe_sincosf(w, &r->step_s[k], &r->step_c[k]);
@@ -8812,8 +9016,8 @@ test_r33_pulse_times_by_bits(void) {
             const int any_mid = reference_row_bands(&models[1], row, 1, pulsed[1]);
             const int any_own = reference_row_bands(&models[2], row, 0, pulsed[2]);
             struct exact_render render[3];
-            exact_prepare(&models[1], pulsed[1], &render[1]);
-            exact_prepare(&models[2], pulsed[2], &render[2]);
+            exact_prepare(&models[1], pulsed[1], MBE_LOW_CUT_START_HZ, &render[1]);
+            exact_prepare(&models[2], pulsed[2], MBE_LOW_CUT_START_HZ, &render[2]);
             const float t1 = (float)reference_row_time(row, b0, 0, 1);
             const float t2 = (float)reference_row_time(row, b0, 0, 2);
             float want[160] = {0.0f};

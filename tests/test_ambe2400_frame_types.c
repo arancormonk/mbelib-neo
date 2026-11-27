@@ -2653,8 +2653,9 @@ test_tone_played_frequencies(void) {
             double want = 0.0;
             for (int harmonic = 7; harmonic <= 11; harmonic += 4) {
                 const double cycles = (double)harmonic * 7968.0 / 524288.0;
-                const double x = cycles * 8000.0 / 100.0;
-                const double high_pass = M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+                /* DVSI's fixed high-pass: a third-order Butterworth at 75 Hz. */
+                const double x = cycles * 8000.0 / 75.0;
+                const double high_pass = (1.5 * M_PI) - atan(x) - atan2(x, 1.0 - (x * x));
                 want += amplitude * cos((2.0 * M_PI * cycles * (t - 16.0)) + high_pass);
             }
             assert(fabs((double)out[n] - want) < 3e-4 * amplitude);

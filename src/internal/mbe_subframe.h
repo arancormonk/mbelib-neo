@@ -84,6 +84,22 @@
  * the library, the state of a stream that had such a frame (two codes of one
  * harmonic count share a grid model). */
 #define MBE_PULSED_ROW_SLOT            (MBE_PULSE_HISTORY + 5)
+/* In D-STAR's, P25's and rate 33's renderings alone, the two elements after
+ * that hold DVSI's adaptive low cut (mbe_low_band.h; docs/dvsi-parity.md,
+ * "DVSI's low band"): MBE_LOW_CUT_TRACK_SLOT the tracker as the frame left it,
+ * in Hz, and MBE_LOW_CUT_CORNER_SLOT the corner the frame applied to its own
+ * model (min of the tracker it started from and MBE_LOW_CUT_CEILING_HZ), so
+ * that the next frame renders that model with the corner it had. ProVoice's
+ * rendering writes 0 in both and reads neither. Each is read by its bit
+ * pattern, only in a state with the subframe rendering's mark, and only within
+ * the range a frame stores (the tracker MBE_LOW_CUT_TRACK_MIN_HZ to
+ * MBE_LOW_CUT_TRACK_MAX_HZ, the corner MBE_LOW_CUT_TRACK_MIN_HZ to
+ * MBE_LOW_CUT_CEILING_HZ); any other value (0, a negative or subnormal value,
+ * an infinity, not a number) reads as a fresh stream's: the tracker at
+ * MBE_LOW_CUT_START_HZ, the last corner the one this frame applies. The
+ * TIA-102.BABA rendering keeps its noise overlap in these elements too. */
+#define MBE_LOW_CUT_TRACK_SLOT         (MBE_PULSE_HISTORY + 6)
+#define MBE_LOW_CUT_CORNER_SLOT        (MBE_PULSE_HISTORY + 7)
 
 /* Samples from a model's point (0, 80 or 160 in its frame) to the one pulse a
  * model with pulsed bands emits (docs/dvsi-parity.md, "D-STAR and P25: the

@@ -3086,13 +3086,14 @@ test_tone_played_steps(void) {
 }
 
 /*
- * The output high-pass's phase at `hz` in double: a second-order Butterworth
- * at 100 Hz, pi - atan2(sqrt(2) x, 1 - x^2) with x = hz / 100.
+ * The phase of DVSI's fixed high-pass at `hz` in double: a third-order
+ * Butterworth at 75 Hz, the argument of s^3 / ((s + 1)(s^2 + s + 1)) at
+ * s = j x, 3 pi / 2 - atan(x) - atan2(x, 1 - x^2) with x = hz / 75.
  */
 static double
 high_pass_phase(double hz) {
-    const double x = hz / 100.0;
-    return M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+    const double x = hz / 75.0;
+    return (1.5 * M_PI) - atan(x) - atan2(x, 1.0 - (x * x));
 }
 
 /*
