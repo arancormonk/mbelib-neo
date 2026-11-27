@@ -1313,14 +1313,15 @@ if(MBELIB_BUILD_TESTS)
             PRIVATE $<$<CONFIG:Debug>:MBELIB_TEST_FENV_OVERFLOW=1>
         )
     endif()
-    # The AMBE+2 and IMBE encoder tests and the AMBE vector search test drive
-    # private quantizer steps and the Hamming encoder, which the shared library
-    # does not export.
+    # The AMBE+2 and IMBE encoder tests, the AMBE vector search test and the AMBE
+    # block-length test drive private quantizer steps and the Hamming encoder,
+    # which the shared library does not export.
     foreach(
         _enc_test
         test_ambe2450_encoder
         test_imbe7200_encoder
         test_ambe_vector_search
+        test_ambe_block_lengths
     )
         add_executable(${_enc_test} tests/${_enc_test}.c)
         target_link_libraries(${_enc_test} PRIVATE mbe-static)
@@ -2122,6 +2123,7 @@ if(MBELIB_BUILD_TESTS)
         test_ambe2450_encoder
         test_imbe7200_encoder
         test_ambe_vector_search
+        test_ambe_block_lengths
         test_speech_analysis
         test_simd_numerics
         test_noise_determinism
