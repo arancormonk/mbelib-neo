@@ -100,9 +100,10 @@ appear here.
   vectors before the gate sets were declared, in the branch's first commit, `6a32fb8`, before any
   build of the branch was scored, so neither partition is out of sample for it. The change was
   measured and gated on the development, validation, tone and channel partitions, and the final
-  partition is to be scored once for it, after the review, against the gate set
-  `r33-row17-train-final` ([November 2026: the pulse train through a row-17
-  frame](#november-2026-the-pulse-train-through-a-row-17-frame)).
+  partition was scored once for it, after the review and its fixes, against the gate set
+  `r33-row17-train-final`, which it passed; no decode of the two held-out vectors changes, so that
+  partition shows no harm and cannot show the gain ([November 2026: the pulse train through a
+  row-17 frame](#november-2026-the-pulse-train-through-a-row-17-frame)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -5163,7 +5164,7 @@ it read the development and validation vectors and DVSI's rate-33 tone vectors, 
 `mark`. Its scratch build was measured on the development and validation vectors (the cases of the
 section above, the whole-file figures and the accounting below) and on the rate-33 tone vectors
 before the gate sets were declared, so the development and validation partitions are not out of
-sample here; the final partition is held out, to be scored once, after the review (below). The
+sample here; the final partition was held out and scored once, after the review (below). The
 library's rate-33 decodes of the 25 development and validation vectors equal the scratch build's
 with the change, file for file, so the scratch build's rate-33 figures below are the library's. The
 scratch build's switch is not limited to the rate-33 rendering, as the library's condition is; no
@@ -5289,7 +5290,7 @@ head's code:
 | `r33-row17-train-validation` | passes all 12 checks | the same limits for harm on the validation vectors, also read in the study (the correlation's mean falling by no more than 0.0005, observed +3.7718e-09); one decode changes, in two frames, and the partition shows no gain at the precision reported |
 | `r33-row17-train-tones` | passes all 15 checks | rate 33's tone measures within their limits on the vectors both runs measure, D-STAR's and P25's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level) unchanged; not that the same tone frames or bits were sent |
 | `r33-row17-train-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), rate 33's mean distance from DVSI's decode on the loud frames not rising past 0.01 dB (observed: no change), D-STAR's and P25's decodes and every encoder's speech rows unchanged |
-| `r33-row17-train-final` | to be scored once, after the review (below) | on `irstia` and `mark`, held out: that nothing moves the wrong way past its limit |
+| `r33-row17-train-final` | passes all 12 checks (scored once, on 2026-11-26, after the review and its fixes; below) | on `irstia` and `mark`, held out: no harm (no decode of either vector changes, in any mode, and every encoder's rows are unchanged); it cannot show the gain, since nothing in it changes |
 
 Notes on the declarations. A check that the mean rises by at least a value is the scoreboard's
 `increase` rule, which also requires the 95% interval above 0. Every paired check of the
@@ -5346,8 +5347,29 @@ correlation with DVSI's decode falling by no more than 0.0005 on the mean and 0.
 the distance from DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any
 vector, and, on the mean only, the envelope correlation falling by no more than 0.001, the distance
 from the input rising by no more than 0.01 dB and the level against DVSI's moving by at most 0.05
-dB. Neither the change nor its scratch build was measured on these vectors. It is to be scored once,
-after the review; its result is not recorded yet.
+dB. Neither the change nor its scratch build was measured on these vectors. The final partition was
+scored once for this change set, on 2026-11-26, after the review and its fixes: `e446950` (the
+build of `git archive e446950`) against the head's code (the build of `3840d2b`, whose library code
+is `8cbef45`'s; its decodes of the 25 development and validation vectors are those of the build
+scored above, in all three modes, 25 of 25 each), on `irstia` and `mark`, both builds aligned freely
+first and then scored at their joint lags, both runs' encodings decoded by the candidate's decoder.
+It passes all 12 checks of `r33-row17-train-final` (none fails). No decode of the two vectors
+changes: the PCM hash of each of the six entries (`irstia` and `mark` in each mode) is the same in
+both runs, rate 33's included, and so is every encoder-row hash; the two vectors hold no frame the
+change touches. As the notes above ask of the encoder-row counter, all six entries carry an
+encoder-row hash and a PCM hash in both reports. The library's decode of DVSI's bits, the same in
+both runs:
+
+| Codec | Waveform corr. vs DVSI, sample for sample, mean | `irstia` | `mark` | LSD vs DVSI (dB), mean | Envelope corr., mean | Level vs DVSI (dB), mean | LSD vs input (dB), mean |
+|---|---|---|---|---|---|---|---|
+| Rate 33 | 0.985956 (0.9860) | 0.982792 | 0.989120 | 1.5074 (`irstia` 1.6848, `mark` 1.3301) | 0.9783 | -0.0731 | 5.5216 |
+| P25 | 0.986919 (0.9869) | 0.984030 | 0.989808 | 1.3346 | 0.9846 | -0.0328 | 5.3658 |
+| D-STAR | 0.985597 (0.9856) | 0.980559 | 0.990634 | 1.5116 | 0.9774 | +0.0608 | 5.5380 |
+
+Every paired delta of the gate is 0. What this establishes: the held-out partition shows no harm,
+and it cannot show the gain, since nothing in it changes. The change's evidence is the development
+vectors', in sample (the twelve cases, the phase measurements, the one row-17 pair without channel
+errors), with validation moving by +3.8e-09.
 
 ### Scoring history
 
@@ -5478,5 +5500,8 @@ through a row-17 frame](#november-2026-the-pulse-train-through-a-row-17-frame)).
 declaration the study's scratch build had been measured on the development, validation and rate-33
 tone vectors, and the baseline alone was scored on the four partitions (its own encodings decoded
 by its own decoder) to record each measure's coverage in the sets' descriptions. The final partition
-is to be scored once for it, after the review, against `r33-row17-train-final`, declared in
-`6a32fb8`.
+was scored once for it, on 2026-11-26, after the review and its fixes: `e446950` against the head's
+code (the build of `3840d2b`), against `r33-row17-train-final`, declared in `6a32fb8`. It passes all
+12 checks; no decode of `irstia` or `mark` changes in any mode, so it shows no harm and cannot show
+the gain ([November 2026: the pulse train through a row-17
+frame](#november-2026-the-pulse-train-through-a-row-17-frame)).
