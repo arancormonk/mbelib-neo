@@ -1415,14 +1415,24 @@ render_emitted_pulse(float* out, const struct rendered_model* from, const struct
  * start, where it falls before it, its response already running) until its
  * response or the interval ends. So a pulse sounds within its model's window and
  * no further, and no pulse plays through a neighbouring model or a voiced band. */
+/* render_pulse() reached through a pointer the compiler must load (a const
+ * volatile object): the rows' two calls are then no direct calls, and the
+ * compiler's inlining and cloning of render_pulse() into the voiced train and
+ * the pulsed state's pulse stay as they were before the rows. With direct
+ * calls GCC stopped inlining it into the train (cloning it instead), and in
+ * the 32-bit Release build (x87, -std=gnu99, so excess precision kept as the
+ * registers allow) that moved samples of D-STAR's, P25's and ProVoice's voiced
+ * frames by an ulp. */
+static void (*const volatile row_render_pulse)(float*, const struct rendered_model*, float, int) = render_pulse;
+
 static void
 render_row_pulses(float* out, int k, const struct pulsed_reading* reading, const struct rendered_model pulsed[3]) {
     const float start = (float)(k * SUBFRAME);
     if (reading->row_emits[k]) {
-        render_pulse(out, &pulsed[k], reading->row_time[k] - start, 0);
+        row_render_pulse(out, &pulsed[k], reading->row_time[k] - start, 0);
     }
     if (reading->row_emits[k + 1]) {
-        render_pulse(out, &pulsed[k + 1], reading->row_time[k + 1] - start, 1);
+        row_render_pulse(out, &pulsed[k + 1], reading->row_time[k + 1] - start, 1);
     }
 }
 
