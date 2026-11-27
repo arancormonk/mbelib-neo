@@ -91,9 +91,9 @@ appear here.
   been measured on both before the gate sets were declared, in the branch's first commit,
   `3593e8c`, before any build of the branch was scored, so neither partition is out of sample for
   it. The change was measured and gated on the development, validation, tone and channel
-  partitions; the final partition is to be scored once for it, after the review, against the gate
-  set `mid-columns-final` ([November 2026: mid-frame voicing by
-  columns](#november-2026-mid-frame-voicing-by-columns)).
+  partitions, and the final partition was scored once for it, after the review and its two rounds
+  of fixes, against the gate set `mid-columns-final`, which it passed ([November 2026: mid-frame
+  voicing by columns](#november-2026-mid-frame-voicing-by-columns)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -4711,7 +4711,7 @@ DVSI's tone, channel-error and DTX vectors and the DVstick 30 curves of
 build was measured on the development and validation vectors (the whole-file figures, the
 accounting and PESQ below) before the gate sets were declared, and the rule was found on those
 vectors' labels, so the development and validation partitions are not out of sample here; the final
-partition is held out (below). The library's D-STAR decodes equal the scratch build's with the rule,
+partition was held out and scored once, after the review (below). The library's D-STAR decodes equal the scratch build's with the rule,
 and its P25 decodes those of the scratch build with the rule applied after a tone model too, on all
 25 development and validation vectors (16-bit samples, every file identical), and on every D-STAR
 and P25 bit file of DVSI's vectors at the top of each mode's directory, `irstia` and `mark` left out
@@ -4896,7 +4896,7 @@ against `e86afd0`, with the same outcome; the observed values are the second run
 | `mid-columns-validation` | passes all 18 checks | the same on the validation vectors, the mean limits again on the mean only (limits 0.003 and 0.0005; observed D-STAR +0.0115, P25 +0.0012, none falling), also read in the study |
 | `mid-columns-tones` | passes all 18 checks | the D-STAR and P25 tone measures within their limits on the vectors both runs measure, rate 33's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level) unchanged; not that the same tone frames or bits were sent |
 | `mid-columns-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), D-STAR's and P25's mean distance from DVSI's decode on the loud frames not rising past 0.01 dB (observed: falling), rate 33's decodes and every encoder's speech rows unchanged |
-| `mid-columns-final` | declared; to be scored once, after the review (below) | |
+| `mid-columns-final` | passes all 18 checks (scored once, on 2026-11-26, after the review; below) | on `irstia` and `mark`, held out: D-STAR's and P25's correlation means rising (+0.0026 and +0.0032; no vector falling), the distance from DVSI's decode falling on the mean and on both vectors, the envelope correlation, the distance from the input and the level within their limits on the mean only, rate 33's decodes and every encoder's bits unchanged, each gated measure measured on both vectors in both runs |
 
 Notes on the declarations. A check that the mean rises by at least a value is the scoreboard's
 `increase` rule, which also requires the 95% interval above 0. Every paired check of the
@@ -4926,7 +4926,7 @@ above). The tones, channel and
 final sets' descriptions do not give the order of events: the study's scratch build was measured on
 the development and validation vectors before the sets were declared, and the baseline's own
 scoreboard was read for coverage. The final set's description, "scored once, after the review", states the
-plan: it has not been scored. All five sets were declared for the rule as first written, which took
+plan, which was kept: it was scored once, after the review and its two rounds of fixes (below). All five sets were declared for the rule as first written, which took
 this frame's voicing after a P25 tone model, and their descriptions say so ("nor in P25's
 rendering after a tone model"); the reviewed change applies the rule after a tone model as after any, three P25 tone
 decodes differ by it (`dtmf60` 19 frames, `dtmf180` 8, `dtmfvbad` 12), and the scores reported
@@ -4939,8 +4939,41 @@ unchanged, every encoder's bits unchanged, and for D-STAR and P25 the waveform c
 DVSI's decode falling by no more than 0.0005 on the mean and 0.002 on any vector, the distance from
 DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any vector, and, on the
 mean only, the envelope correlation falling by no more than 0.001, the distance from the input
-rising by no more than 0.01 dB and the level against DVSI's moving by at most 0.05 dB. It has not
-been scored.
+rising by no more than 0.01 dB and the level against DVSI's moving by at most 0.05 dB. The final
+partition was scored once for this change set, on 2026-11-26, after the review and its two rounds of
+fixes: `c3c6d42` against the head's code (the build of `e86afd0`, whose code the head shares apart
+from comments, as candidate and decode tools), on `irstia` and `mark`, both builds aligned freely
+first and then scored at their joint lags, both runs' encodings decoded by the candidate's decoder.
+It passes all 18 checks of `mid-columns-final` (none fails). The library's decode of DVSI's bits,
+partition means over the two vectors and the waveform correlation of each:
+
+| Codec | Waveform corr. vs DVSI, sample for sample, mean | `irstia` | `mark` | LSD vs DVSI (dB), mean | Envelope corr., mean | Level vs DVSI (dB), mean | LSD vs input (dB), mean |
+|---|---|---|---|---|---|---|---|
+| D-STAR | 0.9830 → 0.9856 | 0.9774 → 0.9806 | 0.9886 → 0.9906 | 1.7794 → 1.5116 | 0.9766 → 0.9774 | +0.0592 → +0.0608 | 5.5432 → 5.5380 |
+| P25 | 0.9837 → 0.9869 | 0.9795 → 0.9840 | 0.9880 → 0.9898 | 1.5248 → 1.3346 | 0.9843 → 0.9846 | -0.0349 → -0.0328 | 5.3690 → 5.3658 |
+| Rate 33 | 0.9860 → 0.9860 | 0.9828 → 0.9828 | 0.9891 → 0.9891 | 1.5074 → 1.5074 | 0.9783 → 0.9783 | -0.0731 → -0.0731 | 5.5216 → 5.5216 |
+
+The gate's paired deltas: the waveform correlation, D-STAR +0.002598 on the mean (`irstia`
++0.003181, `mark` +0.002015), P25 +0.003178 (`irstia` +0.004545, `mark` +0.001810); the distance
+from DVSI's decode, D-STAR -0.2678 dB (`irstia` 1.9671 → 1.7470, `mark` 1.5917 → 1.2762 dB), P25
+-0.1901 dB (`irstia` 1.4894 → 1.2989, `mark` 1.5601 → 1.3704 dB); the envelope correlation +0.00083
+and +0.00028; the distance from the input, D-STAR -0.0052 dB (`irstia` 5.5420 → 5.5401, `mark`
+5.5444 → 5.5359 dB), P25 -0.0032 dB (`irstia` 5.3236 → 5.3243, `mark` 5.4145 → 5.4074 dB); the level
+against DVSI's +0.0017 dB and +0.0021 dB; rate 33's decodes unchanged (no vector with changed PCM),
+and every encoder's bits unchanged (no vector with changed rows in any mode). Both vectors were
+measured in both runs for every gated measure, so the per-vector checks, which do not themselves
+require every vector, compared both.
+
+This is the change's out-of-sample check: the rule was found on the labels of the development and
+validation vectors together, and its scratch build was measured on both, so neither of those
+partitions is out of sample for it. On the final partition the correlation gains, D-STAR +0.0026
+and P25 +0.0032, are larger than development's (+0.0010 and +0.0018) and P25's on validation
+(+0.0012), and smaller than D-STAR's on validation (+0.0115, most of it one run of `t03`). They rest
+on two vectors, so the partition means say little beyond the sign: the correlation rises and the
+distance from DVSI's decode falls on both vectors of both codecs. The distance from the input rises
+on one vector of one codec (P25 `irstia`, by 0.0007 dB) and falls on the other three. The final
+partition shows nothing about the channel-error or tone behaviour, nor which band's voicing is
+right in a given frame.
 
 ### Scoring history
 
@@ -5057,5 +5090,8 @@ review's two fixes (`e86afd0`, which change three P25 tone decodes) it was score
 again, every figure but those of the three tone vectors as before. Before
 that declaration the study's scratch build had been measured on the development and validation
 vectors, and the baseline's own scoreboard of the four partitions (from the rate-33 pitch wave's
-run) was read to record each measure's coverage in the sets' descriptions. The final partition has
-not been scored for it.
+run) was read to record each measure's coverage in the sets' descriptions. The final partition was
+scored once for it, on 2026-11-26, after the review and its two rounds of fixes: `c3c6d42` against
+the head's code (the build of `e86afd0`), against `mid-columns-final`, declared in `3593e8c`. It
+passes all 18 checks ([November 2026: mid-frame voicing by
+columns](#november-2026-mid-frame-voicing-by-columns)).
