@@ -3992,121 +3992,6 @@ test_marks_in_codec_states(void) {
     }
 }
 
-/* One frame of a codec's data path (codec_frame()), returning its result's
- * flags. */
-static unsigned
-codec_frame_flags(int codec, const char* bits, float out[160], mbe_parms* cur, mbe_parms* prev, mbe_parms* enhanced) {
-    mbe_process_result result;
-    mbe_initProcessResult(&result);
-    int rc;
-    if (codec == 0) {
-        rc = mbe_processAmbe2400Dataf(out, &result, bits, cur, prev, enhanced);
-    } else if (codec == 1) {
-        rc = mbe_processImbe4400Dataf(out, &result, bits, cur, prev, enhanced);
-    } else {
-        rc = mbe_processAmbe2450Dataf(out, &result, bits, cur, prev, enhanced);
-    }
-    assert(rc >= 0);
-    (void)rc;
-    assert(all_finite(out, 160));
-    return result.flags;
-}
-
-/* The last two frames of the stream test_row17_mark_in_codec_states() plays:
- * the state `s` with `mark` in slot `slot` (cur_mp, prev_mp,
- * prev_mp_enhanced), then, with `lost`, a lost frame, and a voiced frame. */
-static void
-row17_stream_tail(int codec, const mbe_parms s[3], int slot, enum mbe_frame_mark mark, int lost, const char* lost_bits,
-                  const char* after, float out[320]) {
-    mbe_parms t[3];
-    memcpy(t, s, sizeof(t));
-    mbe_set_frame_mark(&t[slot], mark);
-    if (lost) {
-        const unsigned flags = codec_frame_flags(codec, lost_bits, out, &t[0], &t[1], &t[2]);
-        assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0u && (flags & MBE_PROCESS_FLAG_MUTE) == 0u);
-        (void)flags;
-    } else {
-        memset(out, 0, 160 * sizeof(float));
-    }
-    codec_frame(codec, after, out + 160, &t[0], &t[1], &t[2]);
-}
-
-/*
- * MBE_FRAME_MARK_MID_COLUMN_0 in a caller's state, in each of the three slots
- * (cur_mp, prev_mp, prev_mp_enhanced), through each codec's data path. On the
- * last frame played (prev_mp_enhanced) in the rate-33 path, the train that
- * frame stored is loaded under it, as under MBE_FRAME_MARK_PITCH_ABSENT; in the
- * other slots, and in every slot of D-STAR's and P25's paths, it changes
- * nothing: the stream plays exactly as with no mark there. The stream: three
- * voiced frames, a frame with no voiced band through whose first half the
- * train ran on (rate 33: V/UV row 17, which its decoder marks
- * MBE_FRAME_MARK_MID_COLUMN_0; D-STAR b0 34 and P25 b0 25, which lack a pitch
- * and are marked MBE_FRAME_MARK_PITCH_ABSENT, the voicing before held to
- * mid-frame in the columns), then a voiced frame of another pitch, directly or
- * after a lost frame (D-STAR b0 125, P25 b0 255, rate 33 b0 121), which repeats
- * the last frame played or the history. In rate 33 the repeat drops the row's
- * mark (ambe2450_load_repeat()) and starts afresh, its first subframe voiced at
- * neither end, so there the mark changes nothing either. That the train the
- * last frame stored matters here is checked on the same state with its own
- * mark dropped: then a train that does not run on changes the samples.
- */
-static void
-test_row17_mark_in_codec_states(void) {
-    char voiced[3][88], held[3][88], after[3][88], lost[3][88];
-    set_ambe2400(voiced[0], 45, 0xC);
-    set_ambe2400(held[0], 34, 0x0);
-    set_ambe2400(after[0], 50, 0xF);
-    set_ambe2400(lost[0], 125, 0xF);
-    set_imbe_voicing(voiced[1], 86, "1111111100");
-    memset(held[1], 0, 88);
-    set_imbe_b0(held[1], 25);
-    set_imbe_voicing(after[1], 92, "1111111100");
-    memset(lost[1], 0, 88);
-    set_imbe_b0(lost[1], 255);
-    set_ambe2450(voiced[2], 40, 0);
-    set_ambe2450(held[2], 60, 17);
-    set_ambe2450(after[2], 50, 0);
-    set_ambe2450(lost[2], 121, 0);
-
-    static const enum mbe_frame_mark own_marks[3] = {MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PITCH_ABSENT,
-                                                     MBE_FRAME_MARK_MID_COLUMN_0};
-
-    for (int codec = 0; codec < 3; ++codec) {
-        mbe_parms s[3];
-        float out[160];
-        mbe_initMbeParms(&s[0], &s[1], &s[2]);
-        for (int f = 0; f < 3; ++f) {
-            codec_frame(codec, voiced[codec], out, &s[0], &s[1], &s[2]);
-        }
-        codec_frame(codec, held[codec], out, &s[0], &s[1], &s[2]);
-        /* The last frame played: no voiced band, its decoder's mark, a train
-         * that ran on through its first half. */
-        assert(!reference_voiced(&s[2]) && mbe_frame_mark(&s[2]) == own_marks[codec]);
-        assert(s[2].noiseOverlap[0] >= 1.0f && pulse_phase(&s[2]) > 0.0);
-        for (int lost_first = 0; lost_first < 2; ++lost_first) {
-            float plain[320], marked[320], own[320];
-            for (int slot = 0; slot < 3; ++slot) {
-                row17_stream_tail(codec, s, slot, MBE_FRAME_MARK_NONE, lost_first, lost[codec], after[codec], plain);
-                row17_stream_tail(codec, s, slot, MBE_FRAME_MARK_MID_COLUMN_0, lost_first, lost[codec], after[codec],
-                                  marked);
-                const int acts = codec == 2 && slot == 2 && !lost_first;
-                assert(same_bits(marked, plain, 320) == !acts);
-                if (acts) {
-                    /* As the marks already honoured there load it. */
-                    row17_stream_tail(codec, s, slot, MBE_FRAME_MARK_PITCH_ABSENT, 0, lost[codec], after[codec], own);
-                    assert(same_bits(marked, own, 320));
-                }
-            }
-            if (codec != 2 && !lost_first) {
-                /* The train this state stored is heard: dropped, the samples change. */
-                row17_stream_tail(codec, s, 2, MBE_FRAME_MARK_PITCH_ABSENT, 0, lost[codec], after[codec], own);
-                row17_stream_tail(codec, s, 2, MBE_FRAME_MARK_NONE, 0, lost[codec], after[codec], plain);
-                assert(!same_bits(own, plain, 320));
-            }
-        }
-    }
-}
-
 /* A P25 pitch step whose mid-frame harmonic lies just under halfway between
  * two harmonics of the frame before: b0 134, word 000000000010, then b0 161,
  * word 111111111101. The mid-frame model's harmonic 36 lies at 33.4999986 of
@@ -4416,6 +4301,207 @@ test_p25_forged_tone_in_state(void) {
             for (int i = 0; i < 3; ++i) {
                 assert(same_stream_state(&s[0][i], &s[1][i]));
             }
+        }
+    }
+}
+
+/* The paths test_row17_mark_in_codec_states() plays. */
+enum row17_path { ROW17_DSTAR, ROW17_P25, ROW17_RATE33, ROW17_PROVOICE, ROW17_PATHS };
+
+/* A frame's bits for each path: parameter bits for the data paths, ProVoice
+ * frames (7 x 24, pack_imbe7100()) for ProVoice's own entry point. */
+struct row17_frame {
+    char bits[88];
+    char fr[7][24];
+};
+
+/* One frame of a path, returning its result's flags: D-STAR, P25 and rate 33
+ * through their data paths, ProVoice through mbe_processImbe7100x4400Framef(). */
+static unsigned
+row17_path_frame(enum row17_path path, const struct row17_frame* frame, float out[160], mbe_parms s[3]) {
+    mbe_process_result result;
+    char imbe_d[88];
+    int rc;
+    mbe_initProcessResult(&result);
+    switch (path) {
+        case ROW17_DSTAR: rc = mbe_processAmbe2400Dataf(out, &result, frame->bits, &s[0], &s[1], &s[2]); break;
+        case ROW17_P25: rc = mbe_processImbe4400Dataf(out, &result, frame->bits, &s[0], &s[1], &s[2]); break;
+        case ROW17_RATE33: rc = mbe_processAmbe2450Dataf(out, &result, frame->bits, &s[0], &s[1], &s[2]); break;
+        default:
+            rc = mbe_processImbe7100x4400Framef(out, &result, (const char (*)[24])frame->fr, imbe_d, &s[0], &s[1],
+                                                &s[2]);
+            assert((result.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+            break;
+    }
+    assert(rc >= 0);
+    (void)rc;
+    assert(all_finite(out, 160));
+    return result.flags;
+}
+
+/* The last two frames of the stream test_row17_mark_in_codec_states() plays:
+ * the state `s` with `mark` in slot `slot` (cur_mp, prev_mp,
+ * prev_mp_enhanced), then, with `lost`, a lost frame, and a voiced frame. The
+ * samples go to `out` and the three states the path returns to `t`. */
+static void
+row17_stream_tail(enum row17_path path, const mbe_parms s[3], int slot, enum mbe_frame_mark mark, int lost,
+                  const struct row17_frame* lost_frame, const struct row17_frame* after, float out[320],
+                  mbe_parms between[3], mbe_parms t[3]) {
+    memcpy(t, s, 3 * sizeof(mbe_parms));
+    mbe_set_frame_mark(&t[slot], mark);
+    if (lost) {
+        const unsigned flags = row17_path_frame(path, lost_frame, out, t);
+        assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0u && (flags & MBE_PROCESS_FLAG_MUTE) == 0u);
+        (void)flags;
+    } else {
+        memset(out, 0, 160 * sizeof(float));
+    }
+    memcpy(between, t, 3 * sizeof(mbe_parms));
+    row17_path_frame(path, after, out + 160, t);
+}
+
+/* Two returned states alike in everything but the mark word (PHIl[0]). */
+static int
+same_state_but_mark(const mbe_parms* a, const mbe_parms* b) {
+    mbe_parms x = *a, y = *b;
+    mbe_set_frame_mark(&x, MBE_FRAME_MARK_NONE);
+    mbe_set_frame_mark(&y, MBE_FRAME_MARK_NONE);
+    return same_stream_state(&x, &y);
+}
+
+/* Frame bits for a path: D-STAR b0 and b1, P25 (and ProVoice) b0 and a voicing
+ * word ("" for none), rate 33 b0 and V/UV row. */
+static void
+row17_frame_for(enum row17_path path, int b0, int voicing, const char* word, struct row17_frame* frame) {
+    memset(frame, 0, sizeof(*frame));
+    if (path == ROW17_DSTAR) {
+        set_ambe2400(frame->bits, b0, voicing);
+    } else if (path == ROW17_RATE33) {
+        set_ambe2450(frame->bits, b0, voicing);
+    } else {
+        if (word[0] != '\0') {
+            set_imbe_voicing(frame->bits, b0, word);
+        } else {
+            set_imbe_b0(frame->bits, b0);
+        }
+        if (path == ROW17_PROVOICE) {
+            pack_imbe7100(frame->bits, frame->fr);
+        }
+    }
+}
+
+/*
+ * MBE_FRAME_MARK_MID_COLUMN_0 in a caller's state, in each of the three slots
+ * (cur_mp, prev_mp, prev_mp_enhanced), through D-STAR's, P25's and rate 33's
+ * data paths and ProVoice's own entry point (mbe_processImbe7100x4400Framef(),
+ * frames packed for it). The stream: three voiced frames, a frame with no
+ * voiced band through whose first half the train ran on (rate 33: V/UV row
+ * 17, which its decoder marks MBE_FRAME_MARK_MID_COLUMN_0; D-STAR b0 34 and
+ * P25 and ProVoice b0 25, which lack a pitch and are marked
+ * MBE_FRAME_MARK_PITCH_ABSENT, the voicing before held to mid-frame in the
+ * columns), then a voiced frame of another pitch, directly or after a lost
+ * frame (D-STAR b0 125, P25 and ProVoice b0 255, rate 33 b0 121), which
+ * repeats the last frame played or the history. Against the same state with
+ * no mark in that slot (MBE_FRAME_MARK_NONE in its place):
+ * - the samples: on the last frame played (prev_mp_enhanced) of the rate-33
+ *   path, before the voiced frame, the train that frame stored is loaded under
+ *   the mark, as under MBE_FRAME_MARK_PITCH_ABSENT, whose stream it plays bit
+ *   for bit; everywhere else (every slot of D-STAR's, P25's and ProVoice's
+ *   paths, rate 33's other slots, and rate 33's last frame played before a
+ *   lost frame, whose repeat drops the mark and starts afresh) the samples are
+ *   bit for bit those with no mark there;
+ * - the three states returned: after the voiced frame, wherever the samples
+ *   are alike, all three exactly those of the stream with no mark (and in the
+ *   rate-33 case where the mark acts, those of the stream under
+ *   PITCH_ABSENT); after a lost frame alike in everything but the mark word,
+ *   which is state like any other: the forged 6 in prev_mp travels on where
+ *   the path copies it (D-STAR's, P25's and ProVoice's repeat loads the
+ *   history, so all three returned states hold 6 where the stream with no mark
+ *   holds 0; rate 33's repeat keeps its history in prev_mp, which still holds
+ *   6), and every other mark word is the stream's with no mark.
+ * The mark in the slot replaces the mark the state held: on D-STAR's and P25's
+ * last frame played it replaces MBE_FRAME_MARK_PITCH_ABSENT, whose train the
+ * next frame would otherwise take on, so 6 there plays as no mark does, not as
+ * the stream with its own mark (shown below).
+ */
+static void
+test_row17_mark_in_codec_states(void) {
+    static const enum mbe_frame_mark own_marks[ROW17_PATHS] = {MBE_FRAME_MARK_PITCH_ABSENT, MBE_FRAME_MARK_PITCH_ABSENT,
+                                                               MBE_FRAME_MARK_MID_COLUMN_0,
+                                                               MBE_FRAME_MARK_PITCH_ABSENT};
+
+    for (int p = 0; p < ROW17_PATHS; ++p) {
+        const enum row17_path path = (enum row17_path)p;
+        struct row17_frame voiced, held, after, lost;
+        row17_frame_for(path, (path == ROW17_RATE33) ? 40 : ((path == ROW17_DSTAR) ? 45 : 86),
+                        (path == ROW17_DSTAR) ? 0xC : 0, "1111111100", &voiced);
+        row17_frame_for(path, (path == ROW17_RATE33) ? 60 : ((path == ROW17_DSTAR) ? 34 : 25),
+                        (path == ROW17_RATE33) ? 17 : 0, "", &held);
+        row17_frame_for(path, (path == ROW17_RATE33) ? 50 : ((path == ROW17_DSTAR) ? 50 : 92),
+                        (path == ROW17_DSTAR) ? 0xF : 0, "1111111100", &after);
+        row17_frame_for(path, (path == ROW17_RATE33) ? 121 : ((path == ROW17_DSTAR) ? 125 : 255),
+                        (path == ROW17_DSTAR) ? 0xF : 0, "", &lost);
+        mbe_parms s[3];
+        float out[160];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            row17_path_frame(path, &voiced, out, s);
+        }
+        row17_path_frame(path, &held, out, s);
+        /* The last frame played: no voiced band, its decoder's mark, a train
+         * that ran on through its first half. */
+        assert(!reference_voiced(&s[2]) && mbe_frame_mark(&s[2]) == own_marks[p]);
+        assert(s[2].noiseOverlap[0] >= 1.0f && pulse_phase(&s[2]) > 0.0);
+        for (int lost_first = 0; lost_first < 2; ++lost_first) {
+            for (int slot = 0; slot < 3; ++slot) {
+                float plain[320], marked[320];
+                mbe_parms plain_s[3], marked_s[3], plain_b[3], marked_b[3];
+                row17_stream_tail(path, s, slot, MBE_FRAME_MARK_NONE, lost_first, &lost, &after, plain, plain_b,
+                                  plain_s);
+                row17_stream_tail(path, s, slot, MBE_FRAME_MARK_MID_COLUMN_0, lost_first, &lost, &after, marked,
+                                  marked_b, marked_s);
+                const int acts = path == ROW17_RATE33 && slot == 2 && !lost_first;
+                assert(same_bits(marked, plain, 320) == !acts);
+                if (acts) {
+                    /* As the marks already honoured there load it: the samples
+                     * and the states those of the stream under PITCH_ABSENT. */
+                    float own[320];
+                    mbe_parms own_b[3], own_s[3];
+                    row17_stream_tail(path, s, slot, MBE_FRAME_MARK_PITCH_ABSENT, 0, &lost, &after, own, own_b, own_s);
+                    assert(same_bits(marked, own, 320));
+                    for (int i = 0; i < 3; ++i) {
+                        assert(same_stream_state(&marked_s[i], &own_s[i]));
+                    }
+                    continue;
+                }
+                for (int i = 0; i < 3; ++i) {
+                    /* After the voiced frame: every state as with no mark. */
+                    assert(same_stream_state(&marked_s[i], &plain_s[i]));
+                    if (!lost_first) {
+                        continue;
+                    }
+                    /* After the lost frame: alike but for the mark word, which
+                     * the forged prev_mp carries on where the path copies it:
+                     * D-STAR's, P25's and ProVoice's repeat loads the history
+                     * into all three states; rate 33's keeps its history in
+                     * prev_mp and repeats the last frame played. */
+                    assert(same_state_but_mark(&marked_b[i], &plain_b[i]));
+                    const int travels = slot == 1 && (path != ROW17_RATE33 || i == 1);
+                    assert(mbe_frame_mark(&marked_b[i])
+                           == (travels ? MBE_FRAME_MARK_MID_COLUMN_0 : mbe_frame_mark(&plain_b[i])));
+                    assert(!travels || mbe_frame_mark(&plain_b[i]) == MBE_FRAME_MARK_NONE);
+                }
+            }
+        }
+        if (path != ROW17_RATE33) {
+            /* The train the last frame played stored is heard when it runs on:
+             * under the decoder's own PITCH_ABSENT the samples differ from
+             * those with no mark (and so with 6) in its place. */
+            float own[320], plain[320];
+            mbe_parms own_b[3], own_s[3], plain_b[3], plain_s[3];
+            row17_stream_tail(path, s, 2, MBE_FRAME_MARK_PITCH_ABSENT, 0, &lost, &after, own, own_b, own_s);
+            row17_stream_tail(path, s, 2, MBE_FRAME_MARK_NONE, 0, &lost, &after, plain, plain_b, plain_s);
+            assert(!same_bits(own, plain, 320));
         }
     }
 }
@@ -5156,10 +5242,10 @@ main(void) {
     test_mid_columns_bands_with_no_state();
     test_marks_with_columns();
     test_marks_in_codec_states();
-    test_row17_mark_in_codec_states();
     test_p25_nearest_harmonic_across_a_step();
     test_p25_mid_columns_across_steps();
     test_p25_forged_tone_in_state();
+    test_row17_mark_in_codec_states();
     test_dstar_exact_column_edge();
     test_rate33_hold_past_l();
     test_p25_muted_onset_advances();
