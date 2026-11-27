@@ -24,6 +24,7 @@
 #include "mbe_bitpack.h"
 #include "mbe_compiler.h"
 #include "mbe_math.h"
+#include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
 #include "mbe_validation.h"
@@ -187,6 +188,34 @@ imbe_code_pitch(int b0, enum imbe_pitch pitch, float* w0, int* L, int* K) {
     return 0;
 }
 
+/*
+ * The reserved code (b0 128..183, IMBE_UNVOICED_CODES_*) whose pitch w0 is, as
+ * mbe_pulsed.h asks: the pitch imbe_code_pitch() gives that code for P25, the
+ * function the decode stores it with, compared by bit pattern. The one code
+ * that can match is the one nearest 4 pi / w0 - 39.5: the played pitch lies
+ * within -7.06e-4 and +3.38e-4 of eq 46's (imbe_dvsi_pitch_offset()), so that
+ * quotient lies within 0.16 of the code at b0 183, and nearer below. w0 is
+ * positive and normal, so the quotient is finite; it is bounded before it is
+ * converted.
+ */
+int
+mbe_imbe4400_pulsed_code(float w0) {
+    const double position = ((4.0 * M_PI) / (double)w0) - 39.5;
+    if (!(position > (double)IMBE_UNVOICED_CODES_FIRST - 0.5 && position < (double)IMBE_UNVOICED_CODES_LAST + 0.5)) {
+        return -1;
+    }
+    const int b0 = (int)floor(position + 0.5);
+    float pitch;
+    int L = 0, K = 0;
+    if (imbe_code_pitch(b0, IMBE_PITCH_DVSI, &pitch, &L, &K) != 0) {
+        return -1;
+    }
+    uint32_t want, have;
+    memcpy(&want, &pitch, sizeof(want));
+    memcpy(&have, &w0, sizeof(have));
+    return (want == have) ? b0 - IMBE_UNVOICED_CODES_FIRST : -1;
+}
+
 static int
 imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
@@ -246,7 +275,10 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
  *    only with such frames (IMBE_UNVOICED_CODES_*): the voicing of the frame
  *    before it lasts to mid-frame in the bands whose 500 Hz column, or the
  *    column 250 Hz higher, that frame covers (MBE_FRAME_MARK_PITCH_ABSENT;
- *    the pulse train runs on through the frame only when a band is held);
+ *    the pulse train runs on through the frame only when a band is held); at
+ *    one of those codes no mark: the synthesizer reads the code from the
+ *    model's pitch as the pulsed state (mbe_imbe4400_pulsed_code(),
+ *    mbe_pulsed.h), P25's rendering only;
  *  - voiced bands: MBE_FRAME_MARK_ONSET_COLUMNS, which P25's rendering gives
  *    every voiced model it renders but a tone model, after adaptive smoothing
  *    (the model played for a P25 tone sent as voice frames is marked
@@ -1362,9 +1394,12 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
         imbe4400_play_tone(cur_mp, &tone);
     }
     /* As DVSI's P25 decoder, without eq 116's scaling; ProVoice, which plays
-     * through the same path, likewise. */
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise,
-                                       MBE_VOICED_SYNTHESIS_DVSI_IMBE, MBE_AMPLITUDE_LIMIT_NONE);
+     * through the same path, likewise, in P25's rendering without the pulsed
+     * state (no DVSI ProVoice material shows one). */
+    const enum mbe_voiced_synthesis rendering =
+        imbe4400_is_provoice(result) ? MBE_VOICED_SYNTHESIS_DVSI_PROVOICE : MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
+                                       MBE_AMPLITUDE_LIMIT_NONE);
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

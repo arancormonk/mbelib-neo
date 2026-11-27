@@ -142,8 +142,10 @@ enum mbe_voiced_synthesis {
      * part DVSI's noise (mbe_subframe.h; docs/dvsi-parity.md, "Synthesis in
      * subframes"), the mid-frame model voiced by D-STAR's 500 Hz columns
      * (mbe_subframe_mid_model(); docs/dvsi-parity.md, "D-STAR and P25:
-     * mid-frame voicing by columns"). D-STAR, and with the two below the base
-     * of every codec path's rendering. */
+     * mid-frame voicing by columns"), and D-STAR's pulsed state on a frame
+     * with no voiced band at b0 64..119 (mbe_pulsed.h; docs/dvsi-parity.md,
+     * "D-STAR and P25: the pulsed state"). D-STAR, and with the three below
+     * the base of every codec path's rendering. */
     MBE_VOICED_SYNTHESIS_DVSI,
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's rate-33 (AMBE 3600x2450) decoder
      * renders it, whose mid-frame pitch between two voiced frames of
@@ -163,14 +165,21 @@ enum mbe_voiced_synthesis {
      * MBE_FRAME_MARK_PITCH_ABSENT takes its own voicing); the rendering marks every voiced model it
      * renders that is not a tone model MBE_FRAME_MARK_ONSET_COLUMNS, after
      * adaptive smoothing (mbe_synthesize_subframes(),
-     * mbe_advance_subframes()). The P25 and ProVoice data path. */
+     * mbe_advance_subframes()), and P25's pulsed state on a frame with no
+     * voiced band at b0 128..183 (mbe_pulsed.h; docs/dvsi-parity.md, "D-STAR
+     * and P25: the pulsed state"). The P25 data path. */
     MBE_VOICED_SYNTHESIS_DVSI_IMBE,
+    /** MBE_VOICED_SYNTHESIS_DVSI_IMBE without the pulsed state: the ProVoice
+     * (IMBE 7100x4400) frames of the shared IMBE 4400 data path, which has no
+     * DVSI reference for them (MBE_PROCESS_FLAG_PROVOICE). Everything else is
+     * P25's rendering, so ProVoice plays as it did before the pulsed state. */
+    MBE_VOICED_SYNTHESIS_DVSI_PROVOICE,
 };
 
 /** How a frame's rendering starts; chosen per call, it has a meaning for
  * the subframe renderings (MBE_VOICED_SYNTHESIS_DVSI,
- * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 and MBE_VOICED_SYNTHESIS_DVSI_IMBE)
- * only. */
+ * MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, MBE_VOICED_SYNTHESIS_DVSI_IMBE and
+ * MBE_VOICED_SYNTHESIS_DVSI_PROVOICE) only. */
 enum mbe_synthesis_start {
     /** From the previous frame as it was synthesized: its model, the pulse
      * train it carries and its unvoiced overlap. */

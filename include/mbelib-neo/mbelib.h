@@ -462,8 +462,10 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * lasts through this frame's first 10 ms in the bands whose 500 Hz column, or
  * the column 250 Hz higher, it covers",
  * where b0 64..119
- * would say it ends at the frame's start; DVSI's decoder is inferred to read
- * it so from other codes outside that range. A ThumbDV plays b0 120..123 at
+ * would say it ends at the frame's start and would name a pattern of pulsed
+ * 500 Hz channels for each half of the frame, which DVSI's decoder and this
+ * library's play as a single pulse in place of noise there; DVSI's decoder is
+ * inferred to read b0 123 so from other codes outside that range. A ThumbDV plays b0 120..123 at
  * b1 0 as low-pitch voice (#106), but whether b0 123 lets the voicing of the
  * frame before last through its first 10 ms has not been measured on
  * hardware. The six spectral vector indices (b3..b8) are
@@ -1031,7 +1033,9 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * amplitudes measured on that grid. This library's decoder reads that code as
  * "the voicing of the frame before lasts through this frame's first 10 ms in
  * the bands whose 500 Hz column, or the column 250 Hz higher, it covers", where b0 128..183 would say it ends at the frame's
- * start; DVSI's decoder is inferred to read it so from its decodes of DVSI's
+ * start and would name a pattern of pulsed 500 Hz channels for each half of
+ * the frame, which DVSI's decoder and this library's play as a single pulse in
+ * place of noise there; DVSI's decoder is inferred to read b0 127 as above from its decodes of DVSI's
  * vectors at b0 25, the one code outside that range its encoder sends on such
  * frames. No P25 measurement on hardware exists, and b0 127 is not among the
  * codes measured.

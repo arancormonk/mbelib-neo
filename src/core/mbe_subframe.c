@@ -14,6 +14,7 @@
 #include "ambe3600x2450_internal.h"
 #include "mbe_adaptive.h"
 #include "mbe_math.h"
+#include "mbe_pulsed.h"
 #include "mbe_validation.h"
 #include "mbe_voiced.h"
 
@@ -28,10 +29,12 @@
  * pitch comes near it) and pulses a frame's rendering can see. */
 #define INTERVAL_PULSES 16
 #define TRAIN_PULSES    (MBE_PULSE_HISTORY + 2 * INTERVAL_PULSES)
-/* Band states of a model. */
+/* Band states of a model: a pulsed band (D-STAR's and P25's pulsed state,
+ * pulse_bands()) plays neither the voiced pulse train nor noise. */
 #define BAND_UNVOICED   0
 #define BAND_VOICED     1
 #define BAND_NONE       2
+#define BAND_PULSED     3
 /* log2 magnitude of a band with no amplitude, and the level under which an
  * interpolated magnitude counts as none. */
 #define LOG2_SILENT     (-1000.0)
@@ -40,6 +43,10 @@
 #define MAGNITUDE_LIMIT 1.0e30f
 /* Where noiseOverlap holds the pulse phase, after the count and the pulses. */
 #define PHASE_SLOT      (1 + MBE_PULSE_HISTORY)
+/* Where it holds whether the frame's mid-frame model emitted its pulse
+ * (pulsed_frame()): exactly PULSED_EMITTED for one that did, 0 otherwise. */
+#define PULSED_SLOT     MBE_PULSED_SLOT
+#define PULSED_EMITTED  MBE_PULSED_EMITTED
 /* The bound on a log2 amplitude the phases are regenerated from: far past
  * any codec's (D-STAR's decoder reaches about 49), where a caller's state can
  * put anything. */
@@ -270,10 +277,174 @@ ambe2450_mid_pitch(float a, float b) {
     return (pitch <= (double)FLT_MAX) ? (float)pitch : 0.0f;
 }
 
+/* ---- the pulsed state of D-STAR and P25 ---- */
+
+/*
+ * DVSI's P25 and D-STAR decoders play a voice frame with no voiced band at one
+ * of 56 reserved pitch codes (P25 b0 128..183, D-STAR b0 64..119, mbe_pulsed.h)
+ * in a third voicing state (docs/dvsi-parity.md, "D-STAR and P25: the pulsed
+ * state"): each code names, for the frame's own subframe and for its mid-frame
+ * subframe, which of eight 500 Hz channels are pulsed, and a band there plays
+ * no noise but the response to one pulse. The patterns are Table 2 of US
+ * 7,970,606 (its P25 pitch values 128 to 183), indexed b0 - 128 for P25 and
+ * b0 - 64 for D-STAR: [code][0] the own subframe's, [code][1] the mid-frame
+ * subframe's, channel k (k = 0..7, 500 k to 500 (k + 1) Hz, the last open
+ * above) lowest first, 'P' pulsed. That D-STAR's codes carry the same
+ * patterns, and that DVSI's decoders play them so, are measurements on DVSI's
+ * decodes and on a DVMEGA DVstick 30; the codes whose own subframe has a
+ * pulsed channel (0..7, 24..39, 48..55) are those of D-STAR's
+ * MBE_FRAME_MARK_PITCH_CARRIES.
+ */
+static const char pulsed_patterns[MBE_PULSED_CODES][2][9] = {
+    {"UUUUUUUP", "UUUUUUUU"}, {"UUUUUUPU", "UUUUUUUU"}, {"UUUUUUPP", "UUUUUUUU"}, {"UUUUUPUU", "UUUUUUUU"}, /*  0 */
+    {"UUUUUPPP", "UUUUUUUU"}, {"UUUUPPPP", "UUUUUUUU"}, {"UUUPUUUU", "UUUUUUUU"}, {"UUUPPUUU", "UUUUUUUU"}, /*  4 */
+    {"UUUUUUUU", "PUUUUUUU"}, {"UUUUUUUU", "UUUPPUUU"}, {"UUUUUUUU", "UUUPUUUU"}, {"UUUUUUUU", "UUPPPPPU"}, /*  8 */
+    {"UUUUUUUU", "UUPUUUUU"}, {"UUUUUUUU", "UUPPUUUU"}, {"UUUUUUUU", "UUPPPUUU"}, {"UUUUUUUU", "UUUPPPUU"}, /* 12 */
+    {"UUUUUUUU", "UUUUUUUP"}, {"UUUUUUUU", "UUUUUPPP"}, {"UUUUUUUU", "UUUUUUPU"}, {"UUUUUUUU", "UUUUUPUU"}, /* 16 */
+    {"UUUUUUUU", "UUUUUUPP"}, {"UUUUUUUU", "UUUUPPPP"}, {"UUUUUUUU", "UUUUPUUU"}, {"UUUUUUUU", "UUUUPPUU"}, /* 20 */
+    {"PUUUUUUU", "UUUUUUUU"}, {"UUPPPUUU", "UUUUUUUU"}, {"PPPUUUUU", "UUUUUUUU"}, {"UUUPPPUU", "UUUUUUUU"}, /* 24 */
+    {"PPUUUUUU", "UUUUUUUU"}, {"PPPPUUUU", "UUUUUUUU"}, {"UUUPPPPP", "UUUUUUUU"}, {"UUPPUUUU", "UUUUUUUU"}, /* 28 */
+    {"PPPPPPPP", "UUUUUUUU"}, {"UUUUPUUU", "UUUUUUUU"}, {"UUPPPPPP", "UUUUUUUU"}, {"PPPPPUUU", "UUUUUUUU"}, /* 32 */
+    {"UUPUUUUU", "UUUUUUUU"}, {"PPPPPPUU", "UUUUUUUU"}, {"UPPPPPPP", "UUUUUUUU"}, {"PPPPPPPU", "UUUUUUUU"}, /* 36 */
+    {"UUUUUUUU", "PPPPPPPP"}, {"UUUUUUUU", "PPPPPUUU"}, {"UUUUUUUU", "PPPUUUUU"}, {"UUUUUUUU", "UPPPPPPP"}, /* 40 */
+    {"UUUUUUUU", "PPUUUUUU"}, {"UUUUUUUU", "UUUPPPPP"}, {"UUUUUUUU", "UUPPPPPP"}, {"UUUUUUUU", "PPPPPPUU"}, /* 44 */
+    {"PPPPPPPP", "PPPPPPPP"}, {"PPPPPPPP", "UUPPPPPP"}, {"PPPUUUUU", "PPPUUUUU"}, {"UUUPPPPP", "UUUPPPPP"}, /* 48 */
+    {"UUPPPPPP", "UUPPPPPP"}, {"PPPPPPPP", "PPPUUUUU"}, {"PPUUUUUU", "PPUUUUUU"}, {"UUPUUUUU", "UUPUUUUU"}, /* 52 */
+};
+
+/* Which of a code's two patterns applies: the own subframe's, to a frame's own
+ * model (at its end, and as the next frame's first model), or the mid-frame
+ * subframe's, to its mid-frame model. */
+#define PULSED_OWN      0
+#define PULSED_MID      1
+/* The second channel a band is read in lies this far above it. */
+#define PULSED_REACH_HZ 250.0
+
+/* The IMBE renderings: P25's, and ProVoice's, which is P25's without the
+ * pulsed state. */
+static int
+imbe_rendering(enum mbe_voiced_synthesis rendering) {
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE || rendering == MBE_VOICED_SYNTHESIS_DVSI_PROVOICE;
+}
+
+/* The reserved code (0..55) a model has in `rendering`, or -1: one with no
+ * voiced band, as the synthesis renders it (after adaptive smoothing, which
+ * can voice a band of a frame decoded with none: it then has no code), whose
+ * pitch is the one the codec's decoder stores for a reserved code, by its bit
+ * pattern (mbe_imbe4400_pulsed_code() for P25, mbe_ambe2400_pulsed_code() for
+ * D-STAR, each with its decoder's own pitch function). Nothing but the model's
+ * voicing and pitch selects a pattern: no frame mark is read, so a caller's
+ * model at a reserved pitch with no voiced band is a frame with that code (it
+ * holds nothing that could be forged). Rate 33's rendering, ProVoice's and the
+ * TIA rendering have no reserved code; any rendering not named below renders
+ * as D-STAR's, as for the columns. The harmonic count is 1..56 here. */
+static int
+pulsed_code(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 || rendering == MBE_VOICED_SYNTHESIS_DVSI_PROVOICE
+        || !positive_normal(&mp->w0) || model_has_voiced_band(mp)) {
+        return -1;
+    }
+    return (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) ? mbe_imbe4400_pulsed_code(mp->w0)
+                                                         : mbe_ambe2400_pulsed_code(mp->w0);
+}
+
+/* Whether a code's pattern (PULSED_OWN or PULSED_MID) has a pulsed channel;
+ * none for no code (-1). */
+static int
+pattern_pulses(int code, int pattern) {
+    if (code < 0) {
+        return 0;
+    }
+    for (int k = 0; k < 8; k++) {
+        if (pulsed_patterns[code][pattern][k] == 'P') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The channel (0..7) of a frequency in Hz (finite, not negative): its 500 Hz
+ * column, at most 7. Decided on the bit pattern, positive doubles ordering as
+ * their patterns do, so that the conversion only ever sees a value under 7. */
+static int
+pulsed_channel(double hz) {
+    const double position = hz / 500.0;
+    const double top = 7.0;
+    uint64_t bits, top_bits;
+    memcpy(&bits, &position, sizeof(bits));
+    memcpy(&top_bits, &top, sizeof(top_bits));
+    return (bits >= top_bits) ? 7 : (int)position;
+}
+
+/*
+ * A model's pulsed bands under a code's pattern: in a model with no voiced
+ * band, each unvoiced harmonic l, at f = l w0 4000 / pi Hz, whose channel, or
+ * the channel of f + 250 Hz, is pulsed. A pulsed band takes its magnitude as a
+ * voiced one (the unvoiced factor MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) of
+ * that model taken out: the pulse is the voiced pulse response) and plays no
+ * noise (unvoiced_subframe()). A band with no state keeps none. The 250 Hz
+ * reach and the channels of 500 Hz from 0 Hz were measured on DVSI's decodes
+ * (the reach against 0, 125 and 375 Hz). A model with a voiced band (a
+ * mid-frame model a caller's MBE_FRAME_MARK_PITCH_ABSENT held, say) takes no
+ * pulsed band, so that the two excitations never meet in one model.
+ */
+static void
+pulse_bands(struct mbe_subframe_model* model, int code, int pattern) {
+    if (!pattern_pulses(code, pattern) || model->any_voiced || !positive_normal(&model->w0)) {
+        return;
+    }
+    /* As a float, also under x87 excess precision. */
+    const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
+    const char* channels = pulsed_patterns[code][pattern];
+    for (int l = 1; l <= model->L; l++) {
+        const double hz = (double)l * (double)model->w0 * (4000.0 / M_PI);
+        if (model->voiced[l] != BAND_UNVOICED
+            || (channels[pulsed_channel(hz)] != 'P' && channels[pulsed_channel(hz + PULSED_REACH_HZ)] != 'P')) {
+            continue;
+        }
+        /* Limited before it narrows: a caller's mid-frame pitch can make the factor tiny. */
+        const double magnitude = (double)model->magnitude[l] / (double)factor;
+        model->voiced[l] = BAND_PULSED;
+        model->magnitude[l] = (magnitude < (double)MAGNITUDE_LIMIT) ? (float)magnitude : MAGNITUDE_LIMIT;
+        model->any_pulsed = 1;
+    }
+}
+
+/*
+ * The mid-frame pitch between two frames with no voiced band of which at least
+ * one has a code (pulsed_code()), as DVSI's decoders play it: in P25 this
+ * frame's; in D-STAR the frame before's, unless this frame's own-subframe
+ * pattern has a pulsed channel, and then this frame's, or the geometric mean of
+ * the two if the frame before's own-subframe pattern has one too. Measured on
+ * DVSI's decodes of the development and validation vectors against the
+ * geometric mean everywhere and against each codec's rule in the other. Returns
+ * 0, and leaves *w0, where neither frame has a code: between two frames with no
+ * voiced band and no code the geometric mean stays (DVSI's default-code frames
+ * all share one pitch, so nothing there was measured).
+ */
+static int
+pulsed_mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering, float* w0) {
+    const int cur = pulsed_code(cur_mp, rendering);
+    const int prev = pulsed_code(prev_mp, rendering);
+    if (cur < 0 && prev < 0) {
+        return 0;
+    }
+    if (imbe_rendering(rendering)) {
+        *w0 = cur_mp->w0;
+    } else if (!pattern_pulses(cur, PULSED_OWN)) {
+        *w0 = prev_mp->w0;
+    } else {
+        *w0 = pattern_pulses(prev, PULSED_OWN) ? sqrtf(prev_mp->w0 * cur_mp->w0) : cur_mp->w0;
+    }
+    return 1;
+}
+
 /* The mid-frame pitch: between the two frames' when both are pitched speech
  * or neither is, the voiced frame's when only one has a voiced band, unless
  * the unvoiced frame before a voiced one is marked as carrying its pitch
- * (MBE_FRAME_MARK_PITCH_CARRIES).
+ * (MBE_FRAME_MARK_PITCH_CARRIES); between two frames with no voiced band of
+ * which one has a reserved code, in D-STAR's and P25's renderings, as
+ * pulsed_mid_pitch() says.
  * Between two voiced frames of different pitch, the rate-33 rendering plays
  * the geometric mean times MBE_AMBE2450_MID_PITCH_FACTOR times the half-octave
  * wave (ambe2450_mid_pitch(); docs/dvsi-parity.md, "Rate 33: mid-frame
@@ -295,6 +466,10 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
     }
     if (cur_voiced && !prev_voiced && mbe_frame_mark(prev_mp) != MBE_FRAME_MARK_PITCH_CARRIES) {
         return cur_mp->w0;
+    }
+    float pulsed;
+    if (!prev_voiced && !cur_voiced && pulsed_mid_pitch(prev_mp, cur_mp, rendering, &pulsed)) {
+        return pulsed;
     }
     if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced
         && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
@@ -474,7 +649,7 @@ column_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_s
     if (!model_has_voiced_band(cur_mp) && mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_PITCH_ABSENT) {
         return 0;
     }
-    rule->dstar = rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    rule->dstar = !imbe_rendering(rendering);
     if (rule->dstar) {
         dstar_samples(prev_mp, &rule->prev);
         dstar_samples(cur_mp, &rule->cur);
@@ -906,12 +1081,15 @@ advance_interval(struct pulse_train* train, float start, const struct mbe_subfra
 }
 
 /* What the frame leaves the next: the pulse phase and the pulses of the last
- * frame's length, most recent first, in noiseOverlap; and, as the TIA-102.BABA
- * rendering leaves them, harmonic l's phase at the frame's end before the
- * regenerated phase (PSIl) and with it (PHIl). Element 0 of PSIl and PHIl is
- * not touched (the frame's mark lives there). */
+ * frame's length, most recent first, in noiseOverlap, with whether its
+ * mid-frame model emitted a pulse of the pulsed state (`emitted`,
+ * pulsed_frame(); PULSED_SLOT); and, as the TIA-102.BABA rendering leaves
+ * them, harmonic l's phase at the frame's end before the regenerated phase
+ * (PSIl) and with it (PHIl). Element 0 of PSIl and PHIl is not touched (the
+ * frame's mark lives there). */
 static void
-store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const struct pulse_train* train) {
+store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const struct pulse_train* train,
+                  int emitted) {
     /* Under 20 pi for a pitch below Nyquist; a pitch no codec gives (a caller's
      * state) must not leave phases a float cannot hold. */
     const double advance = (2.0 * M_PI * train->phase) - ((double)PEAK * (double)own->w0);
@@ -936,14 +1114,15 @@ store_pulse_train(mbe_parms* cur_mp, const struct mbe_subframe_model* own, const
     /* A phase that rounds up to a whole cycle is the start of the next one:
      * the stored phase lies in [0, 1). */
     cur_mp->noiseOverlap[PHASE_SLOT] = (phase < 1.0f) ? phase : 0.0f;
+    cur_mp->noiseOverlap[PULSED_SLOT] = emitted ? PULSED_EMITTED : 0.0f;
     mbe_subframe_state_mark(cur_mp);
 }
 
 /* ---- rendering the voiced part ---- */
 
-/* A model's voiced bands, ready to render. */
+/* A model's voiced bands, or its pulsed ones, ready to render. */
 struct rendered_model {
-    int count;        /* voiced bands */
+    int count;        /* bands */
     float w0;         /* radians per sample */
     float period;     /* samples */
     float real[56];   /* amplitude times the cosine of the band's phase */
@@ -953,17 +1132,21 @@ struct rendered_model {
     short harmonic[56];
 };
 
+/* A model's bands in `state` (BAND_VOICED, played by the voiced pulse train,
+ * or BAND_PULSED, played by the pulse of the pulsed state), at the voiced
+ * render gain: the same response for both. */
 static void
-prepare_render(const struct mbe_subframe_model* model, float voiced_gain, struct rendered_model* render) {
+prepare_render(const struct mbe_subframe_model* model, float voiced_gain, int state, struct rendered_model* render) {
     const float hz_per_harmonic = model->w0 * (8000.0f / (2.0f * (float)M_PI));
+    const int any = (state == BAND_PULSED) ? model->any_pulsed : model->any_voiced;
 
     render->count = 0;
     render->w0 = model->w0;
-    render->period = model->any_voiced ? (2.0f * (float)M_PI) / model->w0 : 0.0f;
-    for (int l = 1; l <= model->L && model->any_voiced; l++) {
+    render->period = any ? (2.0f * (float)M_PI) / model->w0 : 0.0f;
+    for (int l = 1; l <= model->L && any; l++) {
         const float w = model->w0 * (float)l;
         /* A harmonic at or above Nyquist would alias back into the band. */
-        if (model->voiced[l] != BAND_VOICED || !(w < (float)M_PI)) {
+        if (model->voiced[l] != state || !(w < (float)M_PI)) {
             continue;
         }
         const float hz = hz_per_harmonic * (float)l;
@@ -1042,6 +1225,9 @@ render_pulse(float* out, const struct rendered_model* render, float pulse, int r
     }
 }
 
+/* One interval of the voiced pulse train: every pulse plays the voiced bands
+ * of the model at the interval's start going out and of the one at its end
+ * coming in. */
 static void
 render_interval(float* out, float start, const struct pulse_train* train, const struct rendered_model* from,
                 const struct rendered_model* to) {
@@ -1050,6 +1236,18 @@ render_interval(float* out, float start, const struct pulse_train* train, const 
         render_pulse(out, from, pulse, 0);
         render_pulse(out, to, pulse, 1);
     }
+}
+
+/* The pulse a model of the pulsed state emits, MBE_PULSED_DELAY samples into
+ * the interval it starts (pulsed_frame()): through its own pulsed bands under
+ * its falling crossfade and through the next model's pulsed bands under its
+ * rising one, the voiced pulse response (render_pulse()), over this interval
+ * only: it does not ring on past the next model's point. The voiced train's
+ * pulses play no pulsed band and this pulse no voiced band. */
+static void
+render_emitted_pulse(float* out, const struct rendered_model* from, const struct rendered_model* to) {
+    render_pulse(out, from, (float)MBE_PULSED_DELAY, 0);
+    render_pulse(out, to, (float)MBE_PULSED_DELAY, 1);
 }
 
 /* ---- the unvoiced part ---- */
@@ -1101,8 +1299,62 @@ frame_accepted(const mbe_parms* cur_mp, const mbe_parms* prev_mp) {
     return mbe_harmonic_count_is_valid(cur_mp->L) && mbe_harmonic_count_is_valid(prev_mp->L);
 }
 
-/* A frame's three models (the last frame's own, mid-frame, this frame's own)
- * and the pulse train it starts from, for rendering and advancing alike.
+/* Whether the mid-frame model of the frame a state holds emitted its pulse of
+ * the pulsed state (PULSED_SLOT): only a state with this rendering's subframe
+ * mark holding exactly PULSED_EMITTED there, by its bit pattern (0x3F800000);
+ * anything else a caller's state holds (not a number, an infinity, a
+ * subnormal, a negative value, 0.5, 2.0) is "not emitted", and so is a state
+ * the other rendering wrote. */
+static int
+mid_model_emitted(const mbe_parms* prev_mp) {
+    const float emitted = PULSED_EMITTED;
+    uint32_t bits, emitted_bits;
+    if (!mbe_subframe_state_is_marked(prev_mp)) {
+        return 0;
+    }
+    memcpy(&bits, &prev_mp->noiseOverlap[PULSED_SLOT], sizeof(bits));
+    memcpy(&emitted_bits, &emitted, sizeof(emitted_bits));
+    return bits == emitted_bits;
+}
+
+/*
+ * The pulsed state of a frame's three models (docs/dvsi-parity.md, "D-STAR and
+ * P25: the pulsed state"), in D-STAR's and P25's renderings: the last frame's
+ * own model under its code's own-subframe pattern, the mid-frame model under
+ * this frame's mid-frame pattern and this frame's own model under its
+ * own-subframe pattern (pulse_bands(); the codes from the models themselves,
+ * pulsed_code()). The mid-frame model that a frame marked
+ * MBE_FRAME_MARK_PREVIOUS_HELD or MBE_FRAME_MARK_TONE puts in place (the
+ * previous model held, or a tone frame's own model) takes no pattern. A model
+ * with a pulsed band emits one pulse MBE_PULSED_DELAY samples after its point
+ * unless the model before it emitted one: emits[0] for the last frame's own
+ * model (the one before it is that frame's mid-frame model, whose emission the
+ * state carries, mid_model_emitted()), emits[1] for the mid-frame model; this
+ * frame's own model emits, if at all, in the next frame. A voiced model never
+ * counts as having emitted (it has no pulsed band), nor does one with no
+ * pulsed band. Starting from silence, the last frame's own model plays
+ * nothing, so it has no pulsed band and emits nothing. Measured on DVSI's
+ * decodes (the study's scratch build): the alternation against a model before
+ * a voiced one emitting nothing and against a voiced model counting as having
+ * emitted, the 24 samples against 23 and 25.
+ */
+static void
+pulsed_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_synthesis rendering,
+             struct mbe_subframe_model models[3], int emits[2]) {
+    const int code = pulsed_code(cur_mp, rendering);
+    const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
+    pulse_bands(&models[0], pulsed_code(prev_mp, rendering), PULSED_OWN);
+    if (mark != MBE_FRAME_MARK_PREVIOUS_HELD && mark != MBE_FRAME_MARK_TONE) {
+        pulse_bands(&models[1], code, PULSED_MID);
+    }
+    pulse_bands(&models[2], code, PULSED_OWN);
+    emits[0] = models[0].any_pulsed && !mid_model_emitted(prev_mp);
+    emits[1] = models[1].any_pulsed && !emits[0];
+}
+
+/* A frame's three models (the last frame's own, mid-frame, this frame's own),
+ * their pulsed state (pulsed_frame(), which of the first two emit) and the
+ * pulse train it starts from, for rendering and advancing alike.
  * Starting from silence, the last frame's own model plays nothing and counts
  * as having no voiced band, and the train it carried is dropped: a new one
  * starts at the frame's start, at phase 0. The mid-frame model is the
@@ -1117,7 +1369,7 @@ frame_accepted(const mbe_parms* cur_mp, const mbe_parms* prev_mp) {
  * 1..56. */
 static int
 prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silence, enum mbe_voiced_synthesis rendering,
-              struct mbe_subframe_model models[3], struct pulse_train* train) {
+              struct mbe_subframe_model models[3], struct pulse_train* train, int emits[2]) {
     if (!frame_accepted(cur_mp, prev_mp)) {
         return 0;
     }
@@ -1134,6 +1386,7 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
     } else {
         load_pulse_train(prev_mp, &models[0], rendering, train);
     }
+    pulsed_frame(cur_mp, prev_mp, rendering, models, emits);
     return 1;
 }
 
@@ -1153,7 +1406,7 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
  * (frame_accepted()), so that a rejected call leaves the state untouched. */
 static void
 mark_rendered_model(mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
-    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+    if (!imbe_rendering(rendering)) {
         return;
     }
     const enum mbe_frame_mark mark = mbe_frame_mark(cur_mp);
@@ -1171,24 +1424,29 @@ void
 mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* prev_mp, mbe_fft_plan* plan,
                          float voiced_gain, int from_silence, enum mbe_voiced_synthesis rendering) {
     struct mbe_subframe_model models[3]; /* the last frame's own, mid-frame, this frame's own */
-    struct rendered_model renders[3];
+    struct rendered_model renders[3], pulsed[3];
     struct mbe_unvoiced_subframe noise[2];
     struct pulse_train train;
+    int emits[2];
 
     if (!frame_accepted(cur_mp, prev_mp)) {
         return;
     }
     mark_rendered_model(cur_mp, rendering);
-    if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
+    if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train, emits)) {
         return;
     }
     for (int i = 0; i < 3; i++) {
-        prepare_render(&models[i], voiced_gain, &renders[i]);
+        prepare_render(&models[i], voiced_gain, BAND_VOICED, &renders[i]);
+        prepare_render(&models[i], voiced_gain, BAND_PULSED, &pulsed[i]);
     }
     for (int k = 0; k < 2; k++) {
         const float start = (float)(k * SUBFRAME);
         advance_interval(&train, start, &models[k], &models[k + 1]);
         render_interval(&aout_buf[(size_t)k * SUBFRAME], start, &train, &renders[k], &renders[k + 1]);
+        if (emits[k]) {
+            render_emitted_pulse(&aout_buf[(size_t)k * SUBFRAME], &pulsed[k], &pulsed[k + 1]);
+        }
     }
     unvoiced_subframe(&models[1], &noise[0]);
     unvoiced_subframe(&models[2], &noise[1]);
@@ -1199,7 +1457,7 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
     } else {
         mbe_dvsi_noise_skip_frame(cur_mp);
     }
-    store_pulse_train(cur_mp, &models[2], &train);
+    store_pulse_train(cur_mp, &models[2], &train, emits[1]);
 }
 
 void
@@ -1207,16 +1465,18 @@ mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_sile
                       enum mbe_voiced_synthesis rendering) {
     struct mbe_subframe_model models[3];
     struct pulse_train train;
+    int emits[2];
 
     if (!frame_accepted(cur_mp, prev_mp)) {
         return;
     }
     mark_rendered_model(cur_mp, rendering);
-    if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train)) {
+    if (!prepare_frame(cur_mp, prev_mp, from_silence, rendering, models, &train, emits)) {
         return;
     }
     advance_interval(&train, 0.0f, &models[0], &models[1]);
     advance_interval(&train, (float)SUBFRAME, &models[1], &models[2]);
     mbe_dvsi_noise_skip_frame(cur_mp);
-    store_pulse_train(cur_mp, &models[2], &train);
+    /* Where rendering the frame leaves it, the pulsed state's emission too. */
+    store_pulse_train(cur_mp, &models[2], &train, emits[1]);
 }
