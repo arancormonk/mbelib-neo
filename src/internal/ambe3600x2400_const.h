@@ -31,10 +31,12 @@
  * 6. The row is inferred from DVSI's output (docs/dvsi-parity.md, "AMBE block
  * lengths at 20 harmonics"): with it the spectral shape error of DVSI's
  * 20-harmonic frames, decoded here, falls to the level of the other harmonic
- * counts, and DVSI's own encodings of such frames decode as near the input
- * speech as at 19 and 21 harmonics, so its encoder divides the blocks so too.
- * The decoder and the encoder of this codec both read this table and must
- * share it.
+ * counts, and this decoder's reading of DVSI's own bits at 20 harmonics comes
+ * as near the input speech those bits were made from as DVSI's own decode,
+ * from which DVSI's encoder is inferred to divide the blocks so too. The
+ * decoder and the encoder of this codec both read this table: a change to it
+ * changes both alike (a stream encoded with the printed row decodes otherwise
+ * at 20 harmonics).
  */
 static const int AmbePlusLmprbl[57][4] = {{
                                               0,

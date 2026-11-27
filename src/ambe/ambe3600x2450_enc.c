@@ -59,6 +59,10 @@
  * library: the median, over DVSI's rate-33 development vectors, of the level
  * that puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR),
  * re-derived (from 1.08) with the joint choice of the spectral vectors.
+ * Measured again with DVSI's block lengths at 20 harmonics, both encodings
+ * decoded by that change's decoder: the development median +0.0034 dB
+ * (-0.0112 for the branch point's encodings under the same decoder, -0.0101
+ * under the branch point's own), under the scale's precision; the scale stays.
  */
 #define AMBE2450_ENC_MAG_SCALE 1.06f
 

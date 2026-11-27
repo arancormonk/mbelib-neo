@@ -134,9 +134,10 @@ appear here.
   frame's or the harmonic's parameters explains (no correlation with the level, the frequency, the
   enhancement weight or the frame-to-frame step), split it by every discrete parameter of the frame,
   the harmonic count, the pitch code, the V/UV row and the gain index among them: it may sit in one
-  value of one of them. The block lengths at 20 harmonics were found so: the AMBE shape error, flat
-  over the harmonic counts but for one, stood at three to five times its level at L = 20 ([AMBE block
-  lengths at 20 harmonics](#ambe-block-lengths-at-20-harmonics)).
+  value of one of them. The block lengths at 20 harmonics were found so: the AMBE shape error, between
+  0.37 and 0.62 dB at most harmonic counts, stood at three to five times that at L = 20, with its
+  neighbours raised by the prediction's memory of it (D-STAR 1.30 dB at L = 21) ([AMBE block lengths at
+  20 harmonics](#ambe-block-lengths-at-20-harmonics)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -4490,7 +4491,11 @@ partition's vectors, in dB:
 | Rate 33 | validation | -0.09 (-0.03) | +0.13 (+0.10) | -0.01 (-0.07) |
 
 Neighbouring D-STAR scales put the development median at -0.04 dB (1.07) and +0.04 dB (1.08); 1.075
-puts it nearest 0.
+puts it nearest 0. Measured again with DVSI's block lengths at 20 harmonics, the median of the
+development vectors depends on the decoder that renders both encodings: D-STAR +0.0292 dB (the branch
+point's encodings under the branch point's decoder), +0.0346 (the same encodings under that change's
+decoder), +0.0316 (that change's encodings and decoder); rate 33 -0.0101, -0.0112, +0.0034. Both scales
+stay ([AMBE block lengths at 20 harmonics](#ambe-block-lengths-at-20-harmonics)).
 
 **Results.** PESQ and ESTOI ([Method](#method)) against the commit before this change, both
 encodings decoded by this library's 2.6.11 decoder (this change touches no decoder):
@@ -4549,42 +4554,47 @@ TIA-102.BABA-1 Annex C, "Log Magnitude Prediction Residual Block Lengths", print
 56. The library's tables, rate 33's `AmbeLmprbl` and D-STAR's `AmbePlusLmprbl` (one table: D-STAR has
 no public specification and uses rate 33's), equalled the annex in all 48 rows (compared row for row
 with the public text layer of version 1.0.5; every row sums to its L). At L = 20 the annex prints 4,
-4, 6, 6. **DVSI's codec uses 4, 5, 5, 6 there**, in D-STAR and in rate 33, in its decoder and in its
-encoder, and since this change so does the library: row 20 of both tables is 4, 5, 5, 6, read by both
-decoders (`Ji[]` in `ambe3600x2450.c` and `ambe3600x2400.c`) and both encoders (`.lmprbl`, and through
-it the joint vector search, which forms its moments from the frame's block lengths at run time). The
-other 47 rows stay the annex's. What DVSI's code holds (a table or a rule) is not known: the row is
-inferred from its output, three ways that agree (below). Whether every DVSI product of these codecs
-uses it is not known either; the vectors are an AMBE-3000's.
+4, 6, 6. **DVSI's decoder uses 4, 5, 5, 6 there**, in D-STAR and in rate 33, and its encoder, by the
+evidence below, does too; since this change so does the library: row 20 of both tables is 4, 5, 5, 6,
+read by both decoders (`Ji[]` in `ambe3600x2450.c` and `ambe3600x2400.c`) and both encoders
+(`.lmprbl`, and through it the joint vector search, which forms its moments from the frame's block
+lengths at run time). The other 47 rows stay the annex's. What DVSI's code holds (a table or a rule)
+is not known: the row is inferred from its output, three ways that agree (below). Whether every DVSI
+product of these codecs uses it is not known either; the vectors are an AMBE-3000's.
 
 **Which frames.** The pitch codes of 20 harmonics, found by decoding every code: D-STAR b0 54 to 57,
 rate 33 b0 51 to 53 (at V/UV rows 0 to 17 and on the band grid of rows 18 to 31 alike, whose harmonic
 count is the code's). On the 25 development and validation vectors they are 2.36% of DVSI's D-STAR
-voice frames (1,305 of 55,296; per vector 1.0% to 3.9%, `t03` 1 of 1,444, `t04` none) and 2.55% of
-its rate-33 voice frames (1,411; 1.0% to 3.6%, `t03` 8, `t04` 6), counting frames our decoder decodes
-as voice frames (no tone, erasure or silence flag) at L = 20; 124 of the rate-33 ones are band-grid
-frames of rows 18 to 31 (none voiced), all six of `t04`'s among them. Frames that never pass through
-row 20: rate 33's silence frames (15 bands, `MBE_AMBE2450_SILENCE_L`), D-STAR's b0 124 (14 bands,
-`MBE_AMBE_SILENCE_L`) and the tone frames of both codecs (classified before any residual is decoded,
-which they do not carry); a band-grid frame of rows 18 to 31 at a code of 20 harmonics takes the new
-row like any other frame of 20 harmonics.
+voice frames (1,305 of 55,296; per vector 0.0% (`t04`, none) to 3.9% (`tia11`), and `t03` 1 of 1,444)
+and 2.55% of its rate-33 voice frames (1,411; per vector 0.4% (`t04`, 6 of 1,364) to 3.6%
+(`damcar`), `t03` 8), counting frames our decoder decodes as voice frames (no tone, erasure or
+silence flag) at L = 20; 124 of the rate-33 ones are band-grid frames of rows 18 to 31 (none voiced),
+all six of `t04`'s among them. Two validation vectors, `t03` and `t04`, hold almost none. Every
+voice frame reads the table at its own L: rate 33's silence frames at row 15
+(`MBE_AMBE2450_SILENCE_L`) and D-STAR's b0 124 at row 14 (`MBE_AMBE_SILENCE_L`), neither of them row
+20; tone frames carry no residual and return before it is decoded; a band-grid frame of rows 18 to 31
+at a code of 20 harmonics takes the new row like any other frame of 20 harmonics.
 
 **The measure.** DVSI's decode against ours, on voiced frames in line with DVSI's: the decode's
 result flags clear of tone, erasure, repeat, mute and silence (the library's own `MBE_PROCESS_FLAG_*`,
-as `mbe_quality_eval` reports them), a voiced band in the rendered model, from the third frame of
-such a run with the next frame such a frame too, DVSI's frame level over 50 rms, no lag of two samples
-or more within half a pitch period beating lag 0 by more than 0.1 of correlation, and the vector's
-DVSI level over 300 rms. For each voiced harmonic, the complex ratio of DVSI's decode to ours over the
-harmonic's band (cross-spectrum over our power, half a harmonic spacing either side, 320-sample Hann
-window centred on the frame's middle, 1,024-point transform), on bands with a coherence of 0.5 or
-more. Its magnitude in dB is the harmonic's level error; less the frame's energy-weighted mean of
-them (the frame's gain error) it is the *shape error*, and the phase less the frame's mean the phase
-error. "Strong": a harmonic whose decoded log2 magnitude lies within 3 of the frame's largest. All
-figures below are the library's: the branch point `f725a66` (before) against `59dddb3` (after), or the
-scratch copy of the latter named where used.
+as `mbe_quality_eval` reports them), a voiced band in the rendered model, from the third frame of such
+a run with the next frame such a frame too, DVSI's frame level over 50 rms, our frame not silent, and
+in line: of the non-zero lags from -(floor(P / 2) + 1) to floor(P / 2) + 1 samples (P the pitch period
+in samples), the one of highest correlation with DVSI's frame is found, and the frame is dropped only
+when that best lag is 2 samples or more from 0 and beats lag 0 by more than 0.1 of correlation (a best
+lag of 1 keeps the frame whatever lag 2 reaches); and the vector's DVSI level over 300 rms, which
+leaves out `dam20`, `dam40` and `dam80` in both codecs (22 of the 25 vectors contribute). For each
+voiced harmonic, the complex ratio of DVSI's decode to ours over the harmonic's band (cross-spectrum
+over our power, half a harmonic spacing either side, 320-sample Hann window centred on the frame's
+middle, 1,024-point transform), on bands with a coherence of 0.5 or more (the *coherent* harmonics).
+Its magnitude in dB is the harmonic's level error; less the frame's energy-weighted mean of them over
+the coherent harmonics (the frame's gain error) it is the *shape error*, and the phase less the frame's
+mean the phase error. "Strong": a coherent harmonic whose decoded log2 magnitude lies within 3 of the
+frame's largest. All figures below are the library's: the branch point `f725a66` (before) against
+`59dddb3` (after), or the scratch copy of the latter named where used.
 
 **How it was found.** The shape error of the strong harmonics, split by the frame's harmonic count
-(standard deviation in dB, the 25 vectors; strong harmonics measured before / after):
+(standard deviation in dB, the 22 vectors above; strong harmonics measured before / after):
 
 | L | D-STAR before | D-STAR after | Rate 33 before | Rate 33 after | P25 (not changed) |
 |---|---|---|---|---|---|
@@ -4598,25 +4608,29 @@ scratch copy of the latter named where used.
 
 At every other L from 13 to 52 with 100 strong harmonics or more the figure lies between 0.37 and 0.57
 dB before and 0.37 and 0.53 after (D-STAR), 0.43 and 0.62 and 0.43 and 0.59 (rate 33), and 0.22 and 0.51
-(P25); the counts near the four that move most (16 to 18 and 23) fall a little too, by up to 0.08 dB. The
-phase error shows the same peak: 0.192 (D-STAR) and 0.224 rad (rate 33) at L 20 before, 0.077 and
-0.098 after, against 0.07 to 0.11 at L 17, 18, 22 and 23. The excess at L 19, 21 and 22 was the
-prediction's memory of 20-harmonic frames: pitch moves slowly, so the frames around one of 20
-harmonics are mostly of 19 to 22, and the prediction carries a part of its error into them. Before
-the change the mean shape error at L 20 runs from +1.1 to -1.0 dB along the harmonics (D-STAR, all
-four codes; rate 33 +1.3 to -0.9), largest about the second and third blocks' boundary, and it differs
-between the codes of one L (per code, harmonics 7 to 11 reach +1.6 and -1.5 dB in D-STAR and +2.0 and
--1.8 in rate 33): it is not a function of frequency alone. Over every L it follows none of the frame's or the harmonic's parameters looked at
-(energy-weighted correlation with the enhancement weight -0.05 and -0.05, with the log2 magnitude under
-the frame's largest -0.15 and -0.11, with the frequency +0.08 and +0.03, with the step of log2 M from
-the frame before or to the frame after within 0.06; the two steps together explain 0.2% and 0.5% of its
-variance; D-STAR, rate 33). A level error that no parameter of the frame explains may sit in one value
-of a discrete parameter ([Method](#method)); split by the harmonic count, it sat in one.
+(P25); the counts near the four that move most (16 to 18 and 23) fall a little too, by up to 0.08 dB.
+The peak is at 20, with its neighbours raised (D-STAR 1.30 dB at 21 and 0.76 and 0.82 at 19 and 22;
+rate 33 1.12, 0.73 and 0.64). The phase error shows the same peak: 0.192 (D-STAR) and 0.224 rad (rate
+33) at L 20 before, 0.077 and 0.098 after, against 0.07 to 0.11 at L 17, 18, 22 and 23. The excess at
+L 19, 21 and 22 was the prediction's memory of 20-harmonic frames: pitch moves slowly, so the frames
+around one of 20 harmonics are mostly of 19 to 22, and the prediction carries a part of its error into
+them. Before the change the mean shape error at L 20 over all coherent harmonics (not only the strong)
+runs from +1.1 to -1.0 dB along the harmonics (D-STAR, all four codes; rate 33 +1.3 to -0.9), largest
+about the second and third blocks' boundary, and it differs between the codes of one L (per code,
+harmonics 7 to 11 reach +1.6 and -1.5 dB in D-STAR and +2.0 and -1.8 in rate 33): it is not a function
+of frequency alone. Over every L, on all coherent harmonics, it follows none of the frame's or the
+harmonic's parameters looked at (energy-weighted correlation with the enhancement weight -0.05 and
+-0.05, with the log2 magnitude under the frame's largest -0.15 and -0.11, with the frequency +0.08 and
++0.03, with the step of log2 M from the frame before or to the frame after within 0.06; the two steps
+together explain 0.2% and 0.5% of its variance; D-STAR, rate 33). A level error that no parameter of
+the frame explains may sit in one value of a discrete parameter ([Method](#method)); split by the
+harmonic count, it sat in one.
 
 **The row.** Other rows tried at L 20, both codecs, with a scratch copy of the library whose decoders
 read the block lengths of one L from the environment (outside the repository): the shape error of the
-strong harmonics at L 19 / 20 / 21 / 22, dB, and the change of the whole-file waveform correlation
-with DVSI's decode at lag 0 against the library before, mean over the 20 development vectors:
+strong harmonics at L 19 / 20 / 21 / 22, dB (on the 22 vectors of the measure, development and
+validation), and the change of the whole-file waveform correlation with DVSI's decode at lag 0 against
+the library before (the mean over the 20 development vectors, all of them):
 
 | Row at L 20 | D-STAR shape error | D-STAR correlation | Rate 33 shape error | Rate 33 correlation |
 |---|---|---|---|---|
@@ -4630,15 +4644,18 @@ with DVSI's decode at lag 0 against the library before, mean over the 20 develop
 | 3, 5, 6, 6 | 2.13 / 4.09 / 2.90 / 1.62 | -0.015379 | 1.68 / 4.12 / 2.43 / 1.12 | -0.011326 |
 | 5, 4, 5, 6 | 1.67 / 3.70 / 2.52 / 1.49 | -0.008356 | 1.14 / 3.28 / 2.05 / 1.03 | -0.008341 |
 
-Only 4, 5, 5, 6 brings L 20 and its neighbours to the level of the other harmonic counts.
+Of these rows only 4, 5, 5, 6 brings L 20 and its neighbours to the level of the other harmonic counts.
 
-**DVSI's encoder uses it too.** This is the evidence that the row is the codec's and not a property of
-its decoder alone. On fully voiced frames (every band of the rendered model voiced; the frames either
-side alike, none flagged) whose pitch is within 3% of both neighbours', the spectral shape of each
-decode against the input speech its bits were made from: per harmonic band under 3.7 kHz, the band's
-energy in the decode over the input's in dB, the frame's mean taken out, rms over the frame's harmonics
-(frames with ten bands or more), the input aligned by the scoreboard's lag of DVSI's decode against it;
-mean over the frames of each L, dB, DVSI's decode / ours before / ours after:
+**DVSI's encoder, by DVSI's own decode.** This is the evidence that the row is the codec's and not a
+property of its decoder alone; it is DVSI's own decode of DVSI's bits against the input speech those
+bits were made from, beside this library's two decodes of the same bits (no encoding of this library's
+was played on a DVSI decoder). On fully voiced frames (every band of the rendered model voiced, no
+tone, erasure, repeat, mute or silence flag, the frames either side alike) whose pitch is within 3% of
+both neighbours', at L 13 to 30, on the vectors whose DVSI level is over 300 rms (the same 22), the
+spectral shape of each decode against the input: per harmonic band under 3.7 kHz, the band's energy in
+the decode over the input's in dB, the frame's mean taken out, rms over the frame's harmonics (frames
+with ten bands or more), the input aligned by the scoreboard's lag of DVSI's decode against it; mean
+over the frames of each L, dB, DVSI's decode / ours before / ours after:
 
 | L | D-STAR frames | D-STAR | Rate 33 frames | Rate 33 |
 |---|---|---|---|---|
@@ -4650,28 +4667,36 @@ mean over the frames of each L, dB, DVSI's decode / ours before / ours after:
 | 22 | 101 | 4.020 / 3.996 / 3.923 | 112 | 3.460 / 3.418 / 3.387 |
 | 23 | 193 | 3.809 / 3.699 / 3.703 | 196 | 3.522 / 3.436 / 3.436 |
 
-At L 13 to 18 and 22 to 30 ours lies 0.02 to 0.16 dB below DVSI's (nearer the input) with either row,
-as at most counts. With the annex's row our decode of DVSI's 20-harmonic frames is 0.65 to 0.74 dB
-further from what DVSI's encoder was given than DVSI's own decode, at no other count more than 0.14; with
-4, 5, 5, 6 it lies below DVSI's as at the other counts: the encoder that made those bits divided the
-blocks 4, 5, 5, 6. Our own encoders agree. On the frames where our encoder and DVSI's (one frame apart:
-our frame f is DVSI's f + 1) both send a code of 20 harmonics, our b6 equals DVSI's on 15.0% of 871
-D-STAR frames before the change and 34.6% after, and on 13.2% of 690 rate-33 frames before and 52.3%
-after; b7 12.9% → 23.4% and 16.8% → 36.8%; at 19 and 21 harmonics, the control, b6 and b7 stay at 23 to
-45% (D-STAR b6 27.4% → 27.6% and 28.5% → 32.1%, rate 33 36.3% → 35.6% and 44.9% → 45.2%). The joint
-search departs from DVSI's choice of vectors ([Joint choice of the AMBE spectral
-vectors](#joint-choice-of-the-ambe-spectral-vectors)), so the rates are low either way.
+At L 13 to 18 and 22 to 30 ours lies 0.02 to 0.16 dB below DVSI's (nearer the input) with either row.
+With the annex's row our decode of DVSI's 20-harmonic frames is 0.65 to 0.74 dB further from the input
+than DVSI's own decode, and at no other L of 13 to 30 more than 0.14 (D-STAR L 21) further; with 4, 5,
+5, 6 it lies below DVSI's as at the other counts: the bits decode best on the boundaries 4, 5, 5, 6,
+from which DVSI's encoder is inferred to have divided the blocks so. Our encoders, scored against
+DVSI's bits, move the same way: on the frames where our encoder and DVSI's (one frame apart: our frame
+f is DVSI's f + 1) both send a code of 20 harmonics, our b6 equals DVSI's on 15.0% of 871 D-STAR
+frames before the change and 34.6% after, and on 13.2% of 690 rate-33 frames before and 52.3% after;
+the other fields and the controls at 19 and 21 harmonics are in the results section below (some fall:
+D-STAR b3 7.0% → 5.9% at L 20). The joint search departs from DVSI's choice of vectors ([Joint choice
+of the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors)), so the rates are low either
+way.
 
-**Other harmonic counts.** For every L from 9 to 56 with 300 strong harmonics or more measured on the
-library's decode, the six rows that move one harmonic between two neighbouring blocks of the library's
-row (each block keeping one harmonic at least and 17 at most, the decoders' largest DCT), decoded with
-the scratch copy, the L of one residue modulo 5 changed together in one decode (so the L changed in one
-decode lie five harmonics or more apart): 46 harmonic counts in each codec, L 11 to 56. At
-every one the library's row (the annex's, and 4, 5, 5, 6 at 20) has the lowest shape error of the seven.
-The nearest any move comes: D-STAR L 55 (316 strong harmonics) 0.56 against the library's 0.55 dB and L
-53 0.49 against 0.43; rate 33 L 53 (592) 0.67 against 0.65 and L 52 and 54 0.07 dB above; every other
-move costs 0.08 dB or more, most of them over 0.5. No other harmonic count stands out (the full table is
-not reproduced here).
+**Other harmonic counts.** For every L from 9 to 56 with 300 strong harmonics or more measured on the library's decode
+(L 11 to 56 in both codecs: 9 and 10 fall under the threshold), the six rows that move one harmonic
+between two neighbouring blocks of the library's row, decoded with the scratch copy; a move that would
+need a block of 18 harmonics, more than the decoders' largest DCT, was skipped (block 3 - at L 55 and
+56), so five moves were measured there. To save decodes the L of one residue modulo 5 were changed
+together in one decode, each with its own move, so a frame whose history has another changed count
+is coupled to two rows: of the selected frames, 117 in D-STAR and 136 in rate 33 follow a frame whose
+L differs from theirs by a multiple of 5 (`ucarf15a` frame 103 in D-STAR goes from 50 to 55 harmonics,
+rate 33's `fambm22a` frame 130 from 48 to 53). In those grouped runs the library's row (the annex's,
+and 4, 5, 5, 6 at 20) had the lowest observed shape error among the valid moves at every one of the 46
+counts in both codecs. The closest calls: D-STAR L 55 (316 strong harmonics) 0.5606 against the
+library's 0.5507 dB, L 53 0.4917 against 0.4298, L 51 and 52 0.079 and 0.082 above; rate 33 L 53 (592)
+0.6654 against 0.6479 and its second move 0.7143 (0.0664 above), L 54 and 52 0.067 and 0.068 above;
+every other move lies 0.129 dB or more above (the nearest rate 33's at L 49). This supports no more than that no single one-harmonic
+move of another row fits DVSI's output better on these vectors; the full table is in the results
+section ([November 2026: the AMBE block lengths at 20
+harmonics](#november-2026-the-ambe-block-lengths-at-20-harmonics)).
 
 **What it leaves.** On the steady voiced frames in line (the measure above, all coherent and
 incoherent harmonic bands), the residual energy of our decode against DVSI's over DVSI's: D-STAR
@@ -4679,27 +4704,47 @@ incoherent harmonic bands), the residual energy of our decode against DVSI's ove
 incoherent rest 0.00123 → 0.00105), rate 33 0.01344 → 0.01141 (0.00450 → 0.00383, 0.00715 → 0.00604,
 0.00178 → 0.00153). The phases are regenerated from the decoded magnitudes ([Phase
 regeneration](#phase-regeneration)), so wrong magnitudes were wrong phases too. On the channel-error
-vectors (our decode of each against DVSI's decode of the same bits, the same measure, all eight)
-the shape error at L 20 falls from 2.24 to 0.45 dB (D-STAR, 1,276 strong harmonics) and 2.42 to 0.51
-(rate 33, 1,088), at L 21 from 2.00 to 0.47 and 1.21 to 0.36.
+vectors (our decode of each against DVSI's decode of the same bits, the same measure, all eight
+vectors contributing) the shape error at L 20 falls from 2.24 to 0.45 dB (D-STAR; strong harmonics
+1,276 before, 1,328 after) and 2.42 to 0.51 (rate 33; 1,088, 1,095), at L 21 from 2.00 to 0.47 (461,
+463) and 1.21 to 0.36 (643, 647).
+
+**What it costs others.** A stream from an encoder that follows the printed row, this library's own
+before this change among them, now decodes its frames of 20 harmonics on other block boundaries:
+harmonics 5 to 14 are shaped otherwise, every harmonic moves with the frame's mean, and the prediction
+carries the difference into the frames after. For the test's rate-33 frame (b0 52, b1 0, b2..b8 20,
+301, 72, 19, 11, 9, 5, from an initialized history) the two public decoders differ by up to 1.430 in
+log2 magnitude (harmonic 8), harmonics 1 to 4 and 15 to 20 by a common +0.048; for the test's D-STAR
+frame (b0 55) by up to 0.552 (harmonic 7). What that costs on other encoders' streams was not
+measured, and which row other encoders use is not known.
 
 **What is not known**: what DVSI's code holds; why the annex differs (not asked); whether every DVSI
-product of the two codecs uses the row (the vectors are an AMBE-3000's); the held-out vectors' share
-of frames of 20 harmonics (not counted). The scales of the encoders' magnitudes were re-derived by
-their procedure ([Joint choice of the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors),
-Level) and are unchanged: the development median of our decoded encoding's level against DVSI's moves
-from +0.0346 to +0.0316 dB (D-STAR, scale 1.075; the scale it implies 1.0707 → 1.0711) and from -0.0112
-to +0.0034 dB (rate 33, 1.06; 1.0614 → 1.0596), well under the scales' precision (D-STAR's neighbouring
-scales 1.07 and 1.08 move the median by about 0.04 dB, rate 33's 1.05 and 1.07 by about 0.08). The D-STAR
-median had drifted above 0 before this change (+0.0346 dB at the branch point in this scoring); that
-is not this change's to correct.
+product of the two codecs uses the row (the vectors are an AMBE-3000's); how a DVSI decoder reads this
+library's new encodings (not tested); the held-out vectors' share of frames of 20 harmonics (not
+counted). The scales of the encoders' magnitudes were re-derived by their procedure ([Joint choice of
+the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors), Level) and are unchanged: the
+development median of our decoded encoding's level against DVSI's (both decoded by one decoder) is
+
+| Encodings, decoder | D-STAR median | Rate 33 median |
+|---|---|---|
+| branch point's encodings, branch point's decoder | +0.029238 dB | -0.010066 dB |
+| branch point's encodings, this change's decoder | +0.034572 dB | -0.011178 dB |
+| this change's encodings, this change's decoder | +0.031637 dB | +0.003393 dB |
+
+(the first row from the branch point scoring itself, aligned freely; the others from the scored run,
+whose free and joint alignments give the same medians). The last two rows hold the decoder fixed and
+isolate the encoders' change: -0.0029 dB (D-STAR) and +0.0146 dB (rate 33), the scales they imply
+1.0707 → 1.0711 and 1.0614 → 1.0596, well under the scales' precision (D-STAR's neighbouring scales
+1.07 and 1.08 move the median by about 0.04 dB, rate 33's 1.05 and 1.07 by about 0.08). The first two
+rows hold the encodings fixed and show the decoder's part. D-STAR's median sat above 0 at the branch
+point under either decoder; that is not this change's to correct.
 
 ## Departures from the specification
 
 | Item | Specification text | DVSI's AMBE-3000 | This library |
 |---|---|---|---|
 | Rate-33 u3 bits 8-5 | Table 8: b3(0), b4(2), b4(1), b4(0) | b4(2), b4(1), b4(0), b3(0) | DVSI |
-| AMBE block lengths at L = 20 (rate 33; D-STAR, which no TIA text covers, shares rate 33's table) | Annex C: 4, 4, 6, 6 | 4, 5, 5, 6, in its decoders and its encoders | DVSI ([AMBE block lengths at 20 harmonics](#ambe-block-lengths-at-20-harmonics)) |
+| AMBE block lengths at L = 20 (rate 33; D-STAR, which no TIA text covers, shares rate 33's table) | Annex C: 4, 4, 6, 6 | 4, 5, 5, 6 in its decoders, and in its encoders as inferred from its decodes of its own bits against the input speech | DVSI ([AMBE block lengths at 20 harmonics](#ambe-block-lengths-at-20-harmonics)) |
 | Rate-33 pitch | Annex A table | smooth log2 law | DVSI |
 | P25 pitch | eq 46: `w0 = 4 pi / (b0 + 39.5)` | on speech and its pulse-train vectors, that pitch times `1 + g`, g between -0.071% and +0.034%, repeating every half octave of the period; a tone its encoder sent as voice frames at eq 46's fundamental cut to a grid of 2^-19 cycle per sample | a fit to DVSI's pitch on speech, for every P25 frame but a recognised tone frame, which plays the grid pitch ([P25 pitch](#p25-pitch), [P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)) |
 | P25 tones sent as voice frames | TIA-102.BABA has no tone frames: every voice frame plays its decoded harmonics at eq 46's pitch | a voice frame whose pitch code and voicing word are those its encoder sends for a DTMF, KNOX or single tone, and whose tone harmonics dominate, plays a tone model: the tone's harmonics at one level, the others at least 27 dB down, eq 46's fundamental cut to a 2^-19 grid; call-progress tones, which DVSI's decoder does not play as equal-amplitude tone models, are left as decoded | DVSI, by a test with two measured limits ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)) |
@@ -7382,16 +7427,18 @@ partition means, the mean paired change and its extremes:
 | P25, both | unchanged on every vector | unchanged | unchanged | unchanged | unchanged |
 
 Every D-STAR and rate-33 speech decode changes but D-STAR's `t04`, which holds no frame of 20
-harmonics. **The distance from the input falls** in every development vector of both codecs, the
-first change of this series to move the decode toward DVSI's and toward the input at once. The
+harmonics. **The distance from the input falls** in every development vector of both codecs, with
+the distance from DVSI's decode (earlier changes have moved both the same way in one codec's
+partition means, PR #196's phase regeneration on D-STAR's development vectors among them: [Phase
+regeneration](#phase-regeneration)). The
 whole-file residual at lag 0 against DVSI's decode over DVSI's energy, development, mean of the
 vectors' ratios: D-STAR 0.0133 → 0.0090, rate 33 0.0125 → 0.0097 (pooled with each vector scaled to
 one level of DVSI's: 0.0145 → 0.0099 and 0.0134 → 0.0105). PESQ (the 25 vectors, the method of
 [Method](#method), pesq 0.0.4; a 95% interval over the 12 recordings, t with 11 degrees of freedom,
-from the standard error clustered by recording): against the input D-STAR +0.0072 ± 0.0022 (+0.0024 to
-+0.0120, 21 of 25 up), rate 33 +0.0051 ± 0.0011 (+0.0027 to +0.0075, 20 up); against DVSI's decode
-+0.0505 ± 0.0101 (+0.0283 to +0.0727, 24 up) and +0.0246 ± 0.0043 (+0.0151 to +0.0341, 23 up): a gain
-on both, established.
+from the standard error clustered by recording, formed from the unrounded results): against the input
+D-STAR +0.0072 ± 0.0022 (+0.0024 to +0.0121, 21 of 25 up), rate 33 +0.0051 ± 0.0011 (+0.0027 to
++0.0074, 20 up); against DVSI's decode +0.0505 ± 0.0101 (+0.0283 to +0.0726, 24 up) and +0.0246 ±
+0.0043 (+0.0151 to +0.0341, 23 up): a gain on both on these in-sample recordings.
 
 **Encoders**, our encodings of the input decoded by the candidate's decoder, against DVSI's bits
 decoded by it (`encoder.vs_dvsi_bits.*`) and against the input (`encoder.lsd_db`), partition means:
@@ -7400,22 +7447,53 @@ D-STAR development LSD vs DVSI's encoding 5.4591 → 5.4387 (-0.0204; all 20 fal
 +0.082 → +0.101 (+0.019; `dam40` +0.064); validation -0.0102, -0.0077, +0.016 (`t03` and `t04`
 unchanged); rate 33 development -0.0129 (17 fall, 3 rise, the most +0.0052), -0.0061 (19 fall, one
 rises +0.0018), +0.012 (`dam80` +0.055); validation -0.0063, -0.0044, +0.009. The encoders' rows
-change on 23 of the 25 speech vectors in each codec (all but `t03` and `t04`): 36,151 of 55,321 D-STAR
-frames and 10,104 of 55,321 rate-33 frames (why D-STAR's share is so much larger was not examined),
-the first changed row of each vector at or
-after its first frame sent at a code of 20 harmonics; P25's rows are identical on all 25 (row hashes
-of all 75 speech entries in both reports). The agreement of b3..b8 with DVSI's is in the section
-above. The magnitude scales are unchanged (above).
+change on 23 of the 25 speech vectors in each codec (all but `t03` and `t04`), the first changed row of
+each vector at or after its first frame sent at a code of 20 harmonics: 36,151 of 55,321 D-STAR frames
+and 10,104 of 55,321 rate-33 frames. Not every frame sent at 20 harmonics changes, and most of the
+frames that change are not at 20 harmonics: of the baseline's 1,111 D-STAR frames at a code of 20
+harmonics 1 keeps its bits (`p01mirs` frame 647, b0 57, frames counted from 0), of its 897 rate-33 ones
+3 (`dam80` frame 197, b0 52; `clean` 1625 and `noisy` 1908, b0 53); of the frames at other codes or
+tones, 35,041 of 54,210 D-STAR and 9,210 of 54,424 rate-33 change, once a frame of 20 harmonics has
+moved the prediction history (why D-STAR's share is so much larger was not examined). P25's rows are
+identical on all 25 (row hashes of all 75 speech entries in both reports). The magnitude scales are
+unchanged (above).
+
+Our encodings against DVSI's bits, field by field: on the frames where our encoder and DVSI's (our
+frame f is DVSI's f + 1) both send a code of L harmonics, before the change and after (the frames are
+the same in both: 871, 529 and 536 D-STAR frames at L 20, 19 and 21; 690, 604 and 624 rate-33 ones),
+the share of frames on which each field equals DVSI's:
+
+| Codec, L | b3 | b4 | b5 | b6 | b7 | b8 |
+|---|---|---|---|---|---|---|
+| D-STAR, 20 | 7.0% → 5.9% | 10.8% → 14.7% | 38.5% → 36.5% | 15.0% → 34.6% | 12.9% → 23.4% | 36.7% → 36.1% |
+| D-STAR, 19 | 5.1% → 4.9% | 12.1% → 15.1% | 35.9% → 38.4% | 27.4% → 27.6% | 32.3% → 32.5% | 32.9% → 34.4% |
+| D-STAR, 21 | 8.4% → 6.7% | 11.4% → 12.1% | 36.0% → 35.4% | 28.5% → 32.1% | 23.5% → 25.9% | 34.7% → 34.1% |
+| Rate 33, 20 | 12.6% → 14.9% | 14.1% → 26.2% | 39.4% → 40.4% | 13.2% → 52.3% | 16.8% → 36.8% | 46.1% → 45.8% |
+| Rate 33, 19 | 18.2% → 18.4% | 26.8% → 24.7% | 40.4% → 39.4% | 36.3% → 35.6% | 40.6% → 40.2% | 47.4% → 48.8% |
+| Rate 33, 21 | 13.3% → 15.5% | 21.0% → 20.0% | 38.8% → 38.8% | 44.9% → 45.2% | 38.3% → 38.9% | 44.7% → 45.0% |
+
+b6 and b7, the higher-order vectors of the second and third blocks (whose boundary the row moves), rise
+at L 20 to the level of the controls or above; the PRBA fields and b5 and b8 move by a few percent
+either way, b3 falling at L 20 in D-STAR. The joint search departs from DVSI's choice of vectors, so
+the rates are low either way.
 
 **Tones.** By the scoreboard's hashes 1 D-STAR and 4 rate-33 tone decodes of 52 change (`alltone`;
-`alltone`, `cpvbad`, `dtmf`, `dtmfvbad`): voice frames of 20 harmonics around the tones. No tone
-measure moves on any vector, in any mode, nor any encoder tone statistic; P25's tone decodes are
-identical.
+`alltone`, `cpvbad`, `dtmf`, `dtmfvbad`): voice frames of 20 harmonics around the tones. Every gated tone
+measure (the encoders' agreement, extra rate and level; the decoders' frequency, level, balance,
+wrong-tone fraction and detector agreement) is unchanged on every vector that measures it, in every
+mode, and the counts of frames and steady windows too. One ungated measure moves, the alignment
+correlation of the decode with DVSI's (`tone.alignment_corr`): D-STAR `alltone` +0.000000304, rate 33
+`alltone` -0.0000095, `dtmfvbad` -0.0000050, `cpvbad` +0.00000074, `dtmf` -0.00000037. Conditional
+measures have no value on some files in both runs (so no pair there): the decoders' frequency, level and
+wrong-tone fraction on `cp1`, `cpvbad` and `dtmfvbad` in every mode and on `knox_2`, `knox_3`, `knox_5`,
+`knox_7` and `knox_14` in D-STAR, the balance on `alert` too; the encoders' agreement and volume error on
+`cpvbad` and the sixteen `knox` files in D-STAR, agreement and AD error on `cpvbad` in rate 33. P25's
+tone decodes are identical.
 
 **Channel errors.** No mute decision changes: every frame's flags are the same in both builds, on the
 24 channel-error decodes and on every bit file below. The distance from DVSI's decode on the loud
 frames neither run nor DVSI mutes (`lsd_common_db`) falls on every vector of both codecs: hard
-decisions D-STAR -0.0818 dB (the least `dam_e10_hd` -0.0009, a vector whose decode the change does not
+decisions D-STAR -0.0818 dB (the least fall `dam_e10_hd`, -0.0009, a vector whose decode the change does not
 move; the scoreboard scales each run's measure by a gain it takes from that run's decode of the clean
 bits, which does change), rate 33 -0.0776 (every vector between
 -0.0505 and -0.0887; coverage 1.000 and 0.750 at the least), soft decisions -0.0950 and -0.0778
@@ -7435,32 +7513,43 @@ local configurations (dev-debug; dev-release, GCC Release with SIMD, fast-math, 
 asan-ubsan-debug; notones-debug; a Debug build with SIMD; a Debug `-march=x86-64-v3` build; Clang
 Release with SIMD, fast-math and LTO, once with `MBELIB_ENABLE_NATIVE=ON` and once with
 `-march=x86-64-v3`; and 32-bit Release and Debug), a differential harness outside the repository,
-built against the baseline's library and the head's, gives the same output byte for byte for: the
-pitch and harmonic count every D-STAR and P25 code decodes to and every rate-33 code at rows 16 and
-18; hashes of the output and of all three returned states of P25's data path and its 7200x4400 frame
-path (float and 16-bit), of ProVoice's frame path (float and 16-bit), of `mbe_synthesizeSpeechf()` and
-`mbe_synthesizeSpeech()` on their own states, of TETRA's decoder (2,000 random frames, some flagged
-bad), of the IMBE encoder (3,000 frames), of D-STAR's and rate 33's data paths (float and 16-bit, 3,000
-frames each) on random streams whose voice frames never carry a code of 20 harmonics (silence, lost,
-tone and erasure frames among them, rate 33's V/UV rows 0 to 31 all drawn) with caller states forged as
-the low band's harness forges them (reserved pitches, every frame mark, pulsed-row words, values in
-slots 34 to 39, states without the subframe mark; the TIA rendering's states were not forged), and of
-the D-STAR and AMBE+2 encoders on a signal that never reaches 20 harmonics (1,500 frames, a frame
-count of 20 harmonics of 0 checked in both builds). On the same streams with codes of 20 harmonics
-allowed from frame 400, and the two AMBE encoders on a signal that reaches 20 harmonics from frame 101,
-the per-frame records (output, results and states; bits and returned model) first differ exactly at
-the first frame of 20 harmonics, in all ten. The golden PCM sequences hold no frame of 20 harmonics
-(their 24 frames per codec have codes under 64, none of 51 to 57 at the seeds used) and none of their
-hashes moves, scalar, SSE2 or AVX2.
+built against the baseline's library and the head's (`c70e70e`; its library code is `59dddb3`'s), gives
+the same 653 lines byte for byte: 640 probes of the return code, pitch and harmonic count of every
+D-STAR code 0 to 127, every P25 code 0 to 255 and every rate-33 code 0 to 127 at V/UV rows 16 and 18
+(the special codes included), one line listing the codes of 20 harmonics, and twelve aggregate hashes
+over return codes, output, results and all returned states of: P25's float and 16-bit data paths and
+its 7200x4400 frame path (float and 16-bit), each state of each forged in turn, the enhanced state
+included; P25's and ProVoice's soft frame paths (float and 16-bit, states forged); ProVoice's hard frame
+path (float and 16-bit, all three states forged); `mbe_synthesizeSpeechf()` and `mbe_synthesizeSpeech()`
+on their own states; TETRA's decoder (2,000 random frames, some flagged bad); D-STAR's and rate 33's
+data paths (float and 16-bit, 3,000 frames each) on random parameter streams that never carry a code of
+20 harmonics (silence, lost, tone and erasure frames among them, rate 33's V/UV rows 0 to 31 all drawn);
+their hard and soft frame paths (float and 16-bit each, 2,000 frames) on random frames drawn again
+whenever their hard or soft decode would carry such a code; and the three encoders' float and 16-bit
+entry points (their return statuses, bits and models) on signals that never reach 20 harmonics (a count
+of such frames, 0, checked in both builds). The caller states are forged as the low band's harness forges
+them (reserved pitches, every frame mark, pulsed-row words, values in slots 34 to 39, states without the
+subframe mark). On the same AMBE streams with codes of 20 harmonics allowed (from frame 400 for the data
+paths, 300 for the frame paths) and the two AMBE encoders on a signal that reaches 20 harmonics from
+frame 101, the per-frame records (return codes, output, results and states; statuses, bits and returned
+models) first differ exactly at the first frame of 20 harmonics, in all ten. It leaves out: the TIA
+rendering's states forged (its states are the ones its own calls leave); the parameter-only decoders
+(`mbe_decodeAmbe2400Parms()` and the like) on streams, beyond the code probes; the frame decoders without
+synthesis (`mbe_decode*Frame()`) as separate lines (the harness calls them only to choose frames); the FEC
+encoders and D-STAR's DV-byte packing; inputs other than the constructed ones; MSVC and macOS. The golden
+PCM sequences hold no frame of 20 harmonics (their 24 frames per codec have codes under 64 at the seeds
+used, rate 33's frame 5 at b0 56, 21 harmonics, none at 51 to 53 or, in D-STAR, 54 to 57) and none of
+their hashes moves, scalar, SSE2 or AVX2.
 
-**Cost.** None: the change is one row of a table. The median complete hard-decision frame decode
+**Cost.** The change is one row of a table. The median complete hard-decision frame decode
 (`bench_replay hard <codec> 60 5` on DVSI's `dam` stream of each codec) and encode (`bench_encode`),
 seven alternating invocations pinned to one CPU, a portable Release build with SIMD, fast-math and LTO,
 `f725a66` against `59dddb3`, in two runs taken under load (another agent's builds running): in the
-second (load average 5.4 to 8.8) AMBE+2 8.167 → 8.157 us, D-STAR 7.723 → 7.701, IMBE (unchanged code)
-8.094 → 8.057, encoders D-STAR 30.32 → 30.16, AMBE+2 31.55 → 31.42, IMBE 15.18 → 15.16 us, every change
-within 0.5% with the ranges overlapping; the first (load 10 to 20) scattered by -6.7% to +1.9%, IMBE's
-unchanged code by -5.3%: no difference resolvable under that load.
+second (load average 5.4 to 8.8) AMBE+2 8.167 → 8.157 us (-0.1%), D-STAR 7.723 → 7.701 (-0.3%), IMBE
+(unchanged code) 8.094 → 8.057 (-0.5%), encoders D-STAR 30.32 → 30.16 (-0.53%), AMBE+2 31.55 → 31.42
+(-0.4%), IMBE 15.18 → 15.16 us (-0.1%), the ranges overlapping in every case; the first (load 10 to 20)
+scattered by -6.7% to +1.9%, IMBE's unchanged code by -5.3%: no resolvable cost under that load, which
+does not establish that there is none.
 
 **Gate sets**, declared in the branch's first commit, `956671f`, before any build of the branch was
 scored (the study's scratch build had been measured on the development, validation, tone and channel
@@ -7473,10 +7562,142 @@ in both reports, P25's every one equal:
 | Gate set | Result | What it establishes |
 |---|---|---|
 | `block-lengths-development` | passes all 26 checks | on the vectors the row was found on: P25's decodes and encoder rows unchanged; in both codecs a mean gain in correlation with DVSI's decode with its interval above 0 (+0.002129, +0.001376), no vector falling (the least +0.000027, +0.000037), the distance from DVSI's decode falling with its interval below 0 (-0.0658, -0.0502 dB) and on every vector, the distance from the input falling with its interval below 0 (-0.0130, -0.0104 dB) and on every vector, the envelope and the level within theirs; our encodings' distance from DVSI's falling with its interval below 0 (-0.0204, -0.0129 dB), no vector rising by more than 0.012 (the most +0.0052), their distance from the input not rising (-0.0098, -0.0061) and their level within its limits (+0.019, +0.012; worst +0.064, +0.055) |
-| `block-lengths-validation` | passes all 24 checks | the same means not moving the wrong way and no vector losing beyond the stated little on the validation vectors (`t03` and `t04` hold 1 and 0 D-STAR frames of 20 harmonics, 8 and 6 rate-33 ones), also read in the study |
-| `block-lengths-tones` | passes all 21 checks | the encoders' tone statistics and the decoders' tone measures unchanged; not that the voice frames around the tones are right |
-| `block-lengths-channel` | passes all 33 checks | no mute statistic moving in any mode, the hard-decision distance from DVSI's decode on the loud frames falling by 0.02 dB in the mean or more with no vector rising (the channel vectors are one recording, so no interval), the soft-decision one not rising, P25's unchanged; P25's encoder rows unchanged |
+| `block-lengths-validation` | passes all 24 checks | on the validation vectors (`t03` and `t04` hold 1 and 0 D-STAR frames of 20 harmonics, 8 and 6 rate-33 ones), also read in the study: the means of the correlation, of both distances, of the envelope correlation, of the level and of the encoder measures not moving the wrong way, and no vector's correlation, distance from DVSI's decode or distance from the input moving the wrong way by more than the stated little (the envelope and the encoder measures are bounded on their means only) |
+| `block-lengths-tones` | passes all 21 checks | the encoders' tone statistics unchanged, and the decoders' tone measures within their limits (frequency and wrong-tone fraction on each vector, level and balance on the mean paired change, detector agreement on each vector); not that the voice frames around the tones are right |
+| `block-lengths-channel` | passes all 33 checks | no mute rate, false or missed mute rate or mute agreement moving in any mode (the identity of the mute decisions themselves rests on the frame-flag comparison above), the hard-decision distance from DVSI's decode on the loud frames falling by 0.02 dB in the mean or more with no hard-decision vector rising by more than 0.01 dB (the channel vectors are one recording, so no interval; each fell), the soft-decision one not rising in the mean, P25's unchanged; P25's encoder rows unchanged (a count over the run's speech vectors) |
 | `block-lengths-final` | not scored | the prediction for `irstia` and `mark` |
+
+**Notes on the declarations.** `dvsi_gates.json` stays as declared; where its descriptions say more
+than a check establishes:
+- `block-lengths-tones` says the decoders' level and balance error may not worsen "in the worst
+  vector"; the `no_increase` rule bounds the mean paired change over the vectors, not each vector (the
+  tone group's summary takes the worst vector for its means, but the paired check reads the deltas).
+  The encoders' tone agreement is the share of DVSI's tone frames that ours matches (extra tones are
+  counted over the frames compared), and the level errors (AD, volume) are taken over the frames whose
+  tone IDs agree.
+- `block-lengths-channel`'s mute checks compare four rates per vector; two swapped mute decisions could
+  leave all four as they were. The frame-flag comparison of the channel decodes (above) is what
+  establishes identical mute decisions here. The hard-decision `all_no_increase` bound lets one vector
+  rise by 0.01 dB. Its P25 encoder-row check counts the speech vectors of the same run: scored on its own,
+  the channel partition has no row hashes and that check fails with no value (every scoring so far has
+  run the four partitions together).
+- `block-lengths-validation` and `block-lengths-final` describe the envelope correlation and the encoder
+  measures as if each vector were bounded; those checks bound the means only. `every_vector` requires the
+  measure on every vector of the partition (coverage), it does not turn a bound on the mean into one on
+  each vector.
+- The development set's description says that no earlier set of this series could ask the distance from
+  the input to fall; earlier changes had moved it down in one codec's means (above), though no earlier
+  set asked it.
+- The descriptions say every frame sent at 20 harmonics changes in the encoders; 1 D-STAR and 3 rate-33
+  such frames keep their bits, and many frames at other codes change through the history (above).
+- The speech PCM counter iterates the baseline's entries; that every vector of the partition was scored in
+  both runs is checked separately (the scoreboard's unscored-vector check).
+
+**The scan of the other harmonic counts**, per move (shape error of the strong harmonics at L, dB, the
+22 vectors; each move names the row it puts at L; the L of one residue mod 5 changed together in one
+decode; "skipped" a move that would need a block of more than 17 harmonics):
+
+D-STAR (a move "block i +" moves one harmonic from block i + 1 into block i, "-" the other way):
+
+| L | strong harmonics | library row | block 1 + | block 1 - | block 2 + | block 2 - | block 3 + | block 3 - |
+|---|---|---|---|---|---|---|---|---|
+| 11 | 399 | 2,3,3,3 0.6769 | 3,2,3,3 10.1558 | 1,4,3,3 4.3384 | 2,4,2,3 4.1290 | 2,2,4,3 2.9444 | 2,3,4,2 2.7411 | 2,3,2,4 3.2218 |
+| 12 | 738 | 2,3,3,4 0.6517 | 3,2,3,4 10.5264 | 1,4,3,4 5.4557 | 2,4,2,4 3.5347 | 2,2,4,4 2.6774 | 2,3,4,3 1.1377 | 2,3,2,5 1.9132 |
+| 13 | 2145 | 3,3,3,4 0.4715 | 4,2,3,4 5.2031 | 2,4,3,4 5.6133 | 3,4,2,4 3.2777 | 3,2,4,4 2.7806 | 3,3,4,3 2.0874 | 3,3,2,5 2.4464 |
+| 14 | 3233 | 3,3,4,4 0.4500 | 4,2,4,4 4.8471 | 2,4,4,4 4.9235 | 3,4,3,4 3.2598 | 3,2,5,4 2.2043 | 3,3,5,3 1.5784 | 3,3,3,5 1.4935 |
+| 15 | 6373 | 3,3,4,5 0.4068 | 4,2,4,5 4.7704 | 2,4,4,5 5.2476 | 3,4,3,5 3.6200 | 3,2,5,5 2.7757 | 3,3,5,4 1.7853 | 3,3,3,6 1.7932 |
+| 16 | 4809 | 3,4,4,5 0.4604 | 4,3,4,5 3.9914 | 2,5,4,5 4.5243 | 3,5,3,5 3.0347 | 3,3,5,5 2.5744 | 3,4,5,4 1.4652 | 3,4,3,6 1.6305 |
+| 17 | 4728 | 3,4,5,5 0.5257 | 4,3,5,5 3.4008 | 2,5,5,5 3.7345 | 3,5,4,5 2.3352 | 3,3,6,5 2.2034 | 3,4,6,4 1.3898 | 3,4,4,6 1.4480 |
+| 18 | 5675 | 4,4,5,5 0.4568 | 5,3,5,5 3.4445 | 3,5,5,5 3.2988 | 4,5,4,5 2.6164 | 4,3,6,5 2.3600 | 4,4,6,4 1.3449 | 4,4,4,6 1.3690 |
+| 19 | 4402 | 4,4,5,6 0.4639 | 5,3,5,6 3.4799 | 3,5,5,6 3.0874 | 4,5,4,6 2.2136 | 4,3,6,6 1.9981 | 4,4,6,5 1.2507 | 4,4,4,7 1.1478 |
+| 20 | 6014 | 4,5,5,6 0.4027 | 5,4,5,6 3.7247 | 3,6,5,6 3.3406 | 4,6,4,6 2.4487 | 4,4,6,6 1.9950 | 4,5,6,5 1.1971 | 4,5,4,7 1.3305 |
+| 21 | 4429 | 4,5,6,6 0.4678 | 5,4,6,6 3.5013 | 3,6,6,6 3.1783 | 4,6,5,6 1.6958 | 4,4,7,6 1.6509 | 4,5,7,5 1.0631 | 4,5,5,7 1.2973 |
+| 22 | 4066 | 4,5,6,7 0.5110 | 5,4,6,7 3.1700 | 3,6,6,7 3.4125 | 4,6,5,7 1.8261 | 4,4,7,7 1.7460 | 4,5,7,6 1.1611 | 4,5,5,8 1.5029 |
+| 23 | 4862 | 5,5,6,7 0.4474 | 6,4,6,7 3.3791 | 4,6,6,7 3.3488 | 5,6,5,7 2.0563 | 5,4,7,7 1.9404 | 5,5,7,6 1.3718 | 5,5,5,8 1.2684 |
+| 24 | 2324 | 5,5,7,7 0.4617 | 6,4,7,7 2.7247 | 4,6,7,7 3.1825 | 5,6,6,7 1.9325 | 5,4,8,7 1.7561 | 5,5,8,6 1.4445 | 5,5,6,8 1.0488 |
+| 25 | 3648 | 5,6,7,7 0.4252 | 6,5,7,7 3.0279 | 4,7,7,7 3.1651 | 5,7,6,7 1.6731 | 5,5,8,7 1.7929 | 5,6,8,6 1.6447 | 5,6,6,8 1.4359 |
+| 26 | 4100 | 5,6,7,8 0.4655 | 6,5,7,8 2.7753 | 4,7,7,8 2.7343 | 5,7,6,8 1.6847 | 5,5,8,8 1.7779 | 5,6,8,7 1.2667 | 5,6,6,9 1.2409 |
+| 27 | 4945 | 5,6,8,8 0.3951 | 6,5,8,8 3.2154 | 4,7,8,8 3.1753 | 5,7,7,8 1.9952 | 5,5,9,8 2.0698 | 5,6,9,7 1.0643 | 5,6,7,9 1.1366 |
+| 28 | 3524 | 6,6,8,8 0.4027 | 7,5,8,8 2.4587 | 5,7,8,8 2.3625 | 6,7,7,8 1.4017 | 6,5,9,8 1.3488 | 6,6,9,7 0.9576 | 6,6,7,9 0.8101 |
+| 29 | 3956 | 6,6,8,9 0.3913 | 7,5,8,9 2.5780 | 5,7,8,9 2.3762 | 6,7,7,9 1.5724 | 6,5,9,9 1.4891 | 6,6,9,8 1.2022 | 6,6,7,10 0.9650 |
+| 30 | 4387 | 6,7,8,9 0.3782 | 7,6,8,9 2.5915 | 5,8,8,9 2.3781 | 6,8,7,9 1.3913 | 6,6,9,9 1.3790 | 6,7,9,8 1.1968 | 6,7,7,10 1.0040 |
+| 31 | 2782 | 6,7,9,9 0.3932 | 7,6,9,9 2.3170 | 5,8,9,9 2.5788 | 6,8,8,9 1.3317 | 6,6,10,9 1.3729 | 6,7,10,8 0.7950 | 6,7,8,10 0.7156 |
+| 32 | 3598 | 6,7,9,10 0.3981 | 7,6,9,10 2.4203 | 5,8,9,10 2.2423 | 6,8,8,10 1.2749 | 6,6,10,10 1.2063 | 6,7,10,9 0.7044 | 6,7,8,11 0.7475 |
+| 33 | 4772 | 7,7,9,10 0.3845 | 8,6,9,10 2.2533 | 6,8,9,10 2.1721 | 7,8,8,10 1.3588 | 7,6,10,10 1.4461 | 7,7,10,9 0.8222 | 7,7,8,11 0.8672 |
+| 34 | 3384 | 7,8,9,10 0.4077 | 8,7,9,10 1.9008 | 6,9,9,10 1.9705 | 7,9,8,10 1.1651 | 7,7,10,10 1.1789 | 7,8,10,9 0.6353 | 7,8,8,11 0.6467 |
+| 35 | 2401 | 7,8,10,10 0.4357 | 8,7,10,10 1.8770 | 6,9,10,10 1.7604 | 7,9,9,10 1.3000 | 7,7,11,10 1.1802 | 7,8,11,9 0.6169 | 7,8,9,11 0.6386 |
+| 36 | 5570 | 7,8,10,11 0.3944 | 8,7,10,11 2.2921 | 6,9,10,11 2.2006 | 7,9,9,11 1.1632 | 7,7,11,11 1.0772 | 7,8,11,10 0.7300 | 7,8,9,12 0.6182 |
+| 37 | 3854 | 8,8,10,11 0.3953 | 9,7,10,11 1.8110 | 7,9,10,11 1.8433 | 8,9,9,11 1.5578 | 8,7,11,11 1.1763 | 8,8,11,10 0.8888 | 8,8,9,12 0.6350 |
+| 38 | 3100 | 8,9,10,11 0.4242 | 9,8,10,11 1.6371 | 7,10,10,11 1.6113 | 8,10,9,11 1.1064 | 8,8,11,11 1.0784 | 8,9,11,10 0.9732 | 8,9,9,12 0.7944 |
+| 39 | 2762 | 8,9,11,11 0.3843 | 9,8,11,11 2.1644 | 7,10,11,11 2.1285 | 8,10,10,11 1.1664 | 8,8,12,11 1.2726 | 8,9,12,10 0.7677 | 8,9,10,12 0.7670 |
+| 40 | 3668 | 8,9,11,12 0.3906 | 9,8,11,12 1.9661 | 7,10,11,12 1.9671 | 8,10,10,12 1.4522 | 8,8,12,12 1.3109 | 8,9,12,11 0.9590 | 8,9,10,13 0.6643 |
+| 41 | 2994 | 8,9,11,13 0.4282 | 9,8,11,13 1.7165 | 7,10,11,13 1.6634 | 8,10,10,13 1.1608 | 8,8,12,13 1.0861 | 8,9,12,12 0.7976 | 8,9,10,14 0.6986 |
+| 42 | 1664 | 8,9,12,13 0.4379 | 9,8,12,13 1.3980 | 7,10,12,13 1.4246 | 8,10,11,13 0.9116 | 8,8,13,13 0.9066 | 8,9,13,12 0.6807 | 8,9,11,14 0.7234 |
+| 43 | 3472 | 8,10,12,13 0.4256 | 9,9,12,13 1.6124 | 7,11,12,13 1.6538 | 8,11,11,13 0.9998 | 8,9,13,13 0.9495 | 8,10,13,12 0.9239 | 8,10,11,14 0.8652 |
+| 44 | 2157 | 9,10,12,13 0.4320 | 10,9,12,13 2.0186 | 8,11,12,13 1.8364 | 9,11,11,13 1.1146 | 9,9,13,13 1.1427 | 9,10,13,12 0.6095 | 9,10,11,14 0.6330 |
+| 45 | 3334 | 9,10,12,14 0.3717 | 10,9,12,14 1.7358 | 8,11,12,14 1.8173 | 9,11,11,14 1.0439 | 9,9,13,14 0.9897 | 9,10,13,13 0.7909 | 9,10,11,15 0.6809 |
+| 46 | 1419 | 9,10,13,14 0.4115 | 10,9,13,14 1.2741 | 8,11,13,14 1.3523 | 9,11,12,14 0.8707 | 9,9,14,14 0.9053 | 9,10,14,13 0.7352 | 9,10,12,15 0.5874 |
+| 47 | 4048 | 9,11,13,14 0.3989 | 10,10,13,14 1.6884 | 8,12,13,14 1.6554 | 9,12,12,14 0.9122 | 9,10,14,14 0.8479 | 9,11,14,13 0.8601 | 9,11,12,15 0.6134 |
+| 48 | 1371 | 10,11,13,14 0.4627 | 11,10,13,14 1.2548 | 9,12,13,14 1.3524 | 10,12,12,14 0.7932 | 10,10,14,14 0.8839 | 10,11,14,13 0.6528 | 10,11,12,15 0.7127 |
+| 49 | 1468 | 10,11,13,15 0.4272 | 11,10,13,15 1.4018 | 9,12,13,15 1.3844 | 10,12,12,15 0.8980 | 10,10,14,15 0.8597 | 10,11,14,14 0.7569 | 10,11,12,16 0.6796 |
+| 50 | 2875 | 10,11,14,15 0.4527 | 11,10,14,15 1.3272 | 9,12,14,15 1.3171 | 10,12,13,15 1.0721 | 10,10,15,15 1.1093 | 10,11,15,14 0.7928 | 10,11,13,16 0.7350 |
+| 51 | 949 | 10,12,14,15 0.4621 | 11,11,14,15 1.0161 | 9,13,14,15 1.0745 | 10,13,13,15 0.8563 | 10,11,15,15 0.9300 | 10,12,15,14 0.5414 | 10,12,13,16 0.5523 |
+| 52 | 592 | 10,12,14,16 0.4776 | 11,11,14,16 1.0675 | 9,13,14,16 1.0680 | 10,13,13,16 0.6287 | 10,11,15,16 0.6690 | 10,12,15,15 0.6856 | 10,12,13,17 0.5593 |
+| 53 | 665 | 11,12,14,16 0.4298 | 12,11,14,16 0.8944 | 10,13,14,16 0.9734 | 11,13,13,16 0.7552 | 11,11,15,16 0.8213 | 11,12,15,15 0.5476 | 11,12,13,17 0.4917 |
+| 54 | 1246 | 11,12,15,16 0.4928 | 12,11,15,16 1.3783 | 10,13,15,16 1.6190 | 11,13,14,16 1.0033 | 11,11,16,16 1.0059 | 11,12,16,15 0.7558 | 11,12,14,17 0.7985 |
+| 55 | 316 | 11,12,15,17 0.5507 | 12,11,15,17 1.1263 | 10,13,15,17 1.0980 | 11,13,14,17 0.7611 | 11,11,16,17 0.7834 | 11,12,16,16 0.5606 | 11,12,14,18 skipped |
+| 56 | 2271 | 11,13,15,17 0.5693 | 12,12,15,17 1.7469 | 10,14,15,17 1.7599 | 11,14,14,17 1.1819 | 11,12,16,17 1.2365 | 11,13,16,16 0.9839 | 11,13,14,18 skipped |
+
+Rate 33:
+
+| L | strong harmonics | library row | block 1 + | block 1 - | block 2 + | block 2 - | block 3 + | block 3 - |
+|---|---|---|---|---|---|---|---|---|
+| 11 | 314 | 2,3,3,3 0.7586 | 3,2,3,3 4.7314 | 1,4,3,3 4.3854 | 2,4,2,3 3.4823 | 2,2,4,3 2.6338 | 2,3,4,2 1.8999 | 2,3,2,4 2.6749 |
+| 12 | 1073 | 2,3,3,4 0.6515 | 3,2,3,4 8.3773 | 1,4,3,4 6.1280 | 2,4,2,4 3.8479 | 2,2,4,4 3.3222 | 2,3,4,3 1.6099 | 2,3,2,5 2.0111 |
+| 13 | 2469 | 3,3,3,4 0.5021 | 4,2,3,4 5.1712 | 2,4,3,4 6.0908 | 3,4,2,4 2.9858 | 3,2,4,4 2.6297 | 3,3,4,3 1.7074 | 3,3,2,5 2.3229 |
+| 14 | 3812 | 3,3,4,4 0.4773 | 4,2,4,4 5.0128 | 2,4,4,4 4.7627 | 3,4,3,4 3.1249 | 3,2,5,4 2.3182 | 3,3,5,3 1.5413 | 3,3,3,5 1.5547 |
+| 15 | 5301 | 3,3,4,5 0.5071 | 4,2,4,5 4.6791 | 2,4,4,5 4.9318 | 3,4,3,5 3.3621 | 3,2,5,5 2.5069 | 3,3,5,4 1.5001 | 3,3,3,6 1.5403 |
+| 16 | 5202 | 3,4,4,5 0.4902 | 4,3,4,5 4.4139 | 2,5,4,5 4.5201 | 3,5,3,5 3.0119 | 3,3,5,5 2.5835 | 3,4,5,4 1.5981 | 3,4,3,6 1.6878 |
+| 17 | 5330 | 3,4,5,5 0.5480 | 4,3,5,5 3.9657 | 2,5,5,5 4.1694 | 3,5,4,5 2.6102 | 3,3,6,5 2.2755 | 3,4,6,4 1.4541 | 3,4,4,6 1.2743 |
+| 18 | 8068 | 4,4,5,5 0.5731 | 5,3,5,5 3.9212 | 3,5,5,5 3.6999 | 4,5,4,5 2.8847 | 4,3,6,5 2.5126 | 4,4,6,4 1.5874 | 4,4,4,6 1.4275 |
+| 19 | 4482 | 4,4,5,6 0.5248 | 5,3,5,6 3.6531 | 3,5,5,6 3.5759 | 4,5,4,6 2.2214 | 4,3,6,6 2.0270 | 4,4,6,5 1.2535 | 4,4,4,7 1.2568 |
+| 20 | 4975 | 4,5,5,6 0.5481 | 5,4,5,6 3.2956 | 3,6,5,6 3.1971 | 4,6,4,6 2.4800 | 4,4,6,6 2.0720 | 4,5,6,5 1.2685 | 4,5,4,7 1.3045 |
+| 21 | 4669 | 4,5,6,6 0.5038 | 5,4,6,6 3.6905 | 3,6,6,6 3.4647 | 4,6,5,6 1.9342 | 4,4,7,6 1.6287 | 4,5,7,5 1.1338 | 4,5,5,7 1.1988 |
+| 22 | 4374 | 4,5,6,7 0.5028 | 5,4,6,7 3.2802 | 3,6,6,7 3.5073 | 4,6,5,7 2.1019 | 4,4,7,7 1.8262 | 4,5,7,6 1.2112 | 4,5,5,8 1.1348 |
+| 23 | 5167 | 5,5,6,7 0.4656 | 6,4,6,7 3.6832 | 4,6,6,7 3.6319 | 5,6,5,7 2.1643 | 5,4,7,7 1.9591 | 5,5,7,6 1.5460 | 5,5,5,8 1.4451 |
+| 24 | 4240 | 5,5,7,7 0.4879 | 6,4,7,7 3.3271 | 4,6,7,7 3.1984 | 5,6,6,7 1.9742 | 5,4,8,7 1.7796 | 5,5,8,6 1.5466 | 5,5,6,8 1.4502 |
+| 25 | 2788 | 5,6,7,7 0.5274 | 6,5,7,7 2.7426 | 4,7,7,7 2.7920 | 5,7,6,7 1.6324 | 5,5,8,7 1.8095 | 5,6,8,6 1.2686 | 5,6,6,8 1.2406 |
+| 26 | 5619 | 5,6,7,8 0.4702 | 6,5,7,8 3.2293 | 4,7,7,8 3.2266 | 5,7,6,8 1.8533 | 5,5,8,8 1.9070 | 5,6,8,7 1.4593 | 5,6,6,9 1.3682 |
+| 27 | 3931 | 5,6,8,8 0.4655 | 6,5,8,8 3.1117 | 4,7,8,8 3.0424 | 5,7,7,8 1.9176 | 5,5,9,8 2.0788 | 5,6,9,7 1.0390 | 5,6,7,9 1.0327 |
+| 28 | 4163 | 6,6,8,8 0.5258 | 7,5,8,8 2.6156 | 5,7,8,8 2.4352 | 6,7,7,8 1.5180 | 6,5,9,8 1.5662 | 6,6,9,7 1.1364 | 6,6,7,9 1.0139 |
+| 29 | 4072 | 6,6,8,9 0.5496 | 7,5,8,9 2.9476 | 5,7,8,9 2.5424 | 6,7,7,9 1.7025 | 6,5,9,9 1.5606 | 6,6,9,8 1.3381 | 6,6,7,10 1.1528 |
+| 30 | 4882 | 6,7,8,9 0.5696 | 7,6,8,9 2.7724 | 5,8,8,9 2.5453 | 6,8,7,9 1.5097 | 6,6,9,9 1.3812 | 6,7,9,8 1.1717 | 6,7,7,10 1.2581 |
+| 31 | 3641 | 6,7,9,9 0.5238 | 7,6,9,9 2.4310 | 5,8,9,9 2.4648 | 6,8,8,9 1.4148 | 6,6,10,9 1.5163 | 6,7,10,8 0.9855 | 6,7,8,10 0.8779 |
+| 32 | 4204 | 6,7,9,10 0.4676 | 7,6,9,10 2.5022 | 5,8,9,10 2.4816 | 6,8,8,10 1.3976 | 6,6,10,10 1.3863 | 6,7,10,9 0.7199 | 6,7,8,11 0.7793 |
+| 33 | 4724 | 7,7,9,10 0.4451 | 8,6,9,10 2.3102 | 6,8,9,10 2.3869 | 7,8,8,10 1.3250 | 7,6,10,10 1.3998 | 7,7,10,9 0.8349 | 7,7,8,11 0.8726 |
+| 34 | 4615 | 7,8,9,10 0.4678 | 8,7,9,10 2.0397 | 6,9,9,10 2.0091 | 7,9,8,10 1.2478 | 7,7,10,10 1.2544 | 7,8,10,9 0.7357 | 7,8,8,11 0.7221 |
+| 35 | 2650 | 7,8,10,10 0.5273 | 8,7,10,10 1.9999 | 6,9,10,10 1.8952 | 7,9,9,10 1.2580 | 7,7,11,10 1.1713 | 7,8,11,9 0.8122 | 7,8,9,11 0.6842 |
+| 36 | 5421 | 7,8,10,11 0.4708 | 8,7,10,11 2.3851 | 6,9,10,11 2.3265 | 7,9,9,11 1.3148 | 7,7,11,11 1.1947 | 7,8,11,10 0.7966 | 7,8,9,12 0.6061 |
+| 37 | 4635 | 8,8,10,11 0.4955 | 9,7,10,11 1.8865 | 7,9,10,11 1.8680 | 8,9,9,11 1.4067 | 8,7,11,11 1.1813 | 8,8,11,10 0.8982 | 8,8,9,12 0.7672 |
+| 38 | 3799 | 8,9,10,11 0.4759 | 9,8,10,11 1.8199 | 7,10,10,11 1.7661 | 8,10,9,11 1.2512 | 8,8,11,11 1.2693 | 8,9,11,10 0.9152 | 8,9,9,12 0.8514 |
+| 39 | 2408 | 8,9,11,11 0.4330 | 9,8,11,11 1.9476 | 7,10,11,11 1.9009 | 8,10,10,11 1.1475 | 8,8,12,11 1.0703 | 8,9,12,10 0.6316 | 8,9,10,12 0.6016 |
+| 40 | 4198 | 8,9,11,12 0.4862 | 9,8,11,12 1.9383 | 7,10,11,12 1.8396 | 8,10,10,12 1.3901 | 8,8,12,12 1.3178 | 8,9,12,11 0.8645 | 8,9,10,13 0.7443 |
+| 41 | 1536 | 8,9,11,13 0.4395 | 9,8,11,13 1.6007 | 7,10,11,13 1.5635 | 8,10,10,13 0.9891 | 8,8,12,13 0.9350 | 8,9,12,12 0.6423 | 8,9,10,14 0.7735 |
+| 42 | 3664 | 8,9,12,13 0.4476 | 9,8,12,13 1.8705 | 7,10,12,13 1.8787 | 8,10,11,13 1.0772 | 8,8,13,13 1.0906 | 8,9,13,12 0.9424 | 8,9,11,14 0.9370 |
+| 43 | 3757 | 8,10,12,13 0.4973 | 9,9,12,13 1.7061 | 7,11,12,13 1.7060 | 8,11,11,13 1.0084 | 8,9,13,13 0.9768 | 8,10,13,12 0.8360 | 8,10,11,14 0.8783 |
+| 44 | 1953 | 9,10,12,13 0.5942 | 10,9,12,13 1.9959 | 8,11,12,13 1.7555 | 9,11,11,13 0.9186 | 9,9,13,13 1.0189 | 9,10,13,12 0.7568 | 9,10,11,14 0.7354 |
+| 45 | 2140 | 9,10,12,14 0.5299 | 10,9,12,14 1.7394 | 8,11,12,14 1.6536 | 9,11,11,14 0.9582 | 9,9,13,14 0.8412 | 9,10,13,13 0.7845 | 9,10,11,15 0.6895 |
+| 46 | 3621 | 9,10,13,14 0.5443 | 10,9,13,14 1.6791 | 8,11,13,14 1.6451 | 9,11,12,14 1.0166 | 9,9,14,14 1.0034 | 9,10,14,13 0.8173 | 9,10,12,15 0.7399 |
+| 47 | 2094 | 9,11,13,14 0.5788 | 10,10,13,14 1.6983 | 8,12,13,14 1.6255 | 9,12,12,14 1.0581 | 9,10,14,14 1.0928 | 9,11,14,13 0.8135 | 9,11,12,15 0.7100 |
+| 48 | 3792 | 10,11,13,14 0.5004 | 11,10,13,14 1.8709 | 9,12,13,14 1.7489 | 10,12,12,14 0.9863 | 10,10,14,14 0.9558 | 10,11,14,13 0.7868 | 10,11,12,15 0.7647 |
+| 49 | 1433 | 10,11,13,15 0.5524 | 11,10,13,15 1.3388 | 9,12,13,15 1.3421 | 10,12,12,15 0.9851 | 10,10,14,15 0.9239 | 10,11,14,14 0.7286 | 10,11,12,16 0.6819 |
+| 50 | 1701 | 10,11,14,15 0.4915 | 11,10,14,15 1.4112 | 9,12,14,15 1.4414 | 10,12,13,15 1.1054 | 10,10,15,15 1.1517 | 10,11,15,14 0.8525 | 10,11,13,16 0.9076 |
+| 51 | 1058 | 10,12,14,15 0.5342 | 11,11,14,15 1.2531 | 9,13,14,15 1.1566 | 10,13,13,15 0.9786 | 10,11,15,15 0.8143 | 10,12,15,14 0.7498 | 10,12,13,16 0.6666 |
+| 52 | 1384 | 10,12,14,16 0.5291 | 11,11,14,16 1.2130 | 9,13,14,16 1.0753 | 10,13,13,16 0.8876 | 10,11,15,16 0.8405 | 10,12,15,15 0.6513 | 10,12,13,17 0.5968 |
+| 53 | 592 | 11,12,14,16 0.6479 | 12,11,14,16 1.2805 | 10,13,14,16 1.2477 | 11,13,13,16 0.9876 | 11,11,15,16 0.9023 | 11,12,15,15 0.6654 | 11,12,13,17 0.7143 |
+| 54 | 681 | 11,12,15,16 0.5230 | 12,11,15,16 1.0441 | 10,13,15,16 1.1006 | 11,13,14,16 1.0005 | 11,11,16,16 1.0085 | 11,12,16,15 0.6183 | 11,12,14,17 0.5903 |
+| 55 | 581 | 11,12,15,17 0.6717 | 12,11,15,17 1.3009 | 10,13,15,17 1.3379 | 11,13,14,17 1.1407 | 11,11,16,17 0.9197 | 11,12,16,16 0.9605 | 11,12,14,18 skipped |
+| 56 | 2378 | 11,13,15,17 0.7623 | 12,12,15,17 2.0034 | 10,14,15,17 1.8948 | 11,14,14,17 1.2433 | 11,12,16,17 1.3053 | 11,13,16,16 1.0580 | 11,13,14,18 skipped |
 
 ### Scoring history
 
