@@ -19,8 +19,8 @@
  * renders the state; it asks the codec whose rendering it serves which code,
  * if any, a model's pitch is, through the functions below (and, for P25's
  * validity counter, which reads a code only while it stands at 0 or more,
- * whether a pitch is the default code's: US 7,970,606's table lists b0 25
- * too). Each codec answers
+ * which pitch code, if any, a pitch is: US 7,970,606's table lists b0 25 too,
+ * and only a model at some code's pitch moves the counter). Each codec answers
  * with its decoder's own pitch function, the one body (not inlined) the
  * decode uses, so that the decode and the test cannot round apart in any
  * build.
@@ -48,16 +48,17 @@
 int mbe_imbe4400_pulsed_code(float w0);
 
 /**
- * @brief Whether @p w0 is the pitch of P25's default code, b0 25.
+ * @brief The P25 pitch code whose pitch @p w0 is.
  *
- * The pitch P25's decoder stores for b0 25 (imbe_code_pitch(), DVSI's pitch),
- * compared by bit pattern. US 7,970,606's Table 2 lists b0 25 with both
- * subframes unvoiced: it has no pattern to read, but P25's validity counter
- * counts it as a code of the table (mbe_subframe.c).
+ * The pitch P25's decoder stores for b0 0..207 (imbe_code_pitch(), DVSI's
+ * pitch), compared by bit pattern. P25's validity counter (mbe_subframe.c)
+ * moves only for a model at such a pitch: a code of US 7,970,606's Table 2
+ * (b0 25, listed with both subframes unvoiced, and the 56) raises it, any
+ * other code lowers it, and a pitch no code decodes to leaves it.
  * @param w0 A pitch, positive, finite and normal (the caller checks).
- * @return 1 for b0 25's pitch, 0 for any other.
+ * @return b0 (0..207), or -1 for a pitch no code decodes to.
  */
-int mbe_imbe4400_default_code(float w0);
+int mbe_imbe4400_pitch_code(float w0);
 
 /**
  * @brief The reserved D-STAR pitch code whose pitch @p w0 is, as an index.

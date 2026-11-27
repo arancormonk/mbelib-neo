@@ -274,8 +274,9 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * (MBE_PULSED_COUNT_SLOT, 0 for a fresh stream) stays through a frame whose
  * model has a voiced band, rises by one, to MBE_PULSED_COUNT_MAX at most,
  * through one with no voiced band at the pitch of the default code b0 25 or
- * of one of the 56, and falls by one, to MBE_PULSED_COUNT_MIN at least,
- * through one with no voiced band at any other pitch. A code that is not read
+ * of one of the 56, falls by one, to MBE_PULSED_COUNT_MIN at least, through
+ * one with no voiced band at another P25 code's pitch, and stays through one
+ * at a pitch no P25 code decodes to (the repeat limit's reset model). A code that is not read
  * is no code: everything below (the patterns, the emission, the mid-frame
  * pitch) applies to codes that are read. Its unvoiced
  * harmonics in the 500 Hz channels the code's pattern pulses (the channel of

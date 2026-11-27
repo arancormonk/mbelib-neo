@@ -421,16 +421,22 @@ last_read_code(const mbe_parms* prev_mp, enum mbe_voiced_synthesis rendering) {
 
 /*
  * The validity counter this frame leaves in P25's rendering (0 in every other,
- * where none is kept), from the one the frame before left: a model with a
- * voiced band (a tone model included) leaves it; one with no voiced band at
- * the pitch of a code of the table, one of the 56 or the default code b0 25
- * (whose table entry is unvoiced in both subframes: nothing is read for it;
- * mbe_imbe4400_default_code()), raises it by one, to MBE_PULSED_COUNT_MAX at
- * most; one with no voiced band at any other pitch lowers it by one, to
- * MBE_PULSED_COUNT_MIN at least. The bounds and the steps are the document's;
- * that the counter starts at 0 and counts the model as rendered (after
- * adaptive smoothing; a muted or repeated frame by the model it renders or
- * advances) are this library's choices.
+ * where none is kept), from the one the frame before left. The document
+ * counts received frames: the counter moves for a model at the pitch some P25
+ * pitch code decodes to (b0 0..207, mbe_imbe4400_pitch_code()) and no other.
+ * A model with a voiced band (a tone model included) leaves it; one with no
+ * voiced band at the pitch of a code of the table, one of the 56 or the
+ * default code b0 25 (whose table entry is unvoiced in both subframes:
+ * nothing is read for it), raises it by one, to MBE_PULSED_COUNT_MAX at most;
+ * one with no voiced band at another code's pitch lowers it by one, to
+ * MBE_PULSED_COUNT_MIN at least; one at a pitch no code decodes to (the repeat
+ * limit's reset model and the initial state, at eq 46's nominal pitch of b0
+ * 134, or a model a caller built) leaves it. The bounds and the steps are the
+ * document's; that the counter starts at 0, counts the model as rendered
+ * (after adaptive smoothing; a muted or repeated frame by the model it renders
+ * or advances: a repeat within the limit replays a decoded model, and so
+ * counts by its code again) and lets a model at no code's pitch leave it are
+ * this library's choices.
  */
 static int
 next_count(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_synthesis rendering) {
@@ -438,11 +444,14 @@ next_count(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voiced_sy
         return 0;
     }
     const int count = stored_count(prev_mp);
-    if (model_has_voiced_band(cur_mp)) {
+    if (model_has_voiced_band(cur_mp) || !positive_normal(&cur_mp->w0)) {
         return count;
     }
-    if (pulsed_code(cur_mp, rendering) >= 0
-        || (positive_normal(&cur_mp->w0) && mbe_imbe4400_default_code(cur_mp->w0))) {
+    const int b0 = mbe_imbe4400_pitch_code(cur_mp->w0);
+    if (b0 < 0) {
+        return count;
+    }
+    if (b0 == MBE_PULSED_P25_DEFAULT || (b0 >= MBE_PULSED_P25_FIRST && b0 < MBE_PULSED_P25_FIRST + MBE_PULSED_CODES)) {
         return (count < MBE_PULSED_COUNT_MAX) ? count + 1 : MBE_PULSED_COUNT_MAX;
     }
     return (count > MBE_PULSED_COUNT_MIN) ? count - 1 : MBE_PULSED_COUNT_MIN;

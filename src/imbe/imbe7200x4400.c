@@ -84,11 +84,10 @@ imbe_get_dct_cache(void) {
 /* The pitch codes DVSI's P25 encoder gives a frame with no voiced band: b0 25
  * (a period of 32.25 samples, 14 harmonics) for most, and b0 128..183 for the
  * rest. */
-#define IMBE_UNVOICED_CODES_FIRST  128
-#define IMBE_UNVOICED_CODES_LAST   183
-/* The pitch code DVSI's P25 encoder gives most frames with no voiced band:
- * US 7,970,606's Table 2 lists it with both subframes unvoiced. */
-#define IMBE_DEFAULT_UNVOICED_CODE MBE_PULSED_P25_DEFAULT
+#define IMBE_UNVOICED_CODES_FIRST 128
+#define IMBE_UNVOICED_CODES_LAST  183
+/* The last pitch code of a voice frame. */
+#define IMBE_LAST_PITCH_CODE      207
 
 /* Which pitch a decoded pitch code plays (imbe_decode_fundamental()). */
 enum imbe_pitch {
@@ -220,21 +219,29 @@ mbe_imbe4400_pulsed_code(float w0) {
 }
 
 /*
- * Whether w0 is the pitch imbe_code_pitch() gives P25's default code for a
- * frame with no voiced band, b0 25 (IMBE_DEFAULT_UNVOICED_CODE), by bit
- * pattern, as mbe_pulsed.h asks.
+ * The P25 pitch code (b0 0..207) whose pitch w0 is, as mbe_pulsed.h asks: the
+ * pitch imbe_code_pitch() gives that code for P25, by bit pattern, or -1. As
+ * for mbe_imbe4400_pulsed_code(), the one code that can match is the one
+ * nearest 4 pi / w0 - 39.5: over the 208 codes the decoded pitch's quotient
+ * lies within 0.17 of its own code. w0 is positive and normal, so the quotient
+ * is finite; it is bounded before it is converted.
  */
 int
-mbe_imbe4400_default_code(float w0) {
+mbe_imbe4400_pitch_code(float w0) {
+    const double position = ((4.0 * M_PI) / (double)w0) - 39.5;
+    if (!(position > -0.5 && position < (double)IMBE_LAST_PITCH_CODE + 0.5)) {
+        return -1;
+    }
+    const int b0 = (int)floor(position + 0.5);
     float pitch;
     int L = 0, K = 0;
-    if (imbe_code_pitch(IMBE_DEFAULT_UNVOICED_CODE, IMBE_PITCH_DVSI, &pitch, &L, &K) != 0) {
-        return 0;
+    if (imbe_code_pitch(b0, IMBE_PITCH_DVSI, &pitch, &L, &K) != 0) {
+        return -1;
     }
     uint32_t want, have;
     memcpy(&want, &pitch, sizeof(want));
     memcpy(&have, &w0, sizeof(have));
-    return want == have;
+    return (want == have) ? b0 : -1;
 }
 
 static int
