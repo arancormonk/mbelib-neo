@@ -4961,8 +4961,8 @@ and +0.00028; the distance from the input, D-STAR -0.0052 dB (`irstia` 5.5420 �
 5.5444 → 5.5359 dB), P25 -0.0032 dB (`irstia` 5.3236 → 5.3243, `mark` 5.4145 → 5.4074 dB); the level
 against DVSI's +0.0017 dB and +0.0021 dB; rate 33's decodes unchanged (no vector with changed PCM),
 and every encoder's bits unchanged (no vector with changed rows in any mode). Both vectors were
-measured in both runs for every gated measure, so the per-vector checks, which do not themselves
-require every vector, compared both.
+measured in both runs for every gated measure, as the checks require (`every_vector`), so none
+failed for a missing measurement.
 
 This is the change's out-of-sample check: the rule was found on the labels of the development and
 validation vectors together, and its scratch build was measured on both, so neither of those
