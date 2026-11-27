@@ -830,12 +830,35 @@ reference_state_at(const mbe_parms* mp, double w) {
 }
 
 /* The rate-33 rendering's hold through a frame lacking a pitch: whether the
- * frame before is voiced at its harmonic at or next above 505 Hz, a harmonic
- * past L read at L (as the library takes it). */
+ * frame before is voiced at its harmonic at or next above 505 Hz. That hold
+ * is the rendering's behaviour from before the columns, kept byte for byte, so
+ * it is stated in the library's own float arithmetic: the position
+ * ceil(505 Hz in radians per sample over w0), each step rounded to float
+ * (volatile, also under x87), then made an index on its bit pattern, a position
+ * at or past L (or infinite) read at L and one under 1 at 1, so that no
+ * conversion sees a value out of range (at w0 = FLT_MIN the position is about
+ * 3.4e37). A double quotient takes another harmonic at some pitches: at the
+ * pitch whose bits are 0x3e0761b7 the float quotient is exactly 3 and the double
+ * one 3.000000018. */
 static int
 reference_holds_505(const mbe_parms* prev) {
-    const int n = (int)ceil(505.0 * 2.0 * M_PI / 8000.0 / (double)prev->w0);
-    return prev->Vl[(n > prev->L) ? prev->L : ((n < 1) ? 1 : n)] == 1;
+    const volatile float reach = 505.0f * ((2.0f * (float)M_PI) / 8000.0f);
+    const volatile float quotient = reach / prev->w0;
+    const volatile float position = ceilf(quotient);
+    const float at = position;
+    const float last = (float)prev->L;
+    uint32_t bits, last_bits, one_bits;
+    const float one = 1.0f;
+    memcpy(&bits, &at, sizeof(bits));
+    memcpy(&last_bits, &last, sizeof(last_bits));
+    memcpy(&one_bits, &one, sizeof(one_bits));
+    int n = 1;
+    if (bits >= last_bits && bits <= UINT32_C(0x7F800000)) {
+        n = prev->L;
+    } else if (bits >= one_bits && bits < last_bits) {
+        n = (int)at;
+    }
+    return prev->Vl[n] == 1;
 }
 
 /* Whether D-STAR's and P25's mid-frame rule of 500 Hz columns sets the
@@ -885,7 +908,10 @@ reference_column_state(const mbe_parms* prev, const mbe_parms* cur, double w, in
  * voiced band); and in the rate-33 rendering a frame of V/UV row 17 or 13
  * voices the harmonics under Nyquist in the 500 Hz columns below 1 or 2 (by
  * the frequency of each, or of 250 Hz above it), whatever the voicing around.
- * Each mark acts in its own codec's rendering alone. */
+ * The marks of the mid-frame voicing (the late onset's reading whatever the
+ * frame before, rows 17 and 13) act in their own codec's rendering alone; the
+ * columns' rule reads no mark of the frame before, PITCH_ABSENT only on this
+ * frame. */
 static void
 reference_mid_voicing(const mbe_parms* prev, const mbe_parms* cur, double w0, int L,
                       enum mbe_voiced_synthesis rendering, unsigned char voiced[57]) {
@@ -3566,8 +3592,8 @@ test_p25_mid_columns_by_words(void) {
  * column 6 is covered, and harmonics 30 to 34 sound; a frame of 36 (b0 116,
  * 103.1 Hz) reads it, and harmonic 30 (3093 Hz) sounds. A frame after a tone
  * model takes the rule as after any model (the mark of the model before is
- * caller state, and no rendering reads it), and a frame with no voiced band that
- * does not lack a pitch holds nothing. */
+ * caller state, and the columns' rule reads no mark of that model), and a frame
+ * with no voiced band that does not lack a pitch holds nothing. */
 static void
 test_p25_mid_columns_cases(void) {
     mbe_parms prev, cur, tone;
@@ -3912,9 +3938,11 @@ set_ambe2450(char ambe_d[49], int b0, int row) {
  * mark can act: the decoder replaces cur_mp's mark, prev_mp's is read only by a
  * repeat, and the last frame played is voiced, so its mark of an unvoiced frame
  * (PITCH_ABSENT, PITCH_CARRIES, PREVIOUS_HELD) does not change how the train
- * loads or the mid-frame pitch, and no rendering reads a tone mark or the
- * others on the model before (a forged MBE_FRAME_MARK_TONE there changed P25's
- * columns before the rule was applied after a tone model). */
+ * loads or the mid-frame pitch (mid_pitch() reads a previous PITCH_CARRIES,
+ * the train's loading a previous PITCH_ABSENT or PREVIOUS_HELD, both only
+ * after a frame with no voiced band), and the columns' rule reads no mark of
+ * the model before (a forged MBE_FRAME_MARK_TONE there changed P25's columns
+ * before the rule was applied after a tone model). */
 static void
 test_marks_in_codec_states(void) {
     static const float marks[] = {0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 80.0f, 5.5f};
@@ -3996,8 +4024,8 @@ p25_sweep_word(int K, int pattern, char word[13]) {
  * voicing words (p25_rule_states(): each frame's nearest harmonic in double,
  * ties upward): every pair of a code among every third from 0, with 134 and 161
  * (72 codes), before one among every fourth from 1, with 134 (53 codes), the 19
- * pairs of a code with itself left out (3,797 pairs, steps from 1 to 206 codes
- * either way), each with four voicing words in each frame (16 pairs of words:
+ * pairs of a code with itself left out (3,797 pairs, steps of up to 205 codes
+ * up and 206 down), each with four voicing words in each frame (16 pairs of words:
  * 60,752 frame pairs; about a second in a Debug build), the frames decoded by
  * the P25 decoder. Among all ordered pairs of different P25 codes, only 134 and
  * 161, in either order, put a mid-frame harmonic where the float quotient and
@@ -4082,9 +4110,134 @@ same_stream_state(const mbe_parms* a, const mbe_parms* b) {
     return same;
 }
 
+/* A Golay (23,12) word whose data bits 11..22 are set in `word`: the parity
+ * bits 0..10 for which the decoder corrects nothing and gives the data back. */
+static void
+golay_parity(char word[23]) {
+    for (int parity = 0; parity < 2048; ++parity) {
+        char out[23];
+        for (int j = 0; j < 11; ++j) {
+            word[j] = (char)((parity >> j) & 1);
+        }
+        if (mbe_golay2312(word, out) == 0) {
+            int same = 1;
+            for (int j = 11; j < 23; ++j) {
+                same &= out[j] == word[j];
+            }
+            if (same) {
+                return;
+            }
+        }
+    }
+    assert(0);
+}
+
+/* A ProVoice (15,11) Hamming word with data bits 4..14 set: its parity bits. */
+static void
+hamming7100_parity(char word[15]) {
+    for (int parity = 0; parity < 16; ++parity) {
+        char out[15];
+        for (int j = 0; j < 4; ++j) {
+            word[j] = (char)((parity >> j) & 1);
+        }
+        if (mbe_7100x4400hamming1511(word, out) == 0) {
+            return;
+        }
+    }
+    assert(0);
+}
+
+/* The ProVoice (IMBE 7100x4400) layout of parameter bits given in the 7200
+ * layout the ProVoice decoder converts to (mbe_convertImbe7100to7200(), whose
+ * permutation this runs backwards). */
+static void
+imbe7100_layout(const char t[88], char d[88]) {
+    const int b0 =
+        (t[0] << 7) | (t[1] << 6) | (t[2] << 5) | (t[3] << 4) | (t[4] << 3) | (t[5] << 2) | (t[85] << 1) | t[86];
+    const float w0 = (float)(4 * M_PI) / (float)((float)b0 + 39.5);
+    const int L = (int)(0.9254 * (int)((M_PI / w0) + 0.25));
+    const int K = (L < 37) ? (int)((float)(L + 2) / (float)3) : 12;
+    memset(d, 0, 88);
+    d[0] = t[87];
+    d[42] = t[48 + K];
+    d[43] = t[49 + K];
+    for (int i = 0; i < K; ++i) {
+        d[44 + i] = t[48 + i];
+    }
+    int j = 0, k = 1;
+    while (j < 87) {
+        d[k] = t[j];
+        if (++j == 48) {
+            j += K + 2;
+        }
+        if (++k == 42) {
+            k += K + 2;
+        }
+    }
+}
+
+/* A ProVoice frame (7 x 24 bits, as received) that decodes, with no error, to
+ * parameter bits `t` in the 7200 layout: the 7100 layout's fields placed in the
+ * code words as mbe_decodeImbe7100x4400Frame() reads them, their parity bits
+ * found by the decoders themselves, and the code words C1 to C5 modulated with
+ * the sequence seeded from C0's data, which the decoder takes off again. */
+static void
+pack_imbe7100(const char t[88], char fr[7][24]) {
+    char d[88], word[23], hword[15];
+    imbe7100_layout(t, d);
+    memset(fr, 0, 7 * 24);
+    memset(word, 0, sizeof(word));
+    for (int j = 18; j > 11; --j) {
+        word[j - 1] = d[18 - j];
+    }
+    golay_parity(word);
+    for (int j = 0; j < 18; ++j) {
+        fr[0][j + 1] = word[j];
+    }
+    int n = 7;
+    for (int i = 1; i < 4; ++i) {
+        memset(word, 0, sizeof(word));
+        for (int j = 22; j > 10; --j) {
+            word[j] = d[n++];
+        }
+        golay_parity(word);
+        for (int j = 0; j < 23; ++j) {
+            fr[i][(i == 1) ? j + 1 : j] = word[j];
+        }
+    }
+    for (int i = 4; i < 6; ++i) {
+        memset(hword, 0, sizeof(hword));
+        for (int j = 14; j >= 4; --j) {
+            hword[j] = d[n++];
+        }
+        hamming7100_parity(hword);
+        for (int j = 0; j < 15; ++j) {
+            fr[i][j] = hword[j];
+        }
+    }
+    for (int j = 22; j >= 0; --j) {
+        fr[6][j] = d[n++];
+    }
+    assert(n == 88);
+    /* The modulation is an exclusive or, so modulating is demodulating. */
+    const int rc = mbe_demodulateImbe7100x4400Data(fr);
+    assert(rc == 0);
+    (void)rc;
+    char back[88];
+    mbe_process_result result;
+    const int errors = mbe_decodeImbe7100x4400Frame((const char (*)[24])fr, back, &result);
+    assert(errors == 0 && (result.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+    (void)errors;
+    for (int i = 0; i < 88; ++i) {
+        assert(back[i] == t[i]);
+    }
+}
+
 /* A tone mark forged in a caller's P25 state changes nothing: three frames of
  * b0 86, word 0011110000, then a frame with no voiced band at b0 25 (lacking a
- * pitch), through mbe_processImbe4400Dataf(), P25 and ProVoice. With
+ * pitch), through mbe_processImbe4400Dataf() (P25, and ProVoice with its flag)
+ * and through ProVoice's own entry point, mbe_processImbe7100x4400Framef(), the
+ * same parameter bits packed in ProVoice frames (pack_imbe7100()). With
  * MBE_FRAME_MARK_TONE in prev_mp_enhanced (the last frame played), in prev_mp
  * or in cur_mp before the last frame, its samples and all three states after it
  * are exactly those of the stream without the mark. (Before the rule was
@@ -4093,31 +4246,42 @@ same_stream_state(const mbe_parms* a, const mbe_parms* b) {
 static void
 test_p25_forged_tone_in_state(void) {
     char voiced[88], unvoiced[88] = {0};
+    char voiced_fr[7][24], unvoiced_fr[7][24];
     const float tone = 4.0f;
     set_imbe_voicing(voiced, 86, "0011110000");
     set_imbe_b0(unvoiced, 25);
-    for (int provoice = 0; provoice < 2; ++provoice) {
+    pack_imbe7100(voiced, voiced_fr);
+    pack_imbe7100(unvoiced, unvoiced_fr);
+    /* 0: P25 through the data path; 1: ProVoice through the data path with its
+     * flag; 2: ProVoice through its own frame entry point, which sets it. */
+    for (int entry = 0; entry < 3; ++entry) {
         for (int slot = 0; slot < 3; ++slot) {
             mbe_parms s[2][3];
             float out[2][160];
             mbe_initMbeParms(&s[0][0], &s[0][1], &s[0][2]);
-            for (int f = 0; f < 3; ++f) {
-                mbe_process_result result;
-                mbe_initProcessResult(&result);
-                result.flags |= provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
-                const int rc = mbe_processImbe4400Dataf(out[0], &result, voiced, &s[0][0], &s[0][1], &s[0][2]);
-                assert(rc >= 0);
-                (void)rc;
-            }
-            memcpy(s[1], s[0], sizeof(s[1]));
-            memcpy(&s[1][slot].PHIl[0], &tone, sizeof(tone));
-            for (int k = 0; k < 2; ++k) {
-                mbe_process_result result;
-                mbe_initProcessResult(&result);
-                result.flags |= provoice ? MBE_PROCESS_FLAG_PROVOICE : 0u;
-                const int rc = mbe_processImbe4400Dataf(out[k], &result, unvoiced, &s[k][0], &s[k][1], &s[k][2]);
-                assert(rc >= 0);
-                (void)rc;
+            for (int f = 0; f < 4; ++f) {
+                if (f == 3) {
+                    memcpy(s[1], s[0], sizeof(s[1]));
+                    memcpy(&s[1][slot].PHIl[0], &tone, sizeof(tone));
+                }
+                for (int k = 0; k < ((f == 3) ? 2 : 1); ++k) {
+                    mbe_process_result result;
+                    char imbe_d[88];
+                    int rc;
+                    mbe_initProcessResult(&result);
+                    if (entry == 2) {
+                        rc = mbe_processImbe7100x4400Framef(out[k], &result,
+                                                            (const char (*)[24])((f == 3) ? unvoiced_fr : voiced_fr),
+                                                            imbe_d, &s[k][0], &s[k][1], &s[k][2]);
+                        assert((result.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+                    } else {
+                        result.flags |= (entry == 1) ? MBE_PROCESS_FLAG_PROVOICE : 0u;
+                        rc = mbe_processImbe4400Dataf(out[k], &result, (f == 3) ? unvoiced : voiced, &s[k][0], &s[k][1],
+                                                      &s[k][2]);
+                    }
+                    assert(rc >= 0);
+                    (void)rc;
+                }
             }
             assert(same_bits(out[0], out[1], 160));
             for (int i = 0; i < 3; ++i) {
@@ -4150,22 +4314,43 @@ test_dstar_exact_column_edge(void) {
 }
 
 /* The rate-33 rendering keeps the hold through a frame lacking a pitch at the
- * harmonic at or next above 505 Hz, a harmonic past L taken at L: a frame of
- * one harmonic at 100 Hz, voiced, holds (its 6th harmonic, past L, read at
- * harmonic 1), and the reference agrees. */
+ * harmonic at or next above 505 Hz, found in float as the library always found
+ * it, a harmonic past L taken at L: a frame of one harmonic at 100 Hz, voiced,
+ * holds (its 6th harmonic, past L, read at harmonic 1); at the pitch whose bits
+ * are 0x3e0761b7 (14 harmonics) the harmonic is the 3rd, where a double
+ * quotient would read the 4th; at FLT_MIN it is L. The reference agrees with
+ * the library in each. */
 static void
 test_rate33_hold_past_l(void) {
-    mbe_parms prev, cur;
-    struct mbe_subframe_model mid;
-    unsigned char want[57] = {0};
-    set_model(&prev, 100.0, 1, 1, 16.0f);
-    set_model(&cur, 100.0, 10, 0, 16.0f);
-    mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PITCH_ABSENT);
-    mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &mid);
-    assert(mid.any_voiced && mid.voiced[1] == 1);
-    reference_mid_voicing(&prev, &cur, (double)mid.w0, mid.L, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, want);
-    for (int l = 1; l <= mid.L; ++l) {
-        assert(mid.voiced[l] == want[l]);
+    static const struct {
+        uint32_t w0_bits; /* 0: 100 Hz */
+        int L, voiced_harmonic, held;
+    } cases[] = {
+        {0u, 1, 1, 1},            /* the 6th harmonic, past L, read at harmonic 1 */
+        {0x3e0761b7u, 14, 3, 1},  /* the float quotient exactly 3: harmonic 3 */
+        {0x3e0761b7u, 14, 4, 0},  /* harmonic 4, which a double quotient would read, is not it */
+        {0x00800000u, 14, 14, 1}, /* FLT_MIN: a position of about 3.4e37, read at L */
+        {0x00800000u, 14, 13, 0},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        mbe_parms prev, cur;
+        struct mbe_subframe_model mid;
+        unsigned char want[57] = {0};
+        set_model(&prev, 100.0, cases[i].L, 0, 16.0f);
+        prev.Vl[cases[i].voiced_harmonic] = 1;
+        if (cases[i].w0_bits != 0u) {
+            memcpy(&prev.w0, &cases[i].w0_bits, sizeof(prev.w0));
+        }
+        set_model(&cur, 100.0, 10, 0, 16.0f);
+        mbe_set_frame_mark(&cur, MBE_FRAME_MARK_PITCH_ABSENT);
+        assert(reference_holds_505(&prev) == cases[i].held);
+        mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, &mid);
+        assert(mid.any_voiced == cases[i].held);
+        reference_mid_voicing(&prev, &cur, (double)mid.w0, mid.L, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, want);
+        for (int l = 1; l <= mid.L; ++l) {
+            assert(mid.voiced[l] == want[l]);
+        }
     }
 }
 
