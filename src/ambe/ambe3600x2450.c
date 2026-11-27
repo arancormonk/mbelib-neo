@@ -1153,7 +1153,17 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
  * its pulse at the own pulse's position relative to its point; a word of rows
  * 26 to 31, whose own mask pulses nothing, is cleared (docs/dvsi-parity.md,
  * "Rate 33: the pulsed rows": observed on six lost frames of DVSI's
- * hard-decision channel-error vectors, not established beyond them). Not in
+ * hard-decision channel-error vectors, rows 19, 26 and 27; the held position
+ * of rows 24 and 25 is the rule's extension, not observed). This is the second
+ * place the word is read (the rate-33 rendering is the first), and it acts on
+ * the word only where the loaded model is the band-grid model of the word's
+ * code (mbe_ambe2450_pulsed_row_model(), the decoder's own grid function): on
+ * any other model a caller's value in PHIl[0] is no word, and the repeat leaves
+ * it as it stands, as it did before the word existed, so that no caller state
+ * on a model that fails the test comes back changed. Voicing is not tested
+ * here: a decoded pulsed-row frame whose adaptive smoothing voiced a band keeps
+ * its word in the enhanced model, its repeat takes the held form, and the
+ * rendering refuses a word on a voiced model either way. Not in
  * TIA-102.BABA-1, which knows no mid-frame model.
  */
 static void
@@ -1161,6 +1171,9 @@ ambe2450_load_repeat(mbe_parms* cur_mp, const mbe_parms* prev_mp_enhanced) {
     struct mbe_pulsed_row word;
     mbe_repeat_load_model(cur_mp, prev_mp_enhanced);
     if (mbe_pulsed_row_word(cur_mp, &word)) {
+        if (!mbe_ambe2450_pulsed_row_model(cur_mp->w0, cur_mp->L, word.b0)) {
+            return;
+        }
         word.held = 1;
         if (word.row <= MBE_PULSED_ROW_OWN_LAST) {
             mbe_set_pulsed_row_word(cur_mp, &word);

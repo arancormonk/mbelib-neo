@@ -1375,7 +1375,7 @@ mbe_pulsed_row_value(const struct mbe_pulsed_row* word) {
 
 int
 mbe_pulsed_row_read(const float* stored, struct mbe_pulsed_row* word) {
-    const struct mbe_pulsed_row last = {MBE_PULSED_ROW_LAST, MBE_PULSED_ROW_CODES - 1, 1};
+    const struct mbe_pulsed_row last = {MBE_PULSED_ROW_OWN_LAST, MBE_PULSED_ROW_CODES - 1, 1};
     const float lowest = (float)MBE_PULSED_ROW_WORD_BASE;
     const float highest = mbe_pulsed_row_value(&last);
     uint32_t bits, low_bits, high_bits, rebuilt_bits;
@@ -1383,7 +1383,7 @@ mbe_pulsed_row_read(const float* stored, struct mbe_pulsed_row* word) {
     memcpy(&low_bits, &lowest, sizeof(low_bits));
     memcpy(&high_bits, &highest, sizeof(high_bits));
     /* Positive floats order as their bit patterns do: a negative value, not a
-     * number or an infinity lies outside, so the conversion sees 1024..4855. */
+     * number or an infinity lies outside, so the conversion sees 1024..4087. */
     if (bits < low_bits || bits > high_bits) {
         return 0;
     }
@@ -1397,12 +1397,16 @@ mbe_pulsed_row_read(const float* stored, struct mbe_pulsed_row* word) {
     const int rest = fields % MBE_PULSED_ROW_WORD_HELD;
     const int row = MBE_PULSED_ROW_FIRST + (rest / MBE_PULSED_ROW_WORD_ROW);
     const int b0 = rest % MBE_PULSED_ROW_WORD_ROW;
-    if (row > MBE_PULSED_ROW_LAST || b0 >= MBE_PULSED_ROW_CODES) {
+    const int held = fields / MBE_PULSED_ROW_WORD_HELD;
+    /* A held word is a repeat's, of a row whose own subframe pulses (18 to
+     * 25): no writer gives rows 26 to 31 a held form (ambe2450_load_repeat()
+     * clears their word), so such a value is no word. */
+    if (row > MBE_PULSED_ROW_LAST || b0 >= MBE_PULSED_ROW_CODES || (held && row > MBE_PULSED_ROW_OWN_LAST)) {
         return 0;
     }
     word->row = row;
     word->b0 = b0;
-    word->held = fields / MBE_PULSED_ROW_WORD_HELD;
+    word->held = held;
     return 1;
 }
 

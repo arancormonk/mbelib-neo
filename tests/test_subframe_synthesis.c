@@ -8061,8 +8061,10 @@ static const uint32_t k_row_values[] = {
     0x44801000u, /* 1024.5 */
     0xC4800000u, /* -1024.0 */
     0x447FC000u, /* 1023.0 */
-    0x4597B800u, /* 4855.0, the last word */
-    0x4597B801u, /* just over it */
+    0x457F7000u, /* 4087.0, the last word (held row 25, code 119) */
+    0x457F7001u, /* just over it */
+    0x457F8000u, /* 4088.0: held row 26, code 0, which nothing writes */
+    0x4597B800u, /* 4855.0: held row 31, code 119, which nothing writes */
     0x4597C000u, /* 4856.0 */
     0x459C4000u, /* 5000.0 */
     0x44F00000u, /* 1920.0: row 25's code 0 (1024 + 7 * 128) */
@@ -8099,9 +8101,18 @@ test_untrusted_row_words(void) {
             for (int held = 0; held < 2; ++held) {
                 const float value = (float)test_row_word(row, b0, held);
                 const float below = nextafterf(value, -INFINITY), above = nextafterf(value, INFINITY);
-                struct mbe_pulsed_row word;
-                assert(mbe_pulsed_row_read(&value, &word) && word.row == row && word.b0 == b0 && word.held == held);
-                assert(!mbe_pulsed_row_read(&below, &word) && !mbe_pulsed_row_read(&above, &word));
+                struct mbe_pulsed_row word = {0, 0, 0};
+                /* A held word is a repeat's of a row with an own mask, 18..25. */
+                const int is_word = !held || row <= 25;
+                const int read = mbe_pulsed_row_read(&value, &word);
+                assert(read == is_word);
+                assert(!is_word || (word.row == row && word.b0 == b0 && word.held == held));
+                const int read_below = mbe_pulsed_row_read(&below, &word);
+                const int read_above = mbe_pulsed_row_read(&above, &word);
+                assert(!read_below && !read_above);
+                (void)read;
+                (void)read_below;
+                (void)read_above;
             }
         }
     }
@@ -8117,8 +8128,10 @@ test_untrusted_row_words(void) {
         float value;
         struct mbe_pulsed_row word;
         memcpy(&value, &values[i], sizeof(value));
-        const int is_word = values[i] == 0x44800000u || values[i] == 0x4597B800u || values[i] == 0x44F00000u;
-        assert(mbe_pulsed_row_read(&value, &word) == is_word);
+        const int is_word = values[i] == 0x44800000u || values[i] == 0x457F7000u || values[i] == 0x44F00000u;
+        const int read = mbe_pulsed_row_read(&value, &word);
+        assert(read == is_word);
+        (void)read;
     }
     /* In PHIl[0]. */
     float w0;
