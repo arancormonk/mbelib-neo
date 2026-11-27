@@ -728,27 +728,70 @@ struct pulse_train {
     float time[TRAIN_PULSES]; /* in samples from the frame's start (negative: before it) */
 };
 
+/* Whether the train runs on from the last frame (`prev_mp`, the frame as it
+ * was synthesized, whose rendered model is `prev`) in `rendering`: from a frame
+ * whose rendered model has a voiced band; from one marked
+ * MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD, through whose
+ * first half the voicing before it may have lasted (every rendering); and, in
+ * the rate-33 rendering only, from one marked MBE_FRAME_MARK_MID_COLUMN_0 (V/UV
+ * row 17), whose mid-frame model voices column 0 (mid_row()), so that the
+ * train ran through its first half and out of the mid-frame model over its
+ * second (advance_interval()). That is the train store_pulse_train() left.
+ * The new case is a row-17 frame rendered with no voiced band: one whose end
+ * the adaptive smoothing of channel errors voices carried the train before
+ * the row-17 train change as after. Whether the carried pulses sound depends
+ * on the frame after: they do when its mid-frame model is voiced (a frame with
+ * a voiced band of its own there, or another row-17 frame), and a frame whose
+ * first subframe has no voiced band at either end starts afresh. From the
+ * mid-frame voicing change, which left row 17's own model with no voiced
+ * band, to the row-17 train change, a frame voiced at mid-frame after it
+ * started a new train at its first sample. Of the 12 row-17 voice frames of
+ * DVSI's development vectors (searched for on development and validation;
+ * validation holds none) rendered with no voiced band between two frames with
+ * a voiced band, frames 2 to n - 5 of each file, the voiced run after the
+ * frame (its first 12 frames at most) comes nearer DVSI's decode by more than
+ * 0.02 of correlation with the train running on in 6 and farther in none
+ * (docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17"). A lost-frame repeat
+ * does not carry the mark (ambe2450_load_repeat()). These marks of the
+ * previous model are read as the caller's state holds them, with no check of
+ * where they came from; each decides only whether the train that state stored
+ * is loaded, and load_pulse_train() bounds what is loaded. (No mark of the
+ * previous model chooses which bands are voiced: column_rule().) In D-STAR's
+ * and P25's renderings MBE_FRAME_MARK_MID_COLUMN_0 on the previous model plays
+ * as no mark does: the samples are those of the same state with no mark. */
+static int
+train_runs_on(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, enum mbe_voiced_synthesis rendering) {
+    if (prev->any_voiced) {
+        return 1;
+    }
+    const enum mbe_frame_mark mark = mbe_frame_mark(prev_mp);
+    if (mark == MBE_FRAME_MARK_PITCH_ABSENT || mark == MBE_FRAME_MARK_PREVIOUS_HELD) {
+        return 1;
+    }
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && mark == MBE_FRAME_MARK_MID_COLUMN_0;
+}
+
 /* The train a stream carries into a frame: the pulse phase reached at the last
- * frame's end and the pulses it kept. It runs on from a frame that has a
- * voiced band, and from one marked MBE_FRAME_MARK_PITCH_ABSENT or
- * MBE_FRAME_MARK_PREVIOUS_HELD, through whose first half the voicing before it
- * may have lasted; after any other frame it starts afresh, whatever a codec
+ * frame's end and the pulses it kept, when it runs on from that frame
+ * (train_runs_on()); after any other frame it starts afresh, whatever a codec
  * path left in the state.
- * Values that are not what a frame stores (another rendering's noise overlap,
- * a caller's own) are dropped. */
+ * What is read is bounded, not checked to be what a frame stores: a state
+ * without this rendering's subframe mark (another rendering's noise overlap)
+ * loads nothing; a pulse count whose bit pattern lies above 32.0f's (a
+ * negative or not-a-number one included) loads nothing, and a count inside the
+ * range is truncated to a whole number (a caller's 1.5 plays as 1); a phase
+ * outside [0, 1) by its bit pattern reads as 0; a pulse time that is not
+ * finite, is positive, or lies more than a frame back is skipped. */
 static void
-load_pulse_train(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, struct pulse_train* train) {
+load_pulse_train(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, enum mbe_voiced_synthesis rendering,
+                 struct pulse_train* train) {
     const float stored = prev_mp->noiseOverlap[0];
     const float phase = prev_mp->noiseOverlap[PHASE_SLOT];
     uint32_t bits;
 
     train->phase = 0.0;
     train->count = 0;
-    if (!mbe_subframe_state_is_marked(prev_mp)) {
-        return;
-    }
-    const enum mbe_frame_mark mark = mbe_frame_mark(prev_mp);
-    if (!prev->any_voiced && mark != MBE_FRAME_MARK_PITCH_ABSENT && mark != MBE_FRAME_MARK_PREVIOUS_HELD) {
+    if (!mbe_subframe_state_is_marked(prev_mp) || !train_runs_on(prev_mp, prev, rendering)) {
         return;
     }
     memcpy(&bits, &stored, sizeof(bits));
@@ -1089,7 +1132,7 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
         train->phase = 0.0;
         train->count = 0;
     } else {
-        load_pulse_train(prev_mp, &models[0], train);
+        load_pulse_train(prev_mp, &models[0], rendering, train);
     }
     return 1;
 }

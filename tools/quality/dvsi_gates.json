@@ -7061,5 +7061,453 @@
         "every_vector": true
       }
     ]
+  },
+  "r33-row17-train-development": {
+    "description": "The pulse train of rate 33's rendering through a frame of V/UV row 17, which voices column 0 at mid-frame and no band at its end and carries MBE_FRAME_MARK_MID_COLUMN_0: the train a stream carries into a frame is also taken from a frame so marked, as it is from one marked MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD, so that a frame voiced in its first half after a row-17 frame continues the pulses of the row-17 frame where, since the mid-frame voicing change (PR #198), it started a new train at its first sample; the phase and the pulses carried are those the row-17 frame stored. Nothing else changes: a frame whose first subframe has no voiced band at either end (after a row-17 frame: a row-15, unvoiced or silence frame, or a lost-frame repeat of the row-17 frame, which drops the mark) starts afresh as before, and the mark has no effect in the D-STAR and P25 renderings. Found on DVSI's rate-33 decodes of the development and validation vectors: of the 12 frames there decoded as row 17 whose rendered model has no voiced band, with a voiced band in the frame before and in the frame after as the baseline renders them (frames 2 to n - 5 of each file), the voiced run after the frame (its first 12 frames at most) correlated with DVSI's decode better by more than 0.02 under a scratch build of the change than under the baseline in 6 and worse in none. The scratch build was measured on the development and validation vectors, and on the rate-33 tone vectors, before this set was declared, so neither speech partition is out of sample for it; the final partition is. The head of fix/mid-frame-columns (e446950) against the change, development vectors: D-STAR's and P25's decodes of DVSI's bits are unchanged (no speech vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), and for rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.002 more (mean, 95% interval above 0) and by no more than 0.0005 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.005 dB (mean) and 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). The scratch build raised the mean of a whole-file correlation at lag 0 on these vectors by 0.003112 and changed five decodes, lowering no vector's correlation (measured by the study's own script, not the scoreboard); this partition's rise is therefore in-sample, not an independent measure of the change. Coverage, checked on the baseline's own scoreboard of these partitions (e446950's build scoring itself) before this set was declared: every paired check's metric is measured in rate 33 on all 20 vectors of the partition, so each check requires every vector (every_vector). What the checks do not establish: the rise of the mean is the scoreboard's increase rule (the mean paired change at least the value and its bootstrap 95% interval, resampling whole recordings, above 0), measured on the frames the scoreboard correlates; a check on a mean limits no single vector (only the checks 'on any vector' do); the unchanged decodes and encodings are hash comparisons of the speech vectors the run scores (development and validation together), not of other inputs, and say nothing of which frames moved; and nothing here measures how the change sounds against the input beyond the log-spectral distance.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
+  },
+  "r33-row17-train-validation": {
+    "description": "The pulse train of rate 33's rendering through a frame of V/UV row 17, which voices column 0 at mid-frame and no band at its end and carries MBE_FRAME_MARK_MID_COLUMN_0: the train a stream carries into a frame is also taken from a frame so marked, as it is from one marked MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD, so that a frame voiced in its first half after a row-17 frame continues the pulses of the row-17 frame where, since the mid-frame voicing change (PR #198), it started a new train at its first sample; the phase and the pulses carried are those the row-17 frame stored. Nothing else changes: a frame whose first subframe has no voiced band at either end (after a row-17 frame: a row-15, unvoiced or silence frame, or a lost-frame repeat of the row-17 frame, which drops the mark) starts afresh as before, and the mark has no effect in the D-STAR and P25 renderings. Found on DVSI's rate-33 decodes of the development and validation vectors: of the 12 frames there decoded as row 17 whose rendered model has no voiced band, with a voiced band in the frame before and in the frame after as the baseline renders them (frames 2 to n - 5 of each file), the voiced run after the frame (its first 12 frames at most) correlated with DVSI's decode better by more than 0.02 under a scratch build of the change than under the baseline in 6 and worse in none. The scratch build was measured on the development and validation vectors, and on the rate-33 tone vectors, before this set was declared, so neither speech partition is out of sample for it; the final partition is. The head of fix/mid-frame-columns (e446950) against the change, validation vectors: D-STAR's and P25's decodes of DVSI's bits are unchanged (no speech vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), and for rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0005 less (mean) and by no more than 0.0005 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.005 dB (mean) and 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). The scratch build changed one decode of these vectors, tambf22b's, in two frames, and moved its correlation by less than 1e-7, so this partition can show no gain here: its checks look only for harm. Coverage, checked on the baseline's own scoreboard of these partitions (e446950's build scoring itself) before this set was declared: every paired check's metric is measured in rate 33 on all 5 vectors of the partition, so each check requires every vector (every_vector). What the checks do not establish: a check on a mean limits no single vector (only the checks 'on any vector' do); the unchanged decodes and encodings are hash comparisons of the speech vectors the run scores (development and validation together), not of other inputs, and say nothing of which frames moved; and nothing here measures how the change sounds against the input beyond the log-spectral distance.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
+  },
+  "r33-row17-train-tones": {
+    "description": "The pulse train of rate 33's rendering through a frame of V/UV row 17, which voices column 0 at mid-frame and no band at its end and carries MBE_FRAME_MARK_MID_COLUMN_0: the train a stream carries into a frame is also taken from a frame so marked, as it is from one marked MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD, so that a frame voiced in its first half after a row-17 frame continues the pulses of the row-17 frame where, since the mid-frame voicing change (PR #198), it started a new train at its first sample; the phase and the pulses carried are those the row-17 frame stored. Nothing else changes: a frame whose first subframe has no voiced band at either end (after a row-17 frame: a row-15, unvoiced or silence frame, or a lost-frame repeat of the row-17 frame, which drops the mark) starts afresh as before, and the mark has no effect in the D-STAR and P25 renderings. Found on DVSI's rate-33 decodes of the development and validation vectors: of the 12 frames there decoded as row 17 whose rendered model has no voiced band, with a voiced band in the frame before and in the frame after as the baseline renders them (frames 2 to n - 5 of each file), the voiced run after the frame (its first 12 frames at most) correlated with DVSI's decode better by more than 0.02 under a scratch build of the change than under the baseline in 6 and worse in none. The scratch build was measured on the development and validation vectors, and on the rate-33 tone vectors, before this set was declared, so neither speech partition is out of sample for it; the final partition is. The head of fix/mid-frame-columns (e446950) against the change, on the tone vectors: D-STAR's and P25's decodes are unchanged, the speech vectors' as well as the tone vectors' (no vector's PCM changes); the D-STAR and rate-33 encoders' tone frames agree with DVSI's, appear where DVSI sends voice, and differ in level from DVSI's where both send a tone, exactly as before on every vector that has the figure (the tones group holds no encoder-row hashes, so the encoders are compared here through their tone frames, not bit for bit; the development, validation and channel sets compare the bits of the speech encodings); and for rate 33 the steady tones' frequency error against DVSI's output rises by no more than 0.0005 on any vector that has the figure, the tone level and the balance of a dual tone's two components move further from DVSI's by no more than 0.02 dB (mean), the share of windows playing a wrong tone rises on no vector that has the figure, and the detector's agreement with DVSI's tone output falls by no more than 0.005 on any vector. The scratch build left all 52 rate-33 tone decodes unchanged. Coverage, checked on the baseline's own scoreboard of this partition (e446950's build scoring itself) before this set was declared: rate 33's detector agreement and the D-STAR and rate-33 encoders' extra-tone rates are measured on all 52 tone vectors, so those checks require every vector; in rate 33 the frequency, level and wrong-tone figures are measured on all but cp1, cpvbad and dtmfvbad, whose DVSI decode has no steady window holding a tone, and the balance on all but those three and alert, a single tone; D-STAR's encoder agreement and volume error on all but cpvbad and the 16 KNOX vectors (D-STAR codes KNOX tones as voice); the rate-33 encoder's agreement and level error on all but cpvbad. A check on a metric that applies to part of the partition cannot require every vector, so a vector that lost the figure in both runs would pass it unnoticed. What the checks do not establish: the tone measures are an acoustic detector's, on windows where DVSI's output is steady, and say nothing of the voice frames in these vectors or of a tone's first and last frames; the scoreboard does not compare tone frames sample for sample; the level and balance checks are on means and limit no single vector.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0005
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.005,
+        "every_vector": true
+      }
+    ]
+  },
+  "r33-row17-train-channel": {
+    "description": "The pulse train of rate 33's rendering through a frame of V/UV row 17, which voices column 0 at mid-frame and no band at its end and carries MBE_FRAME_MARK_MID_COLUMN_0: the train a stream carries into a frame is also taken from a frame so marked, as it is from one marked MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD, so that a frame voiced in its first half after a row-17 frame continues the pulses of the row-17 frame where, since the mid-frame voicing change (PR #198), it started a new train at its first sample; the phase and the pulses carried are those the row-17 frame stored. Nothing else changes: a frame whose first subframe has no voiced band at either end (after a row-17 frame: a row-15, unvoiced or silence frame, or a lost-frame repeat of the row-17 frame, which drops the mark) starts afresh as before, and the mark has no effect in the D-STAR and P25 renderings. Found on DVSI's rate-33 decodes of the development and validation vectors: of the 12 frames there decoded as row 17 whose rendered model has no voiced band, with a voiced band in the frame before and in the frame after as the baseline renders them (frames 2 to n - 5 of each file), the voiced run after the frame (its first 12 frames at most) correlated with DVSI's decode better by more than 0.02 under a scratch build of the change than under the baseline in 6 and worse in none. The scratch build was measured on the development and validation vectors, and on the rate-33 tone vectors, before this set was declared, so neither speech partition is out of sample for it; the final partition is. The head of fix/mid-frame-columns (e446950) against the change, under channel errors (dam at 1.1-10.6% bit errors): D-STAR's and P25's decodes are unchanged, the speech vectors' as well as the channel-error vectors' (no vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), the mute statistics are unchanged in every mode (on every vector, hard and soft, the share of loud frames muted, the agreement with DVSI's mutes and the false and missed mute rates are exactly as before), and for rate 33 the output on the loud frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) comes no further from DVSI's than 0.01 dB (mean over the error rates), hard and soft decisions. Coverage, checked on the baseline's own scoreboard of this partition (e446950's build scoring itself) before this set was declared: each hard-decision figure is measured on the four hard-decision vectors and each soft-decision figure on the four soft-decision ones, in every mode, so none of these checks can require all eight. What the checks do not establish: the mute figures are statistics per vector, which two changes of opposite sign could leave as they were, so they do not show by themselves that no frame's mute decision changed (that is a separate frame-by-frame comparison); the distance is a mean over the four vectors of each kind, limits no single vector, and is measured on the frames that count in both runs only; and rate 33's waveform under channel errors is not gated.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "r33-row17-train-final": {
+    "description": "The pulse train of rate 33's rendering through a frame of V/UV row 17, which voices column 0 at mid-frame and no band at its end and carries MBE_FRAME_MARK_MID_COLUMN_0: the train a stream carries into a frame is also taken from a frame so marked, as it is from one marked MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD, so that a frame voiced in its first half after a row-17 frame continues the pulses of the row-17 frame where, since the mid-frame voicing change (PR #198), it started a new train at its first sample; the phase and the pulses carried are those the row-17 frame stored. Nothing else changes: a frame whose first subframe has no voiced band at either end (after a row-17 frame: a row-15, unvoiced or silence frame, or a lost-frame repeat of the row-17 frame, which drops the mark) starts afresh as before, and the mark has no effect in the D-STAR and P25 renderings. Found on DVSI's rate-33 decodes of the development and validation vectors: of the 12 frames there decoded as row 17 whose rendered model has no voiced band, with a voiced band in the frame before and in the frame after as the baseline renders them (frames 2 to n - 5 of each file), the voiced run after the frame (its first 12 frames at most) correlated with DVSI's decode better by more than 0.02 under a scratch build of the change than under the baseline in 6 and worse in none. The scratch build was measured on the development and validation vectors, and on the rate-33 tone vectors, before this set was declared, so neither speech partition is out of sample for it; the final partition is. The head of fix/mid-frame-columns (e446950) against the change, final vectors (irstia and mark; scored once, after the review): D-STAR's and P25's decodes of DVSI's bits are unchanged (no vector's PCM changes), every encoder's bits are unchanged (no vector's encoder rows change, in any mode), and for rate 33 our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0005 less (mean) and 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.03 dB on any vector, loses no more than 0.001 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). Neither the rule nor its scratch build was measured on these vectors: they are out of sample for it. Every paired check requires every vector (every_vector); the baseline's coverage of this partition was not looked at, the partition being held out, and every one of these figures is measured in rate 33 on every development and validation vector. What the checks do not establish: on two vectors they check that nothing moves the wrong way past its limit; they are not a measure of the change's size, and a check on a mean limits neither vector by itself.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
   }
 }
