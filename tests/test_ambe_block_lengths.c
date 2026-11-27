@@ -27,6 +27,7 @@
  *   residual that blocks of 4, 5, 5, 6 represent exactly round-trips through
  *   the quantizer with the encoders' tables and not with the annex's row.
  */
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -178,8 +179,9 @@ reference_frame(int dstar, const int b[9], int L, const int J[4], const struct h
     for (int i = 1; i <= 4; ++i) {
         double C[18] = {0};
         const int Ji = J[i - 1];
-        C[1] = 0.5 * (R[(2 * i) - 1] + R[2 * i]);
-        C[2] = (R[(2 * i) - 1] - R[2 * i]) / (2.0 * sqrt(2.0));
+        const int odd = i + i - 1; /* R[2i - 1] and R[2i] */
+        C[1] = 0.5 * (R[odd] + R[odd + 1]);
+        C[2] = (R[odd] - R[odd + 1]) / (2.0 * sqrt(2.0));
         for (int k = 3; k <= Ji && k <= 6; ++k) {
             C[k] = hoc[i - 1][b[4 + i]][k - 3];
         }
@@ -220,13 +222,25 @@ reference_frame(int dstar, const int b[9], int L, const int J[4], const struct h
 #define TOLERANCE 2e-4 /* float decode against double reference: a few ulps of values up to about 10 */
 #define MARGIN    0.05 /* every other division tried lies further than this from the decode */
 
+/* Finite: at most DBL_MAX in magnitude, judged on the bit pattern so that no build's float semantics can pass a
+ * NaN or an infinity. */
+static int
+finite_double(double x) {
+    uint64_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return (bits & UINT64_C(0x7FFFFFFFFFFFFFFF)) < UINT64_C(0x7FF0000000000000);
+}
+
+/* The largest difference of log2Ml over the harmonics; a difference that is not finite counts as DBL_MAX. */
 static double
 max_difference(const struct history* a, const struct history* b) {
     double worst = 0.0;
     for (int k = 1; k <= a->L; ++k) {
         const double d = fabs(a->log2Ml[k] - b->log2Ml[k]);
-        /* A NaN difference counts as infinitely far. */
-        worst = (d >= worst) ? d : (d == d ? worst : INFINITY);
+        if (!finite_double(d)) {
+            return DBL_MAX;
+        }
+        worst = fmax(worst, d);
     }
     return worst;
 }
@@ -312,7 +326,8 @@ check_frame(int dstar, const int b[9], int L, mbe_parms* cur, mbe_parms* prev, s
  * decoded L). */
 static int
 code_of(int dstar, int L) {
-    return dstar ? (L == 19 ? 52 : (L == 20 ? 55 : 59)) : (L == 19 ? 49 : (L == 20 ? 52 : 55));
+    static const int codes[2][3] = {{49, 52, 55}, {52, 55, 59}};
+    return codes[dstar ? 1 : 0][L - 19];
 }
 
 static int
@@ -321,7 +336,7 @@ test_decoder(int dstar) {
     static const int dstar_rows[2][9] = {{0, 15, 40, 301, 72, 3, 11, 9, 6}, {0, 15, 44, 117, 21, 12, 5, 14, 2}};
     static const int r33_rows[2][9] = {{0, 0, 20, 301, 72, 19, 11, 9, 5}, {0, 0, 22, 117, 21, 6, 5, 14, 2}};
     int fails = 0;
-    double least = INFINITY;
+    double least = DBL_MAX;
     for (int first = 19; first <= 21; ++first) {
         for (int second = 19; second <= 21; ++second) {
             mbe_parms cur, prev, enhanced;
