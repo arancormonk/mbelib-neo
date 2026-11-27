@@ -789,7 +789,8 @@ reference_samples(const mbe_parms* mp, int dstar, int s[9]) {
         for (int j = 0; j < 4; ++j) {
             const int n = (j == 0) ? 1 : (int)ceil(away_from_whole(1000.0 * j / f0));
             const int in_band = (j == 3) || ((double)n * f0 < 1000.0 * (j + 1));
-            s[2 * j] = s[(2 * j) + 1] = in_band && n <= mp->L && mp->Vl[n] == 1;
+            const int column = j + j;
+            s[column] = s[column + 1] = in_band && n <= mp->L && mp->Vl[n] == 1;
         }
         return;
     }
@@ -3620,7 +3621,9 @@ test_dstar_column_edges(void) {
             const volatile float decoder_position = (float)l * 16.0f * decoder_f0;
             const volatile float above = position + 0.5f;
             const volatile float decoder_above = decoder_position + 0.5f;
-            assert((int)position == (int)decoder_position && (int)above == (int)decoder_above);
+            const int own = (int)position, decoder_own = (int)decoder_position;
+            const int reach = (int)above, decoder_reach = (int)decoder_above;
+            assert(own == decoder_own && reach == decoder_reach);
             const double x = (double)position;
             least_whole = fmin(least_whole, fabs(x - floor(x + 0.5)));
             least_half = fmin(least_half, fabs(x + 0.5 - floor(x + 1.0)));

@@ -442,8 +442,9 @@ dstar_samples(const mbe_parms* mp, struct column_samples* samples) {
     for (int l = 1; l <= mp->L && band < COLUMNS / 2; l++) {
         const int own = dstar_column(dstar_position(l, f0)) / 2;
         if (own >= band) {
-            samples->voiced[2 * own] = mp->Vl[l] == 1;
-            samples->voiced[(2 * own) + 1] = mp->Vl[l] == 1;
+            const int column = own + own;
+            samples->voiced[column] = mp->Vl[l] == 1;
+            samples->voiced[column + 1] = mp->Vl[l] == 1;
             band = own + 1;
         }
     }
