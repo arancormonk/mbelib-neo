@@ -93,7 +93,16 @@ appear here.
   it. The change was measured and gated on the development, validation, tone and channel
   partitions, and the final partition was scored once for it, after the review and its two rounds
   of fixes, against the gate set `mid-columns-final`, which it passed ([November 2026: mid-frame
-  voicing by columns](#november-2026-mid-frame-voicing-by-columns)).
+  voicing by columns](#november-2026-mid-frame-voicing-by-columns)). The row-17 train change
+  ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)) holds it out too: the study that
+  found it read the development and validation vectors and DVSI's rate-33 tone vectors, never
+  `irstia` or `mark`; its scratch build had been measured on the development and validation
+  vectors before the gate sets were declared, in the branch's first commit, `6a32fb8`, before any
+  build of the branch was scored, so neither partition is out of sample for it. The change was
+  measured and gated on the development, validation, tone and channel partitions, and the final
+  partition is to be scored once for it, after the review, against the gate set
+  `r33-row17-train-final` ([November 2026: the pulse train through a row-17
+  frame](#november-2026-the-pulse-train-through-a-row-17-frame)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -1164,7 +1173,10 @@ every frame.
   pitch to the next's across a subframe, after the train is taken an octave down or up where
   the new period is within 20% of twice or of half the old ([The pulse train across an
   octave](#the-pulse-train-across-an-octave)); into or out of voicing it keeps the voiced
-  model's. A subframe with no voiced band at either end starts the train afresh.
+  model's. A subframe with no voiced band at either end starts the train afresh. From one frame to
+  the next the train runs on from a frame with a voiced band, from one marked as lacking a pitch or
+  holding the model before it to mid-frame, and, in the rate-33 rendering, from a V/UV row-17 frame
+  ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)); after any other it starts afresh.
 
 DVSI describes a synthesis of this shape in US 8,200,497: square-root triangular windows over
 10 ms subframes, and an impulse sequence convolved with a pitch-dependent impulse response. The
@@ -2167,7 +2179,9 @@ its voiced runs under a correlation of 0.8 with DVSI's decode, the ones looked a
 runs with the largest residual (examples, not a census), started in line and lost it abruptly at
 the same sequences of rows: row 14 then row 15 (`fambm22a` frames 2364-2365 and 2561-2562, `t02`
 1095-1096, `noisy` 623-624), row 17 then row 13 (`t02` 1618-1619) or 15 (`damcar` 359-360), and
-rows 17, 14 and 13 (`fambf22c` 1474-1476).
+rows 17, 14 and 13 (`fambf22c` 1474-1476). Those after a row-17 frame that the readings below left
+out of line were the pulse train the frame after it dropped (**The pulse train through a row-17
+frame**, below).
 
 **Each row**, measured on the same vectors and builds of `cc272ef` with switches of the same kind (a
 mid-frame column mask per V/UV row, and the row's own columns; the masks go through the decoder's
@@ -2203,7 +2217,9 @@ after another, so each figure names its baseline:
   into the next voiced frame's first half cannot be told: with the mid-frame pitch between a row-17
   frame and a voiced frame taken as the geometric mean of the two instead of the voiced frame's, the
   development mean is 0.98064 against 0.98062, and 18 development vectors rise and 2 fall against
-  `cc272ef`, against 19 and 1. The library keeps the voiced frame's pitch.
+  `cc272ef`, against 19 and 1. The library keeps the voiced frame's pitch. (Both were measured
+  with the voiced frame after a row-17 frame starting a new pulse train, before the row-17 train
+  change below.)
 - **Rows 1 and 3**: nothing resolved. With rows 15 and 13 already read as above, row 1 (482 frames):
   first half 0.03298 with every column voiced at mid-frame and in the frame's own voicing, as the
   library decodes it (0.0341 at `cc272ef`), 0.03257 with the mid-frame top column cleared, 0.03294
@@ -2258,11 +2274,92 @@ no voiced band after smoothing, is the kept model's when the kept model was voic
 mean of the two pitches when it was not (a row-17 frame that smoothing voices takes the pitch
 between two voiced frames, or its own after an unvoiced kept model), and the new pulse
 train launches its first pulse at the frame's start for rows 13 and 17 and at sample 80 for row
-15, whose first half voices no band (`test_rows_13_15_17_after_mute_or_tone`). That is a design
+15, whose first half voices no band (`test_rows_13_15_17_after_mute_or_tone`); since the row-17
+train change a frame voiced in its first half after such a row-17 frame takes on the train the
+row-17 frame started (`test_train_through_row17`). That is a design
 choice, not examined against DVSI's decoder: `dam_e10_hd` has six audible row-17 frames right after
 a mute of the library's, two of them with a voiced kept model (frames 639 and 1172), and what DVSI's
 decoder plays there was not measured. TIA-102.BABA-1 says nothing on either, as it knows no
 mid-frame model.
+
+**The pulse train through a row-17 frame.** Since the mid-frame voicing change a row-17 frame's own
+model has no voiced band and its mid-frame model voices column 0. The pulse train ran through such a
+frame: over its first half between the frame before and the voiced mid-frame model, over its second
+out of the mid-frame model at that model's pitch (a subframe with one voiced end keeps the train;
+[Synthesis in subframes](#synthesis-in-subframes)), and the frame stored the phase it reached and
+the pulses still sounding. The frame after it then dropped that train. The library takes the train
+a stream carries into a frame only from a frame whose own model has a voiced band, or that is
+marked `MBE_FRAME_MARK_PITCH_ABSENT` or `MBE_FRAME_MARK_PREVIOUS_HELD`, through whose first half the
+voicing before may have lasted; a row-17 frame was neither, so a frame voiced in its first half
+after it started a new train at its first sample. Before the mid-frame voicing change the library
+voiced row 17's own column 0, and the train ran on. Since the row-17 train change (`8cbef45`) the
+rate-33 rendering also takes the train from a frame marked `MBE_FRAME_MARK_MID_COLUMN_0`
+(`train_runs_on()` in `src/core/mbe_subframe.c`): the phase and the pulses carried are those the
+row-17 frame stored, and rendering and `mbe_advance_subframes()` load them alike.
+
+Every such case on the development and validation vectors, measured on the scratch builds of the
+study (whose rate-33 decodes of the 25 vectors, without and with the change, are those of the
+library's builds of `e446950` and of the change, file for file): a frame decoded as
+row 17 whose rendered model has no voiced band, with a voiced band in the frame before and in the
+frame after as the baseline renders them, frames 2 to n - 5 of each file, 12 frames. For each, the
+voiced run that starts after it (its first 12 frames at most) is correlated with DVSI's decode under
+the baseline (`e446950`, whose rate-33 decodes are `c3c6d42`'s) and under the change; for runs of
+three frames or more, DVSI's lag against the baseline's fresh start is measured on the run's second
+frame (from the cross-spectrum up to 2.2 rad/sample, searched over half a period either way), in
+cycles of that frame's pitch, beside the library's own train phase at the row-17 frame's end, which
+is what a train that runs on brings into the next frame (a fresh start brings 0):
+
+| Vector, row-17 frame | Next row | Run (frames) | Correlation, baseline → change | DVSI against a fresh start (cycle) | A train running on brings (cycle) |
+|---|---|---|---|---|---|
+| `clean` 1416 | 13 | 24 | -0.011 → +0.982 | -0.202 | -0.194 |
+| `fambf22c` 1212 | 13 | 13 | -0.293 → +0.980 | +0.377 | +0.383 |
+| `t02` 1618 | 13 | 27 | -0.354 → +0.990 | +0.265 | +0.275 |
+| `fambf22c` 1474 | 14 | 13 | +0.768 → +0.997 | -0.000 on the run's second frame (coherence 0.96); +0.043, +0.039 and +0.040 on its third to fifth | +0.037 |
+| `ucarm20a` 609 | 12 | 5 | +0.060 → +0.979 | -0.002 (coherence 0.79) | -0.125 |
+| `t02` 1417 | 14 | 1 | +0.941 → +0.997 | run too short | -0.217 |
+| `ucarm15a` 609 | 14 | 1 | +0.935 → +0.943 | run too short | -0.058 |
+| `dam40` 19 | 15 | 8 | +0.996 → +0.996 | -0.001 | (+0.032) |
+| `damcar` 359 | 15 | 20 | +0.995 → +0.995 | -0.001 | (+0.399) |
+| `t01` 1120 | 15 | 13 | +0.998 → +0.998 | -0.003 | (-0.081) |
+| `tia11` 2130 | 15 | 1 | +0.705 → +0.705 | run too short | (+0.261) |
+| `tambf22a` 998 | 15 | 3 | +0.965 → +0.965 | -0.000 | (-0.211) |
+
+The run after the frame comes nearer DVSI's decode by more than 0.02 of correlation in 6 of the 12
+cases and farther in none. On the three runs after a row-13 frame (`clean` 1416, `fambf22c` 1212,
+`t02` 1618) DVSI's lag against a fresh start lies within 0.010 cycle of the phase a train running
+on brings (observed minus predicted -0.008, -0.006 and -0.010 cycle); that remainder was not
+examined further. On `fambf22c` 1474 DVSI's lag on the run's second frame is that of a fresh start
+and on its third to fifth frames within 0.006 cycle of the running train's phase; on `ucarm20a` 609
+it is that of a fresh start (at a coherence of 0.79), 0.123 cycle from the running train's phase,
+while the run's correlation with DVSI's decode rises from 0.060 to 0.979 with the change. Neither
+was examined further. The five frames followed by row 15 do not change, and are not expected to: a
+row-15 frame voices no band in its first half either, so the subframe from the row-17 frame's end to
+its mid-frame has no voiced band at either end and the train starts afresh at mid-frame in both
+decodes, and DVSI's lag on the four runs long enough to measure lies within 0.003 cycle of a fresh
+start (the bracketed phases do not apply). Two of
+the cases are the losses of alignment that nothing tried had explained until then (`clean`
+1416-1417 and `t02` 1618-1619, each a row-17 frame followed by a row-13 frame with a pitch step):
+the train the frame after the row-17 frame dropped, not the pitch step, which the change leaves as
+it was.
+
+Nothing else changes. A frame whose first subframe has no voiced band at either end after a row-17
+frame (a row-15, unvoiced or silence frame, or a lost-frame repeat of the row-17 frame, which drops
+the mark through `ambe2450_load_repeat()`) starts afresh as before, since the interval it starts
+with has nothing to carry the train. A row-17 frame from silence, after a mute or a tone, starts a
+new train at its first sample, and the frame after it now takes that train on: no DVSI vector shows
+a row-17 frame right after a mute or a tone followed by a voiced frame, and the library makes no
+statement there beyond what the rule gives. Under a mute a row-17 frame is not heard, and the frame
+that ends the mute starts from silence and drops the train the unheard frame stored, as before. A
+caller's `MBE_FRAME_MARK_MID_COLUMN_0` on the previous model (in `prev_mp_enhanced`, the last frame
+played) loads the train that model stored in the rate-33 rendering, as the two marks already
+honoured there do; in D-STAR's and P25's renderings it changes nothing, and in the other slots of a
+stream's state it changes nothing in any codec (`test_row17_mark_in_codec_states`,
+`test_marks_act_in_their_own_rendering`). Never dropping a carried train at all (a scratch variant:
+after a subframe with no voiced band at either end the stored phase is 0 anyway) gives the same
+rate-33 decodes of the 25 vectors as honouring the row-17 mark alone; the library honours the mark
+alone, so that a caller's state with no voiced band and no such mark carries no train, as before.
+What the change does to the speech vectors is in [November 2026: the pulse train through a row-17
+frame](#november-2026-the-pulse-train-through-a-row-17-frame).
 
 The library's rate-33 encoder never sends rows 1, 3, 13, 15 or 17 (it searches rows 0 to 16, and
 ties keep the lower index), so its bits, and the decode of its own bit streams, do not change.
@@ -3356,20 +3453,21 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   between voiced and unvoiced; no reading tried resolves them, and the library plays Annex B's
   rows ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17), where rows 13, 15 and 17, read so
   before, turned out to voice each half of the frame apart).
-- Rate 33 inside voiced runs, with rows 13, 15 and 17 read as DVSI's decoder plays them. Of the
-  losses of alignment with DVSI's waveform looked at, two remain that nothing tried explains, both a
-  row-17 frame followed by a row-13 frame with a pitch step (`clean` frames 1416-1417, `t02`
-  1618-1619). With the mid-frame pitch wave, a fit whose cause in DVSI's decoder is not known
+- Rate 33 inside voiced runs, with rows 13, 15 and 17 read as DVSI's decoder plays them and the
+  pulse train running on through a row-17 frame. With the mid-frame pitch wave, a fit whose cause in DVSI's decoder is not known
   ([Rate 33: mid-frame pitch](#rate-33-mid-frame-pitch)), the residual inside the runs that stay in
   line no longer grows with the run's length on the development vectors; on the validation vectors
   it is lower in every group of frames into the run, and the group from frame 20 on is still the
   largest ([November 2026: rate 33's mid-frame pitch
   wave](#november-2026-rate-33s-mid-frame-pitch-wave)).
-- What is left of rate 33's waveform difference with the mid-frame pitch wave, in the accounting
-  of [November 2026: mid-frame voicing](#november-2026-mid-frame-voicing): 0.0248 of the signal on
-  the development vectors, over half of it (0.0138) in the voiced runs that stay in line and 0.0085
-  in the runs under a correlation of 0.8, and 0.0163 on the validation vectors, with its largest
-  group of frames into a run from frame 20 on; the parts are in [November 2026: rate 33's
+- What is left of rate 33's waveform difference with the pulse train running on through a row-17
+  frame, in the accounting of [November 2026: mid-frame voicing](#november-2026-mid-frame-voicing):
+  0.0163 of the signal on the development vectors, 0.0138 of it in the voiced runs that stay in
+  line, 0.0000 in the runs under a correlation of 0.8 and 0.0025 in the frames with no voiced band,
+  and 0.0163 on the validation vectors (0.0124, 0.0000 and 0.0039), whose largest group of frames
+  into a run in line is that from frame 20 on (as measured with the mid-frame pitch wave); the parts
+  are in [November 2026: the pulse train through a row-17
+  frame](#november-2026-the-pulse-train-through-a-row-17-frame) and [November 2026: rate 33's
   mid-frame pitch wave](#november-2026-rate-33s-mid-frame-pitch-wave).
 - Rate-33 V/UV rows 18 to 31 play here as unvoiced noise on their band grid
   ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)); DVSI's decoder plays more than that. DVSI's
@@ -3586,8 +3684,9 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
     rate 33, one in D-STAR), all four come back in line with the octave step ([The pulse train
     across an octave](#the-pulse-train-across-an-octave)). The rate-33 runs under 0.8 looked at
     lost the alignment at sequences of V/UV rows (row 14 then row 15, row 17 then row 13 or 15),
-    which the mid-frame voicing change reads as DVSI's decoder plays them ([Rate 33: rows 13, 15 and
-    17](#rate-33-rows-13-15-and-17)); the 0.6% was measured before that change and before the
+    which the mid-frame voicing change reads as DVSI's decoder plays them, the pulse train running
+    on through a row-17 frame since the row-17 train change ([Rate 33: rows 13, 15 and
+    17](#rate-33-rows-13-15-and-17)); the 0.6% was measured before those changes and before the
     mid-frame pitch wave. What moves the pulse train at the others is not known, and nor is what
     in DVSI's decoder sets rate 33's mid-frame pitch, which the library follows by a fit ([Rate 33:
     mid-frame pitch](#rate-33-mid-frame-pitch)).
@@ -4975,6 +5074,144 @@ on one vector of one codec (P25 `irstia`, by 0.0007 dB) and falls on the other t
 partition shows nothing about the channel-error or tone behaviour, nor which band's voicing is
 right in a given frame.
 
+### November 2026: the pulse train through a row-17 frame
+
+The mid-frame columns change's head (`e446950`, whose rate-33 decodes are those of `c3c6d42`, PR
+#199) against the row-17 train change ([Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17),
+**The pulse train through a row-17 frame**): in the rate-33 rendering the train a stream carries
+into a frame is also taken from a frame marked `MBE_FRAME_MARK_MID_COLUMN_0`. The study that found
+it read the development and validation vectors and DVSI's rate-33 tone vectors, never `irstia` or
+`mark`. Its scratch build was measured on the development and validation vectors (the cases of the
+section above, the whole-file figures and the accounting below) and on the rate-33 tone vectors
+before the gate sets were declared, so the development and validation partitions are not out of
+sample here; the final partition is held out, to be scored once, after the review (below). The
+library's rate-33 decodes of the 25 development and validation vectors equal the scratch build's
+with the change, file for file, so the scratch build's figures below are the library's. The
+candidate is the branch's head at `2a3a64f`, whose library code is `8cbef45`'s (the commits after
+it change tests and documents only). Both builds aligned freely first and were then scored at their
+joint lags, both runs' encodings decoded by the candidate's decoder.
+
+**Speech**, rate 33 decoding DVSI's bits, on the scoreboard: the waveform correlation with DVSI's
+decode, sample for sample (`vs_dvsi.waveform_corr_unshifted`, over the frames where DVSI's decode
+lies within 40 dB of its loudest), with the mean paired change and its 95% interval and the vectors
+whose correlation rises and falls by more than 1e-6; the log-spectral distance from DVSI's decode
+(`vs_dvsi.lsd_db`), the envelope correlation with it (`vs_dvsi.env_corr`), the level against it
+(`vs_dvsi.level_offset_db`) and the log-spectral distance from the input (`ours.lsd_db`), partition
+means:
+
+| Partition | Waveform corr. vs DVSI | Vectors up / down | LSD vs DVSI (dB) | Envelope corr. vs DVSI | Level vs DVSI (dB) | LSD vs input (dB) |
+|---|---|---|---|---|---|---|
+| development | 0.989337 → 0.992449 (+0.003112, 95% interval 0.000123 to 0.011608) | 4 / 0 (`t02` +0.029258, `clean` +0.016964, `fambf22c` +0.014837, `ucarm20a` +0.001187) | 1.2299 → 1.2291 | 0.99207 → 0.99209 | +0.0139 → +0.0139 | 6.2692 → 6.2692 |
+| validation | 0.992142 → 0.992142 (+3.8e-09) | 0 / 0 | 1.0642 → 1.0641 | 0.98840 → 0.98840 | -0.0403 → -0.0403 | 4.8303 → 4.8303 |
+
+Per vector, the correlation of `ucarm15a` moves by +1.7e-08 and of validation's `tambf22b` by +1.9e-08,
+and no other vector's moves. The distance from DVSI's decode falls on the five development vectors
+that change (`fambf22c` by 0.0077 dB, `t02` 0.0033, `clean` 0.0027, `ucarm20a` 0.0022, `ucarm15a`
+0.00002) and on `tambf22b` (0.0001 dB); the envelope correlation rises on those six; the distance from
+the input rises on `fambf22c` (+0.00025 dB), `t02` (+0.00015) and `ucarm20a` (+0.00013) and falls on
+`clean` (-0.00011), `ucarm15a` (-0.00003) and `tambf22b` (-0.000005); the level against DVSI's
+moves by at most 0.00006 dB (`clean`). D-STAR's and P25's partition means and decodes are unchanged.
+
+The decodes that change, and their frames that change (16-bit samples, the library's builds): `t02`
+31 frames, from frame 1418, `fambf22c` 28 from 1213, `clean` 25 from 1417, `ucarm20a` 6 from 610,
+`ucarm15a` 2 (610 and 611) and, on validation, `tambf22b` 2 (1642 and 1643); the other 19 rate-33
+decodes are identical.
+
+Over whole files, the measure of the study (the correlation of our decode with DVSI's, sample for
+sample over the whole file at lag 0, and the residual energy of the difference over the signal's,
+means over the vectors; the scratch builds): development 0.989326 → 0.992438 (+0.003112; 0.9893 →
+0.9924), residual 0.0214 → 0.0152, four vectors rising by more than 1e-6 and none falling (`t02`
+0.9660 → 0.9953, +0.029257; `clean` 0.9723 → 0.9893, +0.016962; `fambf22c` 0.9774 → 0.9922,
++0.014836; `ucarm20a` 0.9891 → 0.9903, +0.001187; `ucarm15a` moving by less than 1e-7); validation
+0.992119 → 0.992119, `tambf22b` moving by less than 1e-7. A scratch variant that never drops a
+carried train gives the same 25 rate-33 decodes ([Rate 33: rows 13, 15 and
+17](#rate-33-rows-13-15-and-17)).
+
+**Where the residual sits**, in the accounting of [November 2026: mid-frame
+voicing](#november-2026-mid-frame-voicing) (every vector scaled to unit power, the residual and the
+signal summed over the vectors; voiced runs with a whole-run correlation under 0.8 out of line), the
+baseline and with the change, on the scratch builds:
+
+| Rate 33 | Residual | Voiced runs in line | Voiced runs under a correlation of 0.8 | Frames with no voiced band |
+|---|---|---|---|---|
+| development | 0.0248 → 0.0163 | 0.0138 → 0.0138 | 0.0085 → 0.0000 | 0.0025 → 0.0025 |
+| validation | 0.0163 → 0.0163 | 0.0124 → 0.0124 | 0.0000 → 0.0000 | 0.0039 → 0.0039 |
+
+The three runs that held development's 0.0085 were `clean` from frame 1391 (50 frames) and
+`fambf22c` from 1197 (29) and from 1468 (21), counted as runs by a decode that still voiced row 17's
+own model, so that each run spans its row-17 frame; each lost the line at the frame after the row-17
+frame (1417, 1213 and 1475).
+
+**Tones.** No rate-33 tone decode changes (52 of 52 by the scoreboard's hashes), and none of
+D-STAR's or P25's; the five tone measures the gates check and the encoders' tone statistics do not
+move on any vector.
+
+**Channel errors.** No mute decision changes at any error rate, hard or soft, frame for frame: the
+mute flag of every frame of the 24 channel-error decodes (8 vectors in each of the three codecs,
+30,600 frames, 1,678 of them muted) is the same in both builds. Two rate-33 channel-error decodes
+change, `dam_e10_hd` in 3 frames (387, 413 and 861) and `dam_e10_sd` in 10; the scoreboard's
+log-spectral distance from DVSI's decode on the loud frames neither decoder mutes
+(`lsd_common_db`) does not move on any of the eight vectors (a paired change of 0 on each; a
+coverage of 0.750 of the loud frames DVSI plays with hard decisions and 0.991 with soft ones, the
+least over the vectors). No D-STAR or P25 channel-error decode changes.
+
+**Other modes and the encoders.** Every D-STAR and P25 bit file of DVSI's vectors at the top of each
+mode's directory, `irstia` and `mark` left out (106 D-STAR and 103 P25 files, the tone,
+channel-error, DTX and synthetic ones among them, the soft-decision ones decoded as soft), decodes
+identically in the two builds, and so do 97 of the 106 rate-33 files: `clean`, `clean_dtx` (from
+frame 1417), `dam_e10_hd`, `dam_e10_sd`, `fambf22c`, `t02`, `tambf22b`, `ucarm15a` and `ucarm20a`
+decode otherwise. All 285 encodings (95 input files, `irstia` and `mark` not among them, three
+encoders) are identical between the two builds. These were compared in the scoreboard's builds
+(Release, SIMD, IEEE arithmetic) only.
+
+**Cost.** Not measured: the change adds one comparison of the previous frame's mark per frame, in
+the rate-33 rendering, and only after a frame with no voiced band.
+
+**Gate sets**, declared in the branch's first commit, `6a32fb8`, before any build of the branch was
+scored (the study's scratch build had been measured on the development, validation and rate-33 tone
+vectors before that, above, and the baseline's own scoreboard of the four partitions, `e446950`'s
+build decoding its own encodings, was read to record each measure's coverage), and evaluated in one
+combined run over the development, validation, tone and channel partitions, `e446950` against the
+head's code:
+
+| Gate set | Result | What it establishes |
+|---|---|---|
+| `r33-row17-train-development` | passes all 12 checks | on the vectors the change was found on, within the limits declared: rate 33's correlation mean rising by at least 0.002 with its interval above 0 (observed +0.003112, interval 0.000123 to 0.011608) and no vector falling by more than 0.0005 (observed: none falls), the distance from DVSI's decode within its limits on the mean and on every vector, and the envelope correlation, the distance from the input and the level within theirs on the mean only, each check measured on all 20 vectors (`every_vector`); D-STAR's and P25's speech decodes and every encoder's speech rows unchanged |
+| `r33-row17-train-validation` | passes all 12 checks | the same limits for harm on the validation vectors, also read in the study (the correlation's mean falling by no more than 0.0005, observed +3.8e-09); with one decode changing in two frames, this partition can show no gain |
+| `r33-row17-train-tones` | passes all 15 checks | rate 33's tone measures within their limits on the vectors both runs measure, D-STAR's and P25's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level) unchanged; not that the same tone frames or bits were sent |
+| `r33-row17-train-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), rate 33's mean distance from DVSI's decode on the loud frames not rising past 0.01 dB (observed: no change), D-STAR's and P25's decodes and every encoder's speech rows unchanged |
+| `r33-row17-train-final` | to be scored once, after the review (below) | on `irstia` and `mark`, held out: that nothing moves the wrong way past its limit |
+
+Notes on the declarations. A check that the mean rises by at least a value is the scoreboard's
+`increase` rule, which also requires the 95% interval above 0. Every paired check of the
+development, validation and final sets requires every vector (`every_vector`), and the baseline
+measured each of the development and validation ones on all 20 and all 5 vectors; `every_vector`
+makes a check need a measurement on every vector, it does not make a limit on the mean a limit on
+each vector. The tones set requires every vector for rate 33's detector agreement and the D-STAR and
+rate-33 encoders' extra-tone rates, which cover all 52, and its description records the coverage of
+the others from the baseline's own scoreboard (rate 33's frequency, level and wrong-tone figures on
+49 of the 52 vectors, its balance on 48; D-STAR's encoder agreement and volume error on 35; the
+rate-33 encoder's agreement and level error on 51, `cpvbad` absent); a check on a metric that
+applies to part of a partition cannot require every vector, so a vector on which the metric went
+missing in both runs would pass it unnoticed, and in this run each such check covered the vectors
+listed (the channel checks the four hard- and the four soft-decision vectors each). The identity
+counters (`speech.pcm_changed_vectors`, the encoder-row counter) count the speech vectors present in
+the run, so they were evaluated on the combined run. Bit identity of the encodings is the separate
+comparison of the 285 encodings above, and frame-for-frame mute identity the separate comparison of
+the 30,600 channel-error frames: the gates establish neither. No channel-error vector is gated on
+rate 33's waveform. The sets' descriptions give the order of events (the scratch build measured
+before the declaration) and the coverage read from the baseline's scoreboard.
+
+**The final partition.** The gate set `r33-row17-train-final` was declared with the others in
+`6a32fb8`, before any build of the branch was scored: on `irstia` and `mark`, D-STAR's and P25's
+decodes of DVSI's bits unchanged, every encoder's bits unchanged, and for rate 33 the waveform
+correlation with DVSI's decode falling by no more than 0.0005 on the mean and 0.002 on any vector,
+the distance from DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any
+vector, and, on the mean only, the envelope correlation falling by no more than 0.001, the distance
+from the input rising by no more than 0.01 dB and the level against DVSI's moving by at most 0.05
+dB. Neither the change nor its scratch build was measured on these vectors. It is to be scored once,
+after the review; its result is not recorded yet.
+
 ### Scoring history
 
 The final partition was scored twice, with the library unchanged in between. The first scoring fixed
@@ -5095,3 +5332,14 @@ scored once for it, on 2026-11-26, after the review and its two rounds of fixes:
 the head's code (the build of `e86afd0`), against `mid-columns-final`, declared in `3593e8c`. It
 passes all 18 checks ([November 2026: mid-frame voicing by
 columns](#november-2026-mid-frame-voicing-by-columns)).
+
+The row-17 train change was scored once, `e446950` against the head's code (the build of `2a3a64f`,
+whose library code is `8cbef45`'s), on the development, validation, tone and channel partitions in
+one combined run with the four gate sets declared in `6a32fb8`, the branch's first commit, before
+any build of the branch was scored; all four pass, 72 of 72 checks ([November 2026: the pulse train
+through a row-17 frame](#november-2026-the-pulse-train-through-a-row-17-frame)). Before that
+declaration the study's scratch build had been measured on the development, validation and rate-33
+tone vectors, and the baseline alone was scored on the four partitions (its own encodings decoded
+by its own decoder) to record each measure's coverage in the sets' descriptions. The final partition
+is to be scored once for it, after the review, against `r33-row17-train-final`, declared in
+`6a32fb8`.

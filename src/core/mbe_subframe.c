@@ -738,10 +738,15 @@ struct pulse_train {
  * the mid-frame model over its second (advance_interval()). That is the train
  * store_pulse_train() left, and a frame voiced in its first half after it
  * continues it, where after a frame with no voiced band and none of these
- * marks it starts a new train at its first sample (docs/dvsi-parity.md,
- * "Rate 33: rows 13, 15 and 17"). A lost-frame repeat does not carry the mark
- * (ambe2450_load_repeat()), and no other rendering reads it: a caller's mark
- * there changes nothing. */
+ * marks it starts a new train at its first sample, as the rate-33 rendering
+ * did from the mid-frame voicing change, which left row 17's own model with no
+ * voiced band, to the row-17 train change. Of the 12 row-17 frames of DVSI's
+ * development and validation vectors between two frames with a voiced band,
+ * the voiced run after the frame comes nearer DVSI's decode by more than 0.02
+ * of correlation with the train running on in 6 and farther in none
+ * (docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17"). A lost-frame repeat
+ * does not carry the mark (ambe2450_load_repeat()), and no other rendering
+ * reads it: a caller's mark there changes nothing. */
 static int
 train_runs_on(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, enum mbe_voiced_synthesis rendering) {
     if (prev->any_voiced) {
