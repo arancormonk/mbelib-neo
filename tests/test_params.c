@@ -21,6 +21,7 @@
 #include "ambe3600x2450_const.h"
 #include "ambe3600x2450_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_low_band.h"
 #include "mbe_math.h"
 #include "mbe_subframe.h"
 #include "mbe_tone.h"
@@ -546,6 +547,57 @@ test_low_band_phase(void) {
     }
     assert(fabsf(mbe_low_band_phase(100.0f) - (float)(M_PI / 2.0)) < 1e-6f);
     assert(mbe_low_band_phase(0.0f) == 0.0f && mbe_low_band_phase(-5.0f) == 0.0f);
+}
+
+/*
+ * DVSI's fixed high-pass (mbe_low_band.h): a third-order Butterworth at 75 Hz,
+ * H(s) = s^3 / ((s + 1)(s^2 + s + 1)) at s = j hz / 75, here from its three
+ * factors in double (the library forms the closed form x^3 / sqrt(1 + x^6)
+ * and the angle 3 pi / 2 - atan(x) - atan2(x, 1 - x^2)): gain and phase within
+ * 2e-7 at every bin of the unvoiced transform (k 8000 / 256 Hz, k 0..128, 0 and
+ * Nyquist among them) and on a sweep of harmonic frequencies, 1/sqrt(2) and
+ * 3 pi / 4 at 75 Hz exactly; 0 for both at 0 and below, and at a subnormal
+ * frequency a gain of 0 and no NaN. The second-order filter at 100 Hz, which
+ * ProVoice and the public synthesizer keep, is the tests above's.
+ */
+static double
+dvsi_band_gain(double hz) {
+    const double x = hz / 75.0;
+    return (x * x * x) / (sqrt(1.0 + (x * x)) * sqrt(((1.0 - (x * x)) * (1.0 - (x * x))) + (x * x)));
+}
+
+static double
+dvsi_band_phase(double hz) {
+    const double x = hz / 75.0;
+    return (1.5 * M_PI) - atan2(x, 1.0) - atan2(x, 1.0 - (x * x));
+}
+
+static void
+test_low_band_dvsi(void) {
+    for (int k = 1; k <= 128; ++k) {
+        const float hz = (float)k * (8000.0f / 256.0f);
+        assert(fabs((double)mbe_low_band_dvsi_gain(hz) - dvsi_band_gain((double)hz)) < 2e-7);
+        assert(fabs((double)mbe_low_band_dvsi_phase(hz) - dvsi_band_phase((double)hz)) < 2e-7);
+    }
+    static const float sweep[] = {1.0f,   20.0f,  37.5f,  60.0f,  74.9f,   75.1f,   90.0f,   110.0f, 150.0f,
+                                  199.9f, 200.0f, 333.3f, 500.0f, 1000.0f, 2222.0f, 3999.0f, 4000.0f};
+    for (size_t i = 0; i < sizeof(sweep) / sizeof(sweep[0]); ++i) {
+        assert(fabs((double)mbe_low_band_dvsi_gain(sweep[i]) - dvsi_band_gain((double)sweep[i])) < 2e-7);
+        assert(fabs((double)mbe_low_band_dvsi_phase(sweep[i]) - dvsi_band_phase((double)sweep[i])) < 2e-7);
+    }
+    const float at_corner = mbe_low_band_dvsi_gain(75.0f), corner_phase = mbe_low_band_dvsi_phase(75.0f);
+    assert(fabs((double)at_corner - sqrt(0.5)) < 1e-7);
+    assert(fabs((double)corner_phase - (0.75 * M_PI)) < 1e-6);
+    float subnormal;
+    const uint32_t tiny = 0x00000001u;
+    memcpy(&subnormal, &tiny, sizeof(subnormal));
+    const float zero_gain = mbe_low_band_dvsi_gain(0.0f), zero_phase = mbe_low_band_dvsi_phase(0.0f);
+    const float below_gain = mbe_low_band_dvsi_gain(-5.0f), below_phase = mbe_low_band_dvsi_phase(-5.0f);
+    const float tiny_gain = mbe_low_band_dvsi_gain(subnormal), tiny_phase = mbe_low_band_dvsi_phase(subnormal);
+    assert(zero_gain == 0.0f && zero_phase == 0.0f && below_gain == 0.0f && below_phase == 0.0f);
+    assert(tiny_gain == 0.0f && fabs((double)tiny_phase - (1.5 * M_PI)) < 1e-6);
+    /* Above the corner it passes, as the second-order filter does. */
+    assert(fabs((double)mbe_low_band_dvsi_gain(1000.0f) - 1.0) < 1e-6);
 }
 
 /* Amplitude of the component at `hz` over a buffer of n samples. */
@@ -1651,6 +1703,7 @@ main(void) {
     test_ambe2400_repeat_limit_keeps_error_rate();
     test_low_band_gain();
     test_low_band_phase();
+    test_low_band_dvsi();
     test_low_band_rendering();
     test_low_band_phase_rendering();
     test_render_voicing_gains();

@@ -127,24 +127,36 @@ subframe_window(int n) {
     return sqrt(t < 0.0 ? (t + 80.0) / 80.0 : (80.0 - t) / 80.0);
 }
 
-/* The output high-pass at bin k of the 256-point transform: s^2 / (s^2 + sqrt2 s + 1), s = j hz / 100. */
+/* The output high-pass at bin k of the 256-point transform: ProVoice's
+ * s^2 / (s^2 + sqrt2 s + 1), s = j hz / 100, or (dvsi) DVSI's
+ * s^3 / ((s + 1)(s^2 + s + 1)), s = j hz / 75, each from its factors. */
 static void
-output_filter(int k, double* real, double* imag) {
-    const double x = ((double)k * 8000.0 / 256.0) / 100.0;
+output_filter(int k, int dvsi, double* real, double* imag) {
     if (k == 0) {
         *real = 0.0;
         *imag = 0.0;
         return;
     }
-    const double gain = (x * x) / sqrt((x * x * x * x) + 1.0);
-    const double phase = TEST_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+    const double hz = (double)k * 8000.0 / 256.0;
+    double gain, phase;
+    if (dvsi) {
+        const double x = hz / 75.0;
+        gain = (x * x * x) / (sqrt(1.0 + (x * x)) * sqrt(((1.0 - (x * x)) * (1.0 - (x * x))) + (x * x)));
+        phase = (1.5 * TEST_PI) - atan2(x, 1.0) - atan2(x, 1.0 - (x * x));
+    } else {
+        const double x = hz / 100.0;
+        gain = (x * x) / sqrt((x * x * x * x) + 1.0);
+        phase = TEST_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+    }
     *real = gain * cos(phase);
     *imag = gain * sin(phase);
 }
 
 /* One subframe by the equations: window, 256-point DFT, bands scaled against
  * their own power between edges rounded to the nearest bin, the output
- * high-pass, inverse DFT, the window again. */
+ * high-pass (the subframe's, dvsi_low_band), the bins whose centre frequency
+ * k 8000 / 256 Hz lies under the low cut's corner (cut_hz) zero, inverse DFT,
+ * the window again. */
 static void
 reference_subframe(const double* noise, const struct mbe_unvoiced_subframe* sub, double out[160]) {
     double time[256] = {0};
@@ -178,7 +190,10 @@ reference_subframe(const double* noise, const struct mbe_unvoiced_subframe* sub,
         const double scale = (double)sub->amplitude[l] / sqrt(power / (double)(upper - lower));
         for (int k = lower; k < upper; ++k) {
             double filter_real, filter_imag;
-            output_filter(k, &filter_real, &filter_imag);
+            if ((double)k * 8000.0 / 256.0 < (double)sub->cut_hz) {
+                continue;
+            }
+            output_filter(k, sub->dvsi_low_band, &filter_real, &filter_imag);
             const double bin_imag = (k == 0) ? 0.0 : imag[k];
             shaped_real[k] = scale * (real[k] * filter_real - bin_imag * filter_imag);
             shaped_imag[k] = scale * (real[k] * filter_imag + bin_imag * filter_real);
@@ -285,6 +300,85 @@ test_subframes_match_equations(mbe_fft_plan* plan) {
 }
 
 /* A band's noise at its amplitude: level set by MBE_UNVOICED_SUBFRAME_SCALE's convention. */
+/* Whether two float arrays hold the same bits. */
+static int
+same_floats(const float* a, const float* b, int n) {
+    for (int i = 0; i < n; ++i) {
+        uint32_t x, y;
+        memcpy(&x, &a[i], sizeof(x));
+        memcpy(&y, &b[i], sizeof(y));
+        if (x != y) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * DVSI's low band on the unvoiced subframes (D-STAR's, P25's and rate 33's):
+ * the third-order filter at 75 Hz at every bin, and the bins under the low
+ * cut's corner zero, in both subframes, each its own corner (160 Hz mid-frame,
+ * 190 Hz own: under 160 bins 1 to 5, under 190 bins 1 to 6), against the
+ * equations; the band that holds the corner keeps its scale from its whole
+ * power (the bins above keep their level). A frame whose bands all lie above
+ * both corners plays the same bits with the cut as without it. The second-order
+ * filter (ProVoice's) is test_subframes_match_equations()'s.
+ */
+static void
+test_dvsi_subframes_match_equations(mbe_fft_plan* plan) {
+    mbe_parms current, previous;
+    struct mbe_unvoiced_subframe mid, own;
+    double noise[240], mid_out[160], own_out[160];
+    float output[160];
+    const uint32_t state = 777u;
+
+    new_model(&current);
+    new_model(&previous);
+    current.noiseSeed = (float)state;
+    fill_subframe(&mid, 0.0613f, 47, 30.0f, 0);
+    fill_subframe(&own, 0.0820f, 35, 60.0f, 0);
+    mid.dvsi_low_band = own.dvsi_low_band = 1;
+    mid.cut_hz = 160.0f;
+    own.cut_hz = 190.0f;
+    memset(output, 0, sizeof(output));
+    mbe_synthesizeUnvoicedSubframes(output, &current, &previous, plan, &mid, &own);
+    frame_noise(state, noise);
+    reference_subframe(noise, &mid, mid_out);
+    reference_subframe(noise + 80, &own, own_out);
+    double energy = 0.0;
+    for (int n = 0; n < 160; ++n) {
+        const double expected = mid_out[n] + ((n >= 80) ? own_out[n - 80] : 0.0);
+        assert_close(output[n], expected, 0.01, 2.0e-4);
+        energy += expected * expected;
+    }
+    assert(energy > 1.0e3);
+    /* Without the cut the same frame plays otherwise, by more than the tolerance. */
+    struct mbe_unvoiced_subframe mid_uncut = mid, own_uncut = own;
+    mid_uncut.cut_hz = 0.0f;
+    own_uncut.cut_hz = 0.0f;
+    reference_subframe(noise, &mid_uncut, mid_out);
+    reference_subframe(noise + 80, &own_uncut, own_out);
+    double moved = 0.0;
+    for (int n = 0; n < 160; ++n) {
+        moved = fmax(moved, fabs((double)output[n] - mid_out[n] - ((n >= 80) ? own_out[n - 80] : 0.0)));
+    }
+    assert(moved > 1.0);
+    /* Bands above both corners (from 250 Hz): the same bits with the cut as without. */
+    fill_subframe(&mid, 0.1963f, 14, 30.0f, 0);
+    fill_subframe(&own, 0.2160f, 13, 60.0f, 0);
+    mid.amplitude[1] = own.amplitude[1] = 0.0f;
+    mid.dvsi_low_band = own.dvsi_low_band = 1;
+    struct mbe_unvoiced_subframe mid_cut = mid, own_cut = own;
+    mid_cut.cut_hz = 190.0f;
+    own_cut.cut_hz = 200.0f;
+    float plain[160] = {0.0f}, cut[160] = {0.0f};
+    mbe_parms a = current, b = current;
+    a.noiseSeed = b.noiseSeed = (float)state;
+    mbe_synthesizeUnvoicedSubframes(plain, &a, &previous, plan, &mid, &own);
+    mbe_synthesizeUnvoicedSubframes(cut, &b, &previous, plan, &mid_cut, &own_cut);
+    assert(same_floats(plain, cut, 160));
+}
+
 static void
 test_window_squares_sum_to_one(mbe_fft_plan* plan) {
     mbe_parms current, previous;
@@ -820,6 +914,7 @@ main(void) {
     test_generator();
     test_frame_noise();
     test_subframes_match_equations(plan);
+    test_dvsi_subframes_match_equations(plan);
     test_window_squares_sum_to_one(plan);
     test_cold_start_and_skip(plan);
     test_invalid_arguments(plan);
