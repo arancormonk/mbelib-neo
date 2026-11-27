@@ -851,7 +851,7 @@ mbe_imbe4400_tone_first_row(int b0) {
 /* The word a tone frame's decode leaves in the otherwise unused Vl[0] (Vl is
  * indexed from 1, and P25 keeps nothing there): the flag, b0 in bits 16-23,
  * l2 in bits 8-15 and l1 in bits 0-7. */
-#define IMBE_TONE_FLAG         (1 << 24)
+#define IMBE_TONE_FLAG         MBE_P25_TONE_WORD_FLAG
 
 /* The frame's voicing word as transmitted, band 1 the most significant bit:
  * band j holds harmonics 3j - 2 .. 3j, the last band the rest

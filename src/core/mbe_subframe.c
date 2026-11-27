@@ -141,6 +141,77 @@ phase_log2_amplitudes(const mbe_parms* mp, double out[57]) {
     }
 }
 
+/* log2 of the unvoiced factor MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) at a
+ * pitch w0 (positive and normal), in double: an unvoiced band's magnitude is
+ * the voiced one's times the factor, so its log2 is the voiced one's plus
+ * this (about -2.289 - 0.5 log2(w0)). Its one definition: the magnitudes'
+ * move between the two domains and the phase kernel's input in P25's
+ * rendering (p25_phase_log2_inputs()) take it here. */
+static double
+unvoiced_log2_factor(float w0) {
+    return log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)w0));
+}
+
+/*
+ * Whether a model is a P25 tone model as imbe4400_play_tone() leaves it: marked
+ * MBE_FRAME_MARK_TONE, its Vl[0] holding a tone word (MBE_P25_TONE_WORD_FLAG,
+ * tone harmonics l1 <= l2 within 1..L), exactly those harmonics voiced and
+ * every other band unvoiced with no magnitude (0 by its bit pattern). The
+ * mark alone does not make one: it is read on the previous model too, which
+ * is caller state, and a mark only that function earns is checked where it is
+ * read (a caller's model built as a tone model is one, and plays as one).
+ */
+static int
+p25_tone_model(const mbe_parms* mp) {
+    const int word = mp->Vl[0];
+    if (mbe_frame_mark(mp) != MBE_FRAME_MARK_TONE || (word & ~0x00FFFFFF) != MBE_P25_TONE_WORD_FLAG) {
+        return 0;
+    }
+    const int l1 = word & 0xFF, l2 = (word >> 8) & 0xFF;
+    if (l1 < 1 || l1 > l2 || l2 > mp->L) {
+        return 0;
+    }
+    for (int l = 1; l <= mp->L; l++) {
+        const int tone = (l == l1) || (l == l2);
+        uint32_t bits;
+        memcpy(&bits, &mp->Ml[l], sizeof(bits));
+        if (mp->Vl[l] != (tone ? 1 : 0) || (!tone && bits != 0u)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * The phase kernel's input in P25's rendering (docs/dvsi-parity.md, "Phase
+ * regeneration"): a frame's decoded log2 amplitudes (phase_log2_amplitudes()),
+ * those of each band the model holds as unvoiced (Vl 0, as the synthesis
+ * renders it: after adaptive smoothing, which can voice a band, and then
+ * reads it as voiced) with the unvoiced factor taken out, minus
+ * unvoiced_log2_factor() at the frame's own pitch, about 2.289 + 0.5 log2(w0)
+ * more: the domain of TIA-102.BABA-1's log magnitudes, in which an AMBE
+ * decoder's unvoiced bands already are (its encoder adds that before coding)
+ * and in which DVSI's P25 decoder evidently reads P25's bands too. A voiced
+ * band, a band with no state (neither 0 nor 1) and a tone model's bands
+ * (p25_tone_model()) are read as decoded. The kernel's floor
+ * (MBE_PHASE_LOG2_FLOOR) and its extrapolation past L
+ * (mbe_regenerate_phases_log2()) then take the shifted values: band L's, where
+ * it is unvoiced, is the tail's start. The pitch is positive and normal here.
+ */
+static void
+p25_phase_log2_inputs(const mbe_parms* mp, double out[57]) {
+    phase_log2_amplitudes(mp, out);
+    if (p25_tone_model(mp)) {
+        return;
+    }
+    const double step = -unvoiced_log2_factor(mp->w0);
+    for (int l = 1; l <= mp->L; l++) {
+        if (mp->Vl[l] == 0) {
+            out[l] += step;
+        }
+    }
+}
+
 void
 mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
     double log2_amplitudes[57];
@@ -170,10 +241,52 @@ mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
     mbe_regenerate_phases_log2(envelope, model->L, model->phase);
 }
 
+/* mbe_subframe_own_model() in P25's rendering: the phases from
+ * p25_phase_log2_inputs(). A body of its own, so that the other renderings'
+ * code stays as it was. */
+static void
+p25_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
+    double log2_amplitudes[57];
+    float envelope[57] = {0};
+
+    memset(model, 0, sizeof(*model));
+    if (!mbe_harmonic_count_is_valid(mp->L)) {
+        return;
+    }
+    model->L = mp->L;
+    if (!positive_normal(&mp->w0)) {
+        for (int l = 1; l <= model->L; l++) {
+            model->voiced[l] = BAND_NONE;
+        }
+        return;
+    }
+    model->w0 = mp->w0;
+    for (int l = 1; l <= mp->L; l++) {
+        model->voiced[l] = (unsigned char)band_state(mp, l);
+        model->magnitude[l] = positive_normal(&mp->Ml[l]) ? limited_magnitude(mp->Ml[l]) : 0.0f;
+    }
+    note_voiced(model);
+    p25_phase_log2_inputs(mp, log2_amplitudes);
+    for (int l = 1; l <= mp->L; l++) {
+        envelope[l] = (float)log2_amplitudes[l];
+    }
+    mbe_regenerate_phases_log2(envelope, model->L, model->phase);
+}
+
+void
+mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering,
+                                struct mbe_subframe_model* model) {
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        p25_own_model(mp, model);
+    } else {
+        mbe_subframe_own_model(mp, model);
+    }
+}
+
 /* log2 of each band's magnitude with the unvoiced factor taken out. */
 static void
 common_log2_magnitudes(const mbe_parms* mp, double out[57]) {
-    const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)mp->w0));
+    const double unvoiced = unvoiced_log2_factor(mp->w0);
     for (int l = 1; l <= mp->L; l++) {
         if (!positive_normal(&mp->Ml[l])) {
             out[l] = LOG2_SILENT;
@@ -932,6 +1045,29 @@ column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struc
     return columns_voice(rule, model->w0, l) ? BAND_VOICED : BAND_UNVOICED;
 }
 
+/* columns_voice() for P25's columns, in P25's rendering: a copy, so that the
+ * other renderings' code keeps its inlining (p25_fill_mid_bands()). */
+static int
+p25_columns_voice(const struct column_rule* rule, float w0, int l) {
+    const double hz = ((double)w0 * (double)l * 4000.0) / M_PI;
+    return column_voiced(rule, p25_column(hz)) || column_voiced(rule, p25_column(hz + COLUMN_REACH_HZ));
+}
+
+/* column_band_state() in P25's rendering (p25_fill_mid_bands()). */
+static int
+p25_column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struct column_rule* rule,
+                      const struct mbe_subframe_model* model, int l) {
+    const int before = band_state(prev_mp, nearest_harmonic(prev_mp, model->w0, l));
+    const int now = band_state(cur_mp, nearest_harmonic(cur_mp, model->w0, l));
+    if (before == BAND_NONE || now == BAND_NONE) {
+        return BAND_NONE;
+    }
+    if (before == now) {
+        return now;
+    }
+    return p25_columns_voice(rule, model->w0, l) ? BAND_VOICED : BAND_UNVOICED;
+}
+
 /* Whether the rate-33 rendering's mid-frame model keeps the previous frame's
  * voicing instead of taking this frame's: a frame with no voiced band marked
  * MBE_FRAME_MARK_PITCH_ABSENT, after a frame voiced at its harmonic at or next
@@ -1004,11 +1140,13 @@ row_voices(const int row[8], const struct mbe_subframe_model* model, int l) {
  * factor (an AMBE decoder builds an ordinary voice frame's unvoiced band as
  * Ml = MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) times 2^log2Ml; Ml then also
  * carries what log2Ml does not, such as rate 33's further silence scale and
- * spectral enhancement). */
+ * spectral enhancement). P25's rendering has its own copy,
+ * p25_fill_mid_bands(), whose decoded log2Ml of an unvoiced band is the IMBE
+ * magnitude itself. */
 static void
 fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parms* voicing, int late_onset,
                const struct column_rule* columns, const int* row, struct mbe_subframe_model* model) {
-    const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
+    const double unvoiced = unvoiced_log2_factor(model->w0);
     double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
     float envelope[57] = {0};
 
@@ -1019,6 +1157,50 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parm
     for (int l = 1; l <= model->L; l++) {
         const float w = model->w0 * (float)l;
         int state = (columns != NULL) ? column_band_state(prev_mp, cur_mp, columns, model, l)
+                                      : band_state(voicing, harmonic_at(voicing, w));
+        if (late_onset && state == BAND_VOICED) {
+            state = BAND_UNVOICED;
+        }
+        if (row != NULL && state != BAND_NONE) {
+            state = row_voices(row, model, l) ? BAND_VOICED : BAND_UNVOICED;
+        }
+        const double mean = 0.5 * (log2_magnitude_at(prev_mp, prev_log2, w) + log2_magnitude_at(cur_mp, cur_log2, w));
+        model->voiced[l] = (unsigned char)state;
+        if (mean > LOG2_FLOOR) {
+            /* Limited before it narrows: a caller's state can put it past what a float holds. */
+            const double magnitude = exp2(mean + ((state == BAND_UNVOICED) ? unvoiced : 0.0));
+            model->magnitude[l] = (magnitude < (double)MAGNITUDE_LIMIT) ? (float)magnitude : MAGNITUDE_LIMIT;
+        }
+        envelope[l] =
+            (float)(0.5
+                    * (log2_magnitude_at(prev_mp, prev_phase_log2, w) + log2_magnitude_at(cur_mp, cur_phase_log2, w)));
+    }
+    note_voiced(model);
+    mbe_regenerate_phases_log2(envelope, model->L, model->phase);
+}
+
+/* fill_mid_bands() in P25's rendering, a body of its own: each frame's phase
+ * inputs are p25_phase_log2_inputs() (its unvoiced bands with the unvoiced
+ * factor taken out at its own pitch, before the two are read at the band's
+ * frequency), and the columns are P25's (p25_column_band_state()). Kept apart,
+ * with its own copies of the column helpers, so that the other renderings'
+ * code is the code it was: one body serving both moved D-STAR's and rate 33's
+ * samples in the 32-bit Release build (x87), where a helper with a second
+ * caller is no longer inlined and the protected arithmetic spills otherwise. */
+static void
+p25_fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parms* voicing, int late_onset,
+                   const struct column_rule* columns, const int* row, struct mbe_subframe_model* model) {
+    const double unvoiced = unvoiced_log2_factor(model->w0);
+    double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
+    float envelope[57] = {0};
+
+    common_log2_magnitudes(prev_mp, prev_log2);
+    common_log2_magnitudes(cur_mp, cur_log2);
+    p25_phase_log2_inputs(prev_mp, prev_phase_log2);
+    p25_phase_log2_inputs(cur_mp, cur_phase_log2);
+    for (int l = 1; l <= model->L; l++) {
+        const float w = model->w0 * (float)l;
+        int state = (columns != NULL) ? p25_column_band_state(prev_mp, cur_mp, columns, model, l)
                                       : band_state(voicing, harmonic_at(voicing, w));
         if (late_onset && state == BAND_VOICED) {
             state = BAND_UNVOICED;
@@ -1052,8 +1234,13 @@ voice_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onse
     memset(&columns, 0, sizeof(columns));
     const int by_columns = column_rule(prev_mp, cur_mp, rendering, &columns);
     const int held = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) && rate33_voicing_holds(prev_mp, cur_mp);
-    fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
-                   mid_row(cur_mp, rendering), model);
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        p25_fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
+                           mid_row(cur_mp, rendering), model);
+    } else {
+        fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
+                       mid_row(cur_mp, rendering), model);
+    }
 }
 
 void
@@ -1065,7 +1252,7 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     }
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {
         /* The previous frame's model stands at mid-frame unchanged. */
-        mbe_subframe_own_model(prev_mp, model);
+        mbe_subframe_rendered_own_model(prev_mp, rendering, model);
         return;
     }
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
@@ -1074,7 +1261,7 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
          * first subframe and holds it over the second (a first tone frame is at
          * full level from sample 80; the frame after the last holds the tone
          * fading out over its first 80 samples). */
-        mbe_subframe_own_model(cur_mp, model);
+        mbe_subframe_rendered_own_model(cur_mp, rendering, model);
         return;
     }
     const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
@@ -1979,9 +2166,9 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
     if (!frame_accepted(cur_mp, prev_mp)) {
         return 0;
     }
-    mbe_subframe_own_model(prev_mp, &models[0]);
+    mbe_subframe_rendered_own_model(prev_mp, rendering, &models[0]);
     mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp, rendering), rendering, &models[1]);
-    mbe_subframe_own_model(cur_mp, &models[2]);
+    mbe_subframe_rendered_own_model(cur_mp, rendering, &models[2]);
     if (from_silence) {
         silence_model(&models[0]);
         if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {

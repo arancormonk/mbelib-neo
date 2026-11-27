@@ -155,6 +155,23 @@ struct mbe_subframe_model {
  */
 void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model);
 
+/**
+ * @brief The model a frame's parameters give at its end in @p rendering.
+ *
+ * mbe_subframe_own_model() but in P25's rendering
+ * (MBE_VOICED_SYNTHESIS_DVSI_IMBE), whose phase kernel reads each band the
+ * frame holds as unvoiced with the unvoiced factor taken out: its log2Ml minus
+ * log2(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0)), the domain of
+ * TIA-102.BABA-1's log magnitudes in which the AMBE codecs' decoded unvoiced
+ * bands already are (docs/dvsi-parity.md, "Phase regeneration"); a tone model
+ * (MBE_FRAME_MARK_TONE) and a band with no state are read as decoded.
+ * @param mp        Frame parameters.
+ * @param rendering The rendering.
+ * @param model     Receives the model, as mbe_subframe_own_model() says.
+ */
+void mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering,
+                                     struct mbe_subframe_model* model);
+
 /* The rate-33 rendering plays the mid-frame pitch between two voiced frames of
  * different pitch at the geometric mean of their pitches times this, times the
  * half-octave wave below (docs/dvsi-parity.md, "Rate 33: mid-frame pitch").
@@ -254,14 +271,17 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * into its log2Ml, which carries no such factor (an AMBE decoder builds an
  * ordinary voice frame's unvoiced band as Ml = MBE_UNVOICED_MAGNITUDE_FACTOR
  * / sqrt(w0) times 2^log2Ml; Ml then also carries what log2Ml does not, such
- * as rate 33's further silence scale and spectral enhancement). A current
+ * as rate 33's further silence scale and spectral enhancement); in P25's
+ * rendering, whose decoded log2Ml of an unvoiced band is the IMBE magnitude
+ * itself, each frame's unvoiced bands are read with the unvoiced factor taken
+ * out (mbe_subframe_rendered_own_model()). A current
  * frame marked MBE_FRAME_MARK_PREVIOUS_HELD
  * (a rate-33 silence frame) instead gets the previous frame's own model
- * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
+ * (mbe_subframe_rendered_own_model()), whatever the two frames' voicing: DVSI's
  * decoder plays it through the silence frame's first 10 ms and crossfades to
  * the silence model over the second. A current frame marked
  * MBE_FRAME_MARK_TONE (a P25 tone sent as voice frames, played as its tone
- * model) gets its own model (mbe_subframe_own_model()): DVSI's decoder brings
+ * model) gets its own model (mbe_subframe_rendered_own_model()): DVSI's decoder brings
  * the tone's amplitude from the last frame's to its own over the first 10 ms
  * and holds it over the second. Harmonic counts outside 1..56 give a model
  * with no band.

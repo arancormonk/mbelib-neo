@@ -234,7 +234,13 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * hold every rendering applied before the columns: the voicing of the frame
  * before a frame so marked held through that frame's first half when a voiced
  * harmonic lies at or next above this frequency. */
-#define MBE_VOICING_REACH_HZ 505.0f
+#define MBE_VOICING_REACH_HZ   505.0f
+
+/* The flag of the word a P25 tone frame's decode leaves in the otherwise
+ * unused Vl[0] (imbe7200x4400.c): the flag, b0 in bits 16-23, the tone's
+ * harmonic l2 in bits 8-15 and l1 in bits 0-7. P25's rendering reads it to
+ * tell a tone model (MBE_FRAME_MARK_TONE) by its structure (mbe_subframe.c). */
+#define MBE_P25_TONE_WORD_FLAG (1 << 24)
 
 /**
  * What a codec's decoder tells the synthesizer about a frame beyond its model
