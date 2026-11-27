@@ -6542,5 +6542,524 @@
         "value": 0.05
       }
     ]
+  },
+  "mid-columns-development": {
+    "description": "Which bands the mid-frame model of a D-STAR or P25 (and ProVoice) voice frame voices, as DVSI's AMBE-3000 decoders play them: one rule for the state of every band, in place of three (this frame's voicing between two voiced frames; at a voiced frame after one with no voiced band, every voiced band in D-STAR and PR #198's onset columns in P25; through a frame with no voiced band marked as lacking a pitch, all of the frame before's voicing when its harmonic at or next above 505 Hz is voiced, else none). A band in the same state in both frames keeps it; one that differs is voiced at mid-frame if and only if M(k) or M(k') holds, k the band's 500 Hz column and k' the column 250 Hz higher, M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k+1) != Sc(k+1)), with Sp and Sc the two frames' voicing sampled at the columns (unvoiced past the last column; a frame with no voiced band unvoiced in every band and sample): a column voiced in both frames is voiced, and a column that changes is voiced unless the column above it does not change. P25 samples its columns as PR #198 did ([0, 505), [505, 1005), ... [3005, 3505) Hz and one above, read at harmonic 1 and at the harmonic at or next above each edge), its last band (harmonics 34 to L) read as unvoiced in a frame of more than 36 harmonics whose harmonic 34 is voiced and harmonic 33 not; D-STAR samples its own (500 k Hz, both columns of each 1 kHz band taking the voicing at the band's lowest harmonic, the columns found by the decoder's own harmonic rule). The rule does not apply to a frame with no voiced band that is not marked as lacking a pitch, nor in P25's rendering after a tone model; rate 33's rendering and the TIA rendering are unchanged. A fit to per-harmonic labels of DVSI's D-STAR and P25 decodes of the development and validation vectors, corroborated on a DVMEGA DVstick 30's single-band steps (issue #157); the head of fix/ambe2450-mid-pitch-wave (c3c6d42) against the change, development vectors: rate 33's decode of DVSI's bits is unchanged (no vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), and for D-STAR and P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.0005 (D-STAR) and 0.001 (P25) more (mean, 95% interval above 0) and by no more than 0.0005 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.005 dB (mean) and 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). The rule was found on per-harmonic labels of the development and validation vectors' decodes, and a scratch build of it was measured on both partitions before this set was declared, so neither partition is out of sample for it; the final partition is. Coverage, checked on the baseline's own scoreboard of these partitions (c3c6d42's decoder code scoring itself) before this set was declared: every paired check is measured on all 20 vectors of the partition in each mode, so each requires every vector. What the checks do not establish: the rise of the mean is the scoreboard's increase rule (the mean paired change at least the value and its bootstrap 95% interval, resampling whole recordings, above 0), measured on the frames the scoreboard correlates; the unchanged decodes and encodings are hash comparisons of the speech vectors the run scores (development and validation together), not of other inputs; and nothing here measures how the change sounds against the input beyond the log-spectral distance.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
+  },
+  "mid-columns-validation": {
+    "description": "Which bands the mid-frame model of a D-STAR or P25 (and ProVoice) voice frame voices, as DVSI's AMBE-3000 decoders play them: one rule for the state of every band, in place of three (this frame's voicing between two voiced frames; at a voiced frame after one with no voiced band, every voiced band in D-STAR and PR #198's onset columns in P25; through a frame with no voiced band marked as lacking a pitch, all of the frame before's voicing when its harmonic at or next above 505 Hz is voiced, else none). A band in the same state in both frames keeps it; one that differs is voiced at mid-frame if and only if M(k) or M(k') holds, k the band's 500 Hz column and k' the column 250 Hz higher, M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k+1) != Sc(k+1)), with Sp and Sc the two frames' voicing sampled at the columns (unvoiced past the last column; a frame with no voiced band unvoiced in every band and sample): a column voiced in both frames is voiced, and a column that changes is voiced unless the column above it does not change. P25 samples its columns as PR #198 did ([0, 505), [505, 1005), ... [3005, 3505) Hz and one above, read at harmonic 1 and at the harmonic at or next above each edge), its last band (harmonics 34 to L) read as unvoiced in a frame of more than 36 harmonics whose harmonic 34 is voiced and harmonic 33 not; D-STAR samples its own (500 k Hz, both columns of each 1 kHz band taking the voicing at the band's lowest harmonic, the columns found by the decoder's own harmonic rule). The rule does not apply to a frame with no voiced band that is not marked as lacking a pitch, nor in P25's rendering after a tone model; rate 33's rendering and the TIA rendering are unchanged. A fit to per-harmonic labels of DVSI's D-STAR and P25 decodes of the development and validation vectors, corroborated on a DVMEGA DVstick 30's single-band steps (issue #157); the head of fix/ambe2450-mid-pitch-wave (c3c6d42) against the change, validation vectors: rate 33's decode of DVSI's bits is unchanged (no vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), and for D-STAR and P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample at least 0.003 (D-STAR) and 0.0005 (P25) more (mean, 95% interval above 0) and by no more than 0.0005 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.005 dB (mean) and 0.02 dB on any vector, loses no more than 0.0005 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). The rule was found on per-harmonic labels of the development and validation vectors' decodes, and a scratch build of it was measured on both partitions before this set was declared, so neither partition is out of sample for it; the final partition is. Coverage, checked on the baseline's own scoreboard of these partitions (c3c6d42's decoder code scoring itself) before this set was declared: every paired check is measured on all 5 vectors of the partition in each mode, so each requires every vector. What the checks do not establish: the rise of the mean is the scoreboard's increase rule (the mean paired change at least the value and its bootstrap 95% interval, resampling whole recordings, above 0), measured on the frames the scoreboard correlates; the unchanged decodes and encodings are hash comparisons of the speech vectors the run scores (development and validation together), not of other inputs; and nothing here measures how the change sounds against the input beyond the log-spectral distance.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.003,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
+  },
+  "mid-columns-tones": {
+    "description": "Which bands the mid-frame model of a D-STAR or P25 (and ProVoice) voice frame voices, as DVSI's AMBE-3000 decoders play them: one rule for the state of every band, in place of three (this frame's voicing between two voiced frames; at a voiced frame after one with no voiced band, every voiced band in D-STAR and PR #198's onset columns in P25; through a frame with no voiced band marked as lacking a pitch, all of the frame before's voicing when its harmonic at or next above 505 Hz is voiced, else none). A band in the same state in both frames keeps it; one that differs is voiced at mid-frame if and only if M(k) or M(k') holds, k the band's 500 Hz column and k' the column 250 Hz higher, M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k+1) != Sc(k+1)), with Sp and Sc the two frames' voicing sampled at the columns (unvoiced past the last column; a frame with no voiced band unvoiced in every band and sample): a column voiced in both frames is voiced, and a column that changes is voiced unless the column above it does not change. P25 samples its columns as PR #198 did ([0, 505), [505, 1005), ... [3005, 3505) Hz and one above, read at harmonic 1 and at the harmonic at or next above each edge), its last band (harmonics 34 to L) read as unvoiced in a frame of more than 36 harmonics whose harmonic 34 is voiced and harmonic 33 not; D-STAR samples its own (500 k Hz, both columns of each 1 kHz band taking the voicing at the band's lowest harmonic, the columns found by the decoder's own harmonic rule). The rule does not apply to a frame with no voiced band that is not marked as lacking a pitch, nor in P25's rendering after a tone model; rate 33's rendering and the TIA rendering are unchanged. A fit to per-harmonic labels of DVSI's D-STAR and P25 decodes of the development and validation vectors, corroborated on a DVMEGA DVstick 30's single-band steps (issue #157); the head of fix/ambe2450-mid-pitch-wave (c3c6d42) against the change, on the tone vectors: rate 33's decodes are unchanged, the speech vectors' as well as the tone vectors' (no vector's PCM changes); the D-STAR and rate-33 encoders' tone frames agree with DVSI's, appear where DVSI sends voice, and differ in level from DVSI's where both send a tone, exactly as before on every vector (the tones group holds no encoder-row hashes, so the encoders are compared here through their tone frames, not bit for bit; the development, validation and channel sets compare the bits of the speech encodings); and for D-STAR and P25 the steady tones' frequency error against DVSI's output rises by no more than 0.0005 on any vector, the tone level and the balance of a dual tone's two components move further from DVSI's by no more than 0.02 dB (mean), the share of windows playing a wrong tone rises on no vector, and the detector's agreement with DVSI's tone output falls by no more than 0.005 on any vector. Coverage, checked on the baseline's own scoreboard of this partition (c3c6d42's decoder code scoring itself) before this set was declared: the detector agreement is measured on all 52 tone vectors in D-STAR and P25, and so are the D-STAR and rate-33 encoders' extra-tone rates, so those checks require every vector; in P25 the frequency, level and wrong-tone figures are measured on all but cp1, cpvbad and dtmfvbad, whose DVSI decode has no steady window holding a tone, and the balance on all but those three and alert, a single tone; in D-STAR the frequency, level and wrong-tone figures on all but cp1, cpvbad, dtmfvbad, knox_2, knox_3, knox_5, knox_7 and knox_14, and the balance on all but those eight and alert; D-STAR's encoder agreement and volume error on all but cpvbad and the 16 KNOX vectors (D-STAR codes KNOX tones as voice); the rate-33 encoder's agreement and level error on all but cpvbad. Neither run can measure a figure where the baseline lacks it, so those vectors are outside those checks. What the checks do not establish: the tone measures are an acoustic detector's, on windows where DVSI's output is steady, and say nothing of the voice frames in these vectors or of a tone's first and last frames; the scoreboard does not compare tone frames sample for sample.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0005
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.005,
+        "every_vector": true
+      }
+    ]
+  },
+  "mid-columns-channel": {
+    "description": "Which bands the mid-frame model of a D-STAR or P25 (and ProVoice) voice frame voices, as DVSI's AMBE-3000 decoders play them: one rule for the state of every band, in place of three (this frame's voicing between two voiced frames; at a voiced frame after one with no voiced band, every voiced band in D-STAR and PR #198's onset columns in P25; through a frame with no voiced band marked as lacking a pitch, all of the frame before's voicing when its harmonic at or next above 505 Hz is voiced, else none). A band in the same state in both frames keeps it; one that differs is voiced at mid-frame if and only if M(k) or M(k') holds, k the band's 500 Hz column and k' the column 250 Hz higher, M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k+1) != Sc(k+1)), with Sp and Sc the two frames' voicing sampled at the columns (unvoiced past the last column; a frame with no voiced band unvoiced in every band and sample): a column voiced in both frames is voiced, and a column that changes is voiced unless the column above it does not change. P25 samples its columns as PR #198 did ([0, 505), [505, 1005), ... [3005, 3505) Hz and one above, read at harmonic 1 and at the harmonic at or next above each edge), its last band (harmonics 34 to L) read as unvoiced in a frame of more than 36 harmonics whose harmonic 34 is voiced and harmonic 33 not; D-STAR samples its own (500 k Hz, both columns of each 1 kHz band taking the voicing at the band's lowest harmonic, the columns found by the decoder's own harmonic rule). The rule does not apply to a frame with no voiced band that is not marked as lacking a pitch, nor in P25's rendering after a tone model; rate 33's rendering and the TIA rendering are unchanged. A fit to per-harmonic labels of DVSI's D-STAR and P25 decodes of the development and validation vectors, corroborated on a DVMEGA DVstick 30's single-band steps (issue #157); the head of fix/ambe2450-mid-pitch-wave (c3c6d42) against the change, under channel errors (dam at 1.1-10.6% bit errors): rate 33's decodes are unchanged, the speech vectors' as well as the channel-error vectors' (no vector's PCM changes), every encoder's bits are unchanged (no speech vector's encoder rows change, in any mode), no mute decision changes in any mode (on every vector, hard and soft, the share of loud frames muted, the agreement with DVSI's mutes and the false and missed mute rates are exactly as before), and for D-STAR and P25 the output on the loud frames neither run nor DVSI mutes (at least a tenth of those DVSI plays) comes no further from DVSI's than 0.01 dB (mean over the error rates), hard and soft decisions. No channel vector is gated on waveform correlation: under channel errors the voiced runs the change moves can be out of phase with DVSI's decode before the change as after it (in the scratch build's P25 decodes, a residual of 0.18 to 0.26 of the signal in the frames that change, against 0.02 in clean speech's runs in line), where more held voiced energy raises the sample difference whichever voicing is right: there the correlation measures the phase, not the voicing; the spectral distance does not depend on the phase. Coverage, checked on the baseline's own scoreboard of this partition (c3c6d42's decoder code scoring itself) before this set was declared: each hard-decision figure is measured on the four hard-decision vectors and each soft-decision figure on the four soft-decision ones, in every mode, so none of these checks can require all eight. What the checks do not establish: the mute figures are statistics per vector, which two changes of opposite sign could leave as they were, so they do not show by themselves that no frame's mute decision changed; and the distance is measured on the frames that count in both runs only.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "r33",
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "mid-columns-final": {
+    "description": "Which bands the mid-frame model of a D-STAR or P25 (and ProVoice) voice frame voices, as DVSI's AMBE-3000 decoders play them: one rule for the state of every band, in place of three (this frame's voicing between two voiced frames; at a voiced frame after one with no voiced band, every voiced band in D-STAR and PR #198's onset columns in P25; through a frame with no voiced band marked as lacking a pitch, all of the frame before's voicing when its harmonic at or next above 505 Hz is voiced, else none). A band in the same state in both frames keeps it; one that differs is voiced at mid-frame if and only if M(k) or M(k') holds, k the band's 500 Hz column and k' the column 250 Hz higher, M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k+1) != Sc(k+1)), with Sp and Sc the two frames' voicing sampled at the columns (unvoiced past the last column; a frame with no voiced band unvoiced in every band and sample): a column voiced in both frames is voiced, and a column that changes is voiced unless the column above it does not change. P25 samples its columns as PR #198 did ([0, 505), [505, 1005), ... [3005, 3505) Hz and one above, read at harmonic 1 and at the harmonic at or next above each edge), its last band (harmonics 34 to L) read as unvoiced in a frame of more than 36 harmonics whose harmonic 34 is voiced and harmonic 33 not; D-STAR samples its own (500 k Hz, both columns of each 1 kHz band taking the voicing at the band's lowest harmonic, the columns found by the decoder's own harmonic rule). The rule does not apply to a frame with no voiced band that is not marked as lacking a pitch, nor in P25's rendering after a tone model; rate 33's rendering and the TIA rendering are unchanged. A fit to per-harmonic labels of DVSI's D-STAR and P25 decodes of the development and validation vectors, corroborated on a DVMEGA DVstick 30's single-band steps (issue #157); the head of fix/ambe2450-mid-pitch-wave (c3c6d42) against the change, final vectors (irstia and mark; scored once, after the review): rate 33's decode of DVSI's bits is unchanged (no vector's PCM changes), every encoder's bits are unchanged (no vector's encoder rows change, in any mode), and for D-STAR and P25 our decode of DVSI's bits correlates with DVSI's waveform sample against sample by no more than 0.0005 less (mean) and 0.002 less on any vector, comes no further from DVSI's decoder in log-spectral distance than 0.01 dB (mean) and 0.03 dB on any vector, loses no more than 0.001 of envelope correlation with DVSI's decode (mean), comes no further from the input than 0.01 dB (mean), and its level against DVSI's moves by at most 0.05 dB (mean). Neither the rule nor its scratch build was measured on these vectors: they are out of sample for it. The checks require every vector; the baseline's coverage of this partition was not looked at, the partition being held out, and every one of these figures is measured on every development and validation vector. What the checks do not establish: on two vectors they check that nothing moves the wrong way past its limit; they are not a measure of the change's size.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": "r33",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
   }
 }
