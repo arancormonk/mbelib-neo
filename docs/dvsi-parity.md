@@ -1092,8 +1092,10 @@ scaled down and the unvoiced bins are removed. D-STAR's, P25's and rate 33's ren
 (`mbe_low_band.h`, `mbe_subframe.c`, `mbe_unvoiced_fft.c`); ProVoice, for which there is no DVSI
 material, and the public `mbe_synthesizeSpeechf()` keep the second-order filter at 100 Hz that all
 of them played before and no cut. What DVSI's decoders compute is not known: the filter and the
-tracker below are the simplest forms found that fit their output, and every constant is a fit to
-DVSI's decodes.
+tracker below are the simplest forms found that fit their output. The filter's corner, the tracker's
+first value and rate, the ceiling and the cut's power are fits to DVSI's decodes; the tracker's range
+(50 to 500 Hz, the clamp, and with the ceiling the range a stored value is read in) and which frames
+that are not decoded speech move the tracker are the library's choices, no fit.
 
 **Before.** From #107 the library rendered the magnitude of a second-order Butterworth high-pass at
 100 Hz on every voiced harmonic and unvoiced bin, a fit to DVSI's decodes on average (DVSI's
@@ -1108,41 +1110,53 @@ with no change of phase, the same frames differing between recordings of the sam
 
 **The measure.** On a voiced frame with harmonics 1 and 2 voiced, a pitch within 4% of the frame
 before's, the frame before voiced at harmonic 1, a fundamental under 300 Hz and DVSI's decode over 60
-rms in a 320-sample Hann window centred on the frame's middle (samples 160 f - 80 to 160 f + 240):
-the complex ratio of DVSI's decode to ours summed over the bins of harmonic 1 (half a harmonic
-spacing either side, a 4096-point transform), in dB, less the difference of the two fixed filters at
-that frequency (third order at 75 Hz less second order at 100 Hz): the *deficit* of DVSI's
-fundamental. A frame the decoder flags as a repeat, mute, tone, erasure or silence frame gives no
-reading. With the library's build of the branch point (`9a101f8`) as ours, on the 20 development
-and 5 validation vectors and DVSI's 13 synthetic pulse-train vectors (`ptrain0` to `ptrain12`, which
-the scoreboard scores in no partition): 81,342 readings, 26,765 P25 (17,139 of speech, 9,626 of the
-pulse trains), 28,842 rate 33 (19,181, 9,661) and 25,735 D-STAR (16,453, 9,282); 8,515, 8,738 and
-7,698 of them under -1 dB. With no model their rms is 2.593 dB (2.802 P25, 2.482 rate 33, 2.486
-D-STAR; speech 2.948, pulse trains 1.757). Where DVSI's fundamental is cut it is a scaled copy of
-ours: on the speech frames with a deficit under -1 dB (7,468 P25, 7,808 rate 33, 6,757 D-STAR) the
-coherence of DVSI's harmonic-1 band with ours, over the band's bins, has quartiles of 0.9962 to
-0.9998 (P25), 0.9959 to 0.9997 (rate 33) and 0.9976 to 0.9998 (D-STAR).
+in standard deviation over the 320 samples centred on the frame's middle (samples 160 f - 80 to
+160 f + 240, not windowed): over those samples, under a 320-sample Hann window, the complex ratio of
+DVSI's decode to ours summed over the bins of harmonic 1 (half a harmonic spacing either side, a
+4096-point transform), in dB. That ratio is the *raw ratio*; less the difference of the two fixed
+filters at that frequency (third order at 75 Hz less second order at 100 Hz) it is the *deficit* of
+DVSI's fundamental, read on the branch point's decodes. A frame the decoder flags as a repeat, mute,
+tone, erasure or silence frame gives no reading. With the library's build of the branch point
+(`9a101f8`) as ours, on the 20 development and 5 validation vectors and DVSI's 13 synthetic
+pulse-train vectors (`ptrain0` to `ptrain12`, which the scoreboard scores in no partition): 81,342
+readings, 26,765 P25 (17,139 of speech, 9,626 of the pulse trains), 28,842 rate 33 (19,181, 9,661) and
+25,735 D-STAR (16,453, 9,282); 8,515, 8,738 and 7,698 of them with a deficit under -1 dB. The raw
+ratio's rms is 1.935 dB (2.045 P25, 1.838 rate 33, 1.922 D-STAR; speech 2.028, pulse trains 1.750); the
+deficit's, with no model of it, 2.593 dB (2.802, 2.482, 2.486; speech 2.948, pulse trains 1.757).
+Where DVSI's fundamental is cut it is a scaled copy of ours: on the speech frames with a deficit under
+-1 dB (7,468 P25, 7,808 rate 33, 6,757 D-STAR) the coherence of DVSI's harmonic-1 band with ours, over
+the band's bins, has quartiles of 0.9962 to 0.9998 (P25), 0.9959 to 0.9997 (rate 33) and 0.9976 to
+0.9998 (D-STAR). The study that found the rule read the same measure on its own scratch build's
+decodes (its base a worktree at `47d8cf3`): 81,338 readings there (26,761 P25 and 7,406 D-STAR under -1
+dB; rate 33 the same), the deficit's rms with no model 2.558 dB (D-STAR 2.369, its pulse trains 1.617
+against 1.914 here); the two series differ in D-STAR's decodes most, and the figures below are this
+series', with the study's beside them where they are compared.
 
-**It is state, not the frame.** `dam` frames 866 to 900 (a phrase of a male talker, f0 131 falling
-to 97 Hz, after a sentence of a female one), P25: deficits of -6.7 to -10.1 dB on every frame with a
-reading (-7 to -9 on all but the first). DVSI's harmonic 1 over ours (the raw ratio, by the study's
-`fundts10b` window, not less the filters' difference) over frames 866 to 873 is the same at every
-level of the same speech and with a quiet background (`dam` -6.5 to -7.6 dB, `dam20` -6.4 to -7.9,
-`dam_10ov` -6.7 to -7.7, `damcar` -5.9 to -7.7; `dam40` and `dam80`, whose first frames lie near
-the quantisation floor, -5.9 to -7.6 and -5.2 to -7.5 from frame 868), while in `dam10`, the same
-speech over noise, the same frames read +0.1 to +1.7 dB, two of them (870, 871) fully voiced in both
-with harmonic 1's decoded log2 amplitude within 0.6 (8.7 and 8.6 against 9.0 and 9.2). Harmonics 2
-to 4 agree within 0.2 dB in both over frames 867 to 873, and harmonic 2's phase, which the phase
-kernel forms from harmonic 1's decoded amplitude among others, within 0.04 rad. The frames are the
-same; the rendering differs, by what the stream played before: `dam`'s female
-sentence (frames 718 to 799, P25) holds 47 fully voiced frames of its 67 voiced ones, `dam10`'s none
-of 62.
+**It is state, not the frame.** `dam` frames 866 to 901 (a phrase of a male talker, f0 130 falling
+to 97 Hz, after a sentence of a female one), P25: deficits of -10.14 dB on frame 866 and -6.72 to -8.78
+on the other 23 frames with a reading. DVSI's harmonic 1 over the branch point's decode (the raw ratio
+by the study's `fundts10b` window, not less the filters' difference) over frames 866 to 873 is about
+the same at every level of the same speech and with a quiet background (`dam` -6.5 to -7.6 dB, `dam20`
+-6.4 to -7.9, `dam_10ov` -6.7 to -7.7, `damcar` -5.9 to -7.7; `dam40` and `dam80`, whose first frames
+lie near the quantisation floor, -5.9 to -7.6 and -5.2 to -7.5 from frame 868), while in `dam10`, the
+same speech over noise, the same frames read +0.1 to +1.7 dB. The two encodings need not give the
+same frame the same model (frame 866 decodes fully voiced in `dam` and with six of its first twelve
+bands voiced in `dam10`), but frames 867 to 873 are fully voiced in both, harmonic 1's decoded log2
+amplitude within 0.9 of each other (7.7 to 9.2 in `dam10`, 8.1 to 9.0 in `dam`), harmonics 2 to 4 of
+DVSI's over ours within 0.2 dB in both, and harmonic 2's phase, which the phase kernel forms from
+harmonic 1's decoded amplitude among others, within +0.03 to +0.05 rad (`dam`) and +0.03 to +0.07
+(`dam10`). The rendering differs, by what the stream played before: `dam`'s female sentence (frames
+718 to 799, P25) holds 47 fully voiced frames of its 67 voiced ones, `dam10`'s none of 62.
 
 **It is a corner.** Within one talker the corner a `(f / fc)^2` law implies, `fc = f0 10^(-deficit
-/ 40)` where the deficit is under -0.4 dB, stands still while his pitch moves: `t01`'s voiced runs
-from frame 440 to 570 (P25, f0 from 204 down to 109 Hz) imply 135 to 148 Hz wherever their
-fundamental lies under it; `tia11`'s first talker 102 to 177 Hz and mostly 115 to 135, its second
-(from frame 1535) 143 to 213 Hz; `t04`'s runs 86 to 124 Hz.
+/ 40)` where the deficit is under -0.4 dB, stands still while his pitch moves. At four positions in
+each voiced run of at least five frames (its frames 2 and 3, its middle and its last but one, the
+study's `corner10c`): `t01`'s runs from frame 440 to 570 (P25, f0 from 204 down to 109 Hz), 11
+corners from 135 to 148 Hz; `t04`, 149 corners of 47 runs, 80 to 134 Hz; `tia11`'s first talker, 134
+corners, 102 to 177 Hz, its second (from frame 1535) 122, 120 to 254 Hz. On every reading with a
+deficit under -0.4 dB instead: `t01` frames 440 to 570, 73 readings, 138.4 to 150.8 Hz (10th to 90th
+percentile 141.2 to 146.4); `t04` 277, 73.3 to 139.9 (87.9 to 108.2); `tia11` 380, 104.7 to 176.9
+(114.5 to 128.8), and from frame 1535 345, 151.2 to 254.3 (191.0 to 203.0).
 
 **It follows fully voiced frames only.** The pulse trains (rate 33, DVSI's harmonic 1 over ours,
 every 27th frame): `ptrain0` (period 60, 615 of 616 voiced frames fully voiced) +0.5 to +1.7 dB (mostly
@@ -1159,26 +1173,34 @@ the corner); at 45 and 50 every one is again and the tracker comes down (median 
 (median deficits -1.48, -3.17 and -4.34 dB). In speech `t01` holds 98 fully voiced frames of 1,588
 voiced (P25), which is why its corner hardly moves.
 
-**The release**, frame by frame (not used to fit the rate): `ptrain12`'s 76 frames at period 45
-(177.9 Hz, all fully voiced) after the tracker stood above the ceiling (249.9 Hz at the segment's
-start by the rule), deficits every sixth frame, rate 33, measured -2.1 -2.2 -2.0 -2.2 -2.1 -1.6 -1.2
--0.9 -0.7 -0.5 -0.4 -0.4 -0.2, by the rule -2.0 -2.0 -2.0 -2.0 -2.0 -1.8 -1.4 -1.1 -0.8 -0.6 -0.5
--0.4 -0.3, and with the ceiling clipping the tracker itself -1.9 -1.5 -1.2 -0.9 -0.7 -0.5 -0.4 -0.3
--0.2 -0.2 -0.1 -0.1 -0.1 (no plateau: not what DVSI plays); P25 (77 frames, the tracker at 253.7 Hz)
-measured -1.9 -2.2 -2.2 -2.2 -2.2 -1.7 -1.3 -1.0 -0.7 -0.5 -0.4 -0.3 -0.2, the rule -2.1 (five
-times) -1.9 -1.5 -1.2 -0.9 -0.7 -0.5 -0.4 -0.3; D-STAR, whose encoding brings the tracker to 204.1 Hz
-only, measured -2.0 -2.1 -1.5 -1.0 -0.8 -0.7 -0.5 -0.2 -0.4 -0.5 -0.1 -0.1 -0.3, the rule -2.1 -1.9
--1.5 -1.2 -0.9 -0.7 -0.5 -0.4 -0.3 -0.2 -0.2 -0.1 -0.1. (The plateau at -2.2 where `40 log10(177.9 /
-200)` is -2.0 allows a ceiling a hertz or two above 200.)
+**The release**, frame by frame: `ptrain12`'s 76 frames at period 45 (177.9 Hz, all fully voiced)
+after the tracker stood above the ceiling (249.9 Hz at the segment's start by the rule), deficits
+every sixth frame, rate 33, measured -2.1 -2.2 -2.0 -2.2 -2.1 -1.6 -1.2 -0.9 -0.7 -0.5 -0.4 -0.4 -0.2,
+by the rule -2.0 -2.0 -2.0 -2.0 -2.0 -1.8 -1.4 -1.1 -0.8 -0.6 -0.5 -0.4 -0.3, and with the ceiling
+clipping the tracker itself -1.9 -1.5 -1.2 -0.9 -0.7 -0.5 -0.4 -0.3 -0.2 -0.2 -0.1 -0.1 -0.1 (no
+plateau: not what DVSI plays); P25 (77 frames, the tracker at 253.7 Hz) measured -1.9 -2.2 -2.2 -2.2
+-2.2 -1.7 -1.3 -1.0 -0.7 -0.5 -0.4 -0.3 -0.2, the rule -2.1 (five times) -1.9 -1.5 -1.2 -0.9 -0.7 -0.5
+-0.4 -0.3; D-STAR, whose encoding brings the tracker to 204.1 Hz only, measured -2.0 -2.1 -1.5 -1.0
+-0.8 -0.7 -0.5 -0.2 -0.4 -0.5 -0.1 -0.1 -0.3, the rule -2.1 -1.9 -1.5 -1.2 -0.9 -0.7 -0.5 -0.4 -0.3
+-0.2 -0.2 -0.1 -0.1. (The plateau at -2.2 where `40 log10(177.9 / 200)` is -2.0 allows a ceiling a
+hertz or two above 200.) These frames are among the pooled readings the rate was chosen on (below),
+so the trace is not independent evidence for the rate.
 
 **The rule** the library renders (constants in `mbe_low_band.h`):
 
 1. **The tracker.** T, 110 Hz at the start of a stream. A frame whose model, as the synthesis renders
-   it (after adaptive smoothing), has every band 1..L voiced, a positive normal pitch and no tone
-   model (`MBE_FRAME_MARK_TONE`) moves it toward that frame's fundamental f0 = w0 8000 / (2 pi):
+   it (after adaptive smoothing), has every band 1..L voiced, a positive normal pitch, no tone model
+   (`MBE_FRAME_MARK_TONE`), no silence mark (`MBE_FRAME_MARK_PREVIOUS_HELD`, which rate 33's silence
+   frames carry; a mark acts as a mark, so a caller's holds the tracker too, but for P25's rendering,
+   which gives every voiced model its own mark first) and is not the AMBE silence model of D-STAR's or
+   rate 33's rendering (2 pi / 32 by bit pattern, with 14 harmonics in D-STAR's, D-STAR's b0 124,
+   which carries no mark, and 15 in rate 33's; no voice code of either decodes to that pitch,
+   `test_low_cut_range`) moves it toward that frame's fundamental f0 = w0 8000 / (2 pi):
    `T <- T + 0.043 (f0 - T)`, formed in double from the stored floats and rounded to float once,
    kept within 50 to 500 Hz (every pitch code of the three codecs decodes to a fundamental inside
-   that range, so only a caller's pitch reaches a bound). Every other frame leaves it.
+   that range, so only a caller's pitch reaches a bound). Every other frame leaves it. The rule
+   reads the model rendered: a frame decoded as a pulsed row or at a reserved code that adaptive
+   smoothing voices in every band is a fully voiced model and moves it.
 2. **The corner** a frame applies is `min(T, 200 Hz)` of the tracker the frame before left: the
    ceiling clips the corner, not the tracker, and a frame's own step shows from the next frame on.
    The mid-frame model and the frame's own model take that corner; the last frame's own model takes
@@ -1192,55 +1214,100 @@ only, measured -2.0 -2.1 -1.5 -1.0 -0.8 -0.7 -0.5 -0.2 -0.4 -0.5 -0.1 -0.1 -0.3,
 4. **Unvoiced bins.** In both subframes' transforms the bins whose centre frequency, `k 8000 / 256`
    Hz, lies under the subframe's corner (the mid-frame model's, the frame's own's) are zero, after
    the band they belong to has been scaled against its own noise power: the bins above keep the
-   level they had. The noise generator runs as before.
+   level they had, a bin exactly at the corner among them. The noise generator runs as before.
 5. **The fixed filter.** `x^3 / sqrt(1 + x^6)` and the argument of `s^3 / ((s + 1)(s^2 + s + 1))` at
    `s = j x`, `x = f / 75 Hz`, in double, rounded to float once (`mbe_low_band_dvsi_gain()`,
    `mbe_low_band_dvsi_phase()`), on every voiced and pulsed harmonic and, as a second table of the
-   thread-local transform plan, on every unvoiced bin; the second-order table stays for ProVoice.
+   thread-local transform plan, on every unvoiced bin; the second-order table stays for ProVoice. Both
+   functions are total, by the class of their argument's bit pattern: 0 for both at zero, a subnormal
+   (zero under flush-to-zero, as the synthesis treats a subnormal pitch), a negative value and a NaN
+   (as the second-order pair gives at a NaN; that pair, left as it is for ProVoice, gives a NaN gain
+   and a phase of pi / 4 at +infinity, and a NaN gain from 1e30 Hz on, where its square overflows);
+   the limits, a gain of 1 and a phase of 0, at +infinity; and above 76.8 kHz (x over 1024) the phase
+   as `atan(1 / x) + atan2(x, x^2 - 1)`, the same angle with nothing cancelled (the difference form gave
+   0 at 1e30 Hz, where the phase is 1.5e-28 rad). Nothing the renderings form reaches those branches:
+   a harmonic's frequency is formed only under Nyquist of a positive normal pitch (about 4 kHz at the
+   most, x under 54), the transform's bins lie at 0 to 4 kHz and the tones' frequencies come from a
+   table, so no caller state brings a non-finite or absurd frequency to either function or to
+   `mbe_low_cut_gain()` (whose corner is one the renderer read, 50 to 200 Hz);
+   `test_low_cut_caller_pitches` drives the three data paths with models of every float class of
+   pitch at harmonic counts 1 and 56 in all three states and finds every sample finite.
 6. **What it does not touch.** The decoded models, their regenerated phases, `log2Ml`, the stored
    amplitudes and everything the encoders read keep the decoded values: the cut and the filter are
    properties of the rendering.
 
-**The constants.** Fitted on the readings above (the study fitted them on its scratch build's;
-re-measured here on the library's), the rms of the measured deficit less `min(0, 40 log10(f0 /
-corner))` over all 81,342: with the library's constants 0.6148 dB (P25 0.558, rate 33 0.653, D-STAR
-0.627; speech 0.675, pulse trains 0.483), 0.6145 with a ceiling of 198 Hz. With a ceiling of 198: a
-rate of 0.040 / 0.042 / 0.044 / 0.046 / 1/24 0.6182 / 0.6146 / 0.6154 / 0.6197 / 0.6149; a ceiling of
-196 or 202 Hz 0.6157 or 0.6163; a first value of 100 / 105 / 115 / 120 Hz 0.6955 / 0.6408 / 0.6182 /
-0.6492; two rates in log frequency (0.045 up, 0.035 down) 0.6220; one rate in log frequency at best
-0.6568; the corner read after the frame's own step instead of before 0.6141 (no difference: the
-library reads it before); the ceiling clipping the tracker 0.6372; a Butterworth magnitude
-`(f / fc)^2 / sqrt(1 + (f / fc)^4)` in place of the sharp knee 2.227; the power 1.8 / 1.9 / 2.0 /
-2.1 / 2.2: 0.6551 / 0.6223 / 0.6145 / 0.6328 / 0.6750; frames counted as fully voiced from a voiced
-share of 0.9 / 0.95 / 0.98 / 1: 0.6967 / 0.6167 / 0.6145 / 0.6145; a floor on the corner of 75 / 90
-/ 100 / 110 Hz: 0.6247 / 0.8042 / 1.0754 / 1.4377 (none needed). By the size of the predicted
-deficit the model is unbiased: predicted 0, measured -0.02 dB (45,977 readings, rms 0.39, the
-measure's own noise); predicted -0.35 (10,972), measured -0.18; -1.97 (10,541), -1.97; -4.53 (9,805),
--4.55; -7.24 (3,135), -7.07; -10.66 (904), -10.28. D-STAR's pulse trains, 0.727, carry level
-differences of their own that the cut does not explain (`ptrain1` +0.91 dB on average at no
+**The constants.** Fitted on the deficits above (the study fitted them on its own series; re-measured
+here on the branch point's): the fit's residual, the rms of the deficit less the prediction
+`min(0, 40 log10(f0 / corner))`, over all 81,342 readings, with the library's constants 0.6148 dB (P25
+0.558, rate 33 0.653, D-STAR 0.627; speech 0.675, pulse trains 0.483), 0.6145 with a ceiling of 198 Hz.
+On the study's series the same constants leave 0.5614 at 198 Hz (P25 0.559, rate 33 0.652, D-STAR
+0.441; speech 0.662, pulse trains 0.295), the difference being D-STAR's, mostly its pulse trains
+(0.269 there, 0.727 here: three of them carry level offsets on the branch point's decodes, below, that
+the study's decodes did not; what differs between the two builds' decodes of them was not examined).
+With a ceiling of 198, pooled over speech and the pulse trains (`ptrain12`'s release among them): a
+rate of 0.040 / 0.042 / 0.043 / 0.044 / 0.046 / 1/24 0.6182 / 0.6146 / 0.6145 / 0.6154 / 0.6197 /
+0.6149; on speech alone 0.6795 / 0.6750 / 0.6750 / 0.6763 / 0.6826 / 0.6753 (P25's speech alone would
+take a lower rate: 0.6342 at 0.040, 0.6514 at 0.043); a ceiling of 196 or 202 Hz 0.6157 or 0.6163; a
+first value of 100 / 105 / 115 / 120 Hz 0.6955 / 0.6408 / 0.6182 / 0.6492; two rates in log frequency
+(0.045 up, 0.035 down) 0.6220; one rate in log frequency at best 0.6568; the corner read after the
+frame's own step instead of before 0.6141 (no difference: the library reads it before); the ceiling
+clipping the tracker 0.6372; a Butterworth magnitude `(f / fc)^2 / sqrt(1 + (f / fc)^4)` in place of
+the sharp knee 2.227; the power 1.8 / 1.9 / 2.0 / 2.1 / 2.2: 0.6551 / 0.6223 / 0.6145 / 0.6328 / 0.6750;
+frames counted as fully voiced from a voiced share of 0.9 / 0.95 / 0.98 / 1: 0.6967 / 0.6167 / 0.6145 /
+0.6145; a floor on the corner of 75 / 90 / 100 / 110 Hz: 0.6247 / 0.8042 / 1.0754 / 1.4377 (none
+needed). The study's series gives, for the same variants, 0.5656 / 0.5616 / 0.5614 / 0.5622 / 0.5668 /
+0.5619 for the rates (speech alone 0.6680 / 0.6627 / 0.6624 / 0.6635 / 0.6693 / 0.6632), 0.5684 for
+two rates in log frequency, 0.6030 for one, 0.5605 with the corner read after the step, 0.5850 with
+the ceiling clipping the tracker, 2.2121 for the Butterworth knee, 0.596 / 0.5648 / 0.5614 / 0.5862 /
+0.636 for the powers and 0.5682 / 0.7393 / 1.0143 / 1.3821 for the floors. Where the study's own
+figures differ from these on its own series, they are of other variants, not slips: its rate sweep
+(0.5661 / 0.5621 / 0.5628 / 0.5675, 1/24 0.5624) is at a ceiling of 200 Hz; its "0.5674 against
+0.5687" compares the two-rate rule in log frequency read after and before the frame's step (at 200
+Hz); its floors (0.807 / 0.805 / 0.862 / 1.075), its ceiling clipping the tracker ("0.857 against
+0.807") and its Butterworth knee (2.12) are `corner10j`'s, on P25's speech alone with a tracker in log
+frequency (on this series 0.8071 / 0.8056 / 0.8625 / 1.0762, 0.8574 against 0.8071, 2.1236). Its total
+of 81,089 readings was a slip of arithmetic for its series' 81,338. On P25's speech alone the other families of
+tracker the study tried leave, on this series (17,139 readings, 3.261 dB with no model): a forgetting
+mean of the lowest sounding frequency of every voiced frame 1.351 at best of 432 variants; a tracker in
+log frequency with rates up and down on voiced frames 1.324; the same with energy weighting and frames
+with no voiced band pulling 1.295; frames weighted by (voiced share)^2 / ^6 1.093 / 0.956; fully voiced
+frames only with a ceiling of 200 Hz, in log frequency, 0.807 (0.765 with its rates and ceiling
+refined); the library's rule 0.651. By the size of the predicted deficit, every reading in one bin
+(the library's constants, ceiling 200): predicted 0, 45,977 readings, measured -0.019 dB (rms of the
+difference 0.390); predicted -1 to 0 dB, 10,980 (8 of them between -0.001 and 0), predicted -0.346,
+measured -0.183 (+0.163; rms 0.660); -3 to -1, 10,541, -1.966 and -1.972 (-0.006; 0.693); -6 to -3,
+9,805, -4.531 and -4.551 (-0.020; 0.838); -9 to -6, 3,135, -7.235 and -7.071 (+0.165; 1.042); under -9,
+904, -10.662 and -10.285 (+0.377; 1.996). The means follow the prediction within 0.2 dB but for the
+deepest bin, 0.38 dB shallower than predicted; these summaries do not establish that the model is
+unbiased, nor which part of the rms is the measure's own noise. D-STAR's pulse trains, 0.727, carry
+level differences of their own that the cut does not explain (`ptrain1` +0.91 dB on average at no
 predicted deficit, `ptrain11` +0.80 against a predicted -0.21, `ptrain5` 0.88 dB beyond its
-predicted -5.90): they stand with the library's cut
-too (below). The rate was fitted on speech; 0.042 to 0.044 fit alike, 0.043 is the library's.
+predicted -5.90): they stand with the library's cut too (below).
 
-**Harmonic 2** where the model puts 2 f0 under the corner (51 P25, 48 rate-33, 26 D-STAR readings):
-predicted -2.09 / -2.31 / -1.56 dB, measured -2.47 / -2.02 / -1.76, correlation 0.90 / 0.83 / 0.92:
-the cut is a function of frequency, not of the harmonic's number.
+**Harmonic 2.** Where the model puts 2 f0 under the corner, every such reading (61 P25, 56 rate-33,
+31 D-STAR): predicted -1.79 / -2.02 / -1.34 dB, measured -2.16 / -1.77 / -1.56, correlation 0.90 / 0.85
+/ 0.92; where it predicts a cut deeper than 0.5 dB (51, 48, 26 of them): predicted -2.09 / -2.31 /
+-1.56, measured -2.47 / -2.02 / -1.76, correlation 0.90 / 0.83 / 0.92: the cut is a function of
+frequency, not of the harmonic's number.
 
 **Unvoiced bins.** Frames with no voiced band at the default pitch code (P25 248.1 Hz, whose first band
-starts at 124 Hz; D-STAR 250.4 Hz) between two such frames, DVSI's decode over 40 rms: the transfer
-function from our decode to DVSI's by cross-spectrum over the frames (480-sample Hann, 1024-point
-transform; the two coherent because the noise is DVSI's own generator), grouped by the corner the
-library's rule gives the frame (from the readings' series). With the branch point's build as ours:
-P25, a corner under 135 Hz (2,216 frames), +0.2 to +1.8 dB from 102 to 211 Hz; at 198 Hz or more
-(1,116 frames), -28 to -31 dB from 102 to 148 Hz (coherence 0.05 to 0.06), -14.5 at 164, -6.9 at
-180, -3.8 at 195, -1.1 at 211, 0 from 227 up; D-STAR (2,537 and 1,046 frames) +0.1 to +1.6 dB, and
--26 to -38 dB from 102 to 148 Hz, -15.8 at 164, -7.0 at 180, -3.5 at 195, -2.0 at 211. With the
-library's build, the bins under the corner zero: at a high corner P25 -1.1 to +1.0 dB from 102 to 211
-Hz (coherence 0.60 to 0.88), D-STAR -1.3 to +3.5 (+3.5 at 164 Hz, +3.3 at 180; coherence 0.58 to
-0.92); at a low corner P25 -0.4 to +1.7, D-STAR -0.1 to +0.6. The cut on the unvoiced bins removes
-the -15 to -38 dB; what is left near the corner, where DVSI keeps more than the library's whole bins
-let through, is not modelled (a corner of 0.9 or 0.8 of the tracker's, or a scale `(f / fc)^4`, left
--4 to -18 dB in the study's scratch build).
+starts at 124 Hz; D-STAR 250.4 Hz), the frame before and after alike (each with no flag of the
+decoder, no voiced band and its pitch within 1 Hz of the default), DVSI's decode over 40 in standard
+deviation over the 480 samples from 160 f - 160 (not windowed): the transfer function from our decode
+to DVSI's by cross-spectrum over the frames (480-sample Hann, 1024-point transform; the two coherent
+because the noise is DVSI's own generator), grouped by the corner the library's rule gives the frame
+(from the readings' series). With the branch point's build as ours: P25, a corner under 135 Hz (2,216
+frames), +0.2 to +1.8 dB from 102 to 211 Hz; at 198 Hz or more (1,116 frames), -28 to -31 dB from 102
+to 148 Hz (coherence 0.05 to 0.06), -14.5 at 164, -6.9 at 180, -3.8 at 195, -1.1 at 211, -0.1 to -0.5
+from 227 to 258 (-0.5 at 258) and within 0.2 dB of 0 from 273 to 336 Hz, the last frequency read;
+D-STAR (2,537 and 1,046 frames) +0.1 to +1.6 dB, and -26 to -38 dB from 102 to 148 Hz, -15.8 at 164,
+-7.0 at 180, -3.5 at 195, -2.0 at 211, within 0.3 dB of 0 from 227 to 336. With the library's build,
+the bins under the corner zero: at a high corner P25 -1.1 to +1.0 dB from 102 to 211 Hz (coherence 0.60
+to 0.88), D-STAR -1.3 to +3.5 (+3.5 at 164 Hz, +3.3 at 180; coherence 0.58 to 0.92); at a low corner
+P25 -0.4 to +1.7, D-STAR -0.1 to +0.6. The cut on the unvoiced bins removes the -15 to -38 dB; what is
+left near the corner, where DVSI keeps more than the library's whole bins let through, is not
+modelled (a corner of 0.9 or 0.8 of the tracker's, or a scale `(f / fc)^4`, left -4 to -18 dB in the
+study's scratch build).
 
 **The fixed filter.** Re-fitted on the library's own decodes, the cut in, on the frames whose
 fundamental the library's tracker puts at or above the corner (the steady voiced frames of the
@@ -1252,62 +1319,84 @@ best, P25 73.0 Hz (within 1% of the least squared error from 72.0 to 74.0), rate
 76.0) and D-STAR 75.5 (75.0 to 76.0), rms 0.0555, 0.0475 and 0.0324 rad; the second order fits worse
 at any corner (0.0589, 0.0536, 0.0411, near 100 Hz), the fourth order a little worse at about 60 Hz
 (0.0558, 0.0479, 0.0329), where its level would want 80 Hz. The level, flatter and noisier, puts the
-third order's corner at 78.0, 78.0 and 76.5 Hz (74.0 to 81.0 within 1%). One corner for the three
-codecs, 75 Hz. By whole-file correlation with DVSI's decode at lag 0 (the 20 development / 5
-validation vectors, mean change against 75 Hz, the corner alone changed in library copies): P25 65 Hz
--0.003483 / -0.004521, 70 -0.001324 / -0.001618, 80 +0.000463 / +0.000296, 85 +0.000052 / -0.000740;
-D-STAR -0.002129 / -0.003281, -0.000623 / -0.000926, -0.000291 / -0.000536, -0.001508 / -0.002530;
-rate 33 -0.001133 / -0.002425, -0.000137 / -0.000510, -0.000750 / -0.000927, -0.002396 / -0.003290. P25's
-correlation alone would take 80 Hz: DVSI's harmonics there lead ours by about 0.04 rad that is not
-the filter's (P25's phase offset above), and a higher corner hides part of it. The correlation answers
-to the filter's phase tail over the whole band, not to the low harmonics, and is not used to set
-the corner.
+third order's corner at 78.0, 78.0 and 76.5 Hz (within 1% of the least squared error from 76.0 to 79.5,
+74.5 to 81.0 and 74.0 to 78.5). One corner for the three codecs, 75 Hz. By whole-file correlation with
+DVSI's decode at lag 0 (the 20 development / 5 validation vectors, mean change against 75 Hz, the
+corner alone changed in library copies): P25 65 Hz -0.003483 / -0.004521, 70 -0.001324 / -0.001618, 80
++0.000463 / +0.000296, 85 +0.000052 / -0.000740; D-STAR -0.002129 / -0.003281, -0.000623 / -0.000926,
+-0.000291 / -0.000536, -0.001508 / -0.002530; rate 33 -0.001133 / -0.002425, -0.000137 / -0.000510,
+-0.000750 / -0.000927, -0.002396 / -0.003290. P25's correlation alone would take 80 Hz. At 75 Hz
+DVSI's P25 harmonics under 300 Hz lead ours by +0.039 rad on average (sd 0.056; by 40 Hz band of the
+harmonic's frequency from 60 to 300 Hz, +0.017 to +0.052), rate 33's by -0.001 and D-STAR's by +0.006;
+the fit's free offset takes P25's lead up, and says nothing of where it comes from (a higher corner
+hides part of it). The correlation answers to the filter's phase tail over the whole band, not to the
+low harmonics, and is not used to set the corner.
 
-**On the library.** With the low band in, DVSI's harmonic 1 over ours on the same readings has an
-rms of 0.600 dB (2.593 with the branch point's build as ours and no model): P25 0.546 (speech 0.637,
-pulse trains 0.324), rate 33 0.637 (0.757, 0.274), D-STAR 0.612 (0.532, 0.731); by the predicted
-deficit, 0 (45,977 readings) a mean of -0.017 dB and an rms of 0.390, the measure's own level, and
-from 0.645 at a predicted -1 to 0 dB to 1.947 under -9 dB (904 readings), the means within 0.16 dB.
-The vectors left with the most: P25 `noisy` 1.200 dB (a mean of -0.50), `ucarf15a` 1.087, `ucarm15a`
-0.913, `t04` 0.859; rate 33 `ucarm20a` 1.199, `fambm22a` 1.123, `ucarm15a` 1.106; D-STAR `ptrain5`
-1.049 (-0.90), `ptrain11` 1.035 (+1.02), `ptrain1` 0.993 (+0.91). By fundamental, P25's harmonic 1
-over ours on the steady frames (17,139; the bands 60 to 300 Hz of `corner10w`): -0.03, -0.48,
--0.20, -0.23, -0.12, -0.06, -0.01, -0.05 dB (it was -2.79 to +0.10) with a phase of +0.075, +0.022,
-+0.026, +0.019, +0.025, +0.026, +0.048, +0.048 rad (+0.492 to +0.039); its rms 0.637 dB (2.253),
-beside harmonic 2's 0.516 (0.566) and harmonic 3's 0.641 (0.640). Rate 33: harmonic 1 rms 0.757
-(1.950), D-STAR 0.532 (1.867).
+**On the library.** With the low band in, DVSI's harmonic 1 over ours, the raw ratio on the same
+81,342 readings, has an rms of 0.600 dB, where the branch point's build gives 1.935 (P25 0.546 from
+2.045, speech 0.637 from 2.253, pulse trains 0.324 from 1.612; rate 33 0.637 from 1.838, 0.757 from
+1.947, 0.274 from 1.601; D-STAR 0.612 from 1.922, 0.532 from 1.867, 0.731 from 2.015). The fit's residual
+above (0.6148) is the same comparison made on the branch point's decodes through the model; the 0.600
+is measured on the library's decodes directly. By the predicted deficit, 0 (45,977 readings) a mean
+of -0.017 dB and an rms of 0.390, and from 0.645 at a predicted -1 to 0 dB to 1.947 under -9 dB (904
+readings), the means within 0.16 dB. The vectors left with the most: P25 `noisy` 1.200 dB (a mean of
+-0.50), `ucarf15a` 1.087, `ucarm15a` 0.913, `t04` 0.859; rate 33 `ucarm20a` 1.199, `fambm22a` 1.123,
+`ucarm15a` 1.106; D-STAR `ptrain5` 1.049 (-0.90), `ptrain11` 1.035 (+1.02), `ptrain1` 0.993 (+0.91). By
+fundamental, P25's harmonic 1 over ours on the steady frames (17,139; the bands 60 to 300 Hz of
+`corner10w`, the same raw ratio on both builds): -0.03, -0.48, -0.20, -0.23, -0.12, -0.06, -0.01,
+-0.05 dB (it was -2.79 to +0.10) with a phase of +0.075, +0.022, +0.026, +0.019, +0.025, +0.026, +0.048,
++0.048 rad (+0.492 to +0.039); its rms 0.637 dB (2.253), beside harmonic 2's 0.516 (0.566) and harmonic
+3's 0.641 (0.640).
 
-**Which frames move the tracker, path by path** (each the library's choice where DVSI's vectors do
-not isolate the case; `test_low_cut_*_path` in `test_subframe_synthesis.c`): the rule reads the model
-the synthesis renders or advances, so a frame moves it exactly when it renders or advances a fully
-voiced model.
+**Which frames move the tracker.** The rule reads the model the synthesis renders or advances, so a
+frame moves the tracker exactly when it renders or advances a fully voiced model that is not a tone
+model, not marked as a silence frame and not an AMBE silence model. Frame by frame, through each
+codec's public entry points, with clean and forged histories and error rates on both sides of each
+threshold (each row a test of `test_subframe_synthesis.c`; where DVSI's vectors do not isolate the
+case the behaviour is the library's choice, not a measurement):
 
-- A lost frame's repeat renders the repeated model: it counts as that model does (D-STAR, P25, rate
-  33), and so does D-STAR's repeat-limit mute and rate 33's first muted frame after a heard one, whose
-  fades render a silent copy of the last model with its voicing kept. P25's 5th lost frame installs
-  the repeat limit's reset model, with no voiced band: it holds.
-- A frame the error rate mutes: P25's is advanced (`mbe_advance_subframes()`), D-STAR's synthesized
-  before its output is replaced, rate 33's synthesized unheard: each counts as its model does. Rate
-  33's muted frames after the first, which keep the last model and render nothing, hold.
-- Rate 33's silence frames (no voiced band) hold. A frame that starts from silence (after a rate-33
-  mute or tone) renders its own model and counts as it does; the tracker goes on from the state the
-  mute or the tone left (it is no part of the pulse train, which is dropped).
-- D-STAR's first frame after the repeat limit's mute renders from the resumed history, which stands
-  in the last frame and moves nothing; the frame counts by its own model.
-- Tones: an AMBE tone frame renders no speech and leaves the state (D-STAR's tone's first frame renders
-  the repeat of the last frame under it into the stream's state, and so counts as that model; rate
-  33's renders it in a scratch state, and holds). A P25 tone played as its tone model holds (its mark;
-  it is never fully voiced either).
-- Frames of the pulsed state, D-STAR's and P25's codes and rate 33's rows 18 to 31, have no voiced
-  band: they hold.
+| Codec | Frame | Can it be fully voiced? | Tracker | Test |
+|---|---|---|---|---|
+| all | a decoded voice frame, every band voiced as rendered; one with a band unvoiced, or none | as decoded or after smoothing | moves; holds | `test_low_cut_tracker`, the path tests |
+| D-STAR | b0 124, the silence model (250 Hz, 14 bands, no mark) | yes: under an error rate above 0.0125, at a high gain and a history that flattens its spectrum, smoothing voices all 14 | holds (the AMBE silence model) | `test_low_cut_dstar_smoothed`, `test_low_cut_range` |
+| D-STAR | a frame with no voiced band at a reserved code (b0 64..119) | yes, the same way | moves (a fully voiced rendered model) | `test_low_cut_dstar_smoothed` |
+| D-STAR | a lost frame (b0 125, 127, a C0 word with four errors) | as the model it repeats, the prediction history's | as that model: moves after a voiced frame; holds on a caller's `PREVIOUS_HELD` there | `test_low_cut_dstar_path`, `test_low_cut_dstar_smoothed` |
+| D-STAR | the repeat limit's 4th lost frame, its fade to a silent copy of the repeated model (voicing kept), and the muted repeats after it | as that model | moves, each frame | `test_low_cut_dstar_path` |
+| D-STAR | a voice frame the error level mutes (hard decisions), synthesized first | as decoded or smoothed | as its model | `test_low_cut_dstar_path` |
+| D-STAR | the first voice frame after the repeat limit's mute | as decoded | by its own model; the resumed history in the last frame moves nothing | `test_low_cut_dstar_path` |
+| D-STAR | a tone's first frame | the repeat of the last frame under it | after an audible frame the repeat is rendered into the state and moves it; after an inaudible one (muted by the error level or the repeat limit) none is, and it holds | `test_low_cut_dstar_path` |
+| D-STAR | a tone's later frames; lost frames playing a dual tone on | no model rendered | holds | `test_low_cut_dstar_path` |
+| D-STAR | lost frames after a single tone (the tail over a silent copy of the last speech model, voicing kept), and after a dual tone from the repeat limit's 4th frame | as the last speech model | moves | `test_low_cut_dstar_path` |
+| P25 | a frame with no voiced band at a reserved code (b0 128..183) | yes: under an error rate, a loud flat spectrum is voiced throughout | moves | `test_low_cut_p25_path` |
+| P25 | a tone model (two voiced harmonics, `MBE_FRAME_MARK_TONE`) | no (and the mark holds a forged fully voiced one) | holds | `test_tone_model` (`test_p25_tones.c`), `test_low_cut_tracker` |
+| P25 | a lost frame's first three repeats, and the 4th, muted and advanced | as the decoded model repeated | as that model | `test_low_cut_p25_path` |
+| P25 | the repeat limit's reset model, from the 5th lost frame | no: every amplitude 1, where the smoothing's threshold is at least 1.414 E^(3/8) with E at least 10,000, about 44.7 (eq 112-113); tried at error rates 0.004, 0.01, 0.05, 0.085 and 0.1 with the energy at its floor | holds | `test_low_cut_p25_path` |
+| P25 | a voice frame the error rate mutes, advanced | as decoded or smoothed | as its model | `test_low_cut_p25_path` |
+| P25 | a caller's `PREVIOUS_HELD` on a voiced model | the rendering gives the model its own mark first | moves | `test_low_cut_p25_path`, `test_low_cut_tracker` |
+| rate 33 | a silence frame (b0 124, 15 bands, `PREVIOUS_HELD`), heard or synthesized unheard under a mute | yes: under an error rate of 0.08 and a loud history smoothing voices all 15 | holds (its mark, and the silence model) | `test_low_cut_r33_smoothed` |
+| rate 33 | a voice frame of V/UV rows 18 to 31 (the pulsed rows) | yes, the same way (row 18 at b0 37) | moves (a fully voiced rendered model) | `test_low_cut_r33_smoothed` |
+| rate 33 | a lost frame's repeat of the last synthesized model (its mark kept, the marks of rows 13, 15 and 17 dropped) | as that model | as that model; a repeat of a silence frame and a caller's `PREVIOUS_HELD` hold | `test_low_cut_r33_path`, `test_low_cut_r33_smoothed` |
+| rate 33 | a valid voice frame the error rate mutes (synthesized unheard), the first, second and third in a row | as decoded or smoothed | moves, each frame | `test_low_cut_r33_mutes` |
+| rate 33 | the first muted frame after a heard one that is no valid voice or silence frame (an invalid frame, the repeat limit's 4th, a tone at a muting error rate): its fade to a silent copy of the last model (voicing kept, no mark) | as the last model | moves; a silent copy of a silence frame holds (the silence model) | `test_low_cut_r33_mutes`, `test_low_cut_r33_path`, `test_low_cut_r33_smoothed` |
+| rate 33 | a muted invalid frame after a muted one | nothing rendered | holds | `test_low_cut_r33_mutes`, `test_low_cut_r33_path` |
+| rate 33 | a tone's first frame at an ordinary error rate (the repeat under it in a scratch state), its later frames, a lost frame while a tone is held | no model rendered into the state | holds | `test_low_cut_r33_path`, `test_low_cut_r33_mutes` |
+| rate 33 | a lost frame after a tone the error rate muted (no tone held): a repeat of the kept model from silence | as that model | moves | `test_low_cut_r33_mutes` |
+| rate 33 | the frame after a mute or a tone, from silence | as decoded | by its own model; the tracker goes on (it is no part of the pulse train) | `test_low_cut_r33_path` |
+
+The silent copies that a fade renders and the lost frames after a single D-STAR tone count as the
+speech model they copy, at no amplitude: no vector shows what DVSI's tracker does there, and the
+library treats them as the repeat they stand for. The silence models hold because they are no
+speech: a silence frame's pitch is a fixed 250 Hz that would pull the tracker toward it whenever
+smoothing voices it. The reserved codes and pulsed rows move it when smoothing voices them because the
+rule is a property of the model rendered, not of the frame's code.
 
 **The pulsed bands.** Whether DVSI's decoders cut the bands of the pulsed state cannot be read from a
-pulse's deficit as above; on the frames where cutting them changes our decode (the pulsed bands under
-the corner: 1,911 D-STAR, 2,793 P25 and 2,015 rate-33 frames of the 25 vectors), the residual energy
-of our decode against DVSI's at lag 0, pooled over those frames, over DVSI's energy there: cut 0.05200
-/ 0.03568 / 0.17433, uncut 0.05353 / 0.03687 / 0.17775, the cut version nearer DVSI's on 1,284 / 1,700 /
-1,322 frames and the uncut on 593 / 1,026 / 668 (two library copies alike but for that). The library
-cuts them as voiced bands.
+pulse's deficit as above. The library's own cut-on against cut-off experiment, two library copies
+alike but for that, on the frames where cutting them changes our decode (the pulsed bands under the
+corner: 1,911 D-STAR, 2,793 P25 and 2,015 rate-33 frames of the 25 vectors): the residual energy of our
+decode against DVSI's at lag 0, pooled over those frames, over DVSI's energy there, cut 0.05200 /
+0.03568 / 0.17433, uncut 0.05353 / 0.03687 / 0.17775, the cut version nearer DVSI's on 1,284 / 1,700 /
+1,322 frames and the uncut on 593 / 1,026 / 668. The library cuts them as voiced bands.
 
 **The state.** One stream, one tracker: it travels in the stream's subframe state beside the pulsed
 state's slots, `noiseOverlap[38]` (`MBE_LOW_CUT_TRACK_SLOT`, the tracker the frame leaves) and
@@ -1315,20 +1404,23 @@ state's slots, `noiseOverlap[38]` (`MBE_LOW_CUT_TRACK_SLOT`, the tracker the fra
 and by `mbe_advance_subframes()` alike and carried wherever the subframe state is (`mbe_copy_generator_state()`,
 `mbe_subframe_state_adopt()`, which clears a state the other rendering wrote, the repeats, mutes, tones
 and starts from silence above). Each is read by its bit pattern, only in a state with the subframe
-rendering's mark, and only within what a frame stores (the tracker 50 to 500 Hz, the corner 50 to 200);
-any other value, 0, a negative or subnormal value, an infinity or a NaN, a state without the mark (a
-fresh one, or one the TIA rendering wrote, whose noise samples sit there), reads as a fresh stream's:
-the tracker at 110 Hz, the last corner the frame's own. ProVoice's rendering writes 0 in both and reads
-neither. A caller's value chooses at most a corner from 50 to 200 Hz, which scales voiced harmonics
-under 200 Hz and zeroes unvoiced bins under 200 Hz and nothing else: no index, loop bound or division
-depends on it beyond the ratio `f / corner` of a corner checked to be 50 Hz or more and the bins
-compared with it as floats.
+rendering's mark, and only within what a frame stores (the tracker 50 to 500 Hz, the corner 50 to 200,
+both bounds included, `test_untrusted_low_cut`); any other value, 0, a negative or subnormal value, an
+infinity or a NaN, a state without the mark (a fresh one, or one the TIA rendering wrote, whose noise
+samples sit there), reads as a fresh stream's: the tracker at 110 Hz, the last corner the frame's own.
+ProVoice's rendering writes 0 in both and reads neither. A caller's value chooses at most a corner
+from 50 to 200 Hz, which scales voiced harmonics under 200 Hz and zeroes unvoiced bins under 200 Hz:
+it enters the ratio `f / corner` of a corner checked to be 50 Hz or more, and it sets the first bin the
+unvoiced shaping keeps (`first_kept_bin()`: 2 for 50 Hz up to 7 for 200 Hz, 1 with no cut), which
+starts that loop over a band no lower and leaves its upper bound, the band's edge of at most 128,
+unchanged; for any float the first bin lies in 1 to 128 (the search's own bound), so no value a
+caller stores can take an index out of the transform.
 
 **What is not known.** What DVSI's decoder computes (an adaptive high-pass of some kind; the rule is a
 fit); the tracker's exact law (one rate in frequency and two in log frequency fit within 0.01 dB of
 each other on these readings, one rate in log frequency 0.04 dB worse) and whether it steps once a frame or once a subframe; whether the ceiling
-is exactly 200 Hz; what the tracker does on repeated, muted and silence frames and through tones (no
-vector isolates them: the library's choices above); what DVSI plays near the corner in the unvoiced
+is exactly 200 Hz; what the tracker does on repeated, muted, silence and fade frames and through tones
+(no vector isolates them: the library's choices above); what DVSI plays near the corner in the unvoiced
 bands (above); whether DVSI's decoders cut the pulsed bands as voiced ones (the decodes come nearer with
 it, by little); ProVoice; and what an AMBE-3000 plays on streams from other encoders (the rule reads the
 decoded model only, so it applies to them as written). Under channel errors the adaptive smoothing can
@@ -1336,14 +1428,19 @@ voice every band of a frame: whether DVSI's tracker follows the decoded or the r
 hardly be told apart on DVSI's channel-error vectors ([November 2026: DVSI's low band](#november-2026-dvsis-low-band)).
 
 **Tones.** The AMBE tones start at the third-order filter's phase (`tone_start_phase()`,
-`mbelib.c`). On DVSI's rate-33 and D-STAR tone vectors, a DTMF or KNOX tone (IDs 128 to 163) started
-after a frame that is not a tone frame and has no voiced band, its phase extrapolated to the first tone
-frame's start from a least-squares fit of the run's steady frames (runs of five frames or more; 68
-components, 1,540 onsets, both codecs pooled per component): the measured phase less the prediction
-`-16 F + p(F) / (2 pi)` is +0.00178 cycle on average over the components with the second-order
-filter's p (rms 0.00285) and +0.00035 with the third-order one's (rms 0.00210); under 800 Hz +0.00298
-against +0.00104. The spread within a component is 0.00008 cycle (median standard deviation). The tone
-oscillators take no magnitude of either filter and no cut, as before.
+`mbelib.c`). On DVSI's rate-33 and D-STAR tone vectors, a tone started after a frame that is not a
+tone frame and has no voiced band, its phase extrapolated to the first tone frame's start from a
+least-squares fit of the run's steady frames (runs of five frames or more), each start read at its two
+components: 770 starts, 766 of DTMF and KNOX tones (IDs 128 to 159, 64 components, both codecs pooled
+per component) and 4 of call-progress IDs 160 and 161 (4 components). On the DTMF and KNOX tones the
+measured phase less the prediction `-16 F + p(F) / (2 pi)` is +0.00164 cycle on average over the
+components with the second-order filter's p (rms 0.00274) and +0.00028 with the third-order one's (rms
+0.00211); with the call-progress components in, +0.00178 and +0.00035 (rms 0.00285 and 0.00210); under
+800 Hz +0.00298 against +0.00104 (all 68). Within one vector and one component the phase at onset
+varies by 0.00013 cycle at the most (median 2e-7, 104 such sets); across the vectors of one codec the
+vectors' means of a component differ by up to 0.00158 cycle (ID 139's second component, D-STAR, three
+vectors; median 0.00035, 52 of 66 over 0.0002). The tone oscillators take no magnitude of either filter
+and no cut, as before.
 
 ### Voiced and unvoiced level
 
@@ -4021,11 +4118,14 @@ component of frequency F plays
 `cos(2 pi F (t - 16) + p)`, p the phase of the fixed output high-pass at F: since the low-band
 change DVSI's third-order filter at 75 Hz (`mbe_low_band_dvsi_phase()`; [DVSI's low
 band](#dvsis-low-band)), before it the second-order one at 100 Hz (`mbe_low_band_phase()`). The
-phase at onset is the same at every onset of a tone within 0.0002 cycle (20 to 23 onsets per DTMF
-tone), and the measured phase minus this formula was +0.0016 cycle on average, standard deviation
-0.0022, over the 64 DTMF and KNOX components with the second-order filter (as measured for this
-change); measured again with the low-band change over 68 components and 1,540 onsets, +0.00178 with
-the second-order filter and +0.00035 with the third-order one ([DVSI's low band](#dvsis-low-band)). The first 80 samples ramp in, as the library already played them
+phase at onset of one component varies within one vector by 0.00013 cycle at the most (20 to 23
+onsets per DTMF tone), and between the vectors of one codec by up to 0.00158 (the vectors' means of a
+component), and the measured phase minus this formula was +0.0016 cycle on average, standard
+deviation 0.0022, over the 64 DTMF and KNOX components with the second-order filter (as measured for
+this change); measured again with the low-band change, 766 starts of DTMF and KNOX tones each read
+at its two components, +0.00164 with the second-order filter and +0.00028 with the third-order one
+(rms over the components 0.00274 and 0.00211; with the 4 call-progress starts of IDs 160 and 161,
++0.00178 and +0.00035; [DVSI's low band](#dvsis-low-band)). The first 80 samples ramp in, as the library already played them
 ([D-STAR tone transitions](#d-star-tone-transitions), [Rate 33 tone
 transitions](#rate-33-tone-transitions)). A model of all this outside the library (steady tones
 with a fresh start, no rendering of the glide from tone to tone) follows DVSI's rate-33 decode at a
@@ -4475,7 +4575,14 @@ partition's vectors, in dB:
 | Rate 33 | validation | -0.09 (-0.03) | +0.13 (+0.10) | -0.01 (-0.07) |
 
 Neighbouring D-STAR scales put the development median at -0.04 dB (1.07) and +0.04 dB (1.08); 1.075
-puts it nearest 0.
+puts it nearest 0, on the decoder of that change. The median rests on the decoder that decodes both
+encodings: with [DVSI's low band](#dvsis-low-band) (both encodings decoded by one decoder on each
+side, the 20 development vectors, the scoreboard's `encoder.vs_dvsi_bits.level_offset_db`) it moved
+from -0.0004 dB on the branch point's decoder (`9a101f8`, the baseline scoring itself) to +0.0292 dB
+on the low band's (`0e3463e`), rate 33's from -0.0175 to -0.0101 dB and P25's from -0.1480 to -0.1123
+dB. The scales were left as they are, since changing them changes the encoders' bits; these scores do
+not establish which scale is now best (D-STAR's median moved by about three quarters of the 0.04 dB a
+step of 0.005 in its scale makes).
 
 **Results.** PESQ and ESTOI ([Method](#method)) against the commit before this change, both
 encodings decoded by this library's 2.6.11 decoder (this change touches no decoder):
@@ -4725,21 +4832,23 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   the 0.6 to 0.75 dB rms scatter. It is modelled for P25's tone frames only.
 - DVSI's low band ([DVSI's low band](#dvsis-low-band)). The fundamental's level under the corner and
   the low harmonics' phase, which differed from DVSI's by up to 12 dB and 0.5 rad under 140 Hz before
-  the change, are modelled; what is left: DVSI's harmonic 1 over ours at an rms of 0.600 dB over the
-  81,342 readings (0.390 where the model predicts no deficit, the measure's own level; 0.65 to 1.95 dB
-  where it predicts one, rising with the deficit), the most on the car-noise and filtered versions of
-  one recording (`ucarm20a`, `fambm22a`, `ucarm15a`, `ucarf15a`, 0.9 to 1.2 dB in rate 33 and P25)
-  and P25's `noisy` (1.20 dB, a mean of -0.50); D-STAR's pulse trains' harmonic-1 level, off by -0.9 to
-  +1.0 dB on three of them with or without the cut, which the cut does not explain; a phase of DVSI's
-  voiced harmonics over ours in P25 under 300 Hz, +0.02 to +0.05 rad at fundamentals over 75 Hz,
-  that is not the filter's (its correlation alone would take a corner of 80 Hz); in the unvoiced bands near a high corner, +1.0 dB
-  (P25) and +3.5 dB (D-STAR) more in DVSI's decode at 164 Hz than the library's whole bins let
-  through; DVSI's DTX vectors, which come no nearer (0.17761 → 0.17784 D-STAR, 0.17401 → 0.17464
-  rate 33, on the frames the change moves). Not known: the tracker's law beyond the fit (one rate in
-  frequency, two in log frequency and a share of voiced bands fit alike), whether it steps once a
-  frame or a subframe, the ceiling's exact value, what DVSI's decoders do with it on repeated, muted,
-  silence and tone frames (the library's choices), whether they cut the pulsed state's bands, and
-  ProVoice.
+  the change, are modelled; what is left: DVSI's harmonic 1 over ours, the raw ratio, at an rms of
+  0.600 dB over the 81,342 readings (1.935 on the same readings before the change; 0.390 where the
+  model predicts no deficit; 0.65 to 1.95 dB where it predicts one, rising with the deficit), the
+  most on the car-noise and filtered versions of one recording (`ucarm20a`, `fambm22a`, `ucarm15a`,
+  `ucarf15a`, 0.9 to 1.2 dB in rate 33 and P25) and P25's `noisy` (1.20 dB, a mean of -0.50); D-STAR's
+  pulse trains' harmonic-1 level, off by -0.9 to +1.0 dB on three of them with or without the cut,
+  which the cut does not explain; a phase lead of DVSI's voiced harmonics over ours in P25 under 300 Hz,
+  +0.039 rad on average at the frames whose fundamental lies at or above the corner (+0.017 to +0.052
+  by 40 Hz band of the harmonic's frequency), that the fixed filter's corner does not account for (the
+  correlation alone would take a corner of 80 Hz) and whose cause is not known; in the unvoiced bands
+  near a high corner, +1.0 dB (P25) and +3.5 dB (D-STAR) more in DVSI's decode at 164 Hz than the
+  library's whole bins let through; DVSI's DTX vectors, which come no nearer (0.17761 → 0.17784 D-STAR,
+  0.17401 → 0.17464 rate 33, on the frames the change moves). Not known: the tracker's law beyond the
+  fit (one rate in frequency, two in log frequency and a share of voiced bands fit alike), whether it
+  steps once a frame or a subframe, the ceiling's exact value, what DVSI's decoders do with it on
+  repeated, muted, silence, fade and tone frames (the library's choices, frame by frame in [DVSI's low
+  band](#dvsis-low-band)), whether they cut the pulsed state's bands, and ProVoice.
 - P25 onsets the column rule does not fit ([P25: the bands that start with the
   frame](#p25-the-bands-that-start-with-the-frame)): the five onsets of the development and
   validation vectors that its whole-frame form does not explain (three that DVSI's decoder starts
@@ -7050,8 +7159,9 @@ arithmetic).
 **The library against the study's scratch build.** The 25 development and validation vectors,
 decoded by the scoreboard's tools: D-STAR and P25 against the scratch decodes of the one-rate rule on
 the stack's head (the study's `pll1`), rate 33 against those on its scratch pulsed rows (`rll1`).
-D-STAR and P25: every P25 file differs in its frame 0 (79 samples, up to 11 units: the scratch build's
-base differs from the library there too, as the pulsed state's results record); apart from that frame,
+D-STAR and P25: every P25 file differs in its frame 0 (73 samples of each of the 25 files, up to 11
+units: the scratch build's base differs from the library there too, as the pulsed state's results
+record for their builds); apart from that frame,
 16 of the 50 decodes are equal sample for sample, and the other 34 differ in 135 samples of 132 frames,
 each by one unit. A
 copy of the library that forms the cut as the scratch build did (`f / fc` in float, its square
@@ -7079,33 +7189,78 @@ distance from the input (`ours.lsd_db`), partition means, the mean paired change
 | Rate 33, development | 0.993228 → 0.993793 (+0.000565; 16 up, 4 down: `t02` -0.000330, `noisy` -0.000163, `clean` -0.000124, `fambm22a` -0.000026) | 1.1747 → 1.1190 (-0.0557; 19 fall, `dam10` +0.0105) | 0.99703 → 0.99733 (+0.00030) | +0.0106 → +0.0289 (+0.0183) | 6.2809 → 6.3063 (+0.0254; `ucarf15a` +0.0880, 6 fall) |
 | Rate 33, validation | 0.993595 → 0.994696 (+0.001102; 4 up, `t03` -0.000085) | 0.9878 → 0.9345 (-0.0533; all fall, the least `t04` 0.0368) | 0.99172 → 0.99226 | -0.0468 → +0.0088 (+0.0557; `t04` +0.1391) | 4.8515 → 4.8769 (+0.0254; all rise, `t03` +0.0478) |
 
-These are the gate sets' measures; the study's scratch build gave the same to the digits the brief of
-this change quoted, the vectors that fall the same high voices (`t02`, `noisy`, `clean`, `t03`), where
-the cut does nothing and only the fixed filter changes. The whole-file correlation at lag 0 (the
-study's measure, mean over each partition's vectors): P25 0.987487 / 0.991983 → 0.989053 / 0.993816,
-D-STAR 0.992583 / 0.994653 → 0.993593 / 0.996148, rate 33 0.993226 / 0.993591 → 0.993791 / 0.994693,
-each the scratch build's to the sixth decimal. **The distance from the input rises**: by +0.022 to
-+0.030 dB in the mean in all six, the most on `ucarf15a` (+0.071 to +0.088), falling on `p01mirs`
-(-0.024 to -0.030), `clean`, `fambm22a`, `noisy` and some of the car-noise versions: DVSI's decoders
-remove fundamentals the input speech has, and a decode that follows them moves away from the input.
-It is this change's cost. PESQ (the 25 vectors; a 95% interval over the 12 recordings, t with 11
+These are the gate sets' measures, the branch point against the library. The study's scratch build
+was scored on the scoreboard against another base (for D-STAR and P25 one holding two other pending
+changes, P25's pitch rules and D-STAR's gain table; for rate 33 its scratch pulsed rows), so its gains
+are a different comparison: waveform correlation, development / validation, D-STAR +0.001022 /
++0.001564, P25 +0.001249 / +0.001548, rate 33 +0.000558 / +0.001095, beside the branch's +0.001010 /
++0.001496, +0.001565 / +0.001833 and +0.000565 / +0.001102. The vectors whose correlation falls (D-STAR
+`t02` and `noisy`; rate 33 `t02`, `noisy`, `clean` and `fambm22a`, and `t03` on validation) are not
+vectors on which only the fixed filter acts: of their harmonic-1 readings (the measure of [DVSI's low
+band](#dvsis-low-band)) the rule predicts a cut on, in rate 33, 592 of 1,026 in `clean`, 414 of 766
+in `noisy`, 533 of 941 in `fambm22a`, 90 of 1,563 in `t02` and 1 of 854 in `t03`, and in D-STAR 317 of
+609 in `noisy` and 79 of 1,360 in `t02`; the cause of these small losses (0.000026 to 0.000330) is
+not established. The whole-file correlation at lag 0 (the study's measure, mean over each partition's
+vectors): P25 0.987487 / 0.991983 → 0.989053 / 0.993816, D-STAR 0.992583 / 0.994653 → 0.993593 /
+0.996148, rate 33 0.993226 / 0.993591 → 0.993791 / 0.994693, each the scratch build's to the sixth
+decimal. **The distance from the input rises**: by +0.022 to +0.030 dB in the mean in all six, the
+most on `ucarf15a` (+0.071 to +0.088), falling on `p01mirs` (-0.024 to -0.030), `clean`, `fambm22a`,
+`noisy` and some of the car-noise versions: DVSI's decoders remove fundamentals the input speech has,
+and a decode that follows them moves away from the input. It is this change's cost. Its change by
+vector (`ours.lsd_db`, dB, the library less the branch point, both decoding DVSI's bits):
+
+| Vector | D-STAR | P25 | Rate 33 |
+|---|---:|---:|---:|
+| `dam` (dev.) | +0.0473 | +0.0568 | +0.0495 |
+| `dam10` (dev.) | +0.0141 | +0.0196 | +0.0277 |
+| `dam20` (dev.) | +0.0439 | +0.0472 | +0.0491 |
+| `dam40` (dev.) | +0.0309 | +0.0215 | +0.0393 |
+| `dam80` (dev.) | +0.0364 | +0.0178 | +0.0261 |
+| `dam_10ov` (dev.) | +0.0280 | +0.0319 | +0.0434 |
+| `damcar` (dev.) | +0.0276 | +0.0310 | +0.0335 |
+| `lvl` (dev.) | +0.0457 | +0.0474 | +0.0752 |
+| `clean` (dev.) | -0.0164 | -0.0177 | -0.0109 |
+| `noisy` (dev.) | -0.0075 | -0.0096 | -0.0109 |
+| `fambf22c` (dev.) | +0.0356 | +0.0508 | +0.0465 |
+| `fambm22a` (dev.) | -0.0185 | -0.0196 | -0.0181 |
+| `t01` (dev.) | +0.0356 | +0.0381 | +0.0291 |
+| `t02` (dev.) | +0.0251 | +0.0249 | +0.0270 |
+| `tia11` (dev.) | +0.0329 | +0.0369 | +0.0305 |
+| `tambf22a` (dev.) | +0.0293 | +0.0446 | +0.0283 |
+| `ucarm15a` (dev.) | +0.0046 | -0.0018 | -0.0072 |
+| `ucarf15a` (dev.) | +0.0781 | +0.0707 | +0.0880 |
+| `ucarm20a` (dev.) | -0.0031 | -0.0069 | -0.0107 |
+| `p01mirs` (dev.) | -0.0244 | -0.0304 | -0.0281 |
+| `t03` (val.) | +0.0446 | +0.0462 | +0.0478 |
+| `t04` (val.) | -0.0024 | +0.0039 | +0.0001 |
+| `tambf22b` (val.) | +0.0201 | +0.0298 | +0.0252 |
+| `tambf32b` (val.) | +0.0179 | +0.0283 | +0.0254 |
+| `tambf32e` (val.) | +0.0299 | +0.0395 | +0.0286 |
+ PESQ (the 25 vectors; a 95% interval over the 12 recordings, t with 11
 degrees of freedom, from the standard error clustered by recording): against the input D-STAR +0.0023 ±
 0.0017 (-0.0014 to +0.0060, 14 of 25 up), P25 -0.0024 ± 0.0017 (-0.0061 to +0.0013, 12 up), rate 33
 +0.0001 ± 0.0015 (-0.0032 to +0.0034, 12 up): neither a cost nor a gain established; against DVSI's
 decode +0.0029 ± 0.0018 (-0.0011 to +0.0069, 20 up), +0.0055 ± 0.0018 (+0.0015 to +0.0095, 20 up),
 +0.0048 ± 0.0018 (+0.0008 to +0.0088, 23 up). The level against DVSI's moves by +0.009 to +0.057 dB
-in the mean, the most on `t04` (+0.120 to +0.156), the lowest voice of the set (median f0 86 Hz): its
-energy under 150 Hz (3.4 to 4.9% of it) rises by 1.6 dB and that from 150 to 300 Hz (23 to 27%) by
-0.21 dB, the third-order filter at 75 Hz passing more there than the second-order one at 100 Hz
-while its corner follows its own low pitch; that adds 0.12 to 0.16 dB.
+in the mean, the most on `t04` (+0.120 to +0.156), the lowest voice of the set: the median f0 of its
+frames with harmonic 1 voiced and an rms over 100 is 85 to 86 Hz (628 to 675 such frames by codec).
+Its energy under 150 Hz (3.4 to 4.9% of the branch point's decode) rises by 1.6 dB and that from 150 to
+300 Hz (23 to 27% of it) by 0.21 dB, the third-order filter at 75 Hz passing more there than the
+second-order one at 100 Hz while its corner follows its own low pitch; weighted by the branch point's
+shares those add 0.12 to 0.16 dB.
 
 **Tones.** By the scoreboard's hashes every tone decode of the three codecs changes (the AMBE tones
 start at the new filter's phase; P25's tones are voice frames and its tone models play through the
-new filter). No tone measure of D-STAR or rate 33 moves in the third decimal (the worst vector's
-level error 0.2126 → 0.2137 and 0.2829 → 0.2847 dB, balance 0.1687 → 0.1688 and 0.1696 → 0.1697);
-P25's level error 0.5897 → 0.5890 and balance error 0.3392 → 0.3601 (the worst vector, `cp31`:
-+0.021); the share of wrong tones and the detector's agreement do not move on any vector; the
-encoders' tone statistics do not move. In DVSI's tone vectors no P25 tone model has a component under
+new filter). The largest move of a measure on one vector: D-STAR's level error `knox_4` +0.0031 dB
+and balance error `knox_1` -0.0032, rate 33's level error `cp31` +0.0019 and balance error `cp0`
+-0.0005, P25's level error `cp0` +0.0190 and balance error `cp31` +0.0209 (the worst vectors' values,
+level 0.2126 → 0.2137 and 0.2829 → 0.2847 dB in D-STAR and rate 33, P25's balance 0.3392 → 0.3601);
+the share of wrong tones and the detector's agreement move on no vector where they are measured. The
+detector's agreement is measured on all 52 tone vectors of each codec; the level, frequency and
+wrong-tone measures on 44 (D-STAR) and 49 (P25, rate 33), unmeasured on both runs for `cp1`, `cpvbad`
+and `dtmfvbad` in every codec and for `knox_2`, `knox_3`, `knox_5`, `knox_7` and `knox_14` in
+D-STAR's; the balance on 43, 48 and 48 (single tones have none). The encoders' tone statistics do not
+move. In DVSI's tone vectors no P25 tone model has a component under
 the corner (the lowest, ID 5, lies at 156.25 Hz); the voice frames between and around the tones are cut
 as speech is.
 
@@ -7132,8 +7287,10 @@ DVSI's: D-STAR 0.17761 → 0.17784 (the library's decode nearer on 3,530 frames,
 
 **Other modes and the encoders.** Of the bit files at the top of each mode's directory (`irstia` and
 `mark` left out: 106 D-STAR, 103 P25 and 106 rate-33 files, the soft-decision ones decoded as soft), every
-decode changes and every frame's flags are the same (113,596, 105,033 and 113,596 frames). All 285
-encodings (95 input files, three encoders) are identical between the two builds. In each of the ten local
+decode changes and every frame's flags are the same (113,596, 105,033 and 113,596 frames); after the
+review the second candidate (`8fce556`) decoded all 315 again, and every decode and every per-frame
+parameter record is the first candidate's by SHA-256 (630 files). All 285 encodings (95 input files,
+three encoders) are identical between the two builds. In each of the ten local
 configurations (dev-debug; dev-release, GCC Release with SIMD, fast-math, LTO and `-march=native`;
 asan-ubsan-debug; notones-debug; a Debug build with SIMD; a Debug `-march=x86-64-v3` build; Clang Release
 with SIMD, fast-math and LTO, once with `MBELIB_ENABLE_NATIVE=ON` and once with `-march=x86-64-v3`; and
@@ -7150,10 +7307,30 @@ the same samples and returns the same states, but for the two slots, whatever th
 P25's and rate 33's own streams change, as they are to. A first form of the change, before its commit,
 failed the harness in dev-release (ProVoice's samples moved): the unvoiced shaping, written as one loop
 for both filters, was compiled otherwise there; ProVoice's loop is kept as it was (`shape_subframe()`
-apart from `shape_subframe_dvsi()`), and the ten configurations agree since, at `0e3463e`.
-The golden PCM hashes that moved (D-STAR's and rate 33's, scalar, SSE2 and AVX2; the dispatched AVX2
-equal to a `-march=x86-64-v3` build's) pass under glibc 2.39 (an `ubuntu:24.04` container) as under the
-local 2.44.
+apart from `shape_subframe_dvsi()`), and the ten configurations agree since, at `0e3463e`. (That
+experiment isolated the shaping loop; the two filter tables' initialisation, kept in two loops too,
+gave ProVoice's samples unchanged in that build in one loop as well, tried once afterwards.) The golden
+PCM hashes that moved (D-STAR's and rate 33's, scalar, SSE2 and AVX2; the dispatched AVX2 equal to a
+`-march=x86-64-v3` build's) pass under glibc 2.39 (an `ubuntu:24.04` container) as under the local 2.44.
+
+After the review (`cebeafd`: silence frames hold the tracker, the filter helpers total) the harness was
+extended with what it had left out, ProVoice by soft decisions (float and 16-bit entry points, random
+reliabilities) and as tagged parameter data (`mbe_processImbe4400Dataf()` and its 16-bit twin with
+`MBE_PROCESS_FLAG_PROVOICE`), the three encoders' 16-bit entry points and return status (a history
+they reject among them) and the TETRA decoder (3,000 random frames with bad-frame flags and resets),
+and run again in the ten configurations, the baseline against `8fce556` (library `cebeafd`): every
+protected output byte for byte the baseline's in all ten. It still leaves out ProVoice's and the
+encoders' other wrappers that reach the same code (the frame-level IMBE 7200x4400 and AMBE frame
+encoders, the parameter decoders and the frame packers), MSVC and macOS, and caller states other than
+those listed. The D-STAR, P25 and rate-33 streams of the harness (random frames, forged states)
+equal the first candidate's in eight configurations; in the two Clang builds with fast-math and LTO
+they move, by at most 5.7e-7 (D-STAR), 5.9e-7 (P25) and 6.6e-7 (rate 33) of the peak of the
+160-sample frame, which turns 3 D-STAR, 2 P25 and 2 rate-33 samples of 480,000 each by one unit under
+their codecs' 16-bit conversions: with the first candidate's `mbelib.c` (its filter helpers) put back
+into the new head, the Clang LTO build's streams are the first candidate's byte for byte, so the
+helpers' new form (the class test in front of the same formula) changed how Clang compiled the
+formula under fast-math there. Neither the scoreboard's tools nor the golden hashes are such a build
+(both IEEE), and their decodes are the first candidate's (below).
 
 **Cost.** The median complete hard-decision frame decode, `bench_replay hard <codec> 60 5` on DVSI's
 `dam` stream of each codec, seven alternating invocations pinned to one CPU, a portable Release build
@@ -7161,7 +7338,12 @@ with SIMD, fast-math and LTO, `9a101f8` against `0e3463e`: AMBE+2 7.345 → 7.65
 invocations' medians 7.327 to 7.682 and 7.582 to 7.970), D-STAR 6.809 → 7.100 (+4.3%; 6.791 to 7.078
 and 7.037 to 7.192), IMBE 7.279 → 7.528 (+3.4%; 7.231 to 7.574 and 7.492 to 7.560), the ranges barely
 overlapping; the new filter's gain and phase are three double-precision functions per voiced harmonic
-of each model, against one before.
+of each model, against one before. Timed again after the review, the same way, `9a101f8` against
+`c449a2d` (whose decodes in that build carry the first candidate's checksums), on a machine loaded by
+other work (one-minute load 8 to 13): AMBE+2 10.804 → 10.516 us (-2.7%; ranges 9.382 to 14.750 and
+9.222 to 14.960), D-STAR 8.734 → 9.266 (+6.1%; 8.125 to 9.074 and 8.558 to 9.600), IMBE 8.818 →
+9.299 (+5.5%; 8.663 to 9.952 and 8.988 to 10.232), medians of the seven invocations' medians: under
+that load the figures say no more than the first run's.
 
 **Gate sets**, declared in the branch's first commit, `4677a41`, before any build of the branch was
 scored (the study's scratch build had been measured on the development, validation, tone, channel and
@@ -7177,6 +7359,26 @@ combined run over the development, validation, tone and channel partitions, `9a1
 | `low-band-tones` | passes all 21 checks | the D-STAR and rate-33 encoders' tone statistics unchanged and the decoders' tone measures within their limits on the windows the detector calls steady; not that the frames between and around the tones are right |
 | `low-band-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by themselves that no frame's mute decision changed: the flags say that), the distance from DVSI's decode on the loud frames falling in every mode and decision type, every encoder's speech rows unchanged |
 | `low-band-final` | not scored | the prediction for `irstia` and `mark` |
+
+**Scored again after the review**, the same scripts and the same combined run, `9a101f8` against
+`8fce556` (library `cebeafd`; the commits after it change comments, tests and documents only): all
+four sets pass, 102 of 102 checks, every check's line the first run's to the digit, all 75 speech
+entries carrying an encoder-row hash in both reports, every one equal. No decode differs between the
+two candidates: all 255 entries of the candidate's report (75 speech PCM hashes, 156 tone and 24
+channel PCM hashes, 75 encoder-row hashes) equal the first candidate's, and so do the baseline's; on
+those streams no silence frame is voiced throughout by adaptive smoothing, and the helpers' new
+branches are never reached. Of the 315 bit files of the three modes (the held-out vectors left out),
+the second candidate's decodes equal the first's by hash as well (below, "Other modes").
+
+**Notes on the declarations.** The channel set's description says the log-spectral distance on the
+loud frames may not rise "on at least a tenth of the frames measured (min_coverage)"; the scorer's
+coverage is another share (`channel_lsd()`): the frames it counts, those loud in DVSI's clean decode
+and not muted by DVSI, measured by every run, with no frame DVSI or a run muted at or next to them,
+over all the loud frames DVSI leaves unmuted, so that frames a run did not measure count as lost.
+The check is `no_increase` with a limit of 0, which equality passes; the means measured fell in all
+six, each measured on both runs (coverage 0.750 to 1.000, above). The description of the
+tracker in every set ("speech only: a positive pitch, no tone model") predates the silence rule; the
+gates file stays as declared.
 
 ### Scoring history
 

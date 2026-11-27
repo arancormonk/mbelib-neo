@@ -1053,9 +1053,10 @@ mbe_renderTonef(float* out, mbe_parms* mp, uint32_t step1, uint32_t step2, float
  * and p the phase of DVSI's fixed high-pass at it (mbe_low_band_dvsi_phase(),
  * the third-order filter at 75 Hz of D-STAR's and rate 33's renderings; before
  * the low-band change the second-order one at 100 Hz). Measured on DVSI's
- * rate-33 and D-STAR tone vectors: the phase is the same at every such onset
- * of a tone within 0.0002 cycle, and the measured phase less this one is
- * +0.0004 cycle on average over the DTMF and KNOX components, +0.0018 with the
+ * rate-33 and D-STAR tone vectors: within one vector the phase at such
+ * onsets of one component varies by 0.00013 cycle at the most (between vectors
+ * by up to 0.00158), and the measured phase less this one is +0.0003 cycle on
+ * average over the 64 DTMF and KNOX components (766 starts), +0.0016 with the
  * second-order filter (docs/dvsi-parity.md, "DVSI's low band"). After a voiced frame DVSI's decoders continue
  * that frame's pulse train into the tone instead (cp2, cp31); the codec paths
  * start every tone after a frame that was not a tone frame this way, the
