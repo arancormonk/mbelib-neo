@@ -458,8 +458,10 @@ MBE_API void mbe_ambe2400EncoderFree(mbe_ambe2400_encoder* enc);
  * them. KNOX tones, which D-STAR cannot carry, are coded as voice. A voice
  * frame with no voiced band (b1 0) is sent at b0 123 (56 harmonics) rather
  * than at the tracked pitch, its amplitudes measured on that grid. This
- * library's decoder reads that code as "the voicing of the frame before, if
- * it reaches 505 Hz, lasts through this frame's first 10 ms", where b0 64..119
+ * library's decoder reads that code as "the voicing of the frame before
+ * lasts through this frame's first 10 ms in the bands whose 500 Hz column, or
+ * the column 250 Hz higher, it covers",
+ * where b0 64..119
  * would say it ends at the frame's start; DVSI's decoder is inferred to read
  * it so from other codes outside that range. A ThumbDV plays b0 120..123 at
  * b1 0 as low-pitch voice (#106), but whether b0 123 lets the voicing of the
@@ -1027,8 +1029,8 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * then alternating. Every frame is a voice frame. A frame with no voiced
  * band is sent at b0 127 (37 harmonics) rather than at the tracked pitch, its
  * amplitudes measured on that grid. This library's decoder reads that code as
- * "the voicing of the frame before, if it reaches 505 Hz, lasts through this
- * frame's first 10 ms", where b0 128..183 would say it ends at the frame's
+ * "the voicing of the frame before lasts through this frame's first 10 ms in
+ * the bands whose 500 Hz column, or the column 250 Hz higher, it covers", where b0 128..183 would say it ends at the frame's
  * start; DVSI's decoder is inferred to read it so from its decodes of DVSI's
  * vectors at b0 25, the one code outside that range its encoder sends on such
  * frames. No P25 measurement on hardware exists, and b0 127 is not among the

@@ -60,6 +60,10 @@
  * frames of different pitch, moved the AMBE+2 float and int16 hashes (scalar,
  * SSE2 and AVX2; the same under glibc 2.39 and 2.44); the D-STAR and public
  * hashes did not move.
+ * The mid-frame voicing of D-STAR and P25 by 500 Hz columns moved the D-STAR
+ * float and int16 hashes (scalar, SSE2 and AVX2; the same under glibc 2.39 and
+ * 2.44); D-STAR's scalar int16 hash equals the SIMD one again. The AMBE+2 and
+ * public hashes did not move, and no golden sequence is P25's.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -78,13 +82,13 @@ golden_ambe_expected(int isa) {
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
         e.ambe2450_f32 = 0x4E454F6Du;
         e.ambe2450_s16 = 0xDD5D42D0u;
-        e.ambe2400_f32 = 0xC89A3643u;
-        e.ambe2400_s16 = 0xD93C5851u;
+        e.ambe2400_f32 = 0x8A37B0D7u;
+        e.ambe2400_s16 = 0x4FB4B896u;
     } else {
         e.ambe2450_f32 = 0x5E331243u;
         e.ambe2450_s16 = 0x20570E3Bu;
-        e.ambe2400_f32 = 0x25F7B472u;
-        e.ambe2400_s16 = 0x71A03C76u;
+        e.ambe2400_f32 = 0xD1702F7Bu;
+        e.ambe2400_s16 = 0x4FB4B896u;
     }
     return e;
 }

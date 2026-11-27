@@ -147,13 +147,13 @@ imbe_harmonic_count(float nominal) {
  * ProVoice (IMBE 7100x4400), which reaches this decoder converted to the 7200
  * layout, has no DVSI reference and keeps the nominal pitch (`pitch`).
  *
- * The harmonic whose voicing synthesis reads to tell whether a frame's
- * voicing reaches 505 Hz (MBE_VOICING_REACH_HZ; ceil(505 Hz / f0),
- * voicing_persists() in mbe_subframe.c) does not move for any pitch code (the
- * nearest harmonic to 505 Hz, b0 119's 5th, is 0.053% below it and the
- * correction moves it further below); checked for all 208 codes. The 500 Hz
- * columns a P25 onset is read in (MBE_FRAME_MARK_ONSET_COLUMNS) are read at
- * the pitch played, and there the correction moves the harmonic at or next
+ * The harmonic at or next above 505 Hz (MBE_VOICING_REACH_HZ; ceil(505 Hz /
+ * f0)), at which synthesis samples the first edge of the 500 Hz columns P25's
+ * mid-frame voicing is read in (mbe_subframe.c), does not move for any pitch
+ * code (the nearest harmonic to 505 Hz, b0 119's 5th, is 0.053% below it and
+ * the correction moves it further below); checked for all 208 codes. Those
+ * columns are read at the pitch played, and there the correction moves the
+ * harmonic at or next
  * above an edge at 8 of the 208 x 7 pairs of code and edge 505 + 500 k Hz, and
  * at 6 of the 208 x 7 pairs with the edges 250 Hz lower; no edge lies within
  * 2.8e-4 of a harmonic of the played pitch, nor (ProVoice) within 1.5e-4 of
@@ -244,16 +244,18 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
  * the bands that start with the frame"):
  *  - no voiced band, at a pitch code other than the ones DVSI's encoder sends
  *    only with such frames (IMBE_UNVOICED_CODES_*): the voicing of the frame
- *    before it lasts to mid-frame;
- *  - voiced bands: after a frame with no voiced band, P25's rendering reads
- *    them in 500 Hz columns at the frame's pitch and starts the voiced
- *    harmonics that lie neither in a covered column nor within 250 Hz below
- *    one in the frame's second half (MBE_FRAME_MARK_ONSET_COLUMNS, which
- *    holds the frames voiced only below MBE_VOICING_REACH_HZ, all of whose
- *    voiced bands start there). The rendering marks the model it renders
- *    again, after adaptive smoothing, by that model's voicing; the model
- *    played for a P25 tone sent as voice frames is marked MBE_FRAME_MARK_TONE
- *    instead (imbe4400_play_tone()).
+ *    before it lasts to mid-frame in the bands whose 500 Hz column, or the
+ *    column 250 Hz higher, that frame covers (MBE_FRAME_MARK_PITCH_ABSENT;
+ *    the pulse train runs on through the frame only when a band is held);
+ *  - voiced bands: MBE_FRAME_MARK_ONSET_COLUMNS, which P25's rendering gives
+ *    every voiced model it renders but a tone model, after adaptive smoothing
+ *    (the model played for a P25 tone sent as voice frames is marked
+ *    MBE_FRAME_MARK_TONE instead, imbe4400_play_tone()). It chooses no band
+ *    since the mid-frame columns change: P25's reads the mid-frame voicing of
+ *    every voiced model but a tone model in 500 Hz columns, whatever its mark
+ *    (mbe_subframe.c; docs/dvsi-parity.md,
+ *    "D-STAR and P25: mid-frame voicing by columns"), which contains the onset
+ *    rule the mark gave before.
  */
 static void
 imbe_decode_voicing(mbe_parms* cur_mp, int b0, char bb[58][12]) {

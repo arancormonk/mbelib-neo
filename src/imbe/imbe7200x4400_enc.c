@@ -267,7 +267,8 @@ mbe_imbe4400_quantize_amplitudes(int b0, const unsigned char bands[12], const fl
  * codes every frame's own pitch, but this library's decoder reads the pitch
  * code of such a frame: b0 128..183 end the voicing of the frame before where
  * the frame starts, any other code lets that voicing last through the frame's
- * first 10 ms if it reaches 505 Hz; DVSI's decoder is inferred to read b0 127
+ * first 10 ms in the bands whose 500 Hz column, or the column 250 Hz higher, it
+ * covers; DVSI's decoder is inferred to read b0 127
  * so from its decodes of DVSI's vectors at b0 25, the one code outside that
  * range its encoder sends on such frames (no P25 measurement on hardware
  * exists). The tracked pitch of noise is arbitrary, so it said either at

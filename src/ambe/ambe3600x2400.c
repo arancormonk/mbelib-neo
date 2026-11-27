@@ -234,8 +234,13 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
  *    voiced frame's own pitch (925 of 925, with b0 34), whatever that pitch
  *    is.
  *  - any other code, b0 34 among them: the voicing of the frame before lasts
- *    through this frame's first 10 ms. On a DVMEGA DVstick 30 a frame whose
- *    b1 alone is set to 0 plays exactly as its voiced neighbour would through
+ *    through this frame's first 10 ms in the bands whose 500 Hz column, or the
+ *    column 250 Hz higher, that frame covers (mbe_subframe.c;
+ *    docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"), and
+ *    the pulse train runs on through the frame when a band is held (it starts
+ *    afresh when none is, as after a model voiced only at its harmonic 3, which
+ *    adaptive smoothing can leave). On a DVMEGA DVstick 30 a frame whose b1
+ *    alone is set to 0 plays exactly as its voiced neighbour would through
  *    sample 80, at b0 20 and at the pitch code of the frame it was made from,
  *    and departs from the frame's first sample at b0 100 (#157).
  * Any mark cur_mp held is replaced. The D-STAR encoder marks the model it

@@ -303,110 +303,274 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
     return sqrtf(prev_mp->w0 * cur_mp->w0);
 }
 
-/* Whether the mid-frame model keeps the previous frame's voicing instead of
- * taking this frame's: DVSI's decoders hold it through the first 10 ms of a
- * frame with no voiced band that the decoder marked MBE_FRAME_MARK_PITCH_ABSENT
- * when the previous frame's voicing reaches MBE_VOICING_REACH_HZ, read at its
- * harmonic at or next above that frequency. */
-static int
-voicing_persists(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
-    if (mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_PITCH_ABSENT || model_has_voiced_band(cur_mp)) {
-        return 0;
-    }
-    const float position = ceilf((MBE_VOICING_REACH_HZ * ((2.0f * (float)M_PI) / 8000.0f)) / prev_mp->w0);
-    int within;
-    return prev_mp->Vl[harmonic_below(position, prev_mp->L, &within)] == 1;
-}
+/* ---- the mid-frame voicing of D-STAR and P25: 500 Hz columns ---- */
 
-/* ---- the harmonics a P25 onset starts with ---- */
+/*
+ * The mid-frame model of D-STAR's and P25's renderings is voiced by one rule
+ * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"). It
+ * was fitted to per-harmonic labels of DVSI's decodes of its development and
+ * validation vectors (each label says which of two test decodes is nearer
+ * DVSI's in a harmonic's band), and the DVMEGA DVstick 30's single-band step
+ * curves of #157 come closer with it; it is not taken from a document, and what
+ * DVSI's decoders compute is not known. A band in the same state in both
+ * frames (each read at its harmonic nearest the band, nearest_harmonic())
+ * keeps it. One whose state differs is voiced at mid-frame if and only if M(k)
+ * or M(k') holds, k the 500 Hz column of the band's frequency and k' the
+ * column of the frequency 250 Hz higher:
+ *
+ *     M(k) = (Sp(k) and Sc(k)) or (Sp(k) != Sc(k) and Sp(k + 1) != Sc(k + 1))
+ *
+ * with Sp and Sc the two frames' voicing sampled at the columns (the samples,
+ * not the bands' states), the sample past the last column unvoiced in both. A
+ * frame with no voiced band is unvoiced in every band and sample; a band that
+ * plays nothing in either frame (BAND_NONE, a caller's state) plays nothing
+ * (column_band_state()). At an onset M(k) reduces to Sc(k) and Sc(k + 1); at a
+ * frame marked MBE_FRAME_MARK_PITCH_ABSENT with no voiced band, to Sp(k) and
+ * Sp(k + 1).
+ */
 
-/* The 500 Hz columns a P25 frame's voicing is read in after a frame with no
- * voiced band (MBE_FRAME_MARK_ONSET_COLUMNS; a rule fitted to DVSI's P25
- * decodes, docs/dvsi-parity.md): column 0 from 0 Hz
- * to MBE_VOICING_REACH_HZ, each next one ONSET_COLUMN_HZ wide, ONSET_COLUMNS of
- * them, up to 3505 Hz; a harmonic within ONSET_REACH_HZ below a covered column
- * sounds with it. */
-#define ONSET_COLUMNS   7
-#define ONSET_COLUMN_HZ 500.0
-#define ONSET_REACH_HZ  250.0
+/* Columns 0..7, and the sample past the last, always unvoiced. */
+#define COLUMNS          8
+/* P25's columns: column 0 from 0 Hz to MBE_VOICING_REACH_HZ, each next one
+ * P25_COLUMN_HZ wide, column 7 above 3505 Hz. */
+#define P25_COLUMN_HZ    500.0
+/* The second column the rule reads lies this far above the band. */
+#define COLUMN_REACH_HZ  250.0
+/* P25's last band, harmonics 34 to L of a frame with more than 36 (12 bands). */
+#define P25_FULL_BANDS_L 36
+#define P25_LAST_BAND    34
 
-struct onset_columns {
-    double edge[ONSET_COLUMNS];     /* column k's upper edge, in harmonics of the frame's pitch */
-    double reach[ONSET_COLUMNS];    /* the same edges ONSET_REACH_HZ lower */
-    int covered[ONSET_COLUMNS + 1]; /* column k covered; [ONSET_COLUMNS], above 3505 Hz, never */
+/* A frame's voicing sampled at the columns: [COLUMNS] is past the last. */
+struct column_samples {
+    int voiced[COLUMNS + 1];
 };
 
 /* Whether a frame is voiced at its harmonic at or next above `position` (in
- * harmonics of its pitch, positive and finite): unvoiced past L. Decided on
- * the bit pattern, positive doubles ordering as their patterns do, so that the
- * conversion only ever sees a value from 0 to L. */
+ * harmonics of its pitch, positive and finite), harmonics past `last` (at most
+ * L) reading unvoiced. Decided on the bit pattern, positive doubles ordering
+ * as their patterns do, so that the conversion only ever sees a value from 0
+ * to `last`. */
 static int
-voiced_from(const mbe_parms* mp, double position) {
-    const double last = (double)mp->L;
-    uint64_t bits, last_bits;
+voiced_from(const mbe_parms* mp, double position, int last) {
+    const double end = (double)last;
+    uint64_t bits, end_bits;
     memcpy(&bits, &position, sizeof(bits));
-    memcpy(&last_bits, &last, sizeof(last_bits));
-    if (bits > last_bits) {
+    memcpy(&end_bits, &end, sizeof(end_bits));
+    if (bits > end_bits) {
         return 0;
     }
     const int l = (int)ceil(position);
     return mp->Vl[(l < 1) ? 1 : l] == 1;
 }
 
-/* The columns of a frame with a positive, normal pitch and 1..56 harmonics.
- * The edges' positions among its harmonics are quotients formed in double
- * from the stored pitch: for every P25 pitch code (and ProVoice's nominal
- * pitch) each lies at least 1.5e-4 of a harmonic from a whole number
- * (test_p25_onset_edges in test_subframe_synthesis.c), far past any
- * difference the arithmetic of a build (x87 excess precision, fast-math's
- * reordering) can make, so every build reads the same harmonics. */
+/* P25's samples (the reading of PR #198's onset columns): S(0) at harmonic 1,
+ * S(k) for k = 1..7 at the harmonic at or next above MBE_VOICING_REACH_HZ +
+ * P25_COLUMN_HZ (k - 1), unvoiced past L. The last band of a frame with more
+ * than P25_FULL_BANDS_L harmonics, voiced while harmonic P25_LAST_BAND - 1 is
+ * not, reads as unvoiced (a fit to the labels of DVSI's decodes, which mostly
+ * do not sound such a band at mid-frame where a column it covers would:
+ * docs/dvsi-parity.md); the frame's own model still voices it. The edges'
+ * positions among the frame's harmonics are quotients formed in
+ * double from its stored pitch, positive and normal: for every P25 pitch code
+ * (and ProVoice's nominal pitch) each lies at least 1.5e-4 of a harmonic from a
+ * whole number (test_p25_onset_edges in test_subframe_synthesis.c), far past
+ * any difference the arithmetic of a build (x87 excess precision, fast-math's
+ * reordering) can make. */
 static void
-onset_columns(const mbe_parms* mp, struct onset_columns* columns) {
+p25_samples(const mbe_parms* mp, struct column_samples* samples) {
     const double harmonics_per_hz = M_PI / (4000.0 * (double)mp->w0);
-    int lower = mp->Vl[1] == 1;
-    for (int k = 0; k < ONSET_COLUMNS; k++) {
-        const double hz = (double)MBE_VOICING_REACH_HZ + (ONSET_COLUMN_HZ * (double)k);
-        columns->edge[k] = hz * harmonics_per_hz;
-        columns->reach[k] = (hz - ONSET_REACH_HZ) * harmonics_per_hz;
-        const int upper = voiced_from(mp, columns->edge[k]);
-        columns->covered[k] = lower && upper;
-        lower = upper;
+    const int isolated_last =
+        (mp->L > P25_FULL_BANDS_L) && (mp->Vl[P25_LAST_BAND] == 1) && (mp->Vl[P25_LAST_BAND - 1] != 1);
+    const int last = isolated_last ? P25_LAST_BAND - 1 : mp->L;
+    samples->voiced[0] = mp->Vl[1] == 1;
+    for (int k = 1; k < COLUMNS; k++) {
+        const double hz = (double)MBE_VOICING_REACH_HZ + (P25_COLUMN_HZ * (double)(k - 1));
+        samples->voiced[k] = voiced_from(mp, hz * harmonics_per_hz, last);
     }
-    columns->covered[ONSET_COLUMNS] = 0;
+    samples->voiced[COLUMNS] = 0;
 }
 
-/* The column holding a position among the frame's harmonics, by `edges`. */
+/* P25's column (0..7) of a frequency in Hz (finite, not negative). */
 static int
-column_of(const double edges[ONSET_COLUMNS], double position) {
+p25_column(double hz) {
     int k = 0;
-    while (k < ONSET_COLUMNS && position >= edges[k]) {
+    while (k < COLUMNS - 1 && hz >= (double)MBE_VOICING_REACH_HZ + (P25_COLUMN_HZ * (double)k)) {
         k++;
     }
     return k;
 }
 
-/* Whether the mid-frame model's harmonic at `position` (in harmonics of the
- * frame's pitch: a whole number at an onset, where the mid-frame pitch is the
- * frame's) sounds at an onset: in a covered column, or within ONSET_REACH_HZ
- * below one. */
-static int
-sounds_at_onset(const struct onset_columns* columns, double position) {
-    return columns->covered[column_of(columns->edge, position)]
-           || columns->covered[column_of(columns->reach, position)];
+/* A D-STAR position among the 500 Hz columns as the decoder forms it to voice
+ * harmonic l (mbe_ambe2400_harmonic_voiced(): l 16 f0, rounded to float, also
+ * under x87 excess precision). */
+static float
+dstar_position(int l, float f0) {
+    return mbe_round_to_float((float)l * 16.0f * f0);
 }
 
-/* The columns of the current frame when its onset is read in them (in P25's
- * rendering, a frame marked MBE_FRAME_MARK_ONSET_COLUMNS after one with no
- * voiced band), else NULL. */
-static const struct onset_columns*
-onset_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering,
-           struct onset_columns* columns) {
-    if (rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE || mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_ONSET_COLUMNS
-        || model_has_voiced_band(prev_mp)) {
-        return NULL;
+/* The D-STAR column holding a position (positive, or zero, or infinite), at
+ * most 7, as the decoder takes it: its whole part. Decided on the bit pattern,
+ * so that the conversion only ever sees a value under 7: a caller's pitch can
+ * put a position past any int. */
+static int
+dstar_column(float position) {
+    const float top = 7.0f;
+    uint32_t bits, top_bits;
+    memcpy(&bits, &position, sizeof(bits));
+    memcpy(&top_bits, &top, sizeof(top_bits));
+    return (bits >= top_bits) ? 7 : (int)position;
+}
+
+/* A frame's fundamental in cycles per sample, rounded to float (x87). */
+static float
+dstar_f0(float w0) {
+    return mbe_round_to_float(w0 / (2.0f * (float)M_PI));
+}
+
+/* D-STAR's samples: both columns of 1 kHz band j (b1's bit for it) take the
+ * frame's voicing at the band's lowest harmonic, the first whose column (by
+ * the decoder's arithmetic) lies in the band; a band that holds no harmonic (a
+ * caller's state) reads as unvoiced. The pitch is the stored one, positive and
+ * normal; at the ordinary D-STAR pitch codes, 0 to 123, the columns it gives
+ * are the decoder's, each position at least 6.5e-5 of a column from a whole
+ * number and 1.8e-5 from a half in every build measured
+ * (test_dstar_column_edges in test_subframe_synthesis.c). Code 124, the
+ * silence model (L 14, 250 Hz), puts its harmonics exactly on positions 0.5
+ * and 1.0, a margin of zero; it decodes with no voiced band, and an exact edge
+ * lies in the upper column (test_dstar_exact_column_edge). */
+static void
+dstar_samples(const mbe_parms* mp, struct column_samples* samples) {
+    const float f0 = dstar_f0(mp->w0);
+    int band = 0;
+    memset(samples, 0, sizeof(*samples));
+    for (int l = 1; l <= mp->L && band < COLUMNS / 2; l++) {
+        const int own = dstar_column(dstar_position(l, f0)) / 2;
+        if (own >= band) {
+            const int column = own + own;
+            samples->voiced[column] = mp->Vl[l] == 1;
+            samples->voiced[column + 1] = mp->Vl[l] == 1;
+            band = own + 1;
+        }
     }
-    onset_columns(cur_mp, columns);
-    return columns;
+}
+
+/* The two frames' samples and how the rendering finds a band's columns. */
+struct column_rule {
+    struct column_samples prev, cur;
+    int dstar; /* D-STAR's columns, else P25's */
+};
+
+/* Whether the mid-frame model's bands are voiced by the columns: in D-STAR's
+ * and P25's renderings, for a frame with a voiced band, or with none when it is
+ * marked MBE_FRAME_MARK_PITCH_ABSENT. No mark of the previous model is read
+ * (that model is caller state: a P25 tone model before this frame is read in
+ * the columns as any model is). Sets the samples. */
+static int
+column_rule(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering,
+            struct column_rule* rule) {
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) {
+        return 0;
+    }
+    if (!model_has_voiced_band(cur_mp) && mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_PITCH_ABSENT) {
+        return 0;
+    }
+    rule->dstar = rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    if (rule->dstar) {
+        dstar_samples(prev_mp, &rule->prev);
+        dstar_samples(cur_mp, &rule->cur);
+    } else {
+        p25_samples(prev_mp, &rule->prev);
+        p25_samples(cur_mp, &rule->cur);
+    }
+    return 1;
+}
+
+/* M(k): column k (0..7) voiced at mid-frame. */
+static int
+column_voiced(const struct column_rule* rule, int k) {
+    const int* p = rule->prev.voiced;
+    const int* c = rule->cur.voiced;
+    return (p[k] && c[k]) || ((p[k] != c[k]) && (p[k + 1] != c[k + 1]));
+}
+
+/* Whether harmonic l of the mid-frame model, of pitch w0 (positive and
+ * normal), lies in a column voiced at mid-frame, or 250 Hz below one. Where
+ * the mid-frame pitch is a frame's own (an onset after a frame whose pitch does
+ * not carry, a frame lacking a pitch, two frames of one pitch code) the
+ * harmonics lie as far from the columns' edges as the frames' do
+ * (test_p25_onset_edges, test_dstar_column_edges, for the ordinary codes);
+ * between two frames of different pitch, an onset after a pitch-carrying code
+ * among them, their geometric mean can put a harmonic anywhere. */
+static int
+columns_voice(const struct column_rule* rule, float w0, int l) {
+    if (rule->dstar) {
+        const float position = dstar_position(l, dstar_f0(w0));
+        const int above = dstar_column(mbe_round_to_float(position + 0.5f));
+        return column_voiced(rule, dstar_column(position)) || column_voiced(rule, above);
+    }
+    const double hz = ((double)w0 * (double)l * 4000.0) / M_PI;
+    return column_voiced(rule, p25_column(hz)) || column_voiced(rule, p25_column(hz + COLUMN_REACH_HZ));
+}
+
+/* A frame's harmonic nearest harmonic l of the mid-frame model of pitch w0
+ * (both pitches positive and normal), 1..L, for the columns' rule: the
+ * position l w0 / mp->w0 formed in double from the stored pitches, a half
+ * added and its whole part taken, so that a position exactly halfway between
+ * two harmonics (a tie) takes the upper one. In double because the float
+ * quotient harmonic_at() forms rounds a position just under a half (33.4999986
+ * of a P25 frame's harmonics at b0 134, its mid-frame harmonic 36 after a
+ * frame at b0 161) to the half itself, and so to the wrong neighbour: a band
+ * voiced in both frames was taken for one that changes. The index is made on
+ * the bit pattern, positive doubles ordering as their patterns do. */
+static int
+nearest_harmonic(const mbe_parms* mp, float w0, int l) {
+    const double position = (((double)w0 * (double)l) / (double)mp->w0) + 0.5;
+    const double first = 1.0;
+    const double last = (double)mp->L;
+    uint64_t bits, first_bits, last_bits;
+    memcpy(&bits, &position, sizeof(bits));
+    memcpy(&first_bits, &first, sizeof(first_bits));
+    memcpy(&last_bits, &last, sizeof(last_bits));
+    if (bits < first_bits) {
+        return 1;
+    }
+    return (bits >= last_bits) ? mp->L : (int)position;
+}
+
+/* The state of the mid-frame model's band l by the columns: each frame's state
+ * at its harmonic nearest the band (nearest_harmonic()); a band that plays
+ * nothing in either frame (BAND_NONE: a caller's voicing that is neither 0 nor
+ * 1) plays nothing; one in the same state in both keeps it; else the columns
+ * decide. */
+static int
+column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struct column_rule* rule,
+                  const struct mbe_subframe_model* model, int l) {
+    const int before = band_state(prev_mp, nearest_harmonic(prev_mp, model->w0, l));
+    const int now = band_state(cur_mp, nearest_harmonic(cur_mp, model->w0, l));
+    if (before == BAND_NONE || now == BAND_NONE) {
+        return BAND_NONE;
+    }
+    if (before == now) {
+        return now;
+    }
+    return columns_voice(rule, model->w0, l) ? BAND_VOICED : BAND_UNVOICED;
+}
+
+/* Whether the rate-33 rendering's mid-frame model keeps the previous frame's
+ * voicing instead of taking this frame's: a frame with no voiced band marked
+ * MBE_FRAME_MARK_PITCH_ABSENT, after a frame voiced at its harmonic at or next
+ * above MBE_VOICING_REACH_HZ. No rate-33 decoder writes that mark (a caller's
+ * state can hold it); this is the hold every rendering applied before the
+ * columns' rule replaced it in D-STAR's and P25's, kept so that rate 33's
+ * rendering stays exactly as it was. */
+static int
+rate33_voicing_holds(const mbe_parms* prev_mp, const mbe_parms* cur_mp) {
+    if (mbe_frame_mark(cur_mp) != MBE_FRAME_MARK_PITCH_ABSENT || model_has_voiced_band(cur_mp)) {
+        return 0;
+    }
+    const float position = ceilf((MBE_VOICING_REACH_HZ * ((2.0f * (float)M_PI) / 8000.0f)) / prev_mp->w0);
+    int within;
+    return prev_mp->Vl[harmonic_below(position, prev_mp->L, &within)] == 1;
 }
 
 /* ---- the mid-frame voicing of rate 33's rows 13 and 17 ---- */
@@ -450,13 +614,13 @@ row_voices(const int row[8], const struct mbe_subframe_model* model, int l) {
 }
 
 /* The mid-frame model's voicing, magnitudes and phases, its pitch and harmonic
- * count being set: each band's state from the frame whose voicing holds at
- * mid-frame, and the two frames' magnitudes at the band's frequency, met in
- * the log domain. At an onset of a frame marked MBE_FRAME_MARK_ONSET_COLUMNS
- * (`onset`), a voiced band that does not sound there (sounds_at_onset()) is
- * unvoiced; a frame with a mid-frame row (`row`, mid_row()) takes each band's
- * voicing from the row (a band with no state keeps none). Its phases come
- * from the mean of the two frames' decoded
+ * count being set: each band's state by the columns (`columns`, column_rule())
+ * or, where they do not apply, that of the frame whose voicing stands at
+ * mid-frame (`voicing`) at the band's frequency, and the
+ * two frames' magnitudes at the band's frequency, met in the log domain. A late
+ * onset (`late_onset`) voices no band; a frame with a mid-frame row (`row`,
+ * mid_row()) takes each band's voicing from the row (a band with no state
+ * keeps none). Its phases come from the mean of the two frames' decoded
  * log2 amplitudes (phase_log2_amplitudes()), each read at the band's
  * frequency as the magnitudes are and used as the decoder stored it: where
  * common_log2_magnitudes() takes the unvoiced factor out of an unvoiced band's
@@ -466,10 +630,9 @@ row_voices(const int row[8], const struct mbe_subframe_model* model, int l) {
  * carries what log2Ml does not, such as rate 33's further silence scale and
  * spectral enhancement). */
 static void
-fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, const struct onset_columns* onset,
-               const int* row, struct mbe_subframe_model* model) {
+fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parms* voicing, int late_onset,
+               const struct column_rule* columns, const int* row, struct mbe_subframe_model* model) {
     const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
-    const mbe_parms* voicing = voicing_persists(prev_mp, cur_mp) ? prev_mp : cur_mp;
     double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
     float envelope[57] = {0};
 
@@ -479,12 +642,9 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset
     phase_log2_amplitudes(cur_mp, cur_phase_log2);
     for (int l = 1; l <= model->L; l++) {
         const float w = model->w0 * (float)l;
-        int state = band_state(voicing, harmonic_at(voicing, w));
+        int state = (columns != NULL) ? column_band_state(prev_mp, cur_mp, columns, model, l)
+                                      : band_state(voicing, harmonic_at(voicing, w));
         if (late_onset && state == BAND_VOICED) {
-            state = BAND_UNVOICED;
-        }
-        if (onset != NULL && state == BAND_VOICED
-            && !sounds_at_onset(onset, ((double)model->w0 * (double)l) / (double)cur_mp->w0)) {
             state = BAND_UNVOICED;
         }
         if (row != NULL && state != BAND_NONE) {
@@ -503,6 +663,21 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset
     }
     note_voiced(model);
     mbe_regenerate_phases_log2(envelope, model->L, model->phase);
+}
+
+/* The mid-frame model's bands (fill_mid_bands()), its pitch and harmonic count
+ * being set: by the columns where they apply (column_rule()), else by the
+ * voicing of the frame that stands at mid-frame, this frame's but in the
+ * rate-33 rendering's hold (rate33_voicing_holds()). */
+static void
+voice_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset, enum mbe_voiced_synthesis rendering,
+                struct mbe_subframe_model* model) {
+    struct column_rule columns;
+    memset(&columns, 0, sizeof(columns));
+    const int by_columns = column_rule(prev_mp, cur_mp, rendering, &columns);
+    const int held = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) && rate33_voicing_holds(prev_mp, cur_mp);
+    fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
+                   mid_row(cur_mp, rendering), model);
 }
 
 void
@@ -542,9 +717,7 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     const float harmonics = floorf((0.9254f * (float)M_PI) / w0);
     model->w0 = w0;
     model->L = (harmonics < (float)shorter) ? shorter : ((harmonics > (float)longer) ? longer : (int)harmonics);
-    struct onset_columns columns;
-    fill_mid_bands(prev_mp, cur_mp, late_onset, onset_rule(prev_mp, cur_mp, rendering, &columns),
-                   mid_row(cur_mp, rendering), model);
+    voice_mid_model(prev_mp, cur_mp, late_onset, rendering, model);
 }
 
 /* ---- the pulse train ---- */
@@ -924,11 +1097,14 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
 /* In P25's rendering, the mark of the model rendered, as it stands after
  * adaptive smoothing (which can voice harmonics of a frame decoded with none):
  * MBE_FRAME_MARK_ONSET_COLUMNS when it has a voiced band and is not a tone
- * model (MBE_FRAME_MARK_TONE), so that its onset is read in the 500 Hz columns
- * whatever mark it was decoded or repeated with (a caller's
- * MBE_FRAME_MARK_LATE_ONSET or MBE_FRAME_MARK_PREVIOUS_HELD there is
- * overwritten and has no effect); with no voiced band, not that mark (none
- * instead), any other mark kept. The prediction history the data path
+ * model (MBE_FRAME_MARK_TONE), whatever mark it was decoded or repeated with,
+ * so that a caller's MBE_FRAME_MARK_LATE_ONSET or MBE_FRAME_MARK_PREVIOUS_HELD
+ * there is overwritten and has no effect; with no voiced band, not that mark
+ * (none instead), any other mark kept. The rendering reads its voiced models'
+ * bands in the 500 Hz columns whatever their mark (column_rule()), so
+ * MBE_FRAME_MARK_ONSET_COLUMNS no longer chooses bands; this function still
+ * reads it (to clear it from a model with no voiced band) and writes it, and
+ * the marking still decides that no other mark acts on a voiced model. The prediction history the data path
  * committed before keeps the decoded model and its mark. Other renderings
  * leave the mark as it is. Called only on a frame the synthesis accepts
  * (frame_accepted()), so that a rejected call leaves the state untouched. */

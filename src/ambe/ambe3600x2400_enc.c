@@ -229,8 +229,8 @@ ambe2400_enc_voicing(struct ambe_enc_frame* q, const struct mbe_analysis_state* 
  * on that code's harmonic grid. This library's decoder reads the pitch code
  * of such a frame: b0 64..119 end the voicing of the frame before where the
  * frame starts (some carry their pitch into the next voiced frame), any other
- * code lets that voicing last through the frame's first 10 ms if it reaches
- * 505 Hz; DVSI's decoder is inferred to read b0 123 so from other codes outside
+ * code lets that voicing last through the frame's first 10 ms in the bands
+ * whose 500 Hz column, or the column 250 Hz higher, it covers; DVSI's decoder is inferred to read b0 123 so from other codes outside
  * that range (a ThumbDV plays b0 120..123 at b1 0 as low-pitch voice, #106, but
  * whether b0 123 lets the voicing of the frame before last through its first
  * 10 ms has not been measured on hardware). The tracked pitch of noise is
