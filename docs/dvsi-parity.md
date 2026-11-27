@@ -6727,13 +6727,32 @@ hashes in both reports, the four D-STAR and P25 PCM hashes and all six row hashe
 rate-33 PCM hashes different. The prediction, a gain on both held-out vectors, is met. The mean gain
 in correlation there, +0.003599, is larger than on development (+0.000778) and validation
 (+0.001452); nothing was measured that explains the difference. The distance from the input rises
-on `irstia` (+0.012739 dB) and falls on `mark` (-0.006606 dB). It was one scoring, after the two
-reviews and their fixes, of the code of `1502dc0`. The baseline's rate-33 figures here are not those
-the row-17 run's table above gives for the same decode (rate 33's two PCM hashes, 0x4F2FBCFE and
-0x47687202, are those of rate 33's held-out run of the mid-frame pitch wave too): correlation mean
-0.985957 here, 0.985956 there; `irstia`'s distance from DVSI's decode 1.409731 here, 1.6848 there;
-`mark`'s 1.3301 in both. Each
-run scores at its own joint lags; the difference was not examined further.
+on `irstia` (+0.012739 dB) and falls on `mark` (-0.006606 dB) at the lag both runs are scored at;
+against the baseline's own alignment of `mark` it would read as a rise of 0.023873 dB (below), so the
+sign of the change on `mark` is not established. The gate's limit, 0.05 dB on the mean, holds either
+way: +0.0031 dB at the joint lags, +0.0183 dB with the baseline's own figure for `mark`. It was one
+scoring, after the two reviews and their fixes, of the code of `1502dc0`.
+
+The baseline's rate-33 figures here are not those the row-17 run's table above gives for the same
+decode (rate 33's two PCM hashes, 0x4F2FBCFE and 0x47687202, are those of rate 33's held-out run of
+the mid-frame pitch wave too), and the lags account for the difference. `joint_lags()`
+(`tools/quality/dvsi_scoreboard.py`) scores both runs at one lag per comparison: their common lag,
+or, where the two alignment searches disagree, the lag of the run that aligned with the higher
+correlation (the baseline's on a tie). On `irstia`, our decode against DVSI's (`lags.vs_dvsi`), the
+baseline aligning freely takes -8 samples (its free report: distance from DVSI's decode 1.684767 dB,
+envelope correlation 0.968730, correlation 0.982792, level -0.031336 dB) and the candidate 0, and the
+joint lag is 0, where the baseline scores 1.409731, 0.975280, 0.982794 and -0.031362. In the row-17
+run the two decodes of the vector were one file, both aligned at -8, and its table gives the -8
+figures (1.6848; its envelope mean, 0.9783, is the mean of 0.968730 and `mark`'s 0.987956, and its
+correlation mean, 0.985956, that of 0.982792 and `mark`'s 0.989120). On `mark`, our decode against
+the input (`lags.ours`), the baseline's free alignment takes 360 samples, the candidate's 352, and the
+joint lag is 352. The baseline's distance from the input is 5.480776 dB at 360 (the row-17 table's
+partition mean, 5.5216, is the mean of that and `irstia`'s 5.562402) and 5.511256 dB at 352, so the
+fall of 0.006606 dB on `mark` is at the joint lag; against the baseline's own alignment the
+candidate's 5.504649 is 0.023873 dB higher. Every other figure of the table above is equal between
+the free and joint reports of each run: the candidate's two reports are equal in every field, D-STAR's
+and P25's entries in the baseline's too, and the baseline's rate-33 entries differ only in those two
+comparisons and in the fields taken with them (pitch statistics, band and crest deltas).
 
 ### Scoring history
 
