@@ -243,7 +243,10 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * PITCH_CARRIES, PITCH_ABSENT and PREVIOUS_HELD on the previous model act on
  * the mid-frame pitch and the pulse train; in rate 33's rendering
  * MID_COLUMN_0 on the previous model carries the pulse train too (in the
- * others it changes nothing there). No mark of the previous model
+ * others it plays there as no mark does). These marks of the previous model
+ * are read as the caller's state holds them, unchecked; each decides only a
+ * pitch or whether the train that state stored is loaded, which the loader
+ * bounds. No mark of the previous model
  * chooses the columns' bands. P25's rendering gives the model it renders a
  * mark of its own (MBE_FRAME_MARK_ONSET_COLUMNS on any model with a voiced
  * band that is not a tone model), so there a caller's mark on a voiced model,
