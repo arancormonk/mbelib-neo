@@ -152,7 +152,9 @@ struct mbe_parameters {
     /** Noise generator state (seed). */
     float noiseSeed;
     /** Noise buffer overlap for continuity (96 samples). The codec process
-     *  functions keep the state of their pitch-pulse train here instead. */
+     *  functions keep the state of their pitch-pulse train here instead, with
+     *  their pulsed state and, in D-STAR, P25 and rate 33, the tracker of
+     *  DVSI's adaptive low cut. */
     float noiseOverlap[96];
 };
 
