@@ -166,8 +166,9 @@ enum mbe_voiced_synthesis {
      * renders that is not a tone model MBE_FRAME_MARK_ONSET_COLUMNS, after
      * adaptive smoothing (mbe_synthesize_subframes(),
      * mbe_advance_subframes()), and P25's pulsed state on a frame with no
-     * voiced band at b0 128..183 (mbe_pulsed.h; docs/dvsi-parity.md, "D-STAR
-     * and P25: the pulsed state"). The P25 data path. */
+     * voiced band at b0 128..183, read while the stream's validity counter
+     * allows (mbe_pulsed.h; docs/dvsi-parity.md, "D-STAR and P25: the pulsed
+     * state"). The P25 data path. */
     MBE_VOICED_SYNTHESIS_DVSI_IMBE,
     /** MBE_VOICED_SYNTHESIS_DVSI_IMBE without the pulsed state: the ProVoice
      * (IMBE 7100x4400) frames of the shared IMBE 4400 data path, which has no

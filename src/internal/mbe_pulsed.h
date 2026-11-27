@@ -17,7 +17,10 @@
  * same patterns at b0 - 64, and that DVSI's decoders play them, were measured
  * on DVSI's decodes. The synthesizer (mbe_subframe.c) holds the patterns and
  * renders the state; it asks the codec whose rendering it serves which code,
- * if any, a model's pitch is, through the functions below. Each codec answers
+ * if any, a model's pitch is, through the functions below (and, for P25's
+ * validity counter, which reads a code only while it stands at 0 or more,
+ * whether a pitch is the default code's: US 7,970,606's table lists b0 25
+ * too). Each codec answers
  * with its decoder's own pitch function, the one body (not inlined) the
  * decode uses, so that the decode and the test cannot round apart in any
  * build.
@@ -29,6 +32,9 @@
 #define MBE_PULSED_CODES       56
 #define MBE_PULSED_P25_FIRST   128
 #define MBE_PULSED_DSTAR_FIRST 64
+/* P25's default code for a frame with no voiced band, which the validity
+ * counter counts as a code of the table (mbe_subframe.c). */
+#define MBE_PULSED_P25_DEFAULT 25
 
 /**
  * @brief The reserved P25 pitch code whose pitch @p w0 is, as an index.
@@ -40,6 +46,18 @@
  * @return b0 - MBE_PULSED_P25_FIRST (0..55), or -1 for any other pitch.
  */
 int mbe_imbe4400_pulsed_code(float w0);
+
+/**
+ * @brief Whether @p w0 is the pitch of P25's default code, b0 25.
+ *
+ * The pitch P25's decoder stores for b0 25 (imbe_code_pitch(), DVSI's pitch),
+ * compared by bit pattern. US 7,970,606's Table 2 lists b0 25 with both
+ * subframes unvoiced: it has no pattern to read, but P25's validity counter
+ * counts it as a code of the table (mbe_subframe.c).
+ * @param w0 A pitch, positive, finite and normal (the caller checks).
+ * @return 1 for b0 25's pitch, 0 for any other.
+ */
+int mbe_imbe4400_default_code(float w0);
 
 /**
  * @brief The reserved D-STAR pitch code whose pitch @p w0 is, as an index.

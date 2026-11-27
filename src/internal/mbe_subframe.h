@@ -50,11 +50,25 @@
  * after those the pulse phase reached at the frame's end, in cycles, and the
  * one after that (MBE_PULSED_SLOT) whether the frame's mid-frame model emitted
  * the pulse of the pulsed state: exactly MBE_PULSED_EMITTED if it did, 0 if
- * not (D-STAR's and P25's renderings write it; the others leave 0). The
- * TIA-102.BABA rendering keeps its noise overlap there instead. */
+ * not (D-STAR's and P25's renderings write it; the other subframe renderings
+ * leave 0). In P25's rendering alone the two after that hold the pulsed
+ * state's validity counter: MBE_PULSED_READ_SLOT whether the frame's reserved
+ * code was read (exactly MBE_PULSED_READ if it was, 0 if not), and
+ * MBE_PULSED_COUNT_SLOT the counter as the frame left it, a whole number
+ * MBE_PULSED_COUNT_MIN..MBE_PULSED_COUNT_MAX as a float; every other subframe
+ * rendering leaves 0 in both, and reads neither. Each is read by its bit
+ * pattern, only in a state with the subframe rendering's mark
+ * (MBE_SUBFRAME_STATE_MARK); any value a frame does not store reads as a fresh
+ * stream's (not emitted, not read, a count of 0). The TIA-102.BABA rendering
+ * keeps its noise overlap in all these elements instead. */
 #define MBE_PULSE_HISTORY             32
 #define MBE_PULSED_SLOT               (MBE_PULSE_HISTORY + 2)
 #define MBE_PULSED_EMITTED            1.0f
+#define MBE_PULSED_READ_SLOT          (MBE_PULSE_HISTORY + 3)
+#define MBE_PULSED_READ               1.0f
+#define MBE_PULSED_COUNT_SLOT         (MBE_PULSE_HISTORY + 4)
+#define MBE_PULSED_COUNT_MIN          (-10)
+#define MBE_PULSED_COUNT_MAX          3
 
 /* Samples from a model's point (0, 80 or 160 in its frame) to the one pulse a
  * model with pulsed bands emits (docs/dvsi-parity.md, "D-STAR and P25: the
@@ -134,7 +148,10 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * unvoiced frame before a voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES),
  * and the geometric mean when neither has, but in D-STAR's and P25's
  * renderings where one of two frames with no voiced band has a reserved pitch
- * code of the pulsed state (mbe_pulsed.h): there P25's is this frame's
+ * code of the pulsed state (mbe_pulsed.h) that the rendering reads (in P25's
+ * this frame's code only while the validity counter that @p prev_mp's state
+ * holds allows, and the frame before's only where that frame read it;
+ * mbe_synthesize_subframes()): there P25's is this frame's
  * pitch, and D-STAR's the frame before's unless this frame's own-subframe
  * pattern pulses a channel (then this frame's, or the geometric mean if the
  * frame before's pattern does too). The model itself carries no pulsed band:
@@ -204,7 +221,10 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  *                   MBE_VOICED_SYNTHESIS_DVSI_IMBE for P25 and
  *                   MBE_VOICED_SYNTHESIS_DVSI_PROVOICE for ProVoice (P25's
  *                   without the pulsed state); any other value renders as
- *                   MBE_VOICED_SYNTHESIS_DVSI (D-STAR).
+ *                   MBE_VOICED_SYNTHESIS_DVSI (D-STAR) but for the pulsed
+ *                   state, which only MBE_VOICED_SYNTHESIS_DVSI and
+ *                   MBE_VOICED_SYNTHESIS_DVSI_IMBE have (its mid-frame pitch;
+ *                   mbe_synthesize_subframes()).
  * @param model      Receives the model.
  */
 void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onset,
@@ -241,11 +261,23 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * noise generator runs as for any frame.
  *
  * In D-STAR's and P25's renderings (MBE_VOICED_SYNTHESIS_DVSI,
- * MBE_VOICED_SYNTHESIS_DVSI_IMBE; not ProVoice's,
- * MBE_VOICED_SYNTHESIS_DVSI_PROVOICE) a model with no voiced band at the pitch
- * of one of the 56 reserved pitch codes (mbe_pulsed.h) has that code, the
- * frame before's model as this frame's, whatever their marks
- * (docs/dvsi-parity.md, "D-STAR and P25: the pulsed state"). Its unvoiced
+ * MBE_VOICED_SYNTHESIS_DVSI_IMBE) alone, not in ProVoice's
+ * (MBE_VOICED_SYNTHESIS_DVSI_PROVOICE), rate 33's, the TIA-102.BABA
+ * rendering's (MBE_VOICED_SYNTHESIS_SPEC) or any other value's, a model with
+ * no voiced band at the pitch of one of the 56 reserved pitch codes
+ * (mbe_pulsed.h) has that code, the frame before's model as this frame's,
+ * whatever their marks (docs/dvsi-parity.md, "D-STAR and P25: the pulsed
+ * state"). D-STAR's rendering reads every code a model has. P25's reads this
+ * frame's code only while the validity counter the frame before left stands
+ * at 0 or more (US 7,970,606, FIG. 8), and the frame before's only where
+ * that frame read it (MBE_PULSED_READ_SLOT); the counter
+ * (MBE_PULSED_COUNT_SLOT, 0 for a fresh stream) stays through a frame whose
+ * model has a voiced band, rises by one, to MBE_PULSED_COUNT_MAX at most,
+ * through one with no voiced band at the pitch of the default code b0 25 or
+ * of one of the 56, and falls by one, to MBE_PULSED_COUNT_MIN at least,
+ * through one with no voiced band at any other pitch. A code that is not read
+ * is no code: everything below (the patterns, the emission, the mid-frame
+ * pitch) applies to codes that are read. Its unvoiced
  * harmonics in the 500 Hz channels the code's pattern pulses (the channel of
  * the harmonic's frequency or of 250 Hz more), its own-subframe pattern for a
  * frame's own model and its mid-frame pattern for the mid-frame model (none
@@ -258,7 +290,8 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * unvoiced factor taken out of the magnitude. The voiced train plays no
  * pulsed band, and is as it was: a model with pulsed bands counts as one with
  * no voiced band for it. Whether the mid-frame model emitted is stored with
- * the train (MBE_PULSED_SLOT), read exactly by its bits.
+ * the train (MBE_PULSED_SLOT), and in P25's rendering whether the code was
+ * read and the counter, each read exactly by its bits.
  *
  * In P25's rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE, and ProVoice's) the frame is first
  * marked by the voicing it is rendered with (after the adaptive smoothing of
@@ -287,7 +320,8 @@ void mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parm
  * generator run on (the pulses still sounding are kept for the next frame),
  * and no unvoiced overlap is left for it. @p from_silence starts the train as
  * mbe_synthesize_subframes() does, so that the pulse train, the noise
- * generator and the pulsed state's stored emission (MBE_PULSED_SLOT) end where
+ * generator and the pulsed state (the stored emission, MBE_PULSED_SLOT, and
+ * in P25's rendering the code read and the validity counter) end where
  * rendering the frame leaves them; so does @p rendering,
  * which must be the one the stream renders with (and marks the frame as
  * rendering it does). The state is not the one a

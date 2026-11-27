@@ -1035,7 +1035,9 @@ MBE_API void mbe_imbe4400EncoderFree(mbe_imbe4400_encoder* enc);
  * the bands whose 500 Hz column, or the column 250 Hz higher, it covers", where b0 128..183 would say it ends at the frame's
  * start and would name a pattern of pulsed 500 Hz channels for each half of
  * the frame, which DVSI's decoder and this library's play as a single pulse in
- * place of noise there; DVSI's decoder is inferred to read b0 127 as above from its decodes of DVSI's
+ * place of noise there (this library's only while a validity counter allows
+ * it, which frames such as this one, at a pitch outside US 7,970,606's table,
+ * lower); DVSI's decoder is inferred to read b0 127 as above from its decodes of DVSI's
  * vectors at b0 25, the one code outside that range its encoder sends on such
  * frames. No P25 measurement on hardware exists, and b0 127 is not among the
  * codes measured.

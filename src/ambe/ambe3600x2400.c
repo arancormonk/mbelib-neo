@@ -243,8 +243,12 @@ ambe2400_setup_voice_model(mbe_parms* cur_mp, int b0, int* L, float* f0) {
  * pitch ambe2400_code_pitch() gives that code, the function the decode stores
  * it with, compared by bit pattern. The one code that can match is the one
  * nearest the pitch law's inverse, (OFFSET - log2 f0) / SLOPE - 0.5, f0 =
- * w0 / 2 pi, in double: the stored pitch is the law rounded to float twice, a
- * relative 1.2e-7 at most, and a code is SLOPE = 0.0218 of log2 f0 wide. w0 is
+ * w0 / 2 pi, in double: the stored pitch is the law evaluated in float and
+ * rounded more than once (at b0 92 it lies 2.35e-7 below the law evaluated in
+ * double with the decoder's float constants); the inverse of the stored
+ * pitch lies within 2e-5 of a code from each of the 56 (1.56e-5 at most, in
+ * a Release build), while neighbouring codes' pitches lie 1.5% apart
+ * (SLOPE = 0.0218 of log2 f0); the comparison of the bits then decides. w0 is
  * positive and normal, so the quotient is finite; it is bounded before it is
  * converted.
  */

@@ -84,8 +84,11 @@ imbe_get_dct_cache(void) {
 /* The pitch codes DVSI's P25 encoder gives a frame with no voiced band: b0 25
  * (a period of 32.25 samples, 14 harmonics) for most, and b0 128..183 for the
  * rest. */
-#define IMBE_UNVOICED_CODES_FIRST 128
-#define IMBE_UNVOICED_CODES_LAST  183
+#define IMBE_UNVOICED_CODES_FIRST  128
+#define IMBE_UNVOICED_CODES_LAST   183
+/* The pitch code DVSI's P25 encoder gives most frames with no voiced band:
+ * US 7,970,606's Table 2 lists it with both subframes unvoiced. */
+#define IMBE_DEFAULT_UNVOICED_CODE MBE_PULSED_P25_DEFAULT
 
 /* Which pitch a decoded pitch code plays (imbe_decode_fundamental()). */
 enum imbe_pitch {
@@ -216,6 +219,24 @@ mbe_imbe4400_pulsed_code(float w0) {
     return (want == have) ? b0 - IMBE_UNVOICED_CODES_FIRST : -1;
 }
 
+/*
+ * Whether w0 is the pitch imbe_code_pitch() gives P25's default code for a
+ * frame with no voiced band, b0 25 (IMBE_DEFAULT_UNVOICED_CODE), by bit
+ * pattern, as mbe_pulsed.h asks.
+ */
+int
+mbe_imbe4400_default_code(float w0) {
+    float pitch;
+    int L = 0, K = 0;
+    if (imbe_code_pitch(IMBE_DEFAULT_UNVOICED_CODE, IMBE_PITCH_DVSI, &pitch, &L, &K) != 0) {
+        return 0;
+    }
+    uint32_t want, have;
+    memcpy(&want, &pitch, sizeof(want));
+    memcpy(&have, &w0, sizeof(have));
+    return want == have;
+}
+
 static int
 imbe_decode_fundamental(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_mp, int* out_b0, int* out_L9) {
     static const unsigned b0_indices[] = {0u, 1u, 2u, 3u, 4u, 5u, 85u, 86u};
@@ -278,7 +299,7 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
  *    the pulse train runs on through the frame only when a band is held); at
  *    one of those codes no mark: the synthesizer reads the code from the
  *    model's pitch as the pulsed state (mbe_imbe4400_pulsed_code(),
- *    mbe_pulsed.h), P25's rendering only;
+ *    mbe_pulsed.h), P25's rendering only, while its validity counter allows;
  *  - voiced bands: MBE_FRAME_MARK_ONSET_COLUMNS, which P25's rendering gives
  *    every voiced model it renders but a tone model, after adaptive smoothing
  *    (the model played for a P25 tone sent as voice frames is marked
