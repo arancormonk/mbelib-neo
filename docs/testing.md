@@ -33,13 +33,16 @@ The CTest suite includes:
   own double arithmetic, a harmonic rendered only below Nyquist as the library compares it (the
   product l w0 in float); clause 5's mid-frame pitch; and P25's validity counter and read flag
   (`reference_read_codes()`, `reference_next_count()`). Its pieces from the library: in the waveform
-  tests the three models' magnitudes (`mbe_subframe_own_model()`, `mbe_subframe_mid_model()`; their
-  pitch, harmonic count and voicing are checked against the test's own and replaced by them, and
-  the phases are the test's own, `reference_own_phases()`, `reference_mid_phases()`); in the
-  data-path tests the models' pitch, harmonic count, magnitudes and regenerated phases as the
-  library builds them (the mid-frame pitch checked against the test's), the unvoiced synthesis of
-  the bands left unpulsed (`mbe_synthesizeUnvoicedSubframes()`, DVSI's generator), and, where a
-  test says so, the spectral enhancement and the tone renderer. It plays a stream through the state
+  tests the three models as `mbe_subframe_own_model()` and `mbe_subframe_mid_model()` build them,
+  the two own models whole (pitch, harmonic count, voicing and magnitudes) and the mid-frame model's
+  magnitudes, the mid-frame model's pitch and harmonic count checked against the test's own and
+  replaced by them, and its voicing too but on a frame marked `MBE_FRAME_MARK_PREVIOUS_HELD` (where
+  the library's copy of the frame before's own model stands), the phases the test's own
+  (`reference_own_phases()`, `reference_mid_phases()`); in the data-path tests the models' pitch,
+  harmonic count, magnitudes and regenerated phases as the library builds them (the mid-frame
+  model's pitch and harmonic count checked against the test's), the unvoiced synthesis of the bands
+  left unpulsed (`mbe_synthesizeUnvoicedSubframes()`, DVSI's generator), and, where a test says so,
+  the spectral enhancement, the repeat synthesis and the tone renderer. It plays a stream through the state
   (`test_waveform_through_pulsed_codes`: frames with no voiced band without a code and with codes
   whose own, mid-frame or both patterns pulse, in every order of two and three (a de Bruijn
   sequence), default-code frames, voiced frames before and after each kind, tone models before and
@@ -62,47 +65,55 @@ The CTest suite includes:
   holding it there, the next ten code frames not read and the eleventh read, the ceiling of 3,
   ten frames at the default code b0 25 bringing it from -10 to 0, a voiced frame leaving it, and
   D-STAR reading every code after twelve frames outside its table); the counter through P25's
-  repeats, its repeat limit's mute and the error rate's (`test_p25_counter_through_a_mute`: the
-  repeats of a code-48 model holding it at 3, the reset model, at no code's pitch, leaving it there
-  and the first code frame after the run read; three frames muted by the error rate at b0 127
-  lowering it from 1 to -2, and the next two code frames not read); the counter's steps from every
-  value it holds for a voiced model, a tone model, the default code, a reserved code, b0 127's pitch,
-  a pitch an ulp off a code and the reset model's pitch, rendered and advanced alike
-  (`test_pulsed_count_steps`); the frame
+  repeats, its repeat limit's mute and the error rate's (`test_p25_counter_through_a_mute`: every
+  one of fifteen lost frames checked for its repeat count, mute flag, model, counter and read flag,
+  losses 1 to 4 replaying the decoded model, the 4th muted, loss 5 installing the reset model with a
+  repeat count of 0 and the mute flag clear, mutes again at losses 9 and 14; after three code-48
+  frames the counter stands at 3 through the run and the next code frame is read, after twelve
+  frames at b0 127 it stands at -10 and the next code frame is not read and raises it to -9; three
+  frames muted by the error rate at b0 127, advanced unvoiced, lowering it from 1 to -2 and the
+  next two code frames not read); the counter's steps from every value it holds for a voiced model,
+  a tone model, the default code, a reserved code, b0 127's pitch, a pitch an ulp off a reserved
+  code, the two floats beside the default code's pitch and the reset model's pitch, rendered and
+  advanced alike (`test_pulsed_count_steps`); the frame
   before's read flag deciding its own model's pulse and clause 5 (`test_pulsed_read_flag`); the
-  three slots read by their bits (`test_untrusted_pulsed_state`: 40 bit patterns, not a number,
+  three slots read by their bits (`test_untrusted_pulsed_state`: 59 bit patterns, not a number,
   infinities, subnormals, the zeros, the largest floats, 0.5, 1.0 and its neighbours, every whole
-  number the counter holds and its neighbours and whole numbers past its range, in each slot, a
+  number the counter holds and both its neighbours (the test checks that the list holds them) and
+  whole numbers past its range, in each slot, a
   frame after each playing and storing what it does after the value the slot reads as; in D-STAR's
   rendering the read flag and the counter not read; a state without the subframe mark read as a
   fresh stream's); no pulsed state in rate 33's, ProVoice's or the TIA rendering's subframes
-  (`test_pulsed_renderings`); every ordinary pitch code, P25 0..207 and D-STAR 0..123 outside the
-  reserved ranges, decoded by the public decoders with no voiced band and playing no pattern, and
-  every reserved one playing its own (`test_ordinary_codes_carry_no_pattern`); what has a code
+  (`test_pulsed_renderings`); every pitch code, P25 0..207 and D-STAR 0..123, decoded by the public
+  decoders with no voiced band (the test requires all 208 and all 124 to decode so), each ordinary
+  one playing no pattern and each reserved one its own, and P25's counter stepped by each as the
+  rule says, -1 for an ordinary code and +1 for b0 25 and the 56, D-STAR's left at 0
+  (`test_ordinary_codes_carry_no_pattern`); what has a code
   (`test_pulsed_state_is_the_models`: pitches one ulp from each code's having none, a voiced band
   taking it away, a band with no state left unpulsed, every mark of either frame leaving the pulses
   alone but the two that put another model at mid-frame, `MBE_FRAME_MARK_PREVIOUS_HELD` and
   `MBE_FRAME_MARK_TONE`); a caller's `MBE_FRAME_MARK_PITCH_ABSENT` holding voiced bands at
   mid-frame on a frame with a code, whose mid-frame model then takes no pattern
   (`test_pulsed_held_by_a_forged_mark`); a muted frame storing the emission as rendering it does
-  (`test_pulsed_advance_stores_the_emission`); adaptive smoothing that voices a band taking the code
-  (`test_pulsed_smoothing_takes_the_code`); D-STAR's lost frames, its repeat limit's mute and the
+  (`test_pulsed_advance_stores_the_emission`); adaptive smoothing that voices a band taking the code,
+  the frame storing no emission, no read code and the counter it found, rendered and, muted by the
+  error rate, advanced (`test_pulsed_smoothing_takes_the_code`); D-STAR's lost frames, its repeat limit's mute and the
   voice after it (the resume from the prediction history at 0.3 of its amplitudes rebuilt by the
-  test, with the library's spectral enhancement, and compared from sample 80; the two frames after
-  wholly), its tone's first frame (the repeat of the last frame fading out under the tone over the
+  test, with the library's spectral enhancement and its unvoiced overlap from the library's repeat
+  synthesis, and compared wholly; the two frames after wholly), its tone's first frame (the repeat of the last frame fading out under the tone over the
   first 80 samples) and the voice frame after the tone (fading in under the tone's tail), the tone
   and its tail from the library's tone renderer, and P25's repeats, each frame against the rule
   within one stream (`test_pulsed_repeats_mutes_and_tones`); and ProVoice after a caller's model at
-  a P25 reserved pitch, with each of the 40 bit patterns in each of the three slots and each of 13
-  mark values (`test_provoice_has_no_pulsed_state`). Mutations checked to fail them, each pulsed-state test run alone (in the whole suite every one
-  fails `test_subframe_synthesis`), named by the tests that fail (the waveform stream, the channel
-  edges, the data paths, the counter's walk, the counter's steps, the read flag, the slots, the
-  renderings, the ordinary codes, the repeat and tone test, the mute test and the rest by
-  their names): the pulse at 23 or 25
-  samples (waveform D-STAR and P25, edges, data paths, walk, repeats); the alternation dropped
-  (waveform, data paths, walk, slots, steps, repeats) or inverted (all but the waveform's rate-33 and
-  ProVoice runs, D-STAR's slots, the smoothing, the forged-mark and the ProVoice tests); a voiced model counting as
-  having emitted (waveform, all four renderings); the pulse ringing on past the next model's point
+  a P25 reserved pitch, with each of the 59 bit patterns in each of the three slots and each of 13
+  mark values (`test_provoice_has_no_pulsed_state`). Mutations checked to fail them, each pulsed-state test run alone (in the whole suite
+  every one fails `test_subframe_synthesis`), named by the tests that fail (the waveform stream, the
+  channel edges, the data paths, the counter's walk, the counter's steps, the mute test, the read
+  flag, the slots, the renderings, the ordinary codes, the smoothing test, the repeat and tone test,
+  and the rest by their names): the pulse at 23 or 25 samples (waveform D-STAR and P25, edges, data
+  paths, walk, repeats); the alternation dropped (waveform, data paths, walk, slots, steps,
+  repeats) or inverted (all but the waveform's rate-33 and ProVoice runs, the mute test, D-STAR's
+  slots, the smoothing, the forged-mark and the ProVoice tests); a voiced model counting as having
+  emitted (waveform, all four renderings); the pulse ringing on past the next model's point
   (waveform, data paths, repeats); the voiced train through pulsed bands, or the pulse through voiced
   bands (waveform D-STAR and P25); pulsed bands also playing noise (data paths, walk, repeats); the
   reach of 0 or 500 Hz (waveform, edges, data paths, repeats); the two patterns swapped (waveform,
@@ -113,19 +124,25 @@ The CTest suite includes:
   `test_pulsed_advance_stores_the_emission`); ProVoice taking P25's pulsed state (its waveform,
   renderings, the ProVoice test); the counter ignored, or read at -1 (P25's waveform, walk, the mute
   test, slots, steps, read flag); its ceiling 2 or 4 (P25's waveform, data paths, walk, the mute
-  test, slots, steps, repeats);
-  its floor -9 or -11 (walk, slots, steps); b0 25 not counted (P25's waveform, data paths, walk,
-  steps, `test_pulsed_advance_stores_the_emission`, repeats); a voiced frame lowering it (P25's waveform,
-  walk, steps) or raising it (walk, steps); a model at no code's pitch lowering it (P25's waveform,
-  the mute test, steps); the counter applied to D-STAR (D-STAR's waveform, edges, data
-  paths, walk, slots, steps, read flag, `test_pulsed_advance_stores_the_emission`, repeats); the
-  read flag of the frame before ignored (P25's waveform, walk, slots, read flag); the outgoing
-  repeated speech erased when a tone follows a b0 69 frame (repeats); a harmonic's frequency formed
-  in float (edges); P25 b0 1 or b0 12 taking pattern 48 (ordinary codes); "emitted" stored as
-  `3.0f` (waveform, edges, data paths, walk, slots, advance, repeats); the TIA rendering falling
-  through to D-STAR's codes (renderings); the Nyquist comparison in double (edges, IEEE builds); the
-  low-band roll-off's corner at 101 Hz (waveform, all four renderings, edges, data paths, walk,
-  repeats, and six other test programs). A scratch harness outside the
+  test, slots, steps, repeats); its floor -9 or -11 (walk, the mute test, slots, steps); b0 25 not
+  counted (P25's waveform, data paths, walk, steps, ordinary codes,
+  `test_pulsed_advance_stores_the_emission`, repeats); a voiced frame lowering it (P25's waveform,
+  walk, steps, smoothing) or raising it (walk, steps, smoothing); a model at no code's pitch
+  lowering it (P25's waveform, the mute test, steps); the counter applied to D-STAR (D-STAR's
+  waveform, edges, data paths, walk, slots, steps, read flag, ordinary codes,
+  `test_pulsed_advance_stores_the_emission`, repeats); the read flag of the frame before ignored
+  (P25's waveform, walk, slots, read flag); an ordinary code (b0 12) leaving the counter (ordinary
+  codes); the float just above b0 25's pitch counting as b0 25 (steps); a forged counter word
+  (`0xC0E00001`) read as -7 (slots); a reserved frame the smoothing voices still read and raising the
+  counter (smoothing); the first 80 samples of D-STAR's voice after the repeat limit's mute erased
+  after a b0 69 frame (repeats); the outgoing repeated speech erased when a tone follows a b0 69 frame
+  (repeats); a harmonic's frequency formed in float (edges); P25 b0 1 or b0 12 taking pattern 48
+  (ordinary codes); "emitted" stored as `3.0f` (waveform, edges, data paths, walk, slots, advance,
+  repeats); the TIA rendering falling through to D-STAR's codes (renderings); the Nyquist comparison
+  in double (edges, IEEE builds); the low-band roll-off's corner at 101 Hz (waveform, all four
+  renderings, edges, data paths, walk, repeats, and six other test programs). Five of them (b0 12 leaving the
+  counter, the float above b0 25's pitch, the forged word, the smoothed frame, the erased resume)
+  passed the tests as they stood at `6a97d51`. A scratch harness outside the
   repository, built against the baseline's and the head's libraries in each of the ten local
   configurations, compares rate 33's and ProVoice's data paths, `mbe_synthesizeSpeechf()` and the
   three encoders byte for byte over streams whose caller states hold reserved pitches, every mark
@@ -922,10 +939,12 @@ same in both builds, the D-STAR and IMBE ones differ.
 ### The pulsed state
 
 The pulsed state ([DVSI
-parity](dvsi-parity.md#november-2026-the-pulsed-state)) finds a reserved code for each model with no
-voiced band of a D-STAR or P25 frame (with the decoder's own pitch function when the pitch lies in
-the codes' range), steps P25's validity counter, and renders the pulses and the pulsed bands' setup
-where a model has them. Measured with `bench_replay hard <codec> 60 5` on the `dam` stream of each
+parity](dvsi-parity.md#november-2026-the-pulsed-state)) tests each model with no voiced band of a
+D-STAR or P25 frame for a reserved code (a range check on the pitch, and the decoder's own pitch
+function only when the pitch lies in the codes' range: most such models have no code), in P25 also
+for the pitch code that steps the validity counter (the decoder's pitch function for every pitch in
+the range of the 208 codes), and renders the pulses and the pulsed bands'
+setup where a model has them. Measured with `bench_replay hard <codec> 60 5` on the `dam` stream of each
 codec, seven alternating invocations pinned to CPU 6, a portable Release build with SIMD, fast-math
 and LTO (GCC 16.2.1, Ryzen 7 5800HS). AMBE+2's output is the same in every build (its checksums
 agree), but its timed path runs the changed code too (`prepare_frame()`, `pulsed_frame()`, three
@@ -958,7 +977,7 @@ Against `74126a3` the ranges do not overlap in D-STAR or IMBE and do in AMBE+2, 
 first run does not recur. Against `d3fb70f` the final code's ranges overlap in D-STAR and AMBE+2;
 in IMBE the first run has it 1.5% above with the ranges apart (7.100 to 7.146 against 7.175 to
 7.252 us) and the second 0.5% above with them overlapping (7.109 to 7.190 against 7.162 to 7.318
-us): the counter's own cost is not resolved. The checksums of `d3fb70f` and the final code are the
+us): these give no bound on the counter's own cost. The checksums of `d3fb70f` and the final code are the
 same in all three codecs.
 
 ## TETRA Conformance
