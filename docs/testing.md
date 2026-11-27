@@ -240,7 +240,9 @@ The CTest suite includes:
   (`test_r33_pulse_times_by_bits`) and the pulsed magnitude's cap removed
   (`test_r33_pulsed_magnitude_cap`); and the fix round's own two, the repeat loader acting on a word
   on any model (`test_r33_repeat_leaves_foreign_words`) and the reader taking a held form of rows
-  26..31 (`test_untrusted_row_words`). The word accepted on a model with a voiced band passed the tests until
+  26..31 (`test_untrusted_row_words`), the latter with both of its guards removed: the range bound
+  (the last word, 4087) and the row test of a held word each reject those values alone, so either
+  removed by itself leaves the reader as it is and survives, an equivalent mutation. The word accepted on a model with a voiced band passed the tests until
   the case of a model voiced at harmonic 1 alone was added (`pulse_bands()` refuses a model with a
   voiced band itself, so only a mid-frame model left unvoiced shows it). The shared pulsed state's
   mutations (the voiced train through pulsed bands, the reach, pulsed bands playing noise) fail the
