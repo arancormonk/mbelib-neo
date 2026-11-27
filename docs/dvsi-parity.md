@@ -1197,40 +1197,43 @@ block of the step frame, main and now:
 | 27 double steps | same | 0.406 | 0.341 |
 | 18 steps of one band's voicing | same | 0.294 | 0.342 |
 
-The single-band steps come out worse: on the unit a band above 1 kHz that turns voiced starts
-with the frame and one that turns unvoiced lasts to mid-frame, while the lowest band does the
-opposite on both; the mid-frame model of a D-STAR frame here takes this frame's voicing for every
-band.
+The single-band steps come out worse; the mid-frame model of a D-STAR frame here takes this frame's
+voicing for every band. (An earlier reading of these curves said when the unit's lowest and higher
+bands start; the curves are the full-band rms of the difference in 16-sample blocks, so they show
+how a step as a whole comes out, not which 500 Hz band starts when.)
 
-That reading of the curves went beyond them: the curves are the full-band rms of the difference in
-16-sample blocks, so they show how a step as a whole comes out, not which 500 Hz band starts when.
-The mid-frame columns change ([D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns)), fitted to labels of DVSI's decodes, has its sequel here: by
-the rule a band's lower column and its upper column can take different states at mid-frame (at an
-onset of the lowest band alone its upper column starts late, its lower one with the frame), and
-the curves of the single-band steps come closer to the unit's. The same steps and method, the head
-before the change (`c3c6d42`) and with it, mean errors over the steps of each kind:
+The mid-frame columns change ([D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns)), fitted to labels of DVSI's
+decodes, has its sequel here: by the rule a band's lower column and its upper column can take
+different states at mid-frame (at an onset of the lowest band alone its upper column starts late,
+its lower one with the frame), and the mean error of the single-band steps' curves falls. The same
+steps and method, the head before the change (`c3c6d42`) and with it, mean errors over the steps of
+each kind, to five decimals:
 
 | Steps | Head | With the columns |
 |---|---|---|
-| 18 steps of one band's voicing (relative) | 0.346 | 0.189 |
-| 9 from unvoiced to voiced (relative) | 0.034 | 0.034 |
-| 9 from voiced to unvoiced (relative) | 0.061 | 0.061 |
-| 30 gain steps (level / relative) | 0.008 / 0.006 | 0.008 / 0.006 |
-| 3 pitch steps (relative) | 0.091 | 0.091 |
-| double steps (15 with a level curve / 24 with a relative curve) | 0.203 / 0.256 | 0.203 / 0.256 |
+| 18 steps of one band's voicing (relative) | 0.34565 | 0.18882 |
+| 9 from unvoiced to voiced (relative) | 0.03372 | 0.03374 |
+| 9 from voiced to unvoiced (relative) | 0.06052 | 0.06052 |
+| 30 gain steps (level / relative) | 0.00821 / 0.00626 | 0.00821 / 0.00626 |
+| 3 pitch steps (relative) | 0.09050 | 0.09050 |
+| double steps (15 with a level curve / 24 with a relative curve) | 0.20285 / 0.25641 | 0.20285 / 0.25641 |
 
-0.189 is the mean of the 18 steps' errors (six kinds, three positions each), not a bound on each.
-The 18 by step, three positions each (b1 written in bits; the stream's own b1 is 1111): 0100 → 1100
-(the lowest band turns voiced) 0.376 → 0.065; 1111 → 1011 (band 1 turns unvoiced) 0.556 → 0.121;
-1111 → 1101 (band 2 turns unvoiced) 0.383 → 0.212; 1100 → 0100 0.147 → 0.129; 1101 → 1111 (band 2
-turns voiced) 0.391 → 0.384; 1011 → 1111 0.222 → 0.222 (to three decimals; the decodes differ inside
-the step frame, in 10, 2 and 12 samples at positions 16, 25 and 34). Variants on the 18 band steps
-(scratch builds): bands turning unvoiced only 0.242, bands turning voiced only 0.293, the frame
-before's state for every band 0.332, steady bands eroded too 0.433; D-STAR read on P25's grid
-0.189, but then the 9 onset steps go from 0.034 to 0.088 and the 9 offset steps from 0.061 to
-0.138, where D-STAR's own columns leave them as they were. The library's decodes of the 99 streams
-the comparison decodes equal those of the scratch build the rule was measured on, before and after
-the review's fixes.
+The onset steps' mean moves in the fifth decimal (0.033721 → 0.033742; 0.034 in both to three
+decimals); the offset, gain, pitch and double steps' means are equal to nine decimals in the two
+builds (the decodes of some of those streams differ, their curves' means do not). 0.189 is the mean
+of the 18 steps' errors, not a bound on each. The 18 as six means of three positions each (b1
+written in bits; the stream's own b1 is 1111): 0100 → 1100 (the lowest band turns voiced) 0.376 →
+0.065; 1111 → 1011 (band 1 turns unvoiced) 0.556 → 0.121; 1111 → 1101 (band 2 turns unvoiced)
+0.383 → 0.212; 1100 → 0100 0.147 → 0.129; 1101 → 1111 (band 2 turns voiced) 0.391 → 0.384;
+1011 → 1111 0.222 → 0.222 (to three decimals, 0.22197 → 0.22192; the decodes differ inside the step
+frame, in 10, 2 and 12 samples at positions 16, 25 and 34). Two of the 18 get worse: 1101 → 1111 at
+position 34, 0.426 → 0.478, and 1011 → 1111 at position 16, in the fifth decimal (0.13696 →
+0.13697). Variants on the 18 band steps (scratch builds): bands turning unvoiced only 0.242, bands
+turning voiced only 0.293, the frame before's state for every band 0.332, steady bands eroded too
+0.433; D-STAR read on P25's grid 0.189, but then the 9 onset steps go from 0.034 to 0.088 and the 9
+offset steps from 0.061 to 0.138, where with D-STAR's own columns they stay at 0.034 and 0.061 to
+three decimals. The library's decodes of the 99 streams the comparison decodes equal those of the
+scratch build the rule was measured on, before and after the review's fixes.
 
 On DVSI's vectors, at joint lags against the commit before (the unvoiced synthesis above),
 development / validation / final:
@@ -2061,7 +2064,7 @@ no encoder reads it, and the encoder's bits do not change.
 
 P25 and ProVoice render with a rendering of their own (`MBE_VOICED_SYNTHESIS_DVSI_IMBE`), and until
 the mid-frame columns change only that rendering used the mark to choose bands; since then none
-does, P25's reading every voiced model in its columns whatever its mark (it still reads the mark to
+does, P25's reading every voiced model but a tone model in its columns whatever its mark (it still reads the mark to
 clear it from a model with no voiced band, below). D-STAR's and rate 33's play it as no mark, and
 P25's plays rate 33's 6 and 7 as none; other marks in a caller's state still act as marks
 ([D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns), "Marks in a caller's state"). That rendering
@@ -2460,7 +2463,10 @@ wave](#november-2026-rate-33s-mid-frame-pitch-wave).
 ### D-STAR and P25: mid-frame voicing by columns
 
 In D-STAR's and P25's renderings the library voices the mid-frame model ([Synthesis in
-subframes](#synthesis-in-subframes)) by one rule, for every band and in every situation: a band in
+subframes](#synthesis-in-subframes)) by one rule, for every band of every frame but those it does
+not cover (a tone model, which keeps its own model at mid-frame; a model held by
+`MBE_FRAME_MARK_PREVIOUS_HELD`; a frame with no voiced band not marked as lacking a pitch, which
+keeps its own voicing; invalid harmonic counts or pitches; below, **Where it does not apply**): a band in
 the same state in both frames keeps it, and one whose state differs is voiced at mid-frame according
 to fixed 500 Hz columns, read in the two frames together (**The rule**, below). The rule was fitted
 to per-harmonic labels of DVSI's decodes of the development and validation vectors, each label
@@ -2583,8 +2589,9 @@ What it reduces to:
 
 **Agreement with the labels**, the library's three rules at `c3c6d42` → the rule (the share of the
 labelled harmonics whose state a reading gives; in parentheses the harmonics labelled). The readings
-are scored at the labelled frame's own harmonic frequencies, where the library evaluates the rule at
-the mid-frame model's; the two differ across a pitch step and at an onset after a code that carries
+are scored at the labelled harmonics' frequencies (at onsets and inside runs the frame's own, at
+frames lacking a pitch the frame before's), where the library evaluates the rule at the mid-frame
+model's; the two differ across a pitch step and at an onset after a code that carries
 its pitch (D-STAR: 577 labelled onsets, 10,207 labelled harmonics, after such a code with a change of
 pitch).
 
@@ -2621,8 +2628,10 @@ each loses:
   0.9362.
 
 **P25's exception.** Of the labelled harmonics of an isolated voiced last band in a frame of more
-than 36 harmonics that lie in, or within 250 Hz below, a covered column, the labels say voiced at
-mid-frame for 26 and not for 208 at onsets, and 5 and 198 at frames lacking a pitch; of an isolated
+than 36 harmonics that lie in, or within 250 Hz below, a column that is covered when the last band
+is read as voiced, the labels say voiced at mid-frame for 26 and not for 208 at onsets, and 5 and
+198 at frames lacking a pitch (with the shipped exception none of those 437 lies so: that is the
+exception); of an isolated
 last band in a frame of 36 harmonics or fewer, 9 and 0 at onsets, 6 and 3 at frames lacking a pitch.
 With the exception agreement rises at onsets from 0.9493 to 0.9555, at frames lacking a pitch from
 0.9362 to 0.9526 and in-run from 0.8806 to 0.8862. Applied whatever L (the form first tried) it gives
@@ -2633,15 +2642,17 @@ labels together): against no exception it turns 161 predictions voiced (labels v
 113) and 433 unvoiced (31, 402); against the shipped exception it changes 174 (48, 126).
 
 **Other frames with no voiced band.** After a voiced frame, a frame with no voiced band at a code
-DVSI's encoders keep for such frames is not held by the library. Labels against a scratch decode that
-holds on any such frame (`offset8b.py`: only frames where the two decodes differ) say held in 12 of
+DVSI's encoders keep for such frames is not held by the library. Labels comparing the unswitched
+scratch build with one that holds on any such frame (`offset8b.py`: only frames where the two
+decodes differ) say held in 12 of
 953 labelled harmonics at D-STAR b0 64..71, in 0.02 to 0.11 of them at 72..103 (by eights of the
 code) and 0.33 to 0.39 at 104..119; P25 0.01 to 0.13 at b0 128..167, 0.33 to 0.38 at 168..183; rate
 33's row 16, 97 of 8,487. The codes with a third or more labelled "held" are ones whose level DVSI's
 decoder shapes ([Known differences](#known-differences)); the rule does not hold them.
 
-**Which onsets showed it first.** Voiced runs of three frames or more after a gap of one frame,
-selected by DVSI's rms (at least 100 on the last frame before the gap and 200 on the run's second
+**Which onsets showed it first.** Voiced runs of three frames or more after a gap of one frame, the
+onset's index f with 3 <= f < n - 3 (n the file's frames) and a voiced frame before the gap at index
+1 or more, selected by DVSI's rms (at least 100 on the last frame before the gap and 200 on the run's second
 frame), the run before the gap in line with DVSI's on that one frame (lag within 0.6 sample,
 coherence 0.8), and coherence of at least 0.8 on the run's second and third frames with their lags
 within 0.08 cycle of each other: of D-STAR's 119 such onsets two were out of line before this
@@ -2651,8 +2662,9 @@ train stood 0.214 and 0.192 cycle off the library's fresh start there, and a tra
 the gap frame at the last voiced pitch predicts 0.218 and 0.197; by the rule that frame's covered
 column holds. Of the 55 D-STAR onsets after a gap frame at a code DVSI's encoder keeps for frames
 with no voiced band, all 55 agree with a fresh start (within 0.08 cycle) and 7 agree with a train
-running on as well: 48 tell the two apart. In P25, at 8 onsets after a frame lacking a pitch DVSI's
-train agrees with a fresh start: the frame before is voiced in isolated bands only (words
+running on as well: 48 tell the two apart. In P25, of the onsets after a frame lacking a pitch,
+eight tell the two apart, all in favour of a fresh start (others agree with both, `dam` frame 787
+among them): the frame before each of the eight is voiced in isolated bands only (words
 `10000000000`, `100010000`, `100000000100`, `10000000`, `100000000000` three times, `10010001`), so no
 column is covered.
 
@@ -2686,17 +2698,23 @@ rounds a position just under a half to the half itself, and at one pair of P25 c
 of the first frame's harmonics, which float takes for 34 (unvoiced) instead of 33 (voiced), so that
 the first form of this change silenced a band voiced in both frames; at the pitches the P25
 decoder plays, that is the only pair of different codes, in either order, at which the two readings
-differ (no decode of DVSI's vectors changes with it). The rate-33 path and the magnitude and phase interpolation keep their arithmetic.
+differ (no decode of the files compared changes with it: the 106 D-STAR and 103 P25 bit files at the
+top of each mode's directory of DVSI's vectors, `irstia` and `mark` left out). The rate-33 path, and
+the magnitude and phase interpolation, keep their arithmetic: the band's frequency and its position
+among a frame's harmonics in float, the interpolation's weights, logs and means in double.
 D-STAR's positions among the columns are formed with the decoder's arithmetic, from the stored pitch
 over 2 pi in float: at every D-STAR pitch code they give the decoder's columns, each at least 6.58e-5
 of a column from a whole number and 2.00e-5 from a half (1.81e-5 where the decoder's stored pitch
-rounds an ulp otherwise, with fast-math and in 32-bit x87 builds; `test_dstar_column_edges`), so no
-build moves a harmonic to another column, and the model's voicing and the columns' reading cannot
-round apart; a harmonic exactly on an edge (a caller's pitch, as 250 Hz, `test_dstar_exact_column_edge`)
-lies in the upper column. P25's edges are those of PR #198 (`test_p25_onset_edges`). Where the
-mid-frame pitch is a frame's own (an onset, a frame lacking a pitch, two frames of one pitch code)
-the mid-frame harmonics lie as far from the edges; between two frames of different pitch their
-geometric mean can put a harmonic anywhere. A band that plays nothing in either frame (a caller's
+rounds an ulp otherwise, with fast-math and in 32-bit x87 builds; `test_dstar_column_edges`): these
+margins are for the ordinary pitch codes 0 to 123, at which no build moves a harmonic to another
+column, and the model's voicing and the columns' reading cannot round apart. Code 124, the silence
+model (L 14, a pitch of 250 Hz), puts its harmonics exactly on column positions 0.5 and 1.0, a
+margin of zero; it decodes with no voiced band, and a harmonic exactly on an edge lies in the upper
+column (`test_dstar_exact_column_edge`). P25's edges are those of PR #198 (`test_p25_onset_edges`).
+Where the mid-frame pitch is a frame's own (an onset after a code that does not carry its pitch, a
+frame lacking a pitch, two frames of one pitch code) the mid-frame harmonics lie as far from the
+edges; at an onset after a pitch-carrying code the mid-frame pitch is the two frames' geometric
+mean, which there, as between any two frames of different pitch, can put a harmonic anywhere. A band that plays nothing in either frame (a caller's
 voicing that is neither 0 nor 1) plays nothing at mid-frame where the rule applies, so it still plays
 nothing wherever it did before. P25's rendering still marks every voiced model it renders but a tone
 model `MBE_FRAME_MARK_ONSET_COLUMNS`, which replaces any other mark there, and clears that mark from a
@@ -2712,9 +2730,10 @@ held (after P25 b0 97, word `10000000000`, which covers no column, it starts afr
 previous model chooses the columns' bands; its `PITCH_CARRIES`, `PITCH_ABSENT` and `PREVIOUS_HELD`
 still act on the mid-frame pitch and the pulse train, as before.
 
-**What is not known.** What in DVSI's decoders the rule stands for: why, on the labels, the top
-column of a run of changing columns takes the unvoiced state even under a column voiced in both
-frames. Why P25's in-run agreement (0.886) is lower than D-STAR's (0.944) was not examined. A D-STAR
+**What is not known.** What in DVSI's decoders the rule stands for: why, in most labelled bands,
+the top column of a run of changing columns takes the unvoiced state even under a column voiced in
+both frames (1101 → 1111 column 5: 39 labelled early, 352 late; 1111 → 1101: 53 held, 398 let
+go). Why P25's in-run agreement (0.886) is lower than D-STAR's (0.944) was not examined. A D-STAR
 voice frame after a tone, a mute or a resume takes the rule against the last model rendered, as it
 took this frame's voicing before; DVSI's vectors hold no tone inside speech.
 
@@ -3418,7 +3437,8 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   default ones on such a frame, but one fixed code outside the ranges ([Encoder pitch code of
   unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)), so they do not use this channel: every
   frame with no voiced band tells a DVSI decoder, as far as the codes measured show, that the
-  voicing before lasts through its first 10 ms (in the 500 Hz columns that voicing covers, by the
+  voicing before lasts through its first 10 ms (in the bands whose 500 Hz column, or the column 250
+  Hz higher, that voicing covers, by the
   rule of [D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns)), where DVSI's encoders end it at the frame's start on about a third
   of them.
 - P25 tones sent as voice frames ([P25 tones sent as voice
@@ -3470,15 +3490,17 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   ([#157](https://github.com/arancormonk/mbelib-neo/issues/157)). With the rule of
   [D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns) the mean error of the 18 single-band steps' curves falls from 0.346 to 0.189
   ([Synthesis in subframes](#synthesis-in-subframes)). Still far from the unit's: the steps where
-  band 2 turns voiced (1101 → 1111, 0.384 from 0.391) and 1011 → 1111 (0.222 in both builds to three
-  decimals, though the decodes differ inside the step frame). The curves are full-band rms in
-  16-sample blocks and do not show which band starts when.
+  band 2 turns voiced (1101 → 1111, a mean of 0.384 over three positions from 0.391, and at position
+  34 worse, 0.426 → 0.478) and 1011 → 1111 (0.222 in both builds to three decimals, though the decodes
+  differ inside the step frame). The curves are full-band rms in 16-sample blocks and do not show
+  which band starts when.
 - The mid-frame voicing of D-STAR and P25 by columns ([D-STAR and P25: mid-frame voicing by
   columns](#d-star-and-p25-mid-frame-voicing-by-columns)) is a fit to labels of DVSI's decodes
   (which of two test decodes is nearer DVSI's in each harmonic's band), with the DVstick 30's curves
-  coming closer with it; what in DVSI's decoders it stands for is not known, nor why, on the labels,
-  the top column of a run of changing columns takes the unvoiced state even under a column voiced in
-  both frames. Why P25's in-run agreement with the labels (0.886) is lower than D-STAR's (0.944) was
+  coming closer with it; what in DVSI's decoders it stands for is not known, nor why, in most
+  labelled bands, the top column of a run of changing columns takes the unvoiced state even under a
+  column voiced in both frames (1101 → 1111 column 5: 39 labelled early, 352 late; 1111 → 1101: 53
+  held, 398 let go). Why P25's in-run agreement with the labels (0.886) is lower than D-STAR's (0.944) was
   not examined. ProVoice has no DVSI reference and takes P25's rule
   because it shares P25's rendering. A D-STAR voice frame after a tone, a mute or a resume takes
   the rule against the last model rendered, as it took this frame's voicing before; DVSI's vectors
@@ -4700,7 +4722,8 @@ frame's nearest harmonic is now read in double, and the rule applies after a P25
 ([D-STAR and P25: mid-frame voicing by
 columns](#d-star-and-p25-mid-frame-voicing-by-columns)). The first fix changes no decode of DVSI's
 vectors; the second changes three P25 tone decodes (`dtmf60`, `dtmf180`, `dtmfvbad`) and no speech
-decode. The scoreboard figures below are those of the second run, `c3c6d42` against `e86afd0`; the
+decode, on the files compared (the 106 D-STAR and 103 P25 bit files above). The scoreboard figures
+below are those of the second run, `c3c6d42` against `e86afd0`; the
 first run, against `e9cf77c`, gave the same figures but for those three tone vectors. Both builds
 aligned freely first and were then scored at their joint lags, both runs' encodings decoded by the
 candidate's decoder.
@@ -4743,16 +4766,20 @@ scratch build, whose decodes are the library's:
 | P25 | development | 0.9848 → 0.9866 | 0.0309 → 0.0273 | 20 / 0 (smallest `t02`, under +0.00005, largest `noisy` +0.0148) |
 | P25 | validation | 0.9896 → 0.9907 | 0.0208 → 0.0185 | 5 / 0 (smallest `t03` +0.0001, largest `t04` +0.0021) |
 
-Scratch variants each switched on alone, same measure, development / validation, D-STAR read on
-P25's grid (which end to end gives the same means as its own columns to four decimals): frames
-lacking a pitch held by the covered columns of the frame before, D-STAR +0.0002 / +0.0107, P25
-+0.0001 / +0.0000; D-STAR onsets read in columns, +0.0001 / +0.0001. Inside voiced runs the variants
-were not the shipped rule's terms: a changing band voiced at mid-frame when the sample above its
-column, at either reach, changes, without the both-voiced term and without a condition on the
-column's own sample: in both directions D-STAR +0.0006 / +0.0008, P25 +0.0010 / +0.0011; for bands
-turning unvoiced only (those turning voiced starting with the frame) +0.0005 / +0.0007 and +0.0009 /
-+0.0011; for bands turning voiced only (those turning unvoiced let go) +0.0001 / +0.0001 and +0.0001
-/ 0.0000. Variants that lose, on development:
+Scratch variants each switched on alone, same measure, development / validation, the change of
+the partition mean against the unswitched scratch build (to six decimals, then four), D-STAR
+read on P25's grid (which end to end gives the same means as its own columns to four decimals):
+frames lacking a pitch held by the covered columns of the frame before (and within 250 Hz below
+one), D-STAR +0.000192 / +0.010679 (+0.0002 / +0.0107), P25 +0.000123 / +0.000011 (+0.0001 /
++0.0000); D-STAR onsets read in columns, +0.000141 / +0.000047 (+0.0001 / +0.0000). Inside voiced
+runs the variants were not the shipped rule's terms: a changing band voiced at mid-frame when the
+sample above its column, at either reach, changes, without the both-voiced term and without a
+condition on the column's own sample: in both directions D-STAR +0.000586 / +0.000741 (+0.0006 /
++0.0007), P25 +0.000948 / +0.001095 (+0.0009 / +0.0011); for bands turning unvoiced only (those
+turning voiced starting with the frame) D-STAR +0.000489 / +0.000653 (+0.0005 / +0.0007), P25
++0.000886 / +0.001086 (+0.0009 / +0.0011); for bands turning voiced only (those turning unvoiced
+let go) D-STAR +0.000097 / +0.000089 (+0.0001 / +0.0001), P25 +0.000062 / +0.000009 (+0.0001 /
++0.0000). Variants that lose, on development:
 steady voiced bands eroded too (a band voiced at mid-frame when covered in either frame), D-STAR
 0.9902 (2 vectors up, 18 down), P25 0.9842 (4 up, 16 down); bands turning voiced sounding only if
 covered in this frame, D-STAR 0.9906 (8 up, 11 down), P25 0.9847 (3 up, 17 down).
@@ -4800,16 +4827,22 @@ its frames differ).
 **Channel errors.** No mute decision changes at any error rate, hard or soft, frame for frame: the
 mute flag of every frame of the 24 channel-error decodes (8 vectors in each of the three codecs,
 30,600 frames, 1,678 of them muted) is the same in both builds. Every D-STAR and P25 channel-error
-decode changes, and no rate-33 one. On the loud frames that neither decoder nor DVSI mutes the
-log-spectral distance from DVSI's decode (`lsd_common_db`) falls, means over the error rates:
-D-STAR by 0.2051 dB with hard decisions (0.140 to 0.272 dB per vector, on all of the loud frames
-DVSI plays) and 0.2294 dB with soft ones (0.117 to 0.319 dB; 0.937 of them on `dam_e10_sd`, the
-lowest coverage, all on the others), P25 by 0.0501 dB (0.032 to 0.084 dB; 0.974) and 0.0401 dB
-(0.013 to 0.085 dB; 0.971). The waveform correlation, which no channel check uses, measured on the
-scratch build over whole files, hard decisions, head → rule: P25 `dam_e1_hd` 0.8190 → 0.8046,
-`dam_e2_hd` 0.4687 → 0.4539, `dam_e5_hd` 0.0345 → 0.0340 and `dam_e10_hd` 0.0104 → 0.0092 (it falls at
-all four rates); D-STAR 0.9163 → 0.9361, 0.8987 → 0.9173, 0.7159 → 0.7376 and 0.3302 → 0.3296 (it
-rises at three and falls on `dam_e10_hd`). Over all the frames whose decode changes, the head's
+decode changes, and no rate-33 one. The scoreboard's log-spectral distance from DVSI's decode
+(`lsd_common_db`: over the frames loud in DVSI's decode of the clean bits, not muted by DVSI,
+measured in both runs, with no muted frame at or next to them; the set asks for a coverage of at
+least 0.1 of the loud frames DVSI plays) falls, means over the error rates: D-STAR by 0.2051 dB with
+hard decisions (0.140 to 0.272 dB per vector, a coverage of 1.0 on every vector) and 0.2294 dB with
+soft ones (0.117 to 0.319 dB; a coverage of 0.937 at the least, on `dam_e10_sd`), P25 by 0.0501 dB
+(0.032 to 0.084 dB; at the least 0.974, on `dam_e10_hd`) and 0.0401 dB (0.013 to 0.085 dB; at the
+least 0.971, on `dam_e10_sd`). The waveform correlation, which no channel check uses, over whole
+files, head → rule (the library's decodes): with hard decisions P25 `dam_e1_hd` 0.818979 → 0.804567,
+`dam_e2_hd` 0.468670 → 0.453890, `dam_e5_hd` 0.034481 → 0.033988 and `dam_e10_hd` 0.010412 → 0.009247
+(it falls at all four rates), D-STAR 0.916266 → 0.936127, 0.898719 → 0.917346, 0.715943 → 0.737629
+and 0.330184 → 0.329617 (it rises at three and falls on `dam_e10_hd`); with soft decisions P25
+`dam_e1_sd` 0.665945 → 0.666056, `dam_e2_sd` 0.458545 → 0.458726, `dam_e5_sd` 0.103938 → 0.104091 and
+`dam_e10_sd` 0.052836 → 0.054864 (it rises at all four rates), D-STAR 0.973799 → 0.995100, 0.972339 →
+0.994828, 0.706225 → 0.717810 and 0.085516 → 0.082729 (it rises at three and falls on
+`dam_e10_sd`). With hard decisions, over all the frames whose decode changes, the head's
 residual against DVSI's decode, over the signal, is 0.1942, 1.1237, 2.2521 and 3.1105 at the four
 rates for P25 (D-STAR 0.3170, 0.3516, 0.5891 and 1.2930). A magnitude-spectrum distance (the rms
 over 0.1 to 3.8 kHz of the dB difference of 20 ms spectra smoothed over 125 Hz), over the loud frames
@@ -4818,19 +4851,22 @@ dB, `dam_e2_hd` 4.697 → 4.447, `dam_e5_hd` 7.660 → 7.523, `dam_e10_hd` 10.29
 nearer in 803, farther in 521), D-STAR 1.960 → 1.368, 1.951 → 1.396, 2.150 → 1.637 and 3.241 →
 2.924 (1,043 frames, 930 nearer, 113 farther); on the clean validation vectors the same measure gives
 P25 2.380 → 1.858 dB (2,150 frames nearer / 428 farther) and D-STAR 2.257 → 1.594 (2,373 / 279).
-That distance does not see the phase: it does not show why P25's waveform correlation falls there,
-nor which band's voicing is right, and its frame selection is not that of the scoreboard's
-`lsd_common_db`. The cause of P25's fall was not established. D-STAR's DTX vectors, which the
+That distance does not see the phase: it does not show why P25's waveform correlation falls with
+hard decisions (and rises with soft ones), nor which band's voicing is right, and its frame
+selection is not that of the scoreboard's `lsd_common_db`. The cause of P25's fall with hard
+decisions was not established. D-STAR's DTX vectors, which the
 scoreboard does not score as speech: waveform correlation `clean_dtx` 0.8581 → 0.8482, `noisy_dtx`
 0.9535 → 0.9328, `dam_dtx` 0.9580 → 0.9584, the same magnitude-spectrum distance 2.213 → 1.590,
 1.996 → 1.432 and 1.926 → 1.375 dB (1,442 frames nearer, 167 farther).
 
 **On hardware**, the DVstick 30's steps of
 [#157](https://github.com/arancormonk/mbelib-neo/issues/157): the mean error of the 18 single-band
-steps' curves falls from 0.346 to 0.189, and every other kind of step's mean is unchanged (the
-table and the 18 steps one by one are in [Synthesis in subframes](#synthesis-in-subframes)); the
-curves are full-band rms in 16-sample blocks and show the steps as a whole, not which band starts
-when. The library's decodes of these streams are the same after the review's fixes.
+steps' curves falls from 0.346 to 0.189 (two of the 18 get worse, one at position 34 of 1101 → 1111
+by 0.426 → 0.478), the onset steps' mean moves in the fifth decimal (0.034 in both to three
+decimals), and the offset, gain, pitch and double steps' means are equal to nine decimals (the
+table to five decimals, and the six means of three positions each, are in [Synthesis in
+subframes](#synthesis-in-subframes)); the curves are full-band rms in 16-sample blocks and show the
+steps as a whole, not which band starts when. The library's decodes of these streams are the same after the review's fixes.
 
 **Other modes and the encoders.** Every rate-33 bit file of DVSI's vectors at the top of its mode's
 directory (106 files, `irstia` and `mark` left out) decodes identically in the two builds; of the
@@ -4844,7 +4880,8 @@ and by -1.6% for AMBE+2, which the change does not reach (a control), `c3c6d42` 
 with the ranges of the invocations overlapping in every codec, measured on a machine busy with
 other work (one-minute load 1.7 to 2.1; [benchmarks](testing.md#mid-frame-voicing-by-columns)): the
 cost, if any, is within what this measurement resolves, the D-STAR change the nearest to it. The
-review's fixes (a nearest harmonic in double for each changing band, one test fewer per frame) were
+review's fixes (both frames' nearest harmonics in double for every band the columns evaluate,
+before the two states are compared, and one test fewer per frame) were
 not timed.
 
 **Gate sets**, declared in the branch's first commit, `3593e8c`, before any build of the branch was
@@ -4855,8 +4892,8 @@ against `e86afd0`, with the same outcome; the observed values are the second run
 
 | Gate set | Result | What it establishes |
 |---|---|---|
-| `mid-columns-development` | passes all 18 checks | on the vectors the rule was found on, within the limits declared: D-STAR's and P25's correlation means rising by at least 0.0005 and 0.001 with intervals above 0 (observed +0.0010 and +0.0018) and no vector falling by more than 0.0005 (observed: none falls), the spectral, envelope, input and level measures within their limits on all 20 vectors, rate 33's speech decodes and every encoder's speech rows unchanged |
-| `mid-columns-validation` | passes all 18 checks | the same on the validation vectors (limits 0.003 and 0.0005; observed D-STAR +0.0115, P25 +0.0012, none falling), also read in the study |
+| `mid-columns-development` | passes all 18 checks | on the vectors the rule was found on, within the limits declared: D-STAR's and P25's correlation means rising by at least 0.0005 and 0.001 with intervals above 0 (observed +0.0010 and +0.0018) and no vector falling by more than 0.0005 (observed: none falls), the distance from DVSI's decode within its limits on the mean and on every vector, and the envelope correlation, the distance from the input and the level within theirs on the mean only (one vector may pass a mean limit and the set still pass), each check measured on all 20 vectors (`every_vector`), rate 33's speech decodes and every encoder's speech rows unchanged |
+| `mid-columns-validation` | passes all 18 checks | the same on the validation vectors, the mean limits again on the mean only (limits 0.003 and 0.0005; observed D-STAR +0.0115, P25 +0.0012, none falling), also read in the study |
 | `mid-columns-tones` | passes all 18 checks | the D-STAR and P25 tone measures within their limits on the vectors both runs measure, rate 33's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level) unchanged; not that the same tone frames or bits were sent |
 | `mid-columns-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), D-STAR's and P25's mean distance from DVSI's decode on the loud frames not rising past 0.01 dB (observed: falling), rate 33's decodes and every encoder's speech rows unchanged |
 | `mid-columns-final` | declared; to be scored once, after the review (below) | |
@@ -4868,10 +4905,12 @@ each of them on all 20 and all 5 vectors; the tones set requires every vector fo
 agreement and the encoders' extra-tone rates, which cover all 52, and its description records the
 coverage of the others from the baseline's own scoreboard (D-STAR's frequency, level and
 wrong-tone figures on 44 of the 52 vectors, its balance on 43, its encoder agreement and volume
-error on 35; P25's on 49 and 48). A check on a metric that applies to part of a partition cannot
+error on 35; P25's on 49 and 48; the rate-33 encoder's agreement and level error on 51, `cpvbad`
+absent). A check on a metric that applies to part of a partition cannot
 require every vector, so a vector on which the metric went missing in both runs would pass
 unnoticed; in this run each such check covered the vectors listed (and the channel checks the four
-hard- and the four soft-decision vectors each). The tones set's description says that neither run
+hard- and the four soft-decision vectors each). `every_vector` makes a check need a measurement on
+every vector; it does not make a limit on the mean a limit on each vector. The tones set's description says that neither run
 can measure a figure where the baseline lacks it: that is not so, the candidate can measure it
 alone, and the comparator then fails the check as unpaired (no check here was unpaired). The identity
 counters (`speech.pcm_changed_vectors`, the encoder-row counter) count the speech vectors present in
@@ -4880,19 +4919,28 @@ comparison of the 285 encodings above, and frame-for-frame mute identity the sep
 the 30,600 channel-error frames: the gates establish neither. The channel set gates no waveform
 correlation; its description gives as the reason the residual "0.18 to 0.26" in P25's changed frames
 and runs "out of phase ... whichever voicing is right": the figure was two subgroups of `dam_e1_hd`
-alone, and the explanation was not established (**Channel errors**, above). The tones, channel and
+alone, its frames voiced after a voiced frame whose rendered voicing equals the decoded one, 136
+with corrected errors (0.176) and 68 without (0.264); the explanation was not established, and
+P25's correlation falls with hard decisions only, rising with soft ones (**Channel errors**,
+above). The tones, channel and
 final sets' descriptions do not give the order of events: the study's scratch build was measured on
 the development and validation vectors before the sets were declared, and the baseline's own
 scoreboard was read for coverage. The final set's description, "scored once, after the review", states the
-plan: it has not been scored.
+plan: it has not been scored. All five sets were declared for the rule as first written, which took
+this frame's voicing after a P25 tone model, and their descriptions say so ("nor in P25's
+rendering after a tone model"); the reviewed change applies the rule after a tone model as after any, three P25 tone
+decodes differ by it (`dtmf60` 19 frames, `dtmf180` 8, `dtmfvbad` 12), and the scores reported
+here are the final code's. (A tone model itself still keeps its own model at mid-frame; the frame
+after it follows the rule like any frame.)
 
 **The final partition.** The gate set `mid-columns-final` was declared with the others in `3593e8c`,
 before any build of the branch was scored: on `irstia` and `mark`, rate 33's decodes of DVSI's bits
 unchanged, every encoder's bits unchanged, and for D-STAR and P25 the waveform correlation with
 DVSI's decode falling by no more than 0.0005 on the mean and 0.002 on any vector, the distance from
-DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any vector, the envelope
-correlation falling by no more than 0.001, the distance from the input rising by no more than 0.01
-dB, and the level against DVSI's moving by at most 0.05 dB. It has not been scored.
+DVSI's decode rising by no more than 0.01 dB on the mean and 0.03 dB on any vector, and, on the
+mean only, the envelope correlation falling by no more than 0.001, the distance from the input
+rising by no more than 0.01 dB and the level against DVSI's moving by at most 0.05 dB. It has not
+been scored.
 
 ### Scoring history
 

@@ -156,8 +156,10 @@ enum mbe_voiced_synthesis {
     MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's P25 (IMBE 7200x4400) decoder
      * renders it: the mid-frame model voiced by P25's 500 Hz columns, from
-     * 505 Hz (mbe_subframe_mid_model()), except after a tone model
-     * (MBE_FRAME_MARK_TONE); the rendering marks every voiced model it
+     * 505 Hz (mbe_subframe_mid_model()), after a tone model as after any
+     * (a tone model itself, MBE_FRAME_MARK_TONE, keeps its own model at
+     * mid-frame, and a frame with no voiced band not marked
+     * MBE_FRAME_MARK_PITCH_ABSENT takes its own voicing); the rendering marks every voiced model it
      * renders that is not a tone model MBE_FRAME_MARK_ONSET_COLUMNS, after
      * adaptive smoothing (mbe_synthesize_subframes(),
      * mbe_advance_subframes()). The P25 and ProVoice data path. */
@@ -253,8 +255,9 @@ enum mbe_frame_mark {
     MBE_FRAME_MARK_PITCH_CARRIES = 1,
     /* No voiced band, at a pitch code other than those DVSI's encoders keep
      * for such frames: the voicing of the frame before it lasts to mid-frame,
-     * in D-STAR's and P25's renderings in the 500 Hz columns that frame covers
-     * (mbe_subframe_mid_model()), the pulse train running on through the frame
+     * in D-STAR's and P25's renderings in the bands whose 500 Hz column, or
+     * the column 250 Hz higher, that frame covers (mbe_subframe_mid_model()),
+     * the pulse train running on through the frame
      * when a band is held and starting afresh when none is (a P25 frame voiced
      * in isolated bands only, b0 97 word 10000000000, covers no column); in the
      * rate-33 rendering all of it when it is voiced at its harmonic at or next
@@ -280,10 +283,13 @@ enum mbe_frame_mark {
      * harmonics of a frame decoded with none), and clears the mark from one
      * with no voiced band. Since the mid-frame columns change it chooses no
      * band (mark_rendered_model() still reads it, to clear it from a model with
-     * no voiced band): P25's rendering reads the mid-frame voicing of every model in
-     * 500 Hz columns ([0, 505), [505, 1005), ... [3005, 3505) Hz and one
+     * no voiced band): P25's rendering reads the mid-frame voicing in
+     * 500 Hz columns, whatever the current model's mark, for every model but a
+     * tone model, a model held by MBE_FRAME_MARK_PREVIOUS_HELD on one with no
+     * voiced band, and one with no voiced band not marked
+     * MBE_FRAME_MARK_PITCH_ABSENT (columns ([0, 505), [505, 1005), ... [3005, 3505) Hz and one
      * above; docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by
-     * columns"), whatever its mark, and the marking only replaces any other
+     * columns"), and the marking only replaces any other
      * mark a voiced model carries. (From PR #198 to that change the mark
      * gave the onset rule of docs/dvsi-parity.md, "P25: the bands that start
      * with the frame", which the columns' rule contains.) */

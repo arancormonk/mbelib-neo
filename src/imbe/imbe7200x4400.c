@@ -244,14 +244,16 @@ imbe_read_bit_layout(const char* imbe_d, int L9, char bb[58][12]) {
  * the bands that start with the frame"):
  *  - no voiced band, at a pitch code other than the ones DVSI's encoder sends
  *    only with such frames (IMBE_UNVOICED_CODES_*): the voicing of the frame
- *    before it lasts to mid-frame in the 500 Hz columns that frame covers
- *    (MBE_FRAME_MARK_PITCH_ABSENT);
+ *    before it lasts to mid-frame in the bands whose 500 Hz column, or the
+ *    column 250 Hz higher, that frame covers (MBE_FRAME_MARK_PITCH_ABSENT;
+ *    the pulse train runs on through the frame only when a band is held);
  *  - voiced bands: MBE_FRAME_MARK_ONSET_COLUMNS, which P25's rendering gives
  *    every voiced model it renders but a tone model, after adaptive smoothing
  *    (the model played for a P25 tone sent as voice frames is marked
  *    MBE_FRAME_MARK_TONE instead, imbe4400_play_tone()). It chooses no band
  *    since the mid-frame columns change: P25's reads the mid-frame voicing of
- *    every model in 500 Hz columns (mbe_subframe.c; docs/dvsi-parity.md,
+ *    every voiced model but a tone model in 500 Hz columns, whatever its mark
+ *    (mbe_subframe.c; docs/dvsi-parity.md,
  *    "D-STAR and P25: mid-frame voicing by columns"), which contains the onset
  *    rule the mark gave before.
  */

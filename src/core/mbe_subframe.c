@@ -431,10 +431,13 @@ dstar_f0(float w0) {
  * frame's voicing at the band's lowest harmonic, the first whose column (by
  * the decoder's arithmetic) lies in the band; a band that holds no harmonic (a
  * caller's state) reads as unvoiced. The pitch is the stored one, positive and
- * normal; at every D-STAR pitch code the columns it gives are the decoder's,
- * each position at least 6.5e-5 of a column from a whole number and 1.8e-5
- * from a half in every build measured (test_dstar_column_edges in
- * test_subframe_synthesis.c). */
+ * normal; at the ordinary D-STAR pitch codes, 0 to 123, the columns it gives
+ * are the decoder's, each position at least 6.5e-5 of a column from a whole
+ * number and 1.8e-5 from a half in every build measured
+ * (test_dstar_column_edges in test_subframe_synthesis.c). Code 124, the
+ * silence model (L 14, 250 Hz), puts its harmonics exactly on positions 0.5
+ * and 1.0, a margin of zero; it decodes with no voiced band, and an exact edge
+ * lies in the upper column (test_dstar_exact_column_edge). */
 static void
 dstar_samples(const mbe_parms* mp, struct column_samples* samples) {
     const float f0 = dstar_f0(mp->w0);
@@ -492,12 +495,12 @@ column_voiced(const struct column_rule* rule, int k) {
 
 /* Whether harmonic l of the mid-frame model, of pitch w0 (positive and
  * normal), lies in a column voiced at mid-frame, or 250 Hz below one. Where
- * the mid-frame pitch is a frame's own (an onset, a frame lacking a pitch,
- * two frames of one pitch code) the harmonics lie as far from the columns'
- * edges as the frames' do (test_p25_onset_edges, test_dstar_column_edges);
- * between two frames of different pitch their geometric mean can put a
- * harmonic anywhere, as it can for the nearest harmonic of either frame
- * (harmonic_at()). */
+ * the mid-frame pitch is a frame's own (an onset after a frame whose pitch does
+ * not carry, a frame lacking a pitch, two frames of one pitch code) the
+ * harmonics lie as far from the columns' edges as the frames' do
+ * (test_p25_onset_edges, test_dstar_column_edges, for the ordinary codes);
+ * between two frames of different pitch, an onset after a pitch-carrying code
+ * among them, their geometric mean can put a harmonic anywhere. */
 static int
 columns_voice(const struct column_rule* rule, float w0, int l) {
     if (rule->dstar) {
