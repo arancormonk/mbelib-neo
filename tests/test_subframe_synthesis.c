@@ -4869,8 +4869,9 @@ same_rendering(const float a[160], const mbe_parms* a_state, const float b[160],
  * which covers the 500 Hz column 5) after an unvoiced and after a voiced one.
  * On the previous model, MBE_FRAME_MARK_MID_COLUMN_0 loads the train that
  * model stored in the rate-33 rendering, as MBE_FRAME_MARK_PITCH_ABSENT and
- * MBE_FRAME_MARK_PREVIOUS_HELD do in every rendering, and nothing in D-STAR's
- * and P25's (previous_marks_in_their_own_rendering()).
+ * MBE_FRAME_MARK_PREVIOUS_HELD do in every rendering, and in D-STAR's and
+ * P25's renders the frame after as no mark does: its samples, phases and
+ * train (previous_marks_in_their_own_rendering()).
  */
 static void previous_marks_in_their_own_rendering(void);
 
