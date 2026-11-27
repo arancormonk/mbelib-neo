@@ -94,7 +94,15 @@ static const int AmbeVuv[32][8] = {
 */
 
 /*
- * Log Magnitude Prediction Residual Block Lengths
+ * Log Magnitude Prediction Residual Block Lengths J1..J4, indexed by L (rows
+ * 0..8 unused): TIA-102.BABA-1 Annex C, but for row 20, which is DVSI's
+ * codec's 4, 5, 5, 6 where the annex prints 4, 4, 6, 6. The row is inferred
+ * from DVSI's output (docs/dvsi-parity.md, "AMBE block lengths at 20
+ * harmonics"): with it the spectral shape error of DVSI's 20-harmonic frames,
+ * decoded here, falls to the level of the other harmonic counts, and DVSI's
+ * own encodings of such frames decode as near the input speech as at 19 and
+ * 21 harmonics, so its encoder divides the blocks so too. The decoder and the
+ * encoder of this codec both read this table and must share it.
  */
 static const int AmbeLmprbl[57][4] = {{
                                           0,
@@ -216,10 +224,11 @@ static const int AmbeLmprbl[57][4] = {{
                                           5,
                                           6,
                                       },
+                                      /* L = 20: DVSI's row (above) */
                                       {
                                           4,
-                                          4,
-                                          6,
+                                          5,
+                                          5,
                                           6,
                                       },
                                       {
