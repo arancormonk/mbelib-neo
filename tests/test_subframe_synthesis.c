@@ -9617,7 +9617,7 @@ test_low_cut_dstar_path(void) {
     }
     const float under = stored_track(&s[2]);
     (void)low_path_frame(LOW_DSTAR, tone, s, 1, 0.0f, -1);
-    assert(stored_track(&s[2]) != under);
+    assert(!is_value(stored_track(&s[2]), under));
     for (int f = 0; f < 3; ++f) {
         (void)low_path_frame(LOW_DSTAR, tone, s, 0, 0.0f, -1);
     }
