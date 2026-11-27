@@ -62,11 +62,13 @@ The CTest suite includes:
   holding it there, the next ten code frames not read and the eleventh read, the ceiling of 3,
   ten frames at the default code b0 25 bringing it from -10 to 0, a voiced frame leaving it, and
   D-STAR reading every code after twelve frames outside its table); the counter through P25's
-  repeats and its repeat limit's mute (`test_p25_counter_through_a_mute`: the repeats of a code-48
-  model holding it at 3, the reset model lowering it to -8, and the first eight code frames after
-  the run not read, the ninth read); the counter's steps from every
-  value it holds for a voiced model, a tone model, the default code, a reserved code, b0 127's pitch
-  and a pitch an ulp off a code, rendered and advanced alike (`test_pulsed_count_steps`); the frame
+  repeats, its repeat limit's mute and the error rate's (`test_p25_counter_through_a_mute`: the
+  repeats of a code-48 model holding it at 3, the reset model, at no code's pitch, leaving it there
+  and the first code frame after the run read; three frames muted by the error rate at b0 127
+  lowering it from 1 to -2, and the next two code frames not read); the counter's steps from every
+  value it holds for a voiced model, a tone model, the default code, a reserved code, b0 127's pitch,
+  a pitch an ulp off a code and the reset model's pitch, rendered and advanced alike
+  (`test_pulsed_count_steps`); the frame
   before's read flag deciding its own model's pulse and clause 5 (`test_pulsed_read_flag`); the
   three slots read by their bits (`test_untrusted_pulsed_state`: 40 bit patterns, not a number,
   infinities, subnormals, the zeros, the largest floats, 0.5, 1.0 and its neighbours, every whole
@@ -95,8 +97,8 @@ The CTest suite includes:
   mark values (`test_provoice_has_no_pulsed_state`). Mutations checked to fail them, each pulsed-state test run alone (in the whole suite every one
   fails `test_subframe_synthesis`), named by the tests that fail (the waveform stream, the channel
   edges, the data paths, the counter's walk, the counter's steps, the read flag, the slots, the
-  renderings, the ordinary codes, the repeat and tone test, the mute test (run against the
-  counter's mutations only) and the rest by their names): the pulse at 23 or 25
+  renderings, the ordinary codes, the repeat and tone test, the mute test and the rest by
+  their names): the pulse at 23 or 25
   samples (waveform D-STAR and P25, edges, data paths, walk, repeats); the alternation dropped
   (waveform, data paths, walk, slots, steps, repeats) or inverted (all but the waveform's rate-33 and
   ProVoice runs, D-STAR's slots, the smoothing, the forged-mark and the ProVoice tests); a voiced model counting as
@@ -113,8 +115,9 @@ The CTest suite includes:
   test, slots, steps, read flag); its ceiling 2 or 4 (P25's waveform, data paths, walk, the mute
   test, slots, steps, repeats);
   its floor -9 or -11 (walk, slots, steps); b0 25 not counted (P25's waveform, data paths, walk,
-  steps, `test_pulsed_advance_stores_the_emission`, repeats); a voiced frame lowering or raising it
-  (P25's waveform, walk, steps); the counter applied to D-STAR (D-STAR's waveform, edges, data
+  steps, `test_pulsed_advance_stores_the_emission`, repeats); a voiced frame lowering it (P25's waveform,
+  walk, steps) or raising it (walk, steps); a model at no code's pitch lowering it (P25's waveform,
+  the mute test, steps); the counter applied to D-STAR (D-STAR's waveform, edges, data
   paths, walk, slots, steps, read flag, `test_pulsed_advance_stores_the_emission`, repeats); the
   read flag of the frame before ignored (P25's waveform, walk, slots, read flag); the outgoing
   repeated speech erased when a tone follows a b0 69 frame (repeats); a harmonic's frequency formed
@@ -942,20 +945,21 @@ before and 272.1 million (+2.5%) after: most of the difference is the rendering 
 pulses and the setup of the pulsed bands' oscillators, and the code tests; why the time rises more
 than the instructions was not examined.
 
-After the review, the three builds alternating, `74126a3`, `d3fb70f` and the final code with P25's
-validity counter (one-minute load 0.2 to 1.0):
+After the review, twice, the three builds alternating, `74126a3`, `d3fb70f` and the final code with
+P25's validity counter (one-minute load about 1.0); each cell the two runs' medians:
 
 | Complete frame decode | `74126a3` | `d3fb70f` | Final | Change, final |
 | --- | ---: | ---: | ---: | ---: |
-| D-STAR, hard | 6.444 us (6.434 to 6.507) | 6.681 us (6.669 to 6.748) | 6.674 us (6.657 to 6.749) | +3.6% |
-| IMBE, hard | 6.869 us (6.849 to 6.904) | 7.182 us (7.165 to 7.242) | 7.136 us (7.116 to 7.176) | +3.9% |
-| AMBE+2, hard | 7.041 us (7.026 to 7.087) | 7.036 us (7.013 to 7.415) | 7.016 us (7.010 to 7.123) | -0.4% |
+| D-STAR, hard | 6.442, 6.454 us | 6.695, 6.697 us | 6.682, 6.692 us | +3.7%, +3.7% |
+| IMBE, hard | 6.851, 6.849 us | 7.121, 7.146 us | 7.227, 7.180 us | +5.5%, +4.8% |
+| AMBE+2, hard | 7.022, 7.014 us | 7.032, 7.014 us | 7.020, 7.016 us | 0.0%, 0.0% |
 
 Against `74126a3` the ranges do not overlap in D-STAR or IMBE and do in AMBE+2, whose +0.9% of the
-first run does not recur; the final code's ranges overlap `d3fb70f`'s in all three, so the counter's
-own cost lies below what this resolves, and the change against `74126a3` differs between the two
-runs (+5.6% against +3.6% to +4.6%). The checksums of `d3fb70f` and the final code are the same in
-all three codecs.
+first run does not recur. Against `d3fb70f` the final code's ranges overlap in D-STAR and AMBE+2;
+in IMBE the first run has it 1.5% above with the ranges apart (7.100 to 7.146 against 7.175 to
+7.252 us) and the second 0.5% above with them overlapping (7.109 to 7.190 against 7.162 to 7.318
+us): the counter's own cost is not resolved. The checksums of `d3fb70f` and the final code are the
+same in all three codecs.
 
 ## TETRA Conformance
 

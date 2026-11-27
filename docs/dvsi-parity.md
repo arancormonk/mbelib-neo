@@ -3112,22 +3112,30 @@ declaration (clauses 2 and 3); the gain was not measured again.
    one with no voiced band at the pitch b0 25 decodes to or at one of the 56 codes' (the decoder's
    own pitch function, by bit pattern) raises it by one, to 3 at most, and a code of the 56 is read
    if and only if the counter the frame before left is 0 or more (b0 25 has nothing to read); one
-   with no voiced band at any other pitch lowers it by one, to -10 at least, and reads nothing. The
+   with no voiced band at the pitch of any other P25 code (b0 0..207, the same pitch function)
+   lowers it by one, to -10 at least, and reads nothing; one at a pitch no code decodes to (the
+   repeat limit's reset model and the initial state, at eq 46's nominal pitch of b0 134, or a model a
+   caller built) leaves it and reads nothing. A repeat within the limit replays a decoded model and so
+   counts by that model's code again. The
    counter is taken from the document, not measured: on DVSI's own encodings it never falls below 0
    (simulated on the rendered models of the library's decodes of all 103 P25 bit files, `irstia`
    and `mark` left out, the codes matched by the decoder's pitch bit for bit: 10,918 frames with one
    of the 56 codes, none arriving with the counter below 0, the lowest value reached 0; the
    channel-error files at 5% and 10% errors hold 45 to 59 frames with no voiced band outside the
-   table each, never enough in a row), so every decode of those files is the same with it as
-   without. Its starting value (0, for a stream with no marked state) and its reading on the
-   rendered model (after adaptive smoothing; a muted or repeated frame counts by the model it
-   renders or advances) are this library's choices. One consequence of the second: through P25's
-   repeat limit the model advanced is the reset model, at eq 46's nominal pitch of b0 134, outside
-   the table, so each frame there lowers the counter; in a stream of three frames at b0 176, fifteen
-   with no usable pitch code (b0 220, repeated and then muted) and b0 176 again, the repeats hold the
-   counter at 3, the reset model takes it to -8, and the first eight b0 176 frames after the run are
-   not read (`test_p25_counter_through_a_mute`). No decode of DVSI's vectors reaches that (above), and
-   what DVSI's decoder does there was not measured. What an AMBE-3000 does with a stream from an
+   table each, all at codes' pitches, never enough in a row), so every decode of those files is the
+   same with it as without. Its starting value (0, for a stream with no marked state), its reading
+   on the rendered model (after adaptive smoothing; a muted or repeated frame counts by the model it
+   renders or advances) and that a model at no code's pitch leaves it are this library's choices:
+   the description counts received frames, and a lost frame decodes nothing; what DVSI's P25
+   decoder does with lost frames was not measured. So through P25's repeat limit, whose reset model
+   is at no code's pitch, the counter stands: in a stream of three frames at b0 176, fifteen with no
+   usable pitch code (b0 220, repeated three times and then muted, the reset model advanced) and b0
+   176 again, the repeats hold it at 3, the reset model leaves it there, and the first b0 176 frame
+   after the run is read; frames the error rate mutes are decoded and advanced as rendered, so three
+   muted frames at b0 127 lower it from 1 to -2 and the next two b0 176 frames are not read
+   (`test_p25_counter_through_a_mute`). No decode of DVSI's vectors reaches either. (D-STAR's DTX
+   evidence below points the same way: lost frames there do not stop the patterns being read.)
+   What an AMBE-3000 does with a stream from an
    encoder that does not use the codes was not measured. D-STAR keeps the rule with no counter, for
    two reasons: the document describes the P25 decoder only, and DVSI's D-STAR decodes contradict a
    counter of the plain form. In D-STAR's three DTX vectors a counter lowered by every frame with no
@@ -3167,7 +3175,7 @@ built (`pulsed_frame()`), asking the codec whose rendering it serves for a model
 own pitch function); the voiced and the pulsed bands are rendered apart (`prepare_render()`), and
 the unvoiced part leaves pulsed bands out. `mbe_subframe_mid_model()` carries clause 5's pitch and no
 pulsed band. P25's counter is read and stepped there too (`read_code()`, `last_read_code()`,
-`next_count()`; the default code's pitch from `mbe_imbe4400_default_code()`). Rendering and advancing
+`next_count()`; a pitch's P25 code, if any, from `mbe_imbe4400_pitch_code()`). Rendering and advancing
 a frame store the emission, the read flag and the counter alike.
 
 **What is not explained.** P25's first frame with a code after a voiced frame stays further from
@@ -5767,8 +5775,9 @@ decode's, below the score its noise rendering had; no equivalence was tested. Th
 changes 12,261 P25 and 12,511 D-STAR frames of the 55,296 per codec against the head (the scratch
 `pzx3`, which applies clause 5 to every pair of frames with no voiced band and takes the nearest
 code by rounding: 12,286 and 12,517). In `mbe_quality_eval`'s
-measures as the study took them on its scratch build (each file aligned freely; development /
-validation changes of the means; the scoreboard's on the library's builds are in the table above): the
+measures as the study took them, its scratch build `pzx3` against the head's decodes `k1` (each
+file aligned freely; development / validation changes of the means; the scoreboard's on the
+library's builds are in the table above): the
 log-spectral distance from DVSI's decode P25 -0.1606 / -0.1878 dB (all 25 fall), D-STAR -0.1693 /
 -0.1908 (all 25 fall); the envelope correlation with it +0.0051 / +0.0051 (P25), +0.0087 / +0.0086
 (D-STAR); the level against it -0.0034 / -0.0056 dB (P25), -0.0023 / -0.0056 (D-STAR); the
@@ -5847,15 +5856,17 @@ fast-math and LTO, on a lightly loaded machine (one-minute load 1.5 falling to 1
 AMBE+2's output is identical in the two builds (its checksums are the same), but it is not an
 untouched control: its timed path runs the changed code too (`prepare_frame()`, `pulsed_frame()`,
 three more `prepare_render()` calls and the state store), and the cause of its +0.9% (ranges that do
-not overlap) was not examined. Timed again after the review, the three builds alternating (`74126a3`,
-`d3fb70f` and the final code, with the validity counter; the same method, one-minute load 0.2 to
-1.0): D-STAR 6.444 → 6.681 → 6.674 us (+3.7% and +3.6% against `74126a3`; 6.434 to 6.507, 6.669 to
-6.748 and 6.657 to 6.749), IMBE 6.869 → 7.182 → 7.136 us (+4.6% and +3.9%; 6.849 to 6.904, 7.165 to
-7.242 and 7.116 to 7.176), AMBE+2 7.041 → 7.036 → 7.016 us (-0.1% and -0.4%; 7.026 to 7.087, 7.013
-to 7.415 and 7.010 to 7.123). The ranges against `74126a3` do not overlap in D-STAR or IMBE and do
-in AMBE+2, whose +0.9% of the first run does not recur; the final code's ranges overlap
-`d3fb70f`'s in all three, so the counter's own cost is below what this measurement resolves, and
-the size of the change against `74126a3` moves between runs (+5.6% then +3.6% to +4.6%). Under
+not overlap) was not examined. Timed twice more after the review, the three builds alternating
+(`74126a3`, `d3fb70f` and the final code, with the validity counter; the same method, one-minute load
+about 1.0): D-STAR 6.442 → 6.695 → 6.682 us and 6.454 → 6.697 → 6.692 us (+3.7% and +3.7% for the
+final code against `74126a3`), IMBE 6.851 → 7.121 → 7.227 us and 6.849 → 7.146 → 7.180 us (+5.5% and
++4.8%), AMBE+2 7.022 → 7.032 → 7.020 us and 7.014 → 7.014 → 7.016 us (0.0% and 0.0%). Against
+`74126a3` the ranges do not overlap in D-STAR or IMBE and do in AMBE+2, whose +0.9% of the first run
+does not recur. Against `d3fb70f` the final code's ranges overlap in D-STAR and AMBE+2 in both runs;
+in IMBE the first run puts it 1.5% above with ranges apart (7.100 to 7.146 against 7.175 to 7.252)
+and the second 0.5% above with ranges overlapping (7.109 to 7.190 against 7.162 to 7.318), so the
+counter's own cost in IMBE is at most of that order and not resolved; the change against `74126a3`
+moves between runs (IMBE +5.6%, +5.5%, +4.8%). Under
 callgrind (the first run's builds, the P25 `dam` stream once) the head executes 2.5% more
 instructions: the rendering of the emitted pulses (`render_pulse()` for them, and the setup of the
 pulsed bands' oscillators, `atan2` and `sincos`) and the code tests (`pulsed_code()`,
@@ -5863,7 +5874,8 @@ pulsed bands' oscillators, `atan2` and `sincos`) and the code tests (`pulsed_cod
 inlined in the baseline's build, is a function of its own in the head's (its instructions moved, not
 added). Why the time rises more than the instructions was not examined.
 
-**After the review.** The review's fixes add P25's validity counter (clause 8, `6efedb7`) and
+**After the review.** The review's fixes add P25's validity counter (clause 8, `6efedb7`; moving only
+for a model at a P25 code's pitch since `43850cc`) and
 restrict the reserved codes to D-STAR's and P25's renderings; on DVSI's material they change
 nothing. Every decode of the 315 bit files at the top of the three modes' directories (`irstia` and
 `mark` left out: 106 D-STAR, 103 P25 and 106 rate-33 files, the soft-decision ones decoded as soft)
