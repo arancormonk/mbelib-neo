@@ -22,6 +22,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_low_band.h"
 #include "mbe_math.h"
+#include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_subframe.h"
 #include "mbe_tone.h"
@@ -4489,10 +4490,11 @@ test_p25_onset_columns_only_at_onsets(void) {
 /* The quantities the onset rule rounds up to a harmonic number, the column
  * edges 505 + 500 k Hz and the same edges 250 Hz lower over the frame's
  * fundamental, lie far from a whole number at every pitch code: at least
- * 2.5e-4 of a harmonic at the pitch the P25 decoder plays (2.86e-4 is the
- * least, code 3 at 1505 Hz) and 1.5e-4 at ProVoice's nominal one (1.55e-4,
- * code 36 at 2755 Hz), so that no build's arithmetic moves a harmonic across
- * an edge. The pitches are the decoder's, through its own paths. */
+ * 5.5e-5 of a harmonic at the pitch the P25 decoder plays, eq 46 on the 2^-19
+ * grid (5.97e-5 is the least, code 152 at 2005 Hz), and 1.5e-4 at ProVoice's
+ * nominal one (1.55e-4, code 36 at 2755 Hz), so that no build's arithmetic
+ * moves a harmonic across an edge. The pitches are the decoder's, through its
+ * own paths. */
 static void
 test_p25_onset_edges(void) {
     double least[2] = {1.0, 1.0};
@@ -4517,8 +4519,31 @@ test_p25_onset_edges(void) {
             }
         }
     }
-    assert(least[0] > 2.5e-4 && least[0] < 3.0e-4);
+    assert(least[0] > 5.5e-5 && least[0] < 6.5e-5);
     assert(least[1] > 1.5e-4 && least[1] < 2.0e-4);
+}
+
+/* The pulsed state's code tests over all 208 P25 codes at the grid pitch: each
+ * decoded pitch is its own code's (mbe_imbe4400_pitch_code()), and a reserved
+ * code's (b0 128..183) for mbe_imbe4400_pulsed_code(), no other's; the floats
+ * next to it on either side are no code's; and neither is eq 46's nominal
+ * pitch of any code (ProVoice's, and the repeat limit's reset model and the
+ * initial state at b0 134's), which the counter must leave. */
+static void
+test_p25_code_tests_on_the_grid(void) {
+    for (int b0 = 0; b0 <= 207; ++b0) {
+        const float w0 = decoded_pitch(0, b0);
+        assert(mbe_imbe4400_pitch_code(w0) == b0);
+        assert(mbe_imbe4400_pulsed_code(w0) == ((b0 >= 128 && b0 <= 183) ? b0 - 128 : -1));
+        const float below = nextafterf(w0, 0.0f), above = nextafterf(w0, 1.0f);
+        assert(mbe_imbe4400_pitch_code(below) == -1 && mbe_imbe4400_pitch_code(above) == -1);
+        assert(mbe_imbe4400_pulsed_code(below) == -1 && mbe_imbe4400_pulsed_code(above) == -1);
+        const float nominal = mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+        assert(mbe_imbe4400_pitch_code(nominal) == -1 && mbe_imbe4400_pulsed_code(nominal) == -1);
+    }
+    mbe_parms cur, prev, enhanced;
+    mbe_initMbeParms(&cur, &prev, &enhanced);
+    assert(mbe_imbe4400_pitch_code(cur.w0) == -1);
 }
 
 /* ---- D-STAR's and P25's mid-frame voicing by 500 Hz columns ---- */
@@ -5220,13 +5245,22 @@ test_marks_in_codec_states(void) {
     }
 }
 
+/* Sets a model's pitch to the float of bit pattern `bits`. */
+static void
+set_pitch_bits(mbe_parms* mp, uint32_t bits) {
+    memcpy(&mp->w0, &bits, sizeof(mp->w0));
+}
+
 /* A P25 pitch step whose mid-frame harmonic lies just under halfway between
  * two harmonics of the frame before: b0 134, word 000000000010, then b0 161,
- * word 111111111101. The mid-frame model's harmonic 36 lies at 33.4999986 of
- * the first frame's harmonics (nearest 33, voiced) and 38.69 of the second's
- * (39, voiced): voiced in both, it stays voiced. (A float quotient rounds the
- * first position to 33.5 and took harmonic 34, unvoiced, for it, and the
- * columns silenced the band.) */
+ * word 111111111101, at the pitches the decoder played for them before the
+ * grid (the half-octave law: 0x3D9441C4 and 0x3D806171, now a caller's
+ * pitches; at the grid pitches no ordered pair of different codes puts a
+ * mid-frame harmonic there with the geometric mean). The mid-frame model's
+ * harmonic 36 lies at 33.4999986 of the first frame's harmonics (nearest 33,
+ * voiced) and 38.69 of the second's (39, voiced): voiced in both, it stays
+ * voiced. (A float quotient rounds the first position to 33.5 and took
+ * harmonic 34, unvoiced, for it, and the columns silenced the band.) */
 static void
 test_p25_nearest_harmonic_across_a_step(void) {
     mbe_parms prev, cur;
@@ -5234,6 +5268,8 @@ test_p25_nearest_harmonic_across_a_step(void) {
     int want[57];
     p25_frame(&prev, 134, "000000000010");
     p25_frame(&cur, 161, "111111111101");
+    set_pitch_bits(&prev, UINT32_C(0x3D9441C4));
+    set_pitch_bits(&cur, UINT32_C(0x3D806171));
     mbe_subframe_mid_model(&prev, &cur, 0, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &mid);
     const double position = (double)mid.w0 * 36.0 / (double)prev.w0;
     assert(position > 33.4999 && position < 33.5);
@@ -5269,10 +5305,12 @@ p25_sweep_word(int K, int pattern, char word[13]) {
  * pairs of a code with itself left out (3,797 pairs, steps of up to 205 codes
  * up and 206 down), each with four voicing words in each frame (16 pairs of words:
  * 60,752 frame pairs; about a second in a Debug build), the frames decoded by
- * the P25 decoder. Among all ordered pairs of different P25 codes, only 134 and
- * 161, in either order, put a mid-frame harmonic where the float quotient and
- * the double one take different nearest harmonics (harmonic 36:
- * test_p25_nearest_harmonic_across_a_step), so the sweep holds both. The
+ * the P25 decoder. Before the grid pitch, among all ordered pairs of
+ * different P25 codes only 134 and 161, in either order, put a mid-frame
+ * harmonic where the float quotient and the double one take different nearest
+ * harmonics (harmonic 36: test_p25_nearest_harmonic_across_a_step, which now
+ * sets those pitches itself); at the grid pitches with the geometric mean, no
+ * pair does. The sweep keeps both codes. The
  * voicing words are set from each band's parameter bit, found once per code. */
 static void
 test_p25_mid_columns_across_steps(void) {
@@ -9747,6 +9785,7 @@ main(void) {
     test_p25_onset_columns();
     test_p25_onset_columns_only_at_onsets();
     test_p25_onset_edges();
+    test_p25_code_tests_on_the_grid();
     test_dstar_mid_columns_by_words();
     test_dstar_mid_columns_table();
     test_p25_mid_columns_by_words();

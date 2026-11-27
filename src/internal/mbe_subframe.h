@@ -184,11 +184,11 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * (the selection is in docs/dvsi-parity.md); it takes the median absolute
  * change from 0.0493 to 0.0226 samples there, and from 0.0506 to 0.0266 on
  * the 2,638 such frames of the validation vectors.
- * The P25 pitch law (imbe_dvsi_pitch_offset(), imbe7200x4400.c) is a wave in
- * the same variable with the same period (its first harmonic: amplitude
- * 5.00e-4, phase 75.4 degrees; it has a second), but there it is in the
- * pitch each code plays; here it is in the mid-frame pitch alone. What in
- * DVSI's decoder makes it is not known. */
+ * The law P25's decoder played before its pitch was found to lie on a 2^-19
+ * grid was a wave in the same variable with the same period, fitted to the
+ * pulse train's drift over runs at one pitch code, which cannot tell a
+ * frame's own pitch from its mid-frame pitch (docs/dvsi-parity.md, "P25
+ * pitch"). What in DVSI's decoder makes this one is not known. */
 #define MBE_AMBE2450_MID_PITCH_WAVE_C0 4.244e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_C1 9.374e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_S1 8.388e-4

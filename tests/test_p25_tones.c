@@ -857,7 +857,9 @@ test_provoice_keeps_no_word(void) {
     play_repeat(out, &pv, 0);
     assert(mbe_frame_mark(&pv.enhanced) != MBE_FRAME_MARK_TONE);
     assert(pv.cur.Vl[0] == 0 && pv.prev.Vl[0] == 0 && pv.enhanced.Vl[0] == 0);
-    assert(same_float(pv.enhanced.w0, decoded.w0) && !same_float(pv.enhanced.w0, tone_pitch(53)));
+    /* Speech plays the code's pitch, eq 46 on the 2^-19 grid, which is the
+     * tone model's too: the voicing and the mark tell the two apart. */
+    assert(same_float(pv.enhanced.w0, decoded.w0) && same_float(pv.enhanced.w0, tone_pitch(53)));
     assert(pv.enhanced.L == decoded.L);
     for (int l = 1; l <= decoded.L; ++l) {
         assert(pv.enhanced.Vl[l] == decoded.Vl[l]);

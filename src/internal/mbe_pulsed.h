@@ -40,7 +40,7 @@
  * @brief The reserved P25 pitch code whose pitch @p w0 is, as an index.
  *
  * The pitch P25's decoder stores for b0 128..183 (imbe_code_pitch(), DVSI's
- * pitch: the nominal float times 1 + g, rounded once), compared by bit
+ * pitch: eq 46 on a 2^-19 grid, rounded to float once), compared by bit
  * pattern. ProVoice, which keeps the nominal pitch, has no reserved code.
  * @param w0 A pitch, positive, finite and normal (the caller checks).
  * @return b0 - MBE_PULSED_P25_FIRST (0..55), or -1 for any other pitch.

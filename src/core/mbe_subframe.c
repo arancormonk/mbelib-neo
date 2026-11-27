@@ -246,8 +246,8 @@ same_pitch(const float* a, const float* b) {
 /* The half-octave wave h(P) of rate 33's mid-frame pitch at a frame's pitch
  * w0 (positive and normal), P = 2 pi / w0 its period in samples
  * (MBE_AMBE2450_MID_PITCH_WAVE_C0, mbe_subframe.h). In double with the
- * double-precision functions, as the P25 pitch law is (imbe7200x4400.c), so
- * that the pitch does not move with a libm's single-precision ones. */
+ * double-precision functions, so that the pitch does not move with a libm's
+ * single-precision ones. */
 static double
 ambe2450_mid_pitch_wave(float w0) {
     const double t = 4.0 * M_PI * log2((2.0 * M_PI) / (double)w0);

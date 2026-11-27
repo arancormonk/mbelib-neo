@@ -91,32 +91,9 @@ imbe_get_dct_cache(void) {
 
 /* Which pitch a decoded pitch code plays (imbe_decode_fundamental()). */
 enum imbe_pitch {
-    IMBE_PITCH_DVSI,    /* P25: a fit to the pitch DVSI's P25 decoder plays for b0 */
+    IMBE_PITCH_DVSI,    /* P25: the pitch DVSI's P25 decoder plays for b0, eq 46 on a 2^-19 grid */
     IMBE_PITCH_NOMINAL, /* ProVoice: TIA-102.BABA eq 46 as it stands */
 };
-
-/*
- * The relative pitch offset g of DVSI's P25 decoder at pitch code b0
- * (docs/dvsi-parity.md, "P25 pitch"): DVSI's AMBE-3000 plays b0 at
- * TIA-102.BABA eq 46's w0 = 4 pi / (b0 + 39.5) times 1 + g, where, with the
- * nominal period P = (b0 + 39.5) / 2 samples and t = 4 pi log2(P), so that g
- * repeats every half octave of the period,
- *   g = C0 + C1 cos(t) + S1 sin(t) + C2 cos(2t) + S2 sin(2t),
- * from about -7.1e-4 to +3.4e-4 over b0 0..207. Measured from the drift of
- * DVSI's pulse train against ours at one pitch code (the phase advance per
- * frame of each voiced harmonic) on DVSI's speech and synthetic pulse-train
- * vectors: fitted on 69 rows of one pitch code and corpus with five frame
- * pairs or more (50 pulse-train, 19 speech; 5,401 pairs on 61 pitch codes),
- * each row weighing at most 40 pairs; the fit leaves 0.0064% rms with those
- * weights. In double with the double-precision functions, so that the pitch
- * does not move with a libm's single-precision ones; no state.
- */
-static double
-imbe_dvsi_pitch_offset(int b0) {
-    const double C0 = -1.980564e-4, C1 = 1.263798e-4, S1 = 4.835086e-4, C2 = 2.352386e-5, S2 = 7.623621e-5;
-    const double t = 4.0 * M_PI * log2(((double)b0 + 39.5) / 2.0);
-    return C0 + (C1 * cos(t)) + (S1 * sin(t)) + (C2 * cos(2.0 * t)) + (S2 * sin(2.0 * t));
-}
 
 /* Eq 46's nominal fundamental of pitch code b0 (0..207), in float: rounded to
  * float here, where the contract names it, as under x87 excess precision the
@@ -125,6 +102,28 @@ imbe_dvsi_pitch_offset(int b0) {
 static float
 imbe_nominal_fundamental(int b0) {
     return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
+}
+
+/*
+ * The fundamental DVSI's P25 decoder plays for pitch code b0 (0..207;
+ * docs/dvsi-parity.md, "P25 pitch"): eq 46's f0 = 4 / (2 b0 + 79) cycles per
+ * sample cut to a grid of 2^-19 cycle, floor(2^21 / (2 b0 + 79)) / 2^19, as a
+ * w0 in radians per sample. The grid was found first on its decodes of tones
+ * its encoder sends as voice frames (P25 tones sent as voice frames) and then
+ * on speech, once the mid-frame pitch (mbe_subframe.c) had been told from a
+ * frame's own: the per-code drift of the pulse train over runs at one code,
+ * which the half-octave law this replaces was fitted to, is that of the
+ * mid-frame pitch. The floor of an integer quotient, then 2 pi times it over
+ * 2^19 formed in double and rounded to float once: over the 208 codes that
+ * product (with M_PI's double value) lies at least 4.9e-11 of itself from a
+ * point halfway between two floats, so double arithmetic, x87's extended one
+ * and fast-math's reordering (2 pi / 2^19 is exact) all round it to the same
+ * float.
+ */
+static float
+imbe_grid_fundamental(int b0) {
+    const double steps = floor(2097152.0 / (double)((2 * b0) + 79));
+    return mbe_round_to_float((float)(2.0 * M_PI * steps / 524288.0));
 }
 
 /* Eq 47's harmonic count of a nominal fundamental. */
@@ -139,38 +138,32 @@ imbe_harmonic_count(float nominal) {
  * always has (4 pi rounded to float, divided by b0 + 39.5 in float, the
  * quotient rounded to float also where the arithmetic keeps excess
  * precision), and L and K, and with them the bit layout, follow it for every
- * pitch code. The pitch stored for synthesis is a fit to the one DVSI's P25
- * decoder plays on speech: that float times 1 + g (imbe_dvsi_pitch_offset(),
- * -7.06e-4 to +3.38e-4), the product formed in double and rounded to float
- * once (a tone its encoder sent as voice frames DVSI's decoder plays at another
- * pitch, eq 46's fundamental cut to a 2^-19 grid: imbe4400_play_tone()). That is not the law
- * evaluated wholly in double and rounded once: the nominal float's own
- * rounding stays in it (the two differ by an ulp at 79 of the 208 codes), as
- * it stays in L and K.
- * ProVoice (IMBE 7100x4400), which reaches this decoder converted to the 7200
- * layout, has no DVSI reference and keeps the nominal pitch (`pitch`).
+ * pitch code. The pitch stored for synthesis is the one DVSI's P25 decoder
+ * plays, eq 46 on the 2^-19 grid (imbe_grid_fundamental()): from 0 to 2^-19
+ * cycle below eq 46's, a relative 0 to 2.26e-4 (b0 201), and the same value
+ * for speech and for a tone its encoder sent as voice frames
+ * (imbe4400_play_tone(), whose model keeps the pitch of its code). ProVoice
+ * (IMBE 7100x4400), which reaches this decoder converted to the 7200 layout,
+ * has no DVSI reference and keeps the nominal pitch (`pitch`).
  *
  * The harmonic at or next above 505 Hz (MBE_VOICING_REACH_HZ; ceil(505 Hz /
  * f0)), at which synthesis samples the first edge of the 500 Hz columns P25's
- * mid-frame voicing is read in (mbe_subframe.c), does not move for any pitch
- * code (the nearest harmonic to 505 Hz, b0 119's 5th, is 0.053% below it and
- * the correction moves it further below); checked for all 208 codes. Those
- * columns are read at the pitch played, and there the correction moves the
- * harmonic at or next
- * above an edge at 8 of the 208 x 7 pairs of code and edge 505 + 500 k Hz, and
- * at 6 of the 208 x 7 pairs with the edges 250 Hz lower; no edge lies within
- * 2.8e-4 of a harmonic of the played pitch, nor (ProVoice) within 1.5e-4 of
- * one of the nominal pitch, for any code, so float rounding moves none
- * (test_p25_onset_edges in test_subframe_synthesis.c). Discrete steps
- * elsewhere in synthesis (a band edge's transform bin, the mid-frame model's
- * harmonic count, the harmonic where the high-band shelf starts) follow the
- * pitch played and do move at some codes.
+ * rendering reads its voicing in (mbe_subframe.c), is the nominal pitch's for
+ * every code. Of the 208 x 14 pairs of code and edge (505 + 500 k Hz, k 0..6,
+ * and the same edges 250 Hz lower), the harmonic at or next above the edge at
+ * the pitch played differs from the nominal pitch's at 2; every edge lies at least
+ * 5.97e-5 of a harmonic from a whole number (b0 152 at 2005 Hz;
+ * test_p25_onset_edges in test_subframe_synthesis.c), so float rounding moves
+ * none. Discrete steps elsewhere in synthesis (a band edge's transform bin,
+ * the mid-frame model's harmonic count, the harmonic where the high-band shelf
+ * starts) follow the pitch played.
  *
  * imbe_code_pitch() computes them for pitch code b0 (0..207); it returns 1,
  * with the nominal pitch in *w0 and no L or K, for a harmonic count outside
- * 9..56. One body (not inlined) serves the decode and imbe4400_take_tone(),
- * which asks a tone word's model for the pitch of its code, so that the two
- * round alike in every build.
+ * 9..56. One body (not inlined) serves the decode, imbe4400_take_tone(), which
+ * asks a tone word's model for the pitch of its code, and the pulsed state's
+ * code tests (mbe_imbe4400_pulsed_code(), mbe_imbe4400_pitch_code()), so that
+ * they round alike in every build.
  */
 static MBE_NOINLINE int
 imbe_code_pitch(int b0, enum imbe_pitch pitch, float* w0, int* L, int* K) {
@@ -184,8 +177,7 @@ imbe_code_pitch(int b0, enum imbe_pitch pitch, float* w0, int* L, int* K) {
     *L = harmonics;
     *K = (harmonics < 37) ? (int)((float)(harmonics + 2) / (float)3) : 12;
     if (pitch == IMBE_PITCH_DVSI) {
-        /* The nominal float, widened, times 1 + g; one rounding to float. */
-        *w0 = (float)((double)nominal * (1.0 + imbe_dvsi_pitch_offset(b0)));
+        *w0 = imbe_grid_fundamental(b0);
     }
     return 0;
 }
@@ -195,8 +187,9 @@ imbe_code_pitch(int b0, enum imbe_pitch pitch, float* w0, int* L, int* K) {
  * mbe_pulsed.h asks: the pitch imbe_code_pitch() gives that code for P25, the
  * function the decode stores it with, compared by bit pattern. The one code
  * that can match is the one nearest 4 pi / w0 - 39.5: the played pitch lies
- * within -7.06e-4 and +3.38e-4 of eq 46's (imbe_dvsi_pitch_offset()), so that
- * quotient lies within 0.16 of the code at b0 183, and nearer below. w0 is
+ * up to a relative 2.26e-4 below eq 46's (imbe_grid_fundamental()), so that
+ * quotient lies from 0 to 0.046 above the code over b0 128..183 (0.054 at most
+ * over all 208 codes, b0 201). w0 is
  * positive and normal, so the quotient is finite; it is bounded before it is
  * converted.
  */
@@ -223,7 +216,7 @@ mbe_imbe4400_pulsed_code(float w0) {
  * pitch imbe_code_pitch() gives that code for P25, by bit pattern, or -1. As
  * for mbe_imbe4400_pulsed_code(), the one code that can match is the one
  * nearest 4 pi / w0 - 39.5: over the 208 codes the decoded pitch's quotient
- * lies within 0.17 of its own code. w0 is positive and normal, so the quotient
+ * lies from 0 to 0.054 above its own code (b0 201). w0 is positive and normal, so the quotient
  * is finite; it is bounded before it is converted.
  */
 int
@@ -1339,8 +1332,9 @@ imbe_tone_droop(int l) {
  * The model DVSI's decoder plays for a P25 tone sent as voice frames (measured
  * on its decodes of the steady frames of the DTMF and KNOX tones, 3,574, and of
  * the single tones): its pitch is eq 46's fundamental cut to a grid of 2^-19 cycle per
- * sample, floor(2^21 / (2 b0 + 79)) / 2^19 (in double, rounded to float once;
- * not the speech pitch of imbe_dvsi_pitch_offset()); the tone's harmonics are
+ * sample, floor(2^21 / (2 b0 + 79)) / 2^19, which is the pitch of its code
+ * (imbe_grid_fundamental(), for speech as for tones; imbe4400_take_tone() has
+ * found the model at that pitch by its bits, so it is kept); the tone's harmonics are
  * voiced at one amplitude, the rms of their decoded magnitudes times
  * IMBE_TONE_LEVEL, times sinc^2(pi l / 256) (on DVSI's P25 decodes the upper
  * component over the lower is a median 0.9999 of the droop's ratio; the bound
@@ -1364,8 +1358,6 @@ imbe_tone_droop(int l) {
  */
 static void
 imbe4400_play_tone(mbe_parms* mp, const struct imbe_tone* tone) {
-    const double steps = floor(2097152.0 / (double)((2 * tone->b0) + 79));
-    mp->w0 = (float)(2.0 * M_PI * steps / 524288.0);
     for (int l = 1; l <= mp->L; l++) {
         const int sounds = (l == tone->l1) || (l == tone->l2);
         mp->Vl[l] = sounds ? 1 : 0;

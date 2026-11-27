@@ -652,22 +652,10 @@ DEFINE_FRAME_EQUIVALENCE(test_ambe2450_equivalence, AMBE2450, 24, mbe_processAmb
 DEFINE_FRAME_EQUIVALENCE(test_ambe2400_equivalence, AMBE2400, 24, mbe_processAmbe3600x2400, mbe_processAmbe2400)
 #undef DEFINE_FRAME_EQUIVALENCE
 
-/* The relative offset g of the pitch DVSI's P25 decoder plays for code b0
- * (imbe7200x4400.c, imbe_dvsi_pitch_offset()), in double. */
-static double
-imbe_dvsi_offset(int b0) {
-    const double t = 4.0 * M_PI * log2(((double)b0 + 39.5) / 2.0);
-    return -1.980564e-4 + 1.263798e-4 * cos(t) + 4.835086e-4 * sin(t) + 2.352386e-5 * cos(2.0 * t)
-           + 7.623621e-5 * sin(2.0 * t);
-}
-
-/* The law's largest |g| over b0 0..207 is 7.056e-4 (b0 127): no P25 pitch is
- * further than that from the nominal one. */
-#define IMBE_DVSI_OFFSET_MAX 7.06e-4
-
 /* TIA-102.BABA eq 46's fundamental for P25 pitch code b0, as the decoder
- * computes it, in float; and the pitch the P25 decoder stores for it, that
- * float times 1 + g, rounded to float once. */
+ * computes it, in float; and the pitch the P25 decoder stores for it, eq 46's
+ * f0 floored to a grid of 2^-19 cycle per sample, as w0, in double and
+ * rounded to float once (imbe7200x4400.c, imbe_grid_fundamental()). */
 static float
 imbe_nominal_w0(int b0) {
     return (float)(4 * M_PI) / (float)((float)b0 + 39.5);
@@ -675,8 +663,14 @@ imbe_nominal_w0(int b0) {
 
 static float
 imbe_p25_w0(int b0) {
-    return (float)((double)imbe_nominal_w0(b0) * (1.0 + imbe_dvsi_offset(b0)));
+    const double steps = floor(2097152.0 / (double)((2 * b0) + 79));
+    return (float)(2.0 * M_PI * steps / 524288.0);
 }
+
+/* The grid's largest relative deficit from eq 46 over b0 0..207 is 2.26e-4
+ * (b0 201): no P25 pitch is further than that below the nominal one, and none
+ * above it. */
+#define IMBE_GRID_DEFICIT_MAX 2.26e-4
 
 /* Whether a lies within an ulp of float of b (not bit for bit: a fast-math
  * build may evaluate the library's expressions otherwise than this test). */
@@ -773,12 +767,14 @@ test_imbe_fundamental_roundtrip(void) {
             if (b0 > 207) {
                 assert(float_array_equal_exact(&p25.w0, &prev.w0, 1));
             } else {
-                /* ProVoice: eq 46's pitch in float. P25: that times 1 + g, so
-                 * no further from it than the law's largest |g|. */
+                /* ProVoice: eq 46's pitch in float. P25: eq 46 on the 2^-19
+                 * grid, at or below it by no more than the grid's largest
+                 * deficit. */
                 const float nominal = imbe_nominal_w0((int)b0);
                 assert(within_an_ulp(prev.w0, nominal));
                 assert(within_an_ulp(p25.w0, imbe_p25_w0((int)b0)));
-                assert(fabs((double)p25.w0 / (double)nominal - 1.0) <= IMBE_DVSI_OFFSET_MAX);
+                const double ratio = (double)p25.w0 / (4.0 * M_PI / ((double)b0 + 39.5));
+                assert(ratio <= 1.0 + 1.0e-7 && 1.0 - ratio <= IMBE_GRID_DEFICIT_MAX * (1.0 + 1.0e-4));
             }
         }
     }
@@ -788,7 +784,7 @@ test_imbe_fundamental_roundtrip(void) {
  * A repeat plays the repeated model's pitch: a ProVoice stream that repeats
  * its own history (frames with no valid pitch code after ProVoice voice
  * frames) plays and keeps eq 46's nominal pitch, a P25 stream DVSI's. At b0
- * 127, where the two lie furthest apart.
+ * 127, where the two lie 1.19e-4 apart.
  */
 static void
 test_imbe_repeat_keeps_its_pitch(void) {
