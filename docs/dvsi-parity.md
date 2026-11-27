@@ -121,7 +121,17 @@ appear here.
   the branch was scored, so none of those partitions is out of sample for it. The change was measured
   and gated on the development, validation, tone and channel partitions; the final partition is to be
   scored once for it, after the review, against `low-band-final` ([November 2026: DVSI's low
-  band](#november-2026-dvsis-low-band)).
+  band](#november-2026-dvsis-low-band)). The four rules of DVSI's P25 decoder ([P25
+  pitch](#p25-pitch), [Phase regeneration](#phase-regeneration), [D-STAR and P25: mid-frame voicing
+  by columns](#d-star-and-p25-mid-frame-voicing-by-columns)) hold it out too: the study that found
+  them read the development and validation vectors and DVSI's synthetic pulse-train vectors, never
+  `irstia` or `mark`; its scratch build had been measured on the development, validation, tone and
+  channel vectors, with the scoreboard's own measures too, before the gate sets were declared, in the
+  branch's first commit, `f1be05d`, before any build of the branch was scored, so none of those
+  partitions is out of sample for them. The change set was measured and gated on the development,
+  validation, tone and channel partitions; the final partition is to be scored once for it, after the
+  review, against `p25-decoder-final` ([November 2026: four rules of DVSI's P25
+  decoder](#november-2026-four-rules-of-dvsis-p25-decoder)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -1675,6 +1685,58 @@ A `log2Ml` from a caller's state is read on its bit pattern: not a number counts
 floor, and finite values are kept within ±1000. The public `mbe_synthesizeSpeechf()` keeps the
 kernel over the enhanced, smoothed magnitudes it renders.
 
+**The kernel's input domain in P25** (the P25 decoder change set). An AMBE decoder's `log2Ml` of an
+unvoiced band is already the band's magnitude with the unvoiced factor taken out: TIA-102.BABA-1's
+log-magnitude domain adds `0.5 log2(w0) + 2.289` to an unvoiced band before it is coded (2.289 is
+`-log2(0.2046)`), and its decoder builds the unvoiced band as `0.2046 / sqrt(w0)` times
+`2^log2Ml`. P25's decoded `log2Ml` of an unvoiced band is the IMBE magnitude itself. DVSI's P25
+decoder evidently regenerates P25's phases from the AMBE codecs' domain: for a band the frame
+renders as unvoiced, the kernel's input is `log2Ml - log2(0.2046 / sqrt(w0))`, 2.289 + 0.5
+log2(w0) more, at the frame's own pitch. Read as decoded, the kernel answers a step at every
+voicing boundary that is not there, and every voiced harmonic near one is turned by the kernel's
+response to that step. On the library before the change (with the grid and the floored mid-frame
+parabola in: [P25 pitch](#p25-pitch)), the phase of DVSI's voiced harmonics against ours (steady
+voiced frames in line with DVSI's decode, from a run's third frame, DVSI's decode coherent with ours
+at 0.8 or more in the harmonic's band; energy-weighted means; 160,888 harmonics in mixed frames,
+199,373 in fully voiced ones):
+
+| Voiced share of the frame | under 0.3 | 0.3-0.5 | 0.5-0.7 | 0.7-0.85 | 0.85-0.999 | fully voiced |
+|---|---|---|---|---|---|---|
+| before, rad | +0.101 | +0.085 | +0.068 | +0.047 | +0.038 | +0.009 |
+| with the change, rad | +0.012 | +0.006 | +0.004 | +0.004 | +0.005 | +0.005 |
+
+and in mixed frames by the distance in harmonics to the first unvoiced band above, before → with
+it: 1: +0.309 → +0.002, 2: +0.139 → +0.004, 3: +0.125 → +0.008, 4: +0.104 → +0.003, 5: +0.101 →
++0.005, 6: +0.074 → +0.010, 8: +0.067 → +0.003, 10: +0.063 → +0.001, 13: +0.056 → +0.004, 16:
++0.042 → +0.006, 20: +0.017 → +0.006, and where the only unvoiced bands lie below, -0.092 → -0.032:
+the kernel's response to a step on the unvoiced bands, tap for tap (its taps are 1/m at odd m to 19,
+the sums from distance d 2.13, 1.13, 1.13, 0.80, 0.80, 0.60 ... and nothing from 20). The step's
+size, from a regression of the phase on 0.44 times that response and 0.44 times the response times
+log2(w0), before the change: `c = 1.894 + 0.413 log2(w0)` (per pitch range: 0.18, 0.23, 0.43, 0.57
+and 0.81 at w0 about 0.047, 0.062, 0.082, 0.109 and 0.177), where the unvoiced factor's
+`-log2(0.2046 / sqrt(w0))` is `2.289 + 0.5 log2(w0)`; the regression leaves 0.248 of the phase's
+mean square, against 0.328 with a constant step. With the change it finds `0.078 + 0.020 log2(w0)`
+(0.995 of the mean square left: nothing). The same regression on rate 33 and D-STAR finds no step
+(the study's scratch build; their decoded magnitudes are already in that domain). The decoded
+voicing decides, as the synthesis renders it (after adaptive smoothing, which can voice a band: a
+band it voices is rendered voiced, its `log2Ml` the decoded magnitude, in the voiced domain, and is
+read as decoded); a band with no state and a tone model are read as decoded (a tone model is told by
+the structure the decoder gives one, its mark, its word in `Vl[0]`, its two harmonics alone voiced
+and every other band of no magnitude, not by its mark alone, since the previous model is caller
+state). The kernel's floor and its tail past L take the shifted values: the tail follows band L, and
+an unvoiced band under the floor can rise above it. The mid-frame envelope reads each frame's
+shifted inputs, at the frame's own pitch, before the two meet at the band's frequency. On the
+waveform (whole-file correlation at lag 0, mean over the 20 development / 5 validation vectors),
+against the library with every rule in (0.994695 / 0.996755): the step left out -0.002170 /
+-0.001278 (every vector down); `K + 0.5 log2(w0)` with K 2.0 -0.000278 / -0.000199, 2.2 -0.000025 /
+-0.000027, 1.8 -0.000801 / -0.000526, 2.5 -0.000155 / -0.000060; the regression's `1.905 + 0.449
+log2(w0)` (the study's) -0.000175 / -0.000126; half the step -0.000542 / -0.000338; the step on the
+bands the own model's column reading leaves unvoiced instead of the decoded ones -0.000276 /
+-0.000160 (every vector down). The step alone on the baseline: +0.002747 / +0.001540, every vector
+up. The earlier measurement of the table above ("the unvoiced factor taken out of unvoiced bands",
+-0.0010 against `log2Ml` as stored on P25's development vectors) was made with the earlier pitch
+law's error in place, which hid it.
+
 **D-STAR held histories.** A D-STAR frame with an uncorrectable C0 word plays as a lost frame
 while the voice frame decoded from it becomes the prediction history ([D-STAR channel
 errors](#d-star-channel-errors)). In the first version of the phase change (before any release), the
@@ -1825,170 +1887,172 @@ specification](#departures-from-the-specification)), not by a gain against the i
 
 ### P25 pitch
 
-On speech, DVSI's P25 decoder does not play pitch code b0 at TIA-102.BABA eq 46's fundamental
-`w0 = 4 pi / (b0 + 39.5)` exactly: it plays that value times `1 + g`, with g a smooth function of
-the nominal pitch period `P = (b0 + 39.5) / 2` that repeats every half octave and lies between
--0.071% and +0.034%. A tone its encoder sent as voice frames it plays at eq 46's fundamental cut
-to a grid of 2^-19 cycle per sample ([P25 tones sent as voice
-frames](#p25-tones-sent-as-voice-frames)).
+DVSI's P25 decoder plays pitch code b0 at TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19
+cycle per sample, `f0 = floor(2^21 / (2 b0 + 79)) / 2^19` (eq 46's `4 pi / (b0 + 39.5)` radians per
+sample is `4 / (2 b0 + 79)` cycles), from 0 to 2^-19 cycle, a relative 0 to 2.26e-4 (b0 201),
+under eq 46's: the value the library already played for a tone its encoder sent as voice frames
+([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)), found there first. Between two
+models that both have a voiced band, its mid-frame pitch is not the geometric mean of the two but a
+parabola for that square root, floored to the same grid: with `fa fb = y 2^e` the product of the two
+fundamentals in cycles per sample, y in [1, 2),
 
-**The drift.** With [Phase regeneration](#phase-regeneration) in place, the residual of P25's
-voiced runs that line up with DVSI's grew with the run's length (development vectors, residual
-energy over DVSI's): 0.023 of the signal over a run's first four frames, 0.043 over the next four,
-then 0.085, 0.098, 0.111, and 0.21 past the twentieth frame. D-STAR's was 0.016 to 0.018 over a
-run's first twenty frames and 0.037 past them.
+    q(y) = sqrt(1.5) + (sqrt(2) - 1) (y - 1.5) + 2 (sqrt(2) + 1 - 2 sqrt(1.5)) (y - 1.5)^2,
 
-**Per pitch code.** On two consecutive frames at one pitch code, measured only where four
-consecutive frames have that code (each frame of the pair needs the two frames before it at its
-code), the phase of DVSI's output against ours on each voiced harmonic advances by `l w0` times the
-time by which DVSI's pulse train gains on ours; divided by the frame length that is DVSI's
-fundamental against ours. It is the same on every harmonic (b0 40: -0.086 to -0.096 samples a frame
-on harmonics 1 to 18; b0 80, on the pulse-train vectors: -0.100 to -0.113 on harmonics 1 to 27; b0
-29: +0.049 to +0.060 on harmonics 1 to 15), so it is a pitch difference. The measurement keeps one
-row per pitch code and corpus: 58 rows from DVSI's synthetic pulse-train vectors (`ptrain0` to
-`ptrain12`) and 24 from the speech vectors of the development partition, 5,453 frame pairs. Over the
-39 rows with 10 pairs or more DVSI's fundamental runs from -0.069% (b0 42) to +0.036% (b0 57) of eq
-46's (a row with 5 pairs, b0 193, reads -0.106%), as a function of P that repeats every half octave:
-zero at P = 32, 45.3 and 64 (2^(k/2)), about +0.036% a fifth of the way through each half octave,
-zero again at 0.39 of it and about -0.067% at 0.72. Examples (b0: DVSI's fundamental against eq
-46's, frame pairs): 21: -0.063% (72), 29: +0.036% (35), 30: +0.031% (74), 40: -0.058% (80), 51:
--0.004% (80), 61: +0.011% (70), 71: -0.045% (74), 80: -0.064% (2931), 81: -0.068% (227), 165:
--0.010% (609). The best single sinusoid in log2 f0 has exactly 2.00 cycles an octave.
+the parabola through sqrt(y) at y = 1, 1.5 and 2, the mid-frame fundamental is
+`floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19`. Its relative error `q(y) / sqrt(y) - 1` is 0 at
+both ends of the octave and at y = 1.5, about +7.7e-4 near y = 1.2 and -1.2e-3 near y = 1.75: the
+half-octave wave the library had fitted into each code's own pitch, at twice that law's size and in
+the place it measures. It applies at an unchanged code as at a step; at an onset or an offset (one
+of the two models with no voiced band) the voiced model's own pitch stands. Nothing in the rule is
+fitted: the grid is the tone path's, the nodes are the interpolant's. What the decoder computes is
+not known beyond its output (a three-point parabola for a square root, floored to a 2^-19 grid, is
+the simplest thing that gives the mid-frame pitch measured; the integer the decoder holds may differ
+from the floor of the exact parabola by a unit at some pairs, which the decodes cannot show).
+L, K and the bit layout stay on eq 46's nominal pitch, computed in float as the decoder always has.
+ProVoice, which reaches the same data path, has no DVSI reference: it keeps eq 46's nominal pitch
+and the geometric mean at mid-frame, a decision, not a finding. The public
+`mbe_decodeImbe4400Parms()` stores the grid pitch.
 
-**The rule.** `w0 = 4 pi / (b0 + 39.5) (1 + g)`, with t = 4 pi log2 P and
-`g = a0 + a1 cos t + b1 sin t + a2 cos 2t + b2 sin 2t` (`imbe_dvsi_pitch_offset()`: a0 = -1.980564e-4,
-a1 = 1.263798e-4, b1 = 4.835086e-4, a2 = 2.352386e-5, b2 = 7.623621e-5), fitted by least squares
-over the rows with five frame pairs or more: 69 rows (50 from the pulse-train vectors, 19 from
-speech) holding 5,401 frame pairs on 61 different pitch codes (eight codes are in both corpora: 30,
-40, 46, 54, 57, 63, 67 and 79), each row's weight capped at 40 pairs, so a code in both corpora can
-weigh more (b0 40 has 57). It leaves 0.0064% rms with those weights, at most 0.014% on a row with 10
-or more pairs; a third harmonic changes nothing end to end. On the validation vectors' own codes (9
-codes, 115 pairs, noisy) the rms difference from DVSI's, weighted by pairs, falls from 0.046% to
-0.018%. The nominal pitch of eq 46 is computed in float as the decoder always has (rounded to float
-before the correction also where the arithmetic keeps excess precision, as on 32-bit x87), and L, K
-and so the bit layout follow it as before. The pitch stored for synthesis is that float times
-`1 + g`, g computed in double with the double-precision libm functions (from -7.06e-4 at b0 127 to
-+3.38e-4 at b0 96), the product formed in double and rounded to float once. That is not the law
-evaluated wholly in double, from which it differs by an ulp at 79 of the 208 codes. For all 208
-codes and any harmonic as the top voiced one, neither the late-onset mark the decoder set before
-the mid-frame voicing change ([Voiced onsets and offsets](#voiced-onsets-and-offsets)) nor the
-harmonic whose voicing the
-synthesis reads to tell whether a frame's voicing reaches 505 Hz (`ceil(505 Hz / f0)`) moves under
-the correction: the nearest harmonic to 505 Hz is b0 119's 5th, 0.053% below it, and the correction
-moves it further below. Other discrete steps of synthesis follow the pitch played and do move at
-some codes (a band edge's transform bin, the mid-frame model's harmonic count, the harmonic where
-the high-band shelf starts, and since the mid-frame voicing change the harmonics at which a P25
-onset's 500
-Hz columns are read: [P25: the bands that start with the
-frame](#p25-the-bands-that-start-with-the-frame)). ProVoice, which reaches the same data path, has
-no DVSI reference and keeps eq 46; the
-public `mbe_decodeImbe4400Parms()`, which has no frame context, decodes P25's. The P25 encoder
-quantizes from its own pitch code, so its bits do not change.
+**What could not tell them apart.** The library's earlier law (below) was fitted to the drift of
+DVSI's pulse train over runs of four frames at one pitch code. Over such a run the pulses move at a
+mean of the frame's own pitch and its mid-frame pitch, so the drift cannot tell the two apart: an
+offset fitted there is half the mid-frame pitch's and half the own pitch's. What tells them apart
+is the lag of DVSI's decode against ours read at each frame boundary, where both play the frame's
+own model (from the phases of the voiced harmonics: [Rate 33: mid-frame pitch](#rate-33-mid-frame-pitch)
+has the method), and its increment over the frame, which the mid-frame pitch alone sets (a
+mid-frame pitch off by a relative d moves the train by 80 d samples over the frame). And one rule's
+error hid the next: the phase kernel's reading of P25's unvoiced bands ([Phase
+regeneration](#phase-regeneration)) left an error in mixed frames and at onsets that biased every
+drift and lag measured before it was found, so the figures below are the library's with every rule
+before it in, re-measured on the change set's library (its scratch-switch copy, outside the
+repository, decoding byte for byte as the library with each rule on and as the baseline with all
+four off).
 
-With it, the aligned runs no longer grow: 0.023, 0.019, 0.023, 0.028, 0.024 and 0.024 over frames 0
-to 3, 4 to 7 and so on, 20 on. Where the curve comes from is not established; a low-order
-approximation of a logarithm or an exponential over half-octave segments in the decoder's
-fixed-point arithmetic would give one of this shape.
+**The grid.** The per-code drift (DVSI's fundamental against eq 46's over runs at one code: 49
+rows of pitch code and corpus with 8 frame pairs or more, from DVSI's speech and pulse-train
+vectors; a measurement of DVSI's decoder, which no change of the library's moves), after taking out
+a candidate quantization's relative error and fitting a constant and two harmonics over the half
+octave to the rest, weighted by each row's standard error (floored at 0.0005%): 0.00338% rms left
+for f0 floored to 2^-19, 0.00447% for 2^-20 floored, 0.00452% for 2^-21 rounded, 0.00453% for no
+quantization and for every grid of the period (2^-6 to 2^-10 of a sample, floored or rounded) or of
+w0 tried. With the four rules in, on the whole-file waveform correlation with DVSI's decode at lag 0
+(mean over the 20 development / 5 validation vectors, against the library's 0.994695 / 0.996755):
+the own pitch rounded to 2^-19 -0.002065 / -0.001849, no grid (eq 46 as it stands) -0.001948 /
+-0.001838, floored to 2^-20 -0.000567 / -0.000560, floored to 2^-18 -0.001646 / -0.001570; the own
+pitch a tenth of a grid step higher -0.000037 / -0.000017, a tenth lower -0.000119 / -0.000157, a
+quarter step lower -0.000343 / -0.000329. Every vector falls with each but the tenth-step ones.
 
-**Tones sent as voice frames.** DVSI's P25 decoder does not play a tone its encoder sent as voice
-frames at the pitch it plays speech at. On DVSI's 52 tone vectors, over pairs of consecutive voiced
-frames at one pitch code (measured where four consecutive frames have that code, as above), the
-phase of DVSI's output against the phase-change build's, which plays eq 46's pitch, measured per
-harmonic (the strong voiced harmonics, within 10 dB of the frame's strongest, coherence 0.98 or
-more), moves by a median over the frame pairs of -44 to +37 mrad a frame for each of the 61
-combinations of pitch code and harmonic that have 60 frame pairs or more (medians, not a bound on
-single frame pairs or on harmonics not measured), not in proportion to the harmonic number and with
-either sign on one code: b0 36, harmonics 4 and 7, +7 and +37 mrad a frame; b0 92, harmonics 7 and
-11, +16 and -11; b0 144, harmonics 8 and 17, -15 and +16; b0 189, harmonics 10, 11, 19 and 21, -21,
--39, -19 and -44; b0 127, harmonics 8 and 17, -32 and -14, where the law gives -68 and -145. For
-the P25 pitch change (`470374c`) this was read as each measured harmonic playing at eq 46's
-frequency to within 0.35 Hz (44 mrad a frame) in the median over its frame pairs, with a small
-offset of its own that follows no
-rule found. That reading is corrected: those offsets came from the short runs of the DTMF vectors
-and the sidebands of their frame-to-frame amplitude changes. The long runs of the KNOX vectors,
-measured since, are clean: DVSI's decoder plays such a tone at eq 46's fundamental cut to a grid of
-2^-19 cycle per sample, both harmonics of a tone at the same relative offset from eq 46 ([P25 tones
-sent as voice frames](#p25-tones-sent-as-voice-frames)). Fitted
-as one time shift per frame pair to the phases of the voiced harmonics whose coherence is 0.9 or
-more (at least two of them, DVSI's frame standard deviation 100 or more: 11,647 frame pairs, of
-which the 11,535 with a fitted shift under 0.5 samples are used; 28 codes with 100 pairs or more),
-these offsets come out at a median of -0.0006 (b0 127) to -0.041 samples a frame (b0 144) on a code,
-whatever the law gives for the code (-0.113 to +0.054 samples a frame on those codes), and the slope
-of that fit on the law's value is 0.12 over those 11,535 pairs. The same fit on the development
-speech vectors (298 pairs; three frames at one code are rare in speech) gives a slope of 0.92, and
-1.03 on the 105 pairs with every band voiced at codes where the law moves the train by more than
-0.04 samples a frame (rms difference from the law 0.037 samples a frame); the per-code figures of
-"Per pitch code" above came from speech and DVSI's pulse-train vectors (5,453 pairs). At b0 80
-DVSI's pulse-train vectors drift by -0.10 samples a frame, its tone vectors by -0.010 in the
-one-time-shift fit.
+**The mid-frame pitch.** With the grid and the geometric mean at mid-frame (and the low band, the
+pulsed state and every other rule of the branch below), over the 25 vectors, 19,627 frames whose two
+boundaries both read a lag, 16,584 with nine harmonics or more at both and an increment under 0.4
+samples: the median absolute increment is 0.0630 samples, 0.0623 at an unchanged code (2,121 frames
+of the development vectors) and 0.0629 at a step of one or two codes: the deviation is there whether
+the code changes or not. With the phase kernel's reading of unvoiced bands in as well (the geometric
+mean kept) it is 0.0522 (0.0571 at an unchanged code), and as a function of `u = frac(log2(Pa Pb))`
+(the two periods in samples) one curve on the development and validation vectors. A parabola for
+the square root over the octave of the fundamentals' product, three coefficients fitted to those
+increments of the development vectors, is `1.224750 + 0.414032 (y - 1.5) - 0.071392 (y - 1.5)^2`;
+the interpolant at 1, 1.5 and 2 is `1.224745 + 0.414214 (y - 1.5) - 0.070552 (y - 1.5)^2`. The
+increments' standard deviation it leaves is 0.03338 samples on development and 0.04390 on
+validation, against 0.03337 and 0.04389 for two harmonics in u; the same parabola over the product
+of the two periods leaves more (0.03363, 0.04423). With the rule in (the parabola floored), the
+median absolute increment falls to 0.0217 samples before the phase change and 0.0117 with it,
+0.0116 with all four rules:
 
-For the P25 pitch change what tells DVSI's decoder the two apart was not found. Tried: the tone
-frames' voicing
-patterns vary (the bands that
-hold the tone's harmonics are voiced: `01100`, `1110000`, `0111110010000`, ...; 4 of the 28 codes
-have the lowest band voiced, as speech has, and do not drift either); the share of a frame's decoded
-energy outside its two strongest harmonics does not separate them (tone frames: median 1.1%, 90th
-percentile 26%; speech frames: 1st percentile 0.17%, 10th percentile 2.4%; 16,543 and 25,081 voiced
-frames above an RMS of 100); no floor or rounding of a harmonic's frequency `l / P`, of the
-fundamental's `1 / P` times l, or of `w0` times l, to a grid of 2^-10 to 2^-25 (cycles a sample, or
-radians) explains the per-harmonic offsets (the best leaves 77% of their rms); and for the
-one-time-shift fit, no floor, rounding or ceiling of w0, f0, the period or log2 f0 to a grid of 2^-8
-to 2^-23 does (the best leaves 63%). Those searches ran on the contaminated offsets above; on the
-long runs the floor of the fundamental to 2^-19 cycle per sample does explain the pitch. What tells
-DVSI's decoder a tone from speech was found later: the pitch code and the voicing word its encoder
-sends for the tone, with the tone's harmonics dominating the others ([P25 tones sent as voice
-frames](#p25-tones-sent-as-voice-frames)); the share of energy alone does not separate them.
+| Library (development vectors) | Median absolute increment, samples: unchanged code / step of 1-2 / 3-6 / 7 or more codes |
+|---|---|
+| baseline (`f725a66`: the old law, the geometric mean) | 0.0156 / 0.0195 / 0.0277 / 0.0336 |
+| the grid, the geometric mean | 0.0623 / 0.0629 / 0.0609 / 0.0629 |
+| the grid, the floored parabola | 0.0144 / 0.0184 / 0.0264 / 0.0329 |
+| ... and the phase kernel's reading of unvoiced bands | 0.0086 / 0.0101 / 0.0134 / 0.0195 |
+| ... and the own models by columns (the library) | 0.0086 / 0.0101 / 0.0132 / 0.0185 |
 
-The P25 pitch change applied the pitch of this section to every P25 frame. On speech that is a fit
-to the pitch
-DVSI's decoder plays (above). On a tone sent as voice frames it moved harmonic l by `l w0 160 g` a
-frame against eq 46's: by up to 145 mrad a frame over the 61 measured combinations of pitch code and
-harmonic (b0 127's 17th harmonic, -145), and by -307 mrad a frame on the ninth harmonic of b0 2,
-which `alltone` holds for a few frames. So the median correlation of the steady tone frames with
-DVSI's waveform fell from 0.880 to 0.656 (PR #196's selection: the 17,334 loud frames of the 52
-vectors whose neighbours are loud too), while their level error moved from 0.555 to 0.560 dB and
-the scoreboard's tone detector's agreement with DVSI's output moved by at most 0.0083 on a vector
-(`knox_12`) (below). That cost belonged to the P25 pitch change and is gone with the tone model
-change: a frame recognised as a tone plays the grid pitch, not the speech pitch. Measured like for
-like, on PR #196's own selection of 17,334 frames and its own calculation, the median correlation
-is 0.986 (from 0.656; the row "tone model" of the table under **Before this change** in [P25 tones
-sent as voice frames](#p25-tones-sent-as-voice-frames)); on the selection of the tone model
-change's measurement, the frames
-its tone test passes between two such frames ([November 2026: tones and the octave
-step](#november-2026-tones-and-the-octave-step)), it is 0.986 as well, from 0.388.
+(2,121 to 2,211 frames at an unchanged code, 5,477 to 5,757, 4,043 to 4,244 and 1,453 to 1,534 at
+the steps, by build; on the validation vectors the library's medians are 0.0094 / 0.0106 / 0.0148 /
+0.0204.) Before the phase
+change, frames at a pitch step kept more of the lag's change than frames at one code, increasingly
+with the step (the study's scratch build found a fitted parabola drifting from the exact one as the
+step grew); with it, the excess of a step over an unchanged code falls to between 0.4 and 0.55 of
+what it was (0.0040 → 0.0015 samples at a step of one or two codes, 0.0185 → 0.0099 at seven or
+more), and what is left is not explained. The floor against the other
+readings, with all four rules in: the mid-frame value rounded to the grid -0.000513 / -0.000675 of
+correlation (19 of 20 and 5 of 5 vectors down), left unfloored -0.000512 / -0.000608 (19 and 5
+down). The parabola at an onset too (this frame's pitch squared) -0.002205 / -0.001308 (all down), at
+an offset -0.000054 / -0.000012: the rule's condition, two voiced models, stands. Each rule alone on
+the baseline: the grid with the old law's mid-frame pitch (the geometric mean) -0.023848 / -0.021519
+(every vector down: the old law carried the mid-frame deviation in the own pitch), the parabola with
+the old law's own pitch -0.033616 / -0.025837; the two together +0.002570 / +0.001383, every vector
+up.
 
-On the scoreboard (joint lags, against the commit before), P25 decoding DVSI's bits:
+**On the pulse-train vectors** (`ptrain0` to `ptrain12`: long runs at one code, where the earlier
+law was fitted), the median absolute increment is 0.0163 samples with the library, against 0.0185
+with the baseline and 0.0990 with the grid and the geometric mean (0.0179, 0.0176 and 0.0923 at an
+unchanged code). The whole-file correlation at lag 0 of those vectors, which over 620 to 2,000
+frames at one code mostly shows how far the train has drifted by the time each run ends, rises on 8
+and falls on 5 (the study's `parts8.py`: `ptrain1` 0.445 → 0.973, `ptrain4` 0.126 → 0.827, `ptrain7`
+0.947 → 0.224, `ptrain12` 0.847 → 0.190): those swings are the phase at a run's end, not the
+pitch's error per frame, which falls.
 
-| Partition | Waveform corr. vs DVSI, sample for sample | LSD vs DVSI (dB) | Envelope corr. vs DVSI | Level vs DVSI (dB) | LSD vs input (dB) |
-|---|---|---|---|---|---|
-| development | 0.9386 → 0.9672 | 1.668 → 1.647 | 0.9887 → 0.9888 | +0.046 → +0.046 | 6.318 → 6.320 |
-| validation | 0.9619 → 0.9855 | 1.291 → 1.270 | 0.9872 → 0.9873 | -0.014 → -0.014 | 4.724 → 4.728 |
+**The floor's edge.** The library forms the mid-frame pitch in double from the stored floats
+(`imbe_mid_pitch()`, `src/core/mbe_subframe.c`): their product is exact in double, divided by
+(2 pi)^2 for the fundamentals' product, its mantissa by `frexp()`, the square roots from libm in
+double, the floor in double, and 2 pi times the whole number of steps over 2^19 rounded to float
+once. Over every ordered pair of the 208 codes (equal codes included) the unfloored number of steps
+lies at least 6.3e-6 of a step from a whole number (b0 8 and 100, 12866.0000063; next b0 14 and 20,
+2.4e-5), about 4.9e-10 of itself, so no build's double arithmetic (x87's extended one, fast-math's
+reordering) floors it otherwise; exact arithmetic (decimal, 60 digits) and the library's double
+arithmetic floor every pair alike; no product of two codes' fundamentals is an exact power of two
+(where q's two ends meet); and 2 pi times any whole number of steps from 3,000 to 27,000 lies at
+least 7.6e-13 of itself from a float's rounding edge. At equal codes the parabola keeps the code's
+own pitch only where the mantissa of its square lies near 1, 1.5 or 2 (the nearest whole number of
+steps there is 0.0038 away, b0 84). A product or a result past the float range, and a mean that
+floors to no step, give no pitch, which the caller rejects as every pitch that is not positive and
+normal.
 
-The waveform correlation rises and the distance from DVSI's decode falls on every vector. The
-distance from the input rises by 0.0024 dB (development) and 0.0033 dB (validation). The gate sets
-`p25-pitch-development`, `-validation`, `-tones` and `-channel` were declared before scoring;
-all four pass. `-tones` checks that the D-STAR and rate-33 decodes are unchanged: P25 has no tone
-frames, and no gate set of this step checks P25's tone rows (`r33-mid-pitch-tones`, of the next
-step, checks that the mid-frame pitch leaves the P25 tone decodes unchanged).
+**The own pitch's arithmetic.** `imbe_code_pitch()` stores, for P25, `2 pi floor(2^21 / (2 b0 +
+79)) / 2^19` formed in double from the integers and rounded to float once (`imbe_grid_fundamental()`):
+over the 208 codes that product lies at least 4.9e-11 of itself from a float's rounding edge, so
+every build stores the same float. The decode, the tone check (`imbe4400_take_tone()`, which asks a
+tone word's model for the pitch of its code by bit pattern) and the pulsed state's code tests
+(`mbe_imbe4400_pulsed_code()`, `mbe_imbe4400_pitch_code()`) share that one function, and the tone
+model keeps the pitch of its code: one definition. Every decoded pitch is its own code's for the
+code tests, the floats next to it on either side are no code's, and eq 46's nominal pitch of any
+code (ProVoice's, the repeat limit's reset model and the initial state at b0 134) is no code's, so
+the validity counter leaves it (`test_p25_code_tests_on_the_grid`). The quotient `4 pi / w0 - 39.5`
+the code tests round lies from 0 to 0.054 above its code (b0 201; 0.046 at most over b0 128..183).
 
-- **Tones and channel errors.** P25 has no tone frames, and no gate set of this step checks its tone
-  rows; on its 52 tone vectors, whose decodes all change, the detector's agreement and wrong-tone
-  fraction move by less than 0.01 and the steady tones' level error by at most 0.051 dB on a vector
-  (0.555 to 0.560 dB over the steady frames of all 52). DVSI's decoder plays a tone sent as voice
-  frames at another pitch than speech's (eq 46's fundamental cut to a 2^-19 grid, as found since),
-  so the steady tone frames' median correlation with DVSI's waveform falls from 0.880 to 0.656
-  (above; the tone model change plays recognised tone frames at that grid pitch). Every P25
-  channel-error decode
-  changes; the mute decisions do not, and on the loud
-  frames neither decoder mutes the distance from DVSI's decode falls by 0.007 dB (hard decisions;
-  0.006 soft).
-- **Other modes.** The D-STAR and rate-33 decodes are unchanged on every speech, tone and
-  channel-error vector, and every encoder's bits are unchanged.
+**Decisions read at the pitch played.** The harmonic at or next above 505 Hz (`ceil(505 Hz / f0)`)
+is the nominal pitch's for every code (the nearest harmonic to 505 Hz is b0 119's 5th, 0.062% below
+it; 0.053% at the nominal pitch). Of the 208 x 14 pairs of code and column edge (505 + 500 k Hz, k 0
+to 6, and the same edges 250 Hz lower), the harmonic at or next above the edge at the grid pitch
+differs from the nominal pitch's at 2 (the old law's: 14), and every edge lies at least 5.97e-5 of a
+harmonic from a whole number (b0 152 at 2005 Hz; 2.86e-4 under the old law, 1.55e-4 at ProVoice's
+nominal pitch), so float rounding moves none (`test_p25_onset_edges`). The band edges' transform
+bins, the mid-frame harmonic count and the harmonic where the high-band shelf starts follow the
+pitch played, as before. The IMBE encoder quantizes the analysis pitch against eq 45 and derives L
+and K from eq 46's nominal pitch (`imbe_enc_pitch()`, `imbe_enc_set_pitch()`): no decision of it
+reads the decoded `w0`, which moves only in the `cur_mp` it returns; its bits are unchanged on all
+95 inputs.
 
-PESQ against the input falls by 0.0043 ± 0.0022 (8 of 25 vectors better), ESTOI by 0.0001 ± 0.0000
-(6 of 25), and PESQ against DVSI's decode rises by 0.0002 ± 0.0003 (9 of 25). The pitch of a P25 code
-now departs from eq 46 by up to 0.071% to follow DVSI's decoder ([Departures from the
-specification](#departures-from-the-specification)).
+**The earlier law, as history.** From the P25 pitch change (`470374c`) to the branch below, the
+decoder stored eq 46's nominal float times `1 + g`, `g = a0 + a1 cos t + b1 sin t + a2 cos 2t + b2
+sin 2t`, t = 4 pi log2 of the nominal period (a0 = -1.980564e-4, a1 = 1.263798e-4, b1 = 4.835086e-4,
+a2 = 2.352386e-5, b2 = 7.623621e-5; -7.06e-4 at b0 127 to +3.38e-4 at b0 96), the product in double
+and rounded to float once: a least-squares fit to that per-code drift (69 rows of pitch code and
+corpus, 50 from DVSI's pulse-train vectors and 19 from speech, 5,401 frame pairs on 61 codes, each
+row's weight capped at 40 pairs; 0.0064% rms left with those weights). It took the aligned voiced
+runs' residual from growing with the run's length (0.023 of the signal over a run's first four
+frames to 0.21 past the twentieth) to flat (0.019 to 0.028), and, on the scoreboard, P25's waveform
+correlation with DVSI's decode from 0.9386 to 0.9672 (development) and 0.9619 to 0.9855 (validation).
+What it fitted was the mean of a frame's own pitch and its mid-frame pitch over runs at one code:
+the grid and half the mid-frame parabola's deviation. The tone frames, whose own model stands at
+mid-frame and so never take a mid-frame pitch, drifted under it by up to 145 mrad a frame on a
+harmonic, which led to the grid ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)).
+
+**What is not known.** What the routines are in DVSI's decoder beyond their output; why frames at
+pitch steps keep a little more of the lag's change than frames at one code; and what an AMBE-3000
+does with pitch codes no DVSI vector holds in three consecutive frames (the grid covers them by
+rule).
 
 ### P25 tones sent as voice frames
 
@@ -2138,6 +2202,25 @@ decodes that is not a tone, special and invalid frames included; a status error
 there, as before). ProVoice's states keep 0 in `Vl[0]`: a state moved between the P25 and ProVoice
 entry points in mid-stream is outside the stream contract, and a P25 repeat after a ProVoice frame
 plays the repeated model as speech. No result flag marks the frame: it stays a voice frame.
+
+**Since the P25 decoder change set** every P25 code plays the grid pitch ([P25 pitch](#p25-pitch)),
+the tone's pitch included: the tone model keeps the pitch of its code, which the decode stored and
+the tone check (`imbe4400_take_tone()`) compares by bit pattern with the code's, and the tone path
+has no computation of its own any more. Every tone the P25 path plays passes its own check and plays
+at the same `w0` as before, by bit pattern (`test_p25_tones`). Tone frames never drifted with the grid
+because a tone model stands at mid-frame itself (no mid-frame pitch enters it), which is also why
+the grid was found on them first: under the earlier law their drift was the own pitch's alone. All
+52 tone decodes change (the frames around and between the tones), and on the eight DTMF vectors
+whose tones are separated by short runs of voiced frames (`dtmf4` to `dtmf100`, not `dtmf60` and
+`dtmf180`) the whole-file correlation with DVSI's decode at lag 0 falls, from 0.976-0.979 to
+0.958-0.966: the voice frame after a tone model takes the floored parabola between the tone's pitch
+and its own at mid-frame, which moves the pulse train's phase into the next tone run (the change is
+rule 2's alone: with the grid and the geometric mean `dtmf4` is at 0.9777). A geometric mean
+next to a tone model (a scratch form) brings six of them back to 0.977-0.978 and takes `dtmf50` and
+`dtmf100` down to 0.920, `alert` and `dtmf` lower: no rule found there, and the library keeps the
+parabola between any two voiced models. Elsewhere the tones' correlation rises or holds (`cp1`
+0.406 → 0.646, `cpvbad` 0.976 → 0.999, `alert` 0.567 → 0.600; `cp31` falls, 0.793 → 0.708, a
+call-progress vector P25 plays as decoded speech).
 
 **The first implementation** (`d245efd`) used one limit, 0.375, for single and dual tones. P25
 speech then moved away from DVSI's decode: its waveform correlation with DVSI's fell by 0.0044 on
@@ -2334,14 +2417,20 @@ not that the top column of every run is silent on DVSI's decoder.
   rows 13, 15 and 17](#rate-33-rows-13-15-and-17)).
 
 **Which pitch the columns are read at.** With eq 46's nominal pitch and with the pitch the library
-plays ([P25 pitch](#p25-pitch), up to 0.07% off it) the harmonic at or next above an edge differs at
-8 of the 208 × 7 pairs of pitch code and column edge, and at 6 of the 208 × 7 pairs with the edges
-250 Hz lower; the edges are known to about 5 Hz only, so the measurements cannot tell the two
-pitches apart. The library reads the columns at the pitch it plays. (An earlier count of 32 pairs
-took the law's two extremes for every code.) No pitch code puts an edge on a harmonic: the nearest
-lie 2.86e-4 of a harmonic away at the pitch P25 plays (b0 3 at 1505 Hz) and 1.55e-4 at ProVoice's
-nominal pitch (b0 36 at 2755 Hz), so no build's arithmetic (x87 excess precision, fast-math's
-reordering) moves a harmonic across an edge (`test_p25_onset_edges`).
+played when this rule was fitted (the earlier law, up to 0.07% off it) the harmonic at or next above
+an edge differed at 8 of the 208 × 7 pairs of pitch code and column edge, and at 6 of the 208 × 7
+pairs with the edges 250 Hz lower; the edges are known to about 5 Hz only, so the measurements
+cannot tell the two pitches apart. The library reads the columns at the pitch it plays: since the
+P25 decoder change set eq 46 on the 2^-19 grid ([P25 pitch](#p25-pitch)), at which the harmonic at
+or next above an edge differs from the nominal pitch's at 2 of the 208 × 14 pairs. No pitch code puts
+an edge on a harmonic: the nearest lie 5.97e-5 of a harmonic away at the pitch P25 plays (b0 152 at
+2005 Hz; 2.86e-4 under the earlier law, b0 3 at 1505 Hz) and 1.55e-4 at ProVoice's nominal pitch (b0
+36 at 2755 Hz), so no build's arithmetic (x87 excess precision, fast-math's reordering) moves a
+harmonic across an edge (`test_p25_onset_edges`). Since the change set the onset rule's "voiced
+harmonics" are those P25's own model plays, by the columns ([D-STAR and P25: mid-frame voicing by
+columns](#d-star-and-p25-mid-frame-voicing-by-columns)): a harmonic the word leaves unvoiced in a
+covered column, or within 250 Hz below one, sounds with the frame too (at b0 86 with the word
+1000001100, harmonic 18 joins 19 to 23). The labels of this section were not re-measured on it.
 
 **How the library carries it.** The decoder marks every P25 and ProVoice voice frame that has a
 voiced band `MBE_FRAME_MARK_ONSET_COLUMNS` (5.0f in the otherwise unused `PHIl[0]`, set in
@@ -2884,18 +2973,23 @@ well: a median of 0.0228 against 0.0226 samples over all the development steps, 
 0.0217 on the 8,827 steps of one to three codes, and 0.0354 against 0.0338 on the 1,218 steps of
 four codes or more.
 
-**Beside the P25 pitch.** The P25 pitch law ([P25 pitch](#p25-pitch), `imbe_dvsi_pitch_offset()`) is
-a function of the same variable with the same half-octave period: a constant of -1.98e-4, a first
-harmonic of amplitude 5.00e-4 and phase 75.4 degrees, and a second harmonic (C2 = +2.35e-5, S2 =
-+7.62e-5). Rate 33's two constant terms sum to -3.0e-4 + 0.42e-4 = -2.58e-4 (the mean of the fitted
-correction, -3.0e-4 plus (h(Pa) + h(Pb)) / 2, over the selected development frames is about
--2.51e-4), with a single harmonic of amplitude 8.44e-4 and phase 83.6 degrees. In P25 the wave is in
-the pitch a code plays; in rate 33 the pitch a code plays agrees with the library's law to 0.0074%
-rms on the codes measured ([Rate 33: pitch](#rate-33-pitch)), which bounds a periodic part there and
-does not exclude one, and the wave fitted here is in the mid-frame pitch. In this light the factor
-`1 - 3.0e-4` of the earlier change stands for the offset's mean, and the variation from frame to
-frame that it did not follow is what the wave fits. What in DVSI's decoder makes the wave is not
-known.
+**Beside the P25 pitch.** P25's decoder plays each code at eq 46 on a 2^-19 grid and, between two
+voiced models, a floored parabola for the square root of the product of the two fundamentals
+([P25 pitch](#p25-pitch)); its mid-frame deviation, `q(y) / sqrt(y) - 1` (y the product's
+mantissa), is a wave in the same variable with the same half-octave period as rate 33's h, of about
+the same size (+7.7e-4 to -1.2e-3; rate 33's two constant terms sum to -2.58e-4, with a single
+harmonic of amplitude 8.44e-4). The law the library played for P25 before that change was a wave in
+the same variable too (a constant of -1.98e-4, a first harmonic of amplitude 5.00e-4), fitted to the
+per-code drift over runs at one code, which is the mean of a frame's own pitch and its mid-frame
+pitch and so carried half the mid-frame deviation. Rate 33 shows no deviation at an unchanged code
+(above), where P25 does; the parabola in place of rate 33's wave (unfloored, between two different
+pitches only) measured no better on its present pitch law in the study's scratch build, and gains
+there only once that law's two constants are refitted: a later change set's, not this one's. In
+rate 33 the pitch a code plays agrees with the library's law to 0.0074% rms on the codes measured
+([Rate 33: pitch](#rate-33-pitch)), which bounds a periodic part there and does not exclude one, and
+the wave fitted here is in the mid-frame pitch. In this light the factor `1 - 3.0e-4` of the earlier
+change stands for the offset's mean, and the variation from frame to frame that it did not follow is
+what the wave fits. What in DVSI's decoder makes the wave is not known.
 
 **How the library plays it.** Between two voiced frames of different pitch the rate-33 rendering
 (`MBE_VOICED_SYNTHESIS_DVSI_AMBE2450`) plays the mid-frame pitch as the geometric mean of the two
@@ -2903,7 +2997,7 @@ frames' stored pitches times `MBE_AMBE2450_MID_PITCH_FACTOR` times `1 + (h(Pa) +
 C0, C1 and S1 as above (`MBE_AMBE2450_MID_PITCH_WAVE_C0`, `_C1` and `_S1` in
 `src/internal/mbe_subframe.h`) and P each frame's period from its stored pitch, all formed in double
 from the stored floats with the double-precision `log2`, `cos` and `sin` and rounded to float once
-(`ambe2450_mid_pitch()` in `src/core/mbe_subframe.c`), as the P25 law is formed, so that the pitch
+(`ambe2450_mid_pitch()` in `src/core/mbe_subframe.c`), as the P25 law was formed, so that the pitch
 does not move with a libm's single-precision functions. h lies within C0 ± sqrt(C1^2 + S1^2), so the
 two factors together lie between 0.998898 and 1.000587: for any two positive normal floats the
 pitch is positive and finite in double. A product past `FLT_MAX` gives no pitch (the two largest
@@ -3184,6 +3278,87 @@ renders is marked again. The pulse train runs on through a frame lacking a pitch
 held (after P25 b0 97, word `10000000000`, which covers no column, it starts afresh). No mark of the
 previous model chooses the columns' bands; its `PITCH_CARRIES`, `PITCH_ABSENT` and `PREVIOUS_HELD`
 still act on the mid-frame pitch and the pulse train, as before.
+
+**P25's own models by columns** (the P25 decoder change set). DVSI's P25 decoder voices a frame's own
+model, at the frame's end (and as the next frame's first model), by the same 500 Hz columns as the
+mid-frame model: column 0 from harmonic 1, column k from the harmonic at or next above 505 + 500 (k
+- 1) Hz (unvoiced past L; the isolated last band read as unvoiced: P25's samples below), and a
+harmonic voiced if the column of its frequency, or of its frequency plus 250 Hz, is. Where that
+differs from the bands of three (the first one or two harmonics above the voiced region, mostly) the
+library played noise where DVSI's decoder plays a harmonic. Measured on the library before the
+change (with the pitch rules and the phase kernel's reading in), on unvoiced harmonics of steady
+mixed voiced frames in line with DVSI's decode (from a run's third frame, the frame's voicing equal
+to the frames' before and after), by the coherence of DVSI's decode with ours in the harmonic's band
+(the two decoders run the same noise generator, so an unvoiced band of DVSI's is coherent with ours,
+a voiced one is not): of the unvoiced harmonics directly above the voiced region 49% are under 0.5
+(375 harmonics, median 0.516), one further up 27%, two further up 6%, four to six 1%. By what the
+column reading of the same decoded bands gives: ours unvoiced and voiced by columns, 511 harmonics,
+median 0.352, 66.9% under 0.5; ours unvoiced and unvoiced by columns, 3,674, median 0.996, 2.7%;
+ours voiced and voiced by columns, 5,740, median 1.000, 0.3%; ours voiced and unvoiced by columns,
+12. With the change (the library's own voicing, the column reading, as the classifier) the
+unvoiced harmonics directly above the voiced region are 6% under 0.5 (300 harmonics, median 0.994),
+one further up 10%, two further up 5%, four to six 2%; the 511 that turned voiced are coherent with
+DVSI's decode at a median 0.995 (3.5% under 0.5); and over all 101,444 unvoiced harmonics of the
+mixed frames (any neighbours) 3.9% are under 0.5 (from 8.1% of 117,309 by the bands). Labels (450
+frames, 9,491 harmonics labelled DVSI-voiced or DVSI-unvoiced by a coherence under 0.5 or of 0.9 or
+more, 6,082 voiced; the study's `uvband10c.py` on the library before the change): the standard's
+bands agree on 9,026 (0.9510; 440 of ours unvoiced where DVSI's is voiced, 25 the reverse), the
+column reading with the library's constants on 9,341 (0.9842; 103 and 47); over first edges from
+450 to 1,000 Hz, reaches from 0 to 500 Hz and sampling by ceiling, rounding or floor nothing agrees
+better than 9,345 (510 Hz, 250 Hz, ceiling), and edges of 495 to 510 Hz agree within 4 harmonics of
+it. What is left (about 150) is spread over the whole width of a column. No constant is fitted: the
+reading is the mid-frame rule's.
+
+A band that turns takes its magnitude across the unvoiced factor `0.2046 / sqrt(w0)` (divided by it
+to the voiced domain, multiplied by it to the unvoiced one; `magnitude_across()`, which the pulsed
+state's bands use too). Not for a model with no voiced band (its bands and its pulsed state as
+before), a tone model, or a band with no state. A model whose voiced bands all lie off the samples
+(no DVSI encoding of the development and validation vectors has one; adaptive smoothing under
+channel errors makes 76 among the eight channel-error vectors' 10,200 frames) plays with no voiced
+band; kept with its decoded voicing instead, the channel-error vectors' log-spectral distance from
+DVSI's decode rises (hard decisions 4.7357 → 4.7377 dB, soft 5.6455 → 5.6477, the scoreboard's
+measure on the library with the first form of the mid-frame clause), and the speech vectors do not
+change. The decoded model, its voicing, its magnitudes and the prediction history keep the decoded
+values; the public decoder's `cur_mp` too.
+
+**What reads which voicing.** The models' bands, and so the voiced train and its pulses, the unvoiced
+synthesis's bands and the pulse train's carrying into the next frame (`train_runs_on()`: the last
+frame's own model as rendered) follow the column reading. The decoded (smoothed) voicing of the
+parameter sets still decides the mark of the model rendered (`mark_rendered_model()`), the mid-frame
+pitch's cases (an onset, an offset, two voiced models), whether the mid-frame rule applies
+(`column_rule()`), the reserved codes of the pulsed state (a model with no voiced band, which the
+reading leaves alone), the phase kernel's input ([Phase regeneration](#phase-regeneration): the
+step on the column-read voicing measured worse) and the low band's tracker: a tracker that moves on a
+model the columns read as fully voiced (345 of the 32,370 rendered models with a voiced band of the
+25 vectors and the channel-error vectors differ in that) measured no better (the scoreboard's
+log-spectral distance from DVSI's decode 1.1019 → 1.1024 dB development, 0.7466 → 0.7473
+validation, channel hard decisions 4.7357 → 4.7367; the waveform correlation equal to the fifth
+decimal), so the low band's rule stands as it was.
+
+**The mid-frame clause.** With the own models read by columns, a harmonic can be voiced at both ends
+of a steady frame and unvoiced at its middle, if the clause ("a band in the same state in both frames
+keeps it") compares the decoded states. Three forms, measured on the library with the four rules
+(the scoreboard's own measures, each build aligned freely; the lags came out the same in every
+build):
+
+| Clause | Waveform corr. vs DVSI, development / validation | LSD vs DVSI (dB), dev / val | LSD on the channel vectors (dB), hard / soft |
+|---|---|---|---|
+| on the decoded states (as it was) | 0.994636 / 0.996855 | 1.1019 / 0.7466 | 4.7357 / 5.6455 |
+| none (every band by the columns' M) | 0.994673 / 0.996786 | 1.0745 / 0.7309 | 4.7369 / 5.6454 |
+| on the column-read states (the library) | 0.994727 / 0.996757 | 1.0608 / 0.7251 | 4.7309 / 5.6406 |
+
+The waveform correlation splits (the column-read clause the best on development, the decoded one on
+validation, by about 1e-4 either way); the log-spectral distance from DVSI's decode, the
+scoreboard's second measure, is lowest with the clause on the column-read states on both
+partitions and on the channel-error vectors, by 0.041 / 0.022 dB against the clause as it was. The
+library takes it: a band in the same state in both frames' own models, as the columns read them,
+keeps it, and a frame whose two own models read alike plays that reading at mid-frame. The three
+forms differ, for example, between b0 20 and b0 41 with the word 11011(0) in both: the clause as it
+was leaves harmonic 8 of the mid-frame model unvoiced, voiced in both own models; no clause leaves
+harmonic 13 unvoiced (`test_p25_own_columns`). At an onset, where the frame before has no voiced
+band, the reading makes a harmonic the word leaves unvoiced in a covered column, or within 250 Hz
+below one, sound with the frame (at b0 86 with the word 1000001100, harmonic 18 joins 19 to 23;
+`test_p25_onset_columns`); ProVoice keeps its decoded voicing and the clause as it was.
 
 **What is not known.** What in DVSI's decoders the rule stands for: why, in most labelled bands,
 the top column of a run of changing columns takes the unvoiced state even under a column voiced in
@@ -4531,7 +4706,7 @@ this change alone ([November 2026: encoders and rate-33 rows 18 to
 |---|---|---|---|
 | Rate-33 u3 bits 8-5 | Table 8: b3(0), b4(2), b4(1), b4(0) | b4(2), b4(1), b4(0), b3(0) | DVSI |
 | Rate-33 pitch | Annex A table | smooth log2 law | DVSI |
-| P25 pitch | eq 46: `w0 = 4 pi / (b0 + 39.5)` | on speech and its pulse-train vectors, that pitch times `1 + g`, g between -0.071% and +0.034%, repeating every half octave of the period; a tone its encoder sent as voice frames at eq 46's fundamental cut to a grid of 2^-19 cycle per sample | a fit to DVSI's pitch on speech, for every P25 frame but a recognised tone frame, which plays the grid pitch ([P25 pitch](#p25-pitch), [P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)) |
+| P25 pitch | eq 46: `w0 = 4 pi / (b0 + 39.5)`; the synthesis of eq 127-141 has no mid-frame model | eq 46's fundamental cut to a grid of 2^-19 cycle per sample, `floor(2^21 / (2 b0 + 79)) / 2^19` (0 to 2.26e-4 under eq 46), for speech and tones alike; between two voiced models a mid-frame pitch from a floored parabola for the square root of the product of the two fundamentals | DVSI ([P25 pitch](#p25-pitch)) |
 | P25 tones sent as voice frames | TIA-102.BABA has no tone frames: every voice frame plays its decoded harmonics at eq 46's pitch | a voice frame whose pitch code and voicing word are those its encoder sends for a DTMF, KNOX or single tone, and whose tone harmonics dominate, plays a tone model: the tone's harmonics at one level, the others at least 27 dB down, eq 46's fundamental cut to a 2^-19 grid; call-progress tones, which DVSI's decoder does not play as equal-amplitude tone models, are left as decoded | DVSI, by a test with two measured limits ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)) |
 | Rate-33 harmonic count, b0 17 | Annex A: 11 | 12 | DVSI |
 | Rate-33 repeat | eq 57-58: `eps_0 >= 4`, or `eps_0 >= 2` and `eps_T >= 6` | `eps_0 >= 4` | DVSI |
@@ -4753,6 +4928,28 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   select (the two frames after it are quiet, a standard deviation of 10.8 in DVSI's decode); the
   run is in line (frame correlation above 0.8) for its first 11 frames, falls to 0.26 and comes
   back to 0.80 (0.65 over the whole run): the loss is inside the run.
+- P25 voiced runs out of line with DVSI's decode after a speech frame DVSI's decoder plays as a tone
+  model: with the four rules of the P25 decoder change set, about half of P25's remaining whole-file
+  residual on the study's scratch build lay in a dozen voiced runs out of line (`noisy` from frames
+  2796 and 1946, `t04` from 684, ...); in the ones examined, DVSI's decoder plays the one speech frame
+  just before the run as a tone model (two harmonics, the others and the noise silent: `noisy` 2795
+  harmonics 7 and 11, `t04` 683 harmonics 5 and 7, `noisy` 1944 harmonics 4 and 5), at a pitch code
+  one or two away from a tone's own, which the library's tone test (exact rows of code and voicing
+  word) does not pass, and the frame after it takes its own pitch at mid-frame. The tone test's
+  tolerance is a later study's.
+- P25 frames between tone runs: the floored parabola between a tone model and the voice frame after
+  it moves the pulse train's phase into the next tone, and eight DTMF vectors lose whole-file
+  correlation with DVSI's decode (0.976-0.979 → 0.958-0.966); a geometric mean there fits six and
+  not the other two ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)).
+- P25's own model by columns ([D-STAR and P25: mid-frame voicing by
+  columns](#d-star-and-p25-mid-frame-voicing-by-columns)): whether the column reading is DVSI's rule
+  or the nearest the library's constants come to it (it leaves about a third of the bands'
+  disagreements with the labels, about 150 of 9,491, spread over the columns), and what DVSI's
+  decoder does with a model whose voiced bands all lie off the samples (channel errors' smoothing
+  makes a few; the library plays it with no voiced band). Why P25's phases come from the half-rate's
+  magnitude domain ([Phase regeneration](#phase-regeneration)): the simplest reading is one phase
+  routine for all the decoder's modes; the step's size is the half-rate standard's constant,
+  measured to about 0.1 in log2.
 - A single band whose voicing changes between two frames, on a DVMEGA DVstick 30
   ([#157](https://github.com/arancormonk/mbelib-neo/issues/157)). With the rule of
   [D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns) the mean error of the 18 single-band steps' curves falls from 0.346 to 0.189
@@ -4799,9 +4996,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   noise's spectrum (not measured), a level law over b2 to b5 fitted to one sweep, a rule for how
   several b0 124 frames combine (not determined), and more hidden state in `mbe_parms`, whose layout
   is fixed.
-- Pitch per code: P25 now plays within 0.0064% rms of DVSI's decoder over the 69 rows (61 pitch
-  codes) it was fitted on, weighted as fitted, and 0.018% over the validation vectors' 9 codes ([P25
-  pitch](#p25-pitch)), D-STAR within 0.013% rms (at most 0.04% on a code with 10 or more frame
+- Pitch per code: P25 plays eq 46 on DVSI's 2^-19 grid, which leaves 0.00338% rms (weighted) of the
+  per-code drift on the 49 rows measured, and between two voiced models DVSI's floored parabola
+  ([P25 pitch](#p25-pitch)); frames at a pitch step keep a little more of the lag's change over a
+  frame than frames at one code (0.0101 against 0.0086 samples at a step of one or two codes, 0.0185
+  at seven or more), not explained. D-STAR within 0.013% rms (at most 0.04% on a code with 10 or more frame
   pairs) and rate 33 within 0.0074% rms (at most 0.02%), measured as in [P25 pitch](#p25-pitch). A
   law with log2 f0 rounded to a 2^-12 grid explains part of rate 33's difference (0.0074% to 0.0048%
   rms; its slope then comes out at 1 / 45.368) but gains 0.0007 of waveform correlation only, and a
@@ -7177,6 +7376,168 @@ combined run over the development, validation, tone and channel partitions, `9a1
 | `low-band-tones` | passes all 21 checks | the D-STAR and rate-33 encoders' tone statistics unchanged and the decoders' tone measures within their limits on the windows the detector calls steady; not that the frames between and around the tones are right |
 | `low-band-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by themselves that no frame's mute decision changed: the flags say that), the distance from DVSI's decode on the loud frames falling in every mode and decision type, every encoder's speech rows unchanged |
 | `low-band-final` | not scored | the prediction for `irstia` and `mark` |
+
+### November 2026: four rules of DVSI's P25 decoder
+
+DVSI's low band's head (`f725a66`) against four rules of DVSI's P25 decoder, committed one at a
+time: each frame's own pitch eq 46 on a 2^-19 grid (`6fb4ddc`), the mid-frame pitch between two
+voiced models a floored parabola for the square root (`bfe59d4`; [P25 pitch](#p25-pitch)), the phase
+kernel's reading of unvoiced bands with the unvoiced factor taken out (`072dde2`; [Phase
+regeneration](#phase-regeneration)), and the frame's own models voiced by the 500 Hz columns, with
+the mid-frame clause on the column-read states (`aff61e5`; [D-STAR and P25: mid-frame voicing by
+columns](#d-star-and-p25-mid-frame-voicing-by-columns)). P25's rendering alone; ProVoice keeps its
+nominal pitch, the geometric mean, the plain phase source and its decoded voicing, a decision (it
+has no DVSI material). The study that found the rules read the development and validation vectors
+and DVSI's synthetic pulse-train vectors, never `irstia` or `mark`; its scratch build (outside the
+repository, a worktree at `47d8cf3` with environment switches) was measured on the development,
+validation, tone and channel vectors, with the scoreboard's own measures too, before the gate sets
+were declared in the branch's first commit, `f1be05d`, so none of those partitions is out of sample
+here. The baseline is a build of `git archive f725a66`, the candidate one of `999647e`, an earlier
+form of `aff61e5` whose `mid_pitch()` nested its branches otherwise (rewritten for the complexity
+limit; the two builds decode all 98 P25 speech, channel-error, tone and pulse-train vectors byte for
+byte alike, and the differential harness gives the same for every protected stream; the later
+commits change documents only); both aligned freely first and were then scored at their joint lags,
+both runs' encodings decoded by the candidate's decoder (Release, SIMD, IEEE arithmetic). The
+measurements of the sections above that are not the scoreboard's were made on a copy of the library
+with environment switches (outside the repository) that decodes every P25 speech, channel-error and
+tone vector byte for byte as the library with all four rules on and as the baseline with all four
+off.
+
+**The library against the study's scratch build.** The scratch build's low band is its own two-rate
+scratch form, not the library's, so the decodes cannot be compared sample for sample (the library's
+baseline and the scratch build's, `plu1`, differ in 1.70 million of 8.85 million samples, a residual
+of 1.5e-5 of the scratch decode's energy). Compared as the rules' effects (each build's decode with
+the rules less its decode without them, over the 25 development and validation vectors): rules 1 to
+3 against the scratch build's (`pk2` less `plu1`), the two effects differ by 0.036% of the scratch
+effect's energy, pooled; with the own models by columns under the clause as it was (`pk3`), by
+0.027%; rule 4's own effect against the scratch build's (`pk3` less `pk2`) by 0.001%. The largest part
+of the difference lies in `dam40` frames 768 and 769, a frame played as a P25 tone model (a single
+tone at harmonic 1) and the frame after it: the scratch build put the phase step on the tone model's
+unvoiced bands, the library reads a tone model as decoded; the rest is spread at the level of the
+two baselines' own difference, more in `dam_10ov`'s overloaded frames, where a small difference
+moves the output limit. The correlation with DVSI's decode, development / validation means: the
+library's base 0.989053 / 0.993816 (scratch 0.989053 / 0.993810), with rules 1 to 3 0.993692 /
+0.996434 (0.993689 / 0.996426), with rule 4 and the clause as it was 0.994604 / 0.996853 (0.994600 /
+0.996845). The library's tones, channel-error and pulse-train decodes were not compared with the
+scratch build's.
+
+**Speech**, decoding DVSI's bits, on the scoreboard (P25; the gate sets' measures, partition means,
+the mean paired change and its extremes):
+
+| Partition | Waveform corr. vs DVSI | LSD vs DVSI (dB) | Envelope corr. | Level vs DVSI (dB) | LSD vs input (dB) |
+|---|---|---|---|---|---|
+| development | 0.989085 → 0.994727 (+0.005642; 20 up, the least `t01` +0.002228, the most `dam10` +0.013283) | 1.2510 → 1.0608 (-0.1902; all fall, the least `dam80` -0.0221, the most `lvl` -0.3258) | 0.99549 → 0.99565 (+0.00017; `dam40` -0.000007) | +0.0522 → +0.0549 (+0.0027) | 6.3446 → 6.3501 (+0.0055; 17 rise, the most `dam10` +0.0222) |
+| validation | 0.993818 → 0.996757 (+0.002939; 5 up, the least `t04` +0.001747) | 0.8783 → 0.7251 (-0.1532; all fall, the least `t03` -0.0870) | 0.99340 → 0.99347 | +0.0298 → +0.0324 | 4.7763 → 4.7745 (-0.0018; 4 fall, `t03` +0.0074) |
+
+The scratch build's run gave +0.005548 / +0.003036 of correlation and -0.1491 / -0.1317 dB of
+distance from DVSI's decode: the library's clause on the column-read states lowers the distance by a
+further 0.04 / 0.02 dB (above). **The distance from the input rises on development**, by 0.0055 dB in
+the mean (17 of 20 vectors, the most `dam10`, +0.022): the own models' column reading voices
+harmonics that the analysis of the input left unvoiced, and a decode that follows DVSI's there moves
+away from the input. It is this change's cost. The whole-file correlation at lag 0 (the study's
+measure), the rules in turn: 0.989053 / 0.993816 → the grid 0.965205 / 0.972297 → the parabola
+0.991623 / 0.995199 → the phase step 0.993692 / 0.996434 → the own models 0.994695 / 0.996755; each
+rule alone on the baseline: the grid -0.023848 / -0.021519, the parabola -0.033616 / -0.025837, the
+phase step +0.002747 / +0.001540, the own models +0.000890 / +0.000267 (validation 4 up, `tambf32b`
+-0.000397). Of the residual over DVSI's energy pooled over the 22 vectors with a DVSI rms of 300 or
+more (the study's `shares10.py`), 0.01468 → 0.00518: in voiced frames in line with DVSI's 0.01118 →
+0.00201 (0.0115 → 0.0021 of their own signal), in frames with no voiced band 0.00069 → 0.00041,
+and the 59 to 71 voiced frames out of line (0.0028) do not move. In steady voiced frames in line
+(the study's `resid10.py`), residual over DVSI's energy 0.01043 = amplitude 0.00062 + phase 0.00796
++ incoherent 0.00185 → 0.00168 = 0.00046 + 0.00079 + 0.00043 (after the grid and the parabola
+0.00677, phase 0.00433; with the phase step 0.00378, phase 0.00153); the voiced harmonics' phase
+against DVSI's, energy-weighted rms, 0.0593 rad after the pitch rules → 0.0270, their level 0.167 →
+0.164 dB rms. The onsets' lead (the study's `p25on10b.py`, 1,854 onsets followed by two voiced
+frames: DVSI's decode ahead of ours by up to 0.35 samples in the windows 160 and 240 samples into
+the onset frame at short periods) is gone with the pitch rules and the phase step: within about
+0.05 samples in every period range with the first half sounding. About half of P25's remaining
+whole-file residual lies in a dozen voiced runs out of line with DVSI's decode (`noisy` from frames
+2796 and 1946, `t04` from 684, ...), in the ones examined after a speech frame DVSI's decoder plays
+as a tone model at a pitch code one or two away from a tone's own, which the library's tone test
+does not pass: a later study (Known differences); `noisy` and `t04` gain least on validation and
+development for it.
+
+PESQ (the 25 vectors; a 95% interval over the 12 recordings, t with 11 degrees of freedom, from the
+standard error clustered by recording): against the input +0.0029 ± 0.0026 (-0.0027 to +0.0086, 16
+of 25 up), neither a cost nor a gain established; against DVSI's decode +0.0468 ± 0.0049 (+0.0360 to
++0.0575, 25 of 25 up).
+
+**Tones.** All 52 P25 tone decodes change (the D-STAR and rate-33 ones do not). The detector's
+agreement moves on one vector, `cp31` (a call-progress vector P25 plays as decoded speech: one
+steady window of 37 lost, 0.973 → 0.946); the level error 0.0967 → 0.0953 dB in the mean over the 49
+vectors that measure it (`cp31` -0.044, `cp2` -0.024), the balance error 0.0158 → 0.0161 dB over 48
+(`cp2` +0.041, `cp31` -0.028), the frequency error 0.00023 → 0.00024 over 49 (`cp31` +0.00018), the
+share of wrong tones 0 on every vector. The DTMF vectors whose tones are separated by short voiced
+runs lose whole-file correlation ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames)).
+The encoders' tone statistics do not move.
+
+**Channel errors.** No mute decision changes, frame for frame: the flags of every frame of the 103
+P25 bit files (`irstia` and `mark` left out; the soft-decision files decoded as soft; 105,033
+frames) are the same in both builds; every decode changes. The scoreboard's log-spectral distance
+from DVSI's decode on the loud frames that neither run nor DVSI mutes falls: hard decisions -0.0559
+dB in the mean (every vector, the least `dam_e10_hd` -0.0164, coverage 0.974), soft decisions
+-0.0400 (coverage 0.971); `channel.hd.lsd_db` 4.7868 → 4.7309, `channel.sd.lsd_db` 5.6805 →
+5.6406. Whole-file correlation with DVSI's decode on the hard-decision vectors (the study's
+`parts8.py`): 0.8056 → 0.8098, 0.4554 → 0.4657, 0.0340 → 0.0502, 0.0080 → 0.0121.
+
+**Pulse-train vectors** ([P25 pitch](#p25-pitch)): the lag increments fall (0.0185 → 0.0163 samples),
+the whole-file correlation rises on 8 of 13 and falls on 5.
+
+**Other modes and the encoders.** All 285 encodings (95 input files, three encoders) are identical
+between the two builds; the IMBE encoder's `cur_mp` differs in its `w0` only, which the public
+decoder sets. In each of the ten local configurations (dev-debug; dev-release, GCC Release with
+SIMD, fast-math, LTO and `-march=native`; asan-ubsan-debug; notones-debug; a Debug build with SIMD;
+a Debug `-march=x86-64-v3` build; Clang Release with SIMD, fast-math and LTO, once with
+`MBELIB_ENABLE_NATIVE=ON` and once with `-march=x86-64-v3`; and 32-bit Release and Debug), after
+each of the four rule commits, a differential harness outside the repository, built against the
+baseline's library and the commit's, gives the same output byte for byte for: the pitch and harmonic
+count every D-STAR code decodes to and every rate-33 code at rows 16 and 18; hashes of the output
+and of all three returned states of the D-STAR and rate-33 data paths (3,000 random frames each) and
+of ProVoice's path (its float and 16-bit frame entry points, 3,000 frames; and 500 frames each from
+the states the D-STAR and rate-33 streams left), of `mbe_synthesizeSpeechf()` and
+`mbe_synthesizeSpeech()` (3,000 frames), of the two AMBE encoders' bits and `cur_mp` and of the IMBE
+encoder's bits (1,500 frames), over constructed streams whose caller states hold reserved pitches,
+P25 pitches of every code in three forms (the earlier law's, the grid's and eq 46's nominal, from
+the harness's own formulas, so that both builds see the same inputs) with voiced bands (a low voiced
+region, alternate bands, every band, a lone band) and unvoiced ones and shaped `log2Ml`, every frame
+mark, pulsed-row words, values in slots 34 to 37, every float class in the low cut's slots, and
+states without the subframe mark; and ProVoice plays the same samples and returns the same states
+whatever the low cut's slots hold. P25's stream, ProVoice from P25's states and the IMBE encoder's
+`cur_mp` change, as they are to. A first form of rules 3 and 4, before their final commits, moved
+D-STAR's and rate 33's streams in the 32-bit Release build: P25's mid-frame filler and column state,
+written as branches of the shared ones, gave a column helper a second caller, which GCC then no
+longer inlined, and the shared code spilled its x87 intermediates otherwise; P25's rendering has its
+own copies of the three (`p25_fill_mid_bands()`, `p25_column_band_state()`,
+`p25_columns_voice()`), and the ten configurations agree since. No golden PCM sequence is P25's: no
+golden hash moves.
+
+**Cost.** The median complete hard-decision frame decode, `bench_replay hard <codec> 60 5` on DVSI's
+`dam` stream of each codec, seven alternating invocations pinned to one CPU, a portable Release build
+with SIMD, fast-math and LTO, taken under load (one-minute load 9.4 to 12.6, another agent's builds
+and tests running): IMBE `f725a66` 8.558 us, the grid 8.358 (-2.3%), the parabola 9.191 (+7.4%), the
+phase step 8.213 (-4.0%), the own models 8.698 (+1.6%; the invocations' medians 8.117 to 8.777 and
+8.457 to 9.293); the controls, whose decodes do not change, moved by as much: D-STAR -4.9% to +6.0%,
+AMBE+2 -0.7% to +1.5%. Under that load the runs give no bound on the change's cost tighter than about
+6%.
+
+**Gate sets**, declared in the branch's first commit, `f1be05d`, before any build of the branch was
+scored (the study's scratch build had been measured on the development, validation, tone and channel
+vectors before that, and the baseline's own scoreboard of the four partitions, a build of `git
+archive f725a66` scoring itself, was read for each measure's coverage; two checks of the brief the
+sets were written from could not be evaluated as written and were corrected before the declaration:
+the IMBE encoder's distance from the input is `encoder.lsd_db`, and the channel vectors, one
+recording, give no bootstrap interval, so their hard-decision distance is checked on the mean and on
+each vector), and evaluated in one combined run over the development, validation, tone and channel
+partitions, `f725a66` against `999647e` (above); all 75 speech entries carry an encoder-row hash in both
+reports, every one equal:
+
+| Gate set | Result | What it establishes |
+|---|---|---|
+| `p25-decoder-development` | passes all 15 checks | on the vectors the rules were found on: a mean gain in P25's correlation with DVSI's decode with its interval above 0 (+0.005642), every vector up (the least +0.002228), the distance from DVSI's decode falling with its interval below 0 (-0.1902 dB) and on every vector (the most -0.0221), the envelope correlation, the distance from the input (+0.0055 dB in the mean against 0.012 allowed, +0.022 on `dam10` against 0.04) and the level within theirs; D-STAR's and rate 33's decodes and every encoder's rows unchanged |
+| `p25-decoder-validation` | passes all 15 checks | the same on the validation vectors (+0.002939, the least +0.001747; -0.1532 dB), also read in the study |
+| `p25-decoder-tones` | passes all 13 checks | D-STAR's and rate 33's decodes and tone statistics unchanged, P25's tone measures within their limits on the windows the detector calls steady (`cp31`'s one window inside the 0.03 allowed); not that the frames between and around the tones are right |
+| `p25-decoder-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (the flags say no frame's decision changed), D-STAR's and rate 33's channel decodes unchanged, P25's distance from DVSI's decode on the loud frames falling on the mean and on every hard-decision vector and not rising with soft decisions |
+| `p25-decoder-final` | not scored | the prediction for `irstia` and `mark` |
 
 ### Scoring history
 

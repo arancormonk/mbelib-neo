@@ -344,6 +344,63 @@ The CTest suite includes:
   tones' start phase on the old filter (`test_ambe2400_frame_types`, `test_ambe2450_frame_types`,
   `test_frame_paths`). No encoder synthesizes a model, so a cut applied to the stored model changes
   no encoder's bits; it is caught by the state the rendering returns.
+- Four rules of DVSI's P25 decoder (`test_params`, `test_subframe_synthesis`, `test_frame_paths`,
+  `test_p25_tones`; [DVSI parity](dvsi-parity.md#november-2026-four-rules-of-dvsis-p25-decoder)): the
+  pitch of every P25 code, all 208, by bit pattern against `2 pi floor(2^21 / (2 b0 + 79)) / 2^19`
+  formed in the test in double and rounded once, at or below eq 46 by less than a grid step, L
+  pinned against a table of the 208 harmonic counts and K from it, through the public decoder and the
+  data path, ProVoice's nominal pitch unchanged (`test_imbe_pitch_law`); the pulsed state's code
+  tests on the grid (`test_p25_code_tests_on_the_grid`: every decoded pitch its own code's and a
+  reserved code's only for b0 128..183, the floats on either side no code's, eq 46's nominal pitch
+  of every code and the initial state's no code's); the onset columns' edges (`test_p25_onset_edges`:
+  at least 5.97e-5 of a harmonic from a whole number at the grid pitch); P25's mid-frame pitch against
+  the floored parabola formed in the test from its statement (the mantissa by halving and doubling,
+  not `frexp()`) over every ordered pair of the 208 codes, each code against itself included, bit for
+  bit in every build, on the grid, the code's own pitch kept at equal codes at a few codes only, an
+  onset and an offset at the voiced model's pitch, pitches that are no positive normal float (zero,
+  negative zero, subnormal, infinite, NaN, negative) and pairs at the float range's ends giving no
+  pitch and no voiced band, D-STAR's and ProVoice's renderings the geometric mean and rate 33's its
+  wave on the same pairs (`test_p25_mid_pitch_pairs`, and `check_code_pair()`); the phase source
+  (`test_p25_phase_source`: a P25 own model's phases bit for bit the library's kernel run in the
+  test on `log2Ml` plus `-log2(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0))` on the bands held as
+  unvoiced, a voiced band and a band with no state as decoded, the floor taking the shifted value
+  (an unvoiced band at -20.5 rising above it, one at -40 staying under it) and the tail following an
+  unvoiced band L; D-STAR's, rate 33's and ProVoice's own models the plain kernel's, as
+  `mbe_subframe_own_model()`; on a frame voiced in harmonics 1 to 20 of 40 the phases differing from
+  the plain kernel's by 0.44 s S(d) at each distance d from the boundary, S(1) 2.1333; the mid-frame
+  envelope within 2e-5 rad of the reference's shifted inputs and away from the plain ones; a tone
+  model as the decoder plays one read as decoded, and its mark without the word, with a word of
+  other harmonics or flag, or with another band sounding, read as speech); the own models by columns
+  (`test_p25_own_columns`: at every code, with the voicing ending after, starting at and lying only
+  at each harmonic, against the reading formed in the test from the decoded bands, voicing and
+  magnitudes, both turns and emptied models met; a model with no voiced band, a tone model and a band
+  with no state keeping their bands; the decoded model, the history and the stream's states keeping
+  the decoded voicing; the mid-frame clause on the column-read states, separated from the decoded
+  states' and from no clause by b0 20 then 41 with the word 11011(0)); the onsets with the own
+  reading (`test_p25_onset_columns`, ProVoice's train from its own decoded voicing), a smoothed onset
+  of a lone harmonic playing no train (`test_p25_smoothed_onset`), the halfway mid-frame harmonic at
+  the grid pitches (b0 109 then 163) and at the earlier law's (as caller pitches, in ProVoice's
+  rendering) (`test_p25_nearest_harmonic_across_a_step`); and the independent rendering of the
+  waveform tests (`run_waveform()`), which takes P25's mid-frame pitch, its phase inputs and its own
+  models' voicing from its own arithmetic (`reference_p25_mid_pitch()`, `reference_phase_input()`,
+  `reference_own_voicing()`, `reference_own_state_at()`) and checks the library's own models against
+  them. Mutations, each failing a test (the first named): the grid 2^-18 and 2^-20, rounding in
+  place of the floor, the earlier law on top of the grid (`test_params`, `test_frame_paths`,
+  `test_p25_tones`); the mid-frame value rounded, unfloored, with nodes 1, 1.4 and 2, with the
+  period product's mantissa, only where the two pitches differ, in ProVoice's, D-STAR's (also
+  `test_golden_pcm`) or rate 33's rendering (also `test_params`, `test_golden_pcm`), at an onset and
+  an offset, computed in float; the phase step with 2.0 for 2.289, with its sign reversed, on voiced
+  bands, on the column-read voicing, in ProVoice's, D-STAR's (also `test_golden_pcm`) or rate 33's
+  rendering (also `test_golden_pcm`), left out of the mid-frame envelope; the own model read by the
+  bands in the last frame's own model only and in this frame's only; the reach 0 and 500 Hz; the first
+  edge 500 + 500 k (`MBE_VOICING_REACH_HZ` 500); a turned band keeping its magnitude; the column
+  reading written into the stream's state (also `test_p25_tones`) (`test_subframe_synthesis` for all
+  of these). A differential harness outside the repository, after each rule's commit, in the ten
+  local configurations, compares the D-STAR and rate-33 data paths, ProVoice's, `mbe_synthesizeSpeechf()`,
+  the AMBE encoders and the IMBE encoder's bits byte for byte over streams whose caller states hold P25
+  pitches of every code in three forms with voiced bands, reserved pitches, every mark, pulsed-row
+  words and every float class in the slots ([DVSI
+  parity](dvsi-parity.md#november-2026-four-rules-of-dvsis-p25-decoder)).
 - AMBE 3600x2450 frame-type handling per TIA-102.BABA-1 and as DVSI's decoder plays it: frame classification, silence history freeze, silence frames on 15 bands at their level with the previous model held to mid-frame, repeats, erasures (tone ID 255 among them, on the hard, soft and parameter-bit paths, and the all-ones frame of DVSI's DTX vectors, a tone frame with the unusable index 180), tones (including unverified tone frames; the components a tone ID plays, in 2^-19 cycle per sample, against values written out for DTMF, KNOX, call-progress and single tones, within 0.1 Hz of the nominal single tones and 20 Hz of the nominal dual ones, Table 9's nominal lookup unchanged; a tone after a voice frame starting as a fresh pulse train against an independent rendering in double, its second frame and a tone changed to another going on from the phases), muting (the mute noise level, the last frame fading out against an independent rendering, the model kept, without a row's mark after erasures, and the noise generator's single frame through every kind of mute), V/UV rows 13, 15 and 17 (each row's own voicing and its mid-frame voicing after a voiced and after an unvoiced frame, row 10 as the control; row 15 after a voiced frame leaving the pulse phase at the phase before plus 80 samples at each frame's pitch, row 17 then row 15 starting the train at mid-frame, and row 17 then row 16 launching no pulse; the pulse train running on through a row-17 frame (`test_train_through_row17`, every mid-frame voicing and pitch stated by the test itself, not read from the library's mid-frame model: after a voiced frame the row-17 frame leaving the phase before plus 160 samples at that frame's pitch; row 13, row 5 at another pitch and another row-17 frame after it launching their first pulse (1 - p) / g samples in, p the phase the row-17 frame stored and g the mid-frame pitch, and leaving p + 80 g + 40 (g + f') cycles (80 g for the row-17 frame's unvoiced end in place of the last term), each case first shown to differ from a fresh start by more than 0.01 cycle, and the pulses the row-17 frame left sounding in them, the same stream with those pulses dropped and their phase kept playing other samples before its first new pulse; row 15 after it starting a new train at mid-frame, its first pulse at sample 80, the dropped pulses changing nothing; after a tone the row-17 frame from silence launching a new train at its first sample, which the frame after it takes on; under an error-rate mute, at one pitch code, the unheard row-17 frame storing the phase before plus 160 samples at that pitch whatever its end voicing, and the frame that ends the mute starting from silence, its first pulse at its first sample (row 15: at sample 80); advancing, started from fields no frame leaves, leaving the same pulse state, `PSIl`, `PHIl` and mark as rendering, compared as the file's fast-math rule asks); a lost frame after each of them repeating the model with its own voicing through and leaving no mark, and a tone frame right after each playing as after the same frame without its mark, the speech it fades out repeating the model's own voicing; each as the first frame after a mute and after a tone through `mbe_processAmbe2450Dataf()`, its first pulse at the frame's start for rows 13 and 17 and at sample 80 for row 15, which pins what the library does; P25's onset mark in a caller's state playing as none before an erasure or a tone), the frame after a mute or a tone rendered from silence from the kept model (plus a tone's tail), and lost frames repeating a tone bit for bit until the repeat limit fades it out; a held-tone word in the caller's state that names an ID with no tone playing, frame after frame and state after state, as the word without the held tone; and the played tone table pinned (every AMBE+2 ID's and D-STAR index's components, by an FNV-1a hash that every one-unit change of a dual-tone row's fundamental or harmonics was checked to move) (`test_ambe2450_frame_types`)
 - D-STAR voicing: every b1 value at four pitches, each voiced band reaching 250 Hz into the band below (`test_ambe2400_frame_types`)
 - D-STAR frame classes outside plain voice: b0 125, tone frames without a tone and b0 127 frames repeating like error repeats through the hard, soft and parameter-bit APIs and sharing the repeat limit, the null frame and b0 120..124 as voice (b0 124 with the AMBE+2 silence model, all 16 b1 values playing alike on every API and committed to the prediction history), zero-volume tones, C0 words with four errors (every pattern of weight 4 and none lighter, hard and soft) playing as lost frames whose decode the next frame predicts from, through a lost frame or a tone after them, runs of such frames playing sample for sample as lost frames (the repeated model rendered with its own `log2Ml`: the last synthesized frame holding the repeated model's `log2Ml` and the prediction history the held one's, and the frame's phases those of the first, not the held history's nor those of the `Ml` it renders), a lost frame or a tone right after such a frame playing sample for sample as after a lost frame in its place (the speech under the tone's first frame included), the same with one state as `cur_mp` and `prev_mp_enhanced` as with three (`test_one_state_held_history`: sequences of voice, lost and uncorrectable-C0 frames, single and dual tones and the repeat-limit mute, none with channel errors, each playing sample for sample as its copy with lost frames in place of the uncorrectable ones up to the first voice frame after an uncorrectable one, every repeat after a repeat-limit frame up to the next voice or tone frame at the mute noise's level, and the prediction history, `log2Ml`, L, w0 and the voicing, the same after every frame in both arrangements; `test_repeat_limit_mute_holds`: the repeats after the repeat limit's mute at the mute noise with one state as with three), corrections repeating no frame and tones with corrections playing, lost frames after a single tone (the tail fading out, then silence) and after a dual tone (the tone going on until the repeat limit), tones muted with the error level, the repeat-limit mute (fade-out, DVSI-level noise, prediction kept), the voice after it starting from the prediction history (against a reference that takes the history's `log2Ml`, the stream's silent last frame given other `log2Ml` first; that frame alone changing; a held or initial history fading in from silence; a b0 124 or still-muted frame after it) and the error-level mute and its noise level, and the all-ones DV frame as a lost frame for runs of 1, 3 and 20, the 80-sample crossfades into and out of a tone against a stream with a lost frame in its place, a tone's volume step ramping over 80 samples before the clip while a new index starts at once, and D-STAR tones at the frequencies of the AMBE+2 tone of the same nominal pair (the DTMF row tone first, call progress 144..147 as 160..163, single tones as AMBE+2's), started as a fresh pulse train after a frame that was not a tone frame, a held-tone word in the caller's state that names an index with no tone playing as no held tone (the next tone frame, voice frame or lost frame and the frame after it bit for bit as without it), and the other codecs' frame marks in a caller's history or last frame played (P25's onset columns, rate 33's rows 13 and 17) playing as none before a lost frame and a tone's first frame and in the voice frame after, the late onset acting only after a frame with no voiced band, as before those marks (`test_foreign_marks_in_history`) (`test_ambe2400_frame_types`)
@@ -1214,6 +1271,29 @@ build with SIMD, fast-math and LTO (GCC 16.2.1), `9a101f8` against `0e3463e` (on
 | IMBE, hard | 7.279 us (7.231 to 7.574) | 7.528 us (7.492 to 7.560) | +3.4% |
 
 The ranges overlap a little in each row; every checksum differs (every decode changes).
+
+### Four rules of DVSI's P25 decoder
+
+The four rules of DVSI's P25 decoder ([DVSI
+parity](dvsi-parity.md#november-2026-four-rules-of-dvsis-p25-decoder)) replace the old law's three
+double-precision functions per code with an integer quotient, add a few double-precision functions
+per mid-frame model of two voiced P25 models, one double-precision logarithm per model for the phase
+step, and the column reading of P25's two own models. Measured with `bench_replay hard <codec> 60 5`
+on DVSI's `dam` stream of each codec, seven alternating invocations pinned to CPU 6, a portable
+Release build with SIMD, fast-math and LTO (GCC 16.2.1), `f725a66` against each rule's commit (rules
+2 to 4 measured on their first forms, which differ from the commits only in how `mid_pitch()` nests
+its branches), taken under load (one-minute load 9.4 to 12.6, another agent's builds and tests
+running):
+
+| Complete frame decode | `f725a66` | Grid | Parabola | Phase step | Own columns |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| IMBE, hard | 8.558 us | 8.358 (-2.3%) | 9.191 (+7.4%) | 8.213 (-4.0%) | 8.698 (+1.6%) |
+| D-STAR, hard (control) | 8.171 us | 8.093 (-1.0%) | 7.774 (-4.9%) | 7.854 (-3.9%) | 8.664 (+6.0%) |
+| AMBE+2, hard (control) | 8.478 us | 8.506 (+0.3%) | 8.420 (-0.7%) | 8.601 (+1.5%) | 8.448 (-0.4%) |
+
+The controls' checksums are the same in every build (their outputs equal), IMBE's differ (its decode
+changes); the controls move by as much as IMBE, and the runs give no bound on the change's cost
+tighter than about 6%.
 
 ## TETRA Conformance
 
