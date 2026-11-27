@@ -1187,7 +1187,9 @@ the hardware below.
 The codec paths render this, with a voiced gain of +0.55 dB: fully voiced frames then play
 within 0.02 dB of DVSI's (frame medians on the development vectors, all three modes; 0.09-0.12 dB
 low at the +0.45 dB of the rendering before). The pulse phase and the pulses still sounding
-travel in `noiseOverlap`, which these paths no longer use for noise, and `PSIl` and `PHIl` hold
+travel in `noiseOverlap`, which these paths no longer use for noise (in D-STAR and P25 also whether
+the frame's mid-frame model emitted the pulse of the pulsed state, [D-STAR and P25: the pulsed
+state](#d-star-and-p25-the-pulsed-state)), and `PSIl` and `PHIl` hold
 the harmonic phases at the frame's end as before. The public `mbe_synthesizeSpeechf()` keeps
 the specification's rendering.
 
@@ -1293,7 +1295,9 @@ what those fields say (one mark per frame, in the unused element 0 of `PHIl`):
 - **Unvoiced frames have pitch codes of their own.** DVSI's encoders give a frame with no voiced
   band either one default pitch code (P25 b0 25, D-STAR b0 34: 71% of the unvoiced frames of
   the speech vectors in both) or a code from a range they use for nothing else (P25 b0 128..183,
-  D-STAR b0 64..119). Rate 33 has its V/UV rows 16 to 31 for this.
+  D-STAR b0 64..119). Rate 33 has its V/UV rows 16 to 31 for this. Each of the 56 also names a
+  pattern of pulsed 500 Hz channels for the frame itself, which DVSI's decoders play in place of
+  noise there ([D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state)).
 - **Outside those ranges the voicing before lasts to mid-frame.** A P25 or D-STAR frame with no
   voiced band at any other pitch code takes the previous frame's voicing for its mid-frame
   model when that voicing reaches 505 Hz, the pulse train runs on at the old pitch through the
@@ -2914,6 +2918,176 @@ go). Why P25's in-run agreement (0.886) is lower than D-STAR's (0.944) was not e
 voice frame after a tone, a mute or a resume takes the rule against the last model rendered, as it
 took this frame's voicing before; DVSI's vectors hold no tone inside speech.
 
+### D-STAR and P25: the pulsed state
+
+DVSI's P25 and D-STAR encoders give a voice frame with no voiced band either one default pitch code
+(P25 b0 25, D-STAR b0 34) or one of 56 others (P25 b0 128..183, D-STAR b0 64..119; [Voiced onsets and
+offsets](#voiced-onsets-and-offsets)). The library reads those 56 as side information for the voicing
+around them (the voicing before ends where the frame starts, and some codes carry their pitch into
+a voiced frame after them), and played the frame itself as plain noise. DVSI's decoders play it
+otherwise: each of the 56 codes names, for the frame's own subframe and for its mid-frame subframe,
+which of eight 500 Hz channels are **pulsed**, a third voicing state in which a band plays no noise
+and, instead, the response to a single pulse. TIA-102.BABA plays every unvoiced band as noise
+whatever the pitch code ([Departures from the specification](#departures-from-the-specification)).
+
+How often, on DVSI's bit streams of the 20 development and 5 validation vectors (the study's count,
+frames with no voiced band as decoded): 8,087 of P25's 28,384 frames with no voiced band carry a
+reserved code (3,333 whose pattern pulses the own subframe only, 3,914 the mid-frame subframe only,
+840 both), and the other 20,297 all carry b0 25; 8,222 of D-STAR's 28,555 (3,326 / 4,055 / 841), the
+other 20,333 all b0 34. The library's own decodes of the same bit streams give the same counts
+(frames its public decoder decodes as voice with no voiced band, from `mbe_quality_eval --params`),
+each code on 27 frames or more in P25 and 28 or more in D-STAR.
+
+**The patterns.** Index b0 - 128 (P25) or b0 - 64 (D-STAR); eight characters for the frame's own
+subframe, then eight for its mid-frame subframe, the lowest channel first, channel k from 500 k to
+500 (k + 1) Hz (the last open above 3500 Hz), `P` pulsed:
+
+```
+ 0 UUUUUUUP UUUUUUUU   14 UUUUUUUU UUPPPUUU   28 PPUUUUUU UUUUUUUU   42 UUUUUUUU PPPUUUUU
+ 1 UUUUUUPU UUUUUUUU   15 UUUUUUUU UUUPPPUU   29 PPPPUUUU UUUUUUUU   43 UUUUUUUU UPPPPPPP
+ 2 UUUUUUPP UUUUUUUU   16 UUUUUUUU UUUUUUUP   30 UUUPPPPP UUUUUUUU   44 UUUUUUUU PPUUUUUU
+ 3 UUUUUPUU UUUUUUUU   17 UUUUUUUU UUUUUPPP   31 UUPPUUUU UUUUUUUU   45 UUUUUUUU UUUPPPPP
+ 4 UUUUUPPP UUUUUUUU   18 UUUUUUUU UUUUUUPU   32 PPPPPPPP UUUUUUUU   46 UUUUUUUU UUPPPPPP
+ 5 UUUUPPPP UUUUUUUU   19 UUUUUUUU UUUUUPUU   33 UUUUPUUU UUUUUUUU   47 UUUUUUUU PPPPPPUU
+ 6 UUUPUUUU UUUUUUUU   20 UUUUUUUU UUUUUUPP   34 UUPPPPPP UUUUUUUU   48 PPPPPPPP PPPPPPPP
+ 7 UUUPPUUU UUUUUUUU   21 UUUUUUUU UUUUPPPP   35 PPPPPUUU UUUUUUUU   49 PPPPPPPP UUPPPPPP
+ 8 UUUUUUUU PUUUUUUU   22 UUUUUUUU UUUUPUUU   36 UUPUUUUU UUUUUUUU   50 PPPUUUUU PPPUUUUU
+ 9 UUUUUUUU UUUPPUUU   23 UUUUUUUU UUUUPPUU   37 PPPPPPUU UUUUUUUU   51 UUUPPPPP UUUPPPPP
+10 UUUUUUUU UUUPUUUU   24 PUUUUUUU UUUUUUUU   38 UPPPPPPP UUUUUUUU   52 UUPPPPPP UUPPPPPP
+11 UUUUUUUU UUPPPPPU   25 UUPPPUUU UUUUUUUU   39 PPPPPPPU UUUUUUUU   53 PPPPPPPP PPPUUUUU
+12 UUUUUUUU UUPUUUUU   26 PPPUUUUU UUUUUUUU   40 UUUUUUUU PPPPPPPP   54 PPUUUUUU PPUUUUUU
+13 UUUUUUUU UUPPUUUU   27 UUUPPPUU UUUUUUUU   41 UUUUUUUU PPPPPUUU   55 UUPUUUUU UUPUUUUU
+```
+
+Provenance: the 56 patterns are Table 2 of US 7,970,606 ("Interoperable vocoder"), which was read
+([legal/patents.md](../legal/patents.md)); it lists them for the P25 pitch values 128 to 183. That
+D-STAR's codes 64..119 carry the same 56 patterns at index b0 - 64, and that DVSI's decoders play
+them so, are measurements (below). The codes whose own subframe has a pulsed channel (0..7, 24..39,
+48..55) are exactly D-STAR's `MBE_FRAME_MARK_PITCH_CARRIES` codes (b0 64..71, 88..103, 112..119).
+A separate threshold measurement of each code's channels on DVSI's decodes (the study's: the
+median, over the code's frames, of DVSI's departure from the plain noise rendering in the channel,
+a channel called pulsed at 0.5 of the noise's energy or more) gives the table's state for 851 of
+the 896 (code, subframe, channel) triples in P25 and 860 of 896 in D-STAR; every difference lies
+near that threshold.
+
+**The rule** (D-STAR's and P25's renderings; not ProVoice's, rate 33's or the TIA-102.BABA one),
+each clause with what the study measured it against. The figures in this list are the study's, on
+its scratch build (outside the repository: made at `47d8cf3` with switches, its decodes of the 25
+vectors with the pulsed state switched off equal to those of the library's head `74126a3`, file for
+file in all three modes), on the 20 development and 5 validation vectors (in sample: the rule was
+found on them), as totals of the residual energy against DVSI's decode over the signal's in the 22
+vectors with an rms of 300 or more (`dam20`, `dam40` and `dam80` left out: at their level the 16-bit
+quantisation dominates such shares), P25 / D-STAR; the adopted rule gives 0.02099 / 0.01475, the
+head 0.02302 / 0.01689.
+
+1. **Which frames.** A model the synthesis renders (after adaptive smoothing, like every rule of the
+   mid-frame voicing) that has no voiced band and whose pitch is the one a reserved code decodes to
+   has that code; so does the frame before's model, the last frame synthesized. Nothing but the
+   model selects a pattern: the codes come from the models' voicing and pitch, and no frame mark is
+   read. The pitch is compared by its bit pattern with the decoder's own pitch function for the
+   code (P25 `imbe_code_pitch()`; D-STAR `ambe2400_code_pitch()`, one body, not inlined, for the
+   decode and this test, so that the two cannot round apart in any build). A frame whose smoothing
+   voices a band has no code; a caller's model at a reserved pitch with no voiced band has the
+   code (it holds nothing that could be forged).
+2. **Which bands.** In a model with a code, an unvoiced harmonic l, at f = l w0 4000 / pi Hz, is
+   pulsed if channel min(7, floor(f / 500)) or channel min(7, floor((f + 250) / 500)) is pulsed in
+   the pattern that applies to the model: the code's own-subframe pattern for the frame's own model
+   (as this frame's end model and as the next frame's first), its mid-frame pattern for its
+   mid-frame model. A pulsed band plays no noise in that model. From the study's earlier numpy model
+   of frames deep inside runs with no voiced band: the 250 Hz reach gave an error of 0.006, against
+   0.010 at 125 or 375 Hz and 0.014 at none.
+3. **The pulse.** The three models of a frame stand at its sample 0 (the last frame's own), 80 (the
+   mid-frame one) and 160 (this frame's own). A model with a pulsed band emits one pulse 24 samples
+   after its point (the last frame's own model at sample 24 of the frame, the mid-frame model at
+   104) unless the model before it emitted one; voiced models and models without pulsed bands never
+   count as having emitted. The pulse plays through the emitting model's pulsed bands under that
+   model's falling crossfade and through the next model's pulsed bands under its rising one, over
+   the 80 samples of that interval and no further. The response is the voiced pulse response
+   ([Synthesis in subframes](#synthesis-in-subframes): the window rising over 16 samples, whole
+   until one period of that model after the pulse, falling over 16; phases regenerated from
+   `log2Ml`; the low-band gain and phase; the voiced render gain), each band's magnitude taken as a
+   voiced one (the unvoiced factor `0.2046 / sqrt(w0)` of that model taken out). Measured against:
+   a pulsed model before a voiced one emitting nothing, 0.02106 / 0.01484 (with the excitations kept
+   apart, clause 4); a voiced model counting as having emitted, 0.02120 / 0.01496; the pulse ringing
+   on past the next model's point, 0.02109 / 0.01491. From the numpy model: the pulse at 24 samples
+   (correlation with DVSI's 0.93 there, about 0 at 23 or 25), at the voiced gain (a free fit gives
+   0.99 of it).
+4. **The two excitations do not cross.** The voiced pulse train never plays through pulsed bands,
+   nor a pulsed model's pulse through voiced bands. The train itself is as it was (its phase, its
+   pulses, when it runs on or starts afresh, the octave step): a model with pulsed bands and no
+   voiced band counts as one with no voiced band for every rule of the train and of the mid-frame
+   voicing, so that a voiced frame after a frame whose own subframe is pulsed starts its train at its
+   first sample, and the pulse of the frame before's own model, at sample 24, sounds in that model's
+   pulsed bands only. Measured against: both crossing, 0.02151 / 0.01545; the train kept out of
+   pulsed bands only, 0.02117 / 0.01507; the pulse kept out of voiced bands only, 0.02134 / 0.01514;
+   with both crossing the class of voiced frames right after a frame whose own subframe is pulsed
+   goes from a residual share of 0.00008 to 0.00053 (P25). The voiced train of an onset starting
+   from the pulsed model's pulse instead of the frame's first sample (measured with the excitations
+   still crossing) takes the development correlation from 0.987 to 0.770 (P25) and 0.992 to 0.789
+   (D-STAR): the runs after such onsets fall out of line. The frame before's voicing held to
+   mid-frame on a frame with a code (as on a default-code frame lacking a pitch) takes the
+   correlation from 0.9875 to 0.9756 (P25) and 0.9926 to 0.9794 (D-STAR): the voicing before ends where the frame
+   starts.
+5. **Mid-frame pitch.** Between two frames with no voiced band of which at least one has a code, in
+   P25 this frame's pitch; in D-STAR the frame before's, unless this frame's own-subframe pattern has
+   a pulsed channel, and then this frame's, or the geometric mean if the frame before's has one too.
+   Between two frames with no voiced band and no code the geometric mean stays (DVSI's default-code
+   frames all share one pitch, so nothing was measured there); every other case is as it was.
+   Measured against: the geometric mean everywhere, 0.02118 / 0.01489; P25's rule in D-STAR,
+   0.01495; D-STAR's rule in P25, 0.02129; after a voiced frame, the mid-frame model of a frame with
+   a code at that frame's own pitch, 0.02099 / 0.01477 (no gain, not adopted). The study's tag
+   `pzx3` applied clause 5 to every pair of frames with no voiced band; as written here it is
+   `pzm7`, whose P25 decodes equal `pzx3`'s on all 25 files and whose D-STAR decodes equal them on
+   19, the other six differing in one to three samples by one unit (the geometric mean of two equal
+   pitches against the pitch itself).
+6. **State.** Whether the mid-frame model emitted is needed by the next frame (its first model is
+   this frame's own); it travels in a free element of the subframe state (`noiseOverlap[34]`,
+   `MBE_PULSED_SLOT`), written with the pulse train by rendering and by `mbe_advance_subframes()`
+   alike: exactly `1.0f` means emitted, anything else, or a state without the subframe rendering's
+   mark, not emitted. A frame from silence plays nothing of the last frame's own model, so that
+   model emits nothing; a rejected call (`frame_accepted()`) leaves the state untouched.
+7. **Where it does not apply.** Tone models (which have voiced bands), the model a frame marked
+   `MBE_FRAME_MARK_TONE` or `MBE_FRAME_MARK_PREVIOUS_HELD` puts at mid-frame (that mid-frame model
+   takes no pattern), a mid-frame model with a voiced band (a caller's `MBE_FRAME_MARK_PITCH_ABSENT`
+   on a frame with a code can hold voiced bands there), rate 33's rendering and the TIA rendering:
+   no pulsed band. ProVoice, which shares P25's data path and has no DVSI material, renders P25's
+   way without the pulsed state (`MBE_VOICED_SYNTHESIS_DVSI_PROVOICE`), so its frames decode
+   exactly as before.
+
+**On hardware.** Issue #157's DVMEGA DVstick 30 package (a real AMBE-3000 decoding constructed
+D-STAR streams; full-band rms in 16-sample blocks of the difference between a stepped stream and its
+control, relative curves; mean absolute error against the unit's curve over the step frame's ten
+blocks), the head against the study's scratch build with the rule: the three steps from frames with
+`b1` 0 at `b0` 100 (index 36: the own subframe pulsed in channel 2) to voiced frames 0.0604 → 0.0241,
+0.0483 → 0.0152 and 0.0886 → 0.0204 (mean 0.06577 → 0.01992); in the second block, where the pulse at
+sample 24 falls, the unit's curve reads 0.73 at one position, the head's 0.52 and the rule's 0.76.
+The three steps into such frames: 0.0692 → 0.0512, 0.1652 → 0.1891 and 0.1599 → 0.1653 (mean 0.13143
+→ 0.13520: not better). Every other row of the package is unchanged to the digits printed (gain
+steps 0.006, band-voicing steps 0.189, the pitch step 0.091, double steps 0.256, the steps at `b0`
+20 and at the stream's own pitch). The curves are full-band levels: they corroborate the pulse
+after an own-pulsed frame, and cannot show which band plays it.
+
+**How the library carries it.** `mbe_subframe.c` holds the patterns and gives the three models of
+a frame their pulsed bands (`BAND_PULSED`, beside voiced, unvoiced and none) after the models are
+built (`pulsed_frame()`), asking the codec whose rendering it serves for a model's code through
+`mbe_pulsed.h` (`mbe_imbe4400_pulsed_code()`, `mbe_ambe2400_pulsed_code()`, each with its decoder's
+own pitch function); the voiced and the pulsed bands are rendered apart (`prepare_render()`), and
+the unvoiced part leaves pulsed bands out. `mbe_subframe_mid_model()` carries clause 5's pitch and no
+pulsed band. Rendering and advancing a frame store the emission alike.
+
+**What is not explained.** P25's first frame with a code after a voiced frame stays further from
+DVSI's decode than D-STAR's (the study's residual over those frames' signal 0.074 / 0.167 / 0.259
+for own / mid-frame / both pulsed, against D-STAR's 0.038 / 0.024 / 0.024; later in runs with no
+voiced band P25 0.041 / 0.042 / 0.081, D-STAR 0.013 / 0.018 / 0.030); the DVstick's steps into
+frames at `b0` 100 do not come nearer the unit's curves; rate 33's V/UV rows 18 to 31, which the study
+reads as rate 33's form of the same state (the pulse's position travels with the pitch code there),
+are not modelled, their response not having been matched ([Known differences](#known-differences)); ProVoice
+has no DVSI material; the mid-frame pitch between two default-code frames of different pitch was
+not measured and is left as it was. A frame with no voiced band at one of these codes from any
+encoder plays its pattern here, as on an AMBE-3000 (this library's encoders send none:
+[Encoder pitch code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)). What DVSI's
+decoders compute is known only through their output.
+
 ### Tones as harmonics of a fundamental
 
 TIA-102.BABA-1 clause 7.3 ("Tone Regeneration") says only that the decoder synthesizes a tone
@@ -3506,6 +3680,7 @@ this change alone ([November 2026: encoders and rate-33 rows 18 to
 | P25 output under channel errors | eq 112-116 | attenuates progressively | specification |
 | Unvoiced synthesis (P25, and rate 33, whose synthesis TIA-102.BABA-1 takes from TIA-102.BABA) | eq 117-126: the 11.2 noise generator, one 256-sample window per frame | a 16-bit generator, `x <- 173 x + 13849`, and 10 ms subframes under a square-root triangular window | DVSI ([Unvoiced synthesis](#unvoiced-synthesis)) |
 | Voiced synthesis (P25, rate 33) | eq 127-141: a frame in one piece; harmonics 1-7 at steady pitch interpolate linearly, the others crossfade with `wS`; the phase advances by `l 80 (w0(-1) + w0(0))` per frame, through unvoiced frames too | two 10 ms subframes around a mid-frame model, linear crossfades, a train of pitch pulses that starts afresh after an unvoiced subframe, harmonic phases regenerated from the decoded log2 amplitudes | DVSI ([Synthesis in subframes](#synthesis-in-subframes), [Phase regeneration](#phase-regeneration)) |
+| Frames with no voiced band at a reserved pitch code (P25 b0 128..183; D-STAR b0 64..119, which no TIA text covers) | TIA-102.BABA eq 117-126: every unvoiced band plays noise, whatever the pitch code | each code names, for the frame's own subframe and its mid-frame subframe, pulsed 500 Hz channels, whose bands play the response to one pulse in place of noise | DVSI ([D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state)) |
 | Where voicing starts and ends inside a frame (D-STAR, P25, rate 33) | the frame's V/UV decisions hold for the whole frame | the pitch code of a frame with no voiced band (D-STAR, P25) moves it to mid-frame; in D-STAR and P25 a band whose state differs between two frames is voiced at mid-frame by 500 Hz columns read in both frames (at an onset only the voiced harmonics in or within 250 Hz below the columns this frame covers start with the frame, through a frame lacking a pitch only those the frame before covers hold); V/UV rows 13, 15 and 17 (rate 33) voice the first half of the frame otherwise than their end | DVSI ([Voiced onsets and offsets](#voiced-onsets-and-offsets), [D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns), [P25: the bands that start with the frame](#p25-the-bands-that-start-with-the-frame), [Rate 33: rows 13, 15 and 17](#rate-33-rows-13-15-and-17)) |
 | Rate-33 tone frames | clause 7 gives the tone a frame carries, nothing on the frames around it | the tone crossfades with the speech over 80 samples at both ends | DVSI ([Rate 33 tone transitions](#rate-33-tone-transitions)) |
 | Rate-33 tone frequencies | 7.3: the tone synthesized from its decoded frequency parameters; Table 9: the nominal frequencies | harmonics l1 and l2 of Annex J's fundamental on a grid of 2^-19 cycle per sample (indices 145 and 147 at fundamentals of its own), a single tone as harmonic `ID / 16 + 1` of a fundamental under 500 Hz; DTMF within 0.48% of nominal, call progress within 3.41% | DVSI ([Tones as harmonics of a fundamental](#tones-as-harmonics-of-a-fundamental)) |
@@ -3550,7 +3725,10 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   frame](#november-2026-the-pulse-train-through-a-row-17-frame) and [November 2026: rate 33's
   mid-frame pitch wave](#november-2026-rate-33s-mid-frame-pitch-wave).
 - Rate-33 V/UV rows 18 to 31 play here as unvoiced noise on their band grid
-  ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)); DVSI's decoder plays more than that. DVSI's
+  ([Rate 33: V/UV vectors](#rate-33-vuv-vectors)); DVSI's decoder plays more than that. The study of
+  the pulsed state reads them as rate 33's form of D-STAR's and P25's reserved pitch codes (the
+  pulse's position travels with the pitch code there); their response was not matched, and they are
+  not modelled ([D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state)). DVSI's
   encoder sends rows 17 to 31 on 12.2% of the voice frames of the speech vectors (row 16 on 37.3%).
   Putting DVSI's samples in place of ours on the frames of rows 17 to 31 would raise PESQ against
   the input by 0.019 ± 0.003 on the 25 development and validation vectors, nearly all of the
@@ -3602,23 +3780,31 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
     peaky (kurtosis about 8.5 against 3.8 for ours), and on a given pitch code row 25's peak often
     falls at the same place (60% of frames within 3 samples of their code's median); no single law
     was found.
-- The pitch code of a P25 or D-STAR frame with no voiced band tells DVSI's decoder more than the
-  marks of [Voiced onsets and offsets](#voiced-onsets-and-offsets). Frames at the encoders' default
-  codes (P25 b0 25, D-STAR b0 34) match DVSI's output sample for sample, across level steps too
-  (median correlation 0.999). At the 56 codes kept for unvoiced frames (P25 b0 128..183, D-STAR b0
-  64..119, seven blocks of eight in both) they correlate 0.87-0.98: where the level steps up,
-  DVSI plays one half of such a frame, or the start of the next, 1 to 9 dB quieter than this
-  library, and which half and by how much goes with the block and with the code's low bits. A
-  D-STAR frame of this kind right before a tone plays its second half a median 7.5 dB louder here
-  than on DVSI's decoder. It reads as if the code said how the frame's energy lies in its two
-  halves; the law is not determined. This library's encoders send neither those codes nor the
-  default ones on such a frame, but one fixed code outside the ranges ([Encoder pitch code of
-  unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)), so they do not use this channel: every
-  frame with no voiced band tells a DVSI decoder, as far as the codes measured show, that the
-  voicing before lasts through its first 10 ms (in the bands whose 500 Hz column, or the column 250
-  Hz higher, that voicing covers, by the
-  rule of [D-STAR and P25: mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns)), where DVSI's encoders end it at the frame's start on about a third
-  of them.
+- The pitch code of a P25 or D-STAR frame with no voiced band. Since the pulsed state ([D-STAR and
+  P25: the pulsed state](#d-star-and-p25-the-pulsed-state)) the 56 codes kept for such frames (P25 b0
+  128..183, D-STAR b0 64..119) play the patterns of pulsed 500 Hz channels they name, and the
+  pitch code is no longer a side channel the library leaves unread. Measured before that state:
+  frames at the encoders' default codes (P25 b0 25, D-STAR b0 34) matched DVSI's output sample for
+  sample, across level steps too (median correlation 0.999), and those at the 56 codes correlated
+  0.87-0.98, where the level stepped up DVSI playing one half of such a frame, or the start of the
+  next, 1 to 9 dB quieter than this library, which half and by how much going with the block and the
+  code's low bits; a D-STAR frame of this kind right before a tone played its second half a median
+  7.5 dB louder here than on DVSI's decoder. What the pulsed state leaves: P25's first frame with a
+  code after a voiced frame stays further from DVSI's decode than D-STAR's (the study's residual over
+  those frames' signal 0.074 / 0.167 / 0.259 for own / mid-frame / both pulsed, against D-STAR's
+  0.038 / 0.024 / 0.024); the DVstick 30's steps into frames at `b0` 100 do not come nearer the
+  unit's curves; ProVoice, with no DVSI material, plays such frames as noise; and the mid-frame pitch
+  between two default-code frames of different pitch is unmeasured and left as it was. A frame with
+  no voiced band at one of the 56 codes from any encoder plays its pattern here, as on an AMBE-3000.
+  This library's encoders send neither those codes nor the default ones on such a frame, but one
+  fixed code outside the ranges ([Encoder pitch code of unvoiced frames](#encoder-pitch-code-of-unvoiced-frames)),
+  so they do not use this channel: every frame with no voiced band tells a DVSI decoder, as far as
+  the codes measured show, that the voicing before lasts through its first 10 ms (in the bands whose
+  500 Hz column, or the column 250 Hz higher, that voicing covers, by the rule of [D-STAR and P25:
+  mid-frame voicing by columns](#d-star-and-p25-mid-frame-voicing-by-columns)), where DVSI's encoders
+  end it at the frame's start on about a third of them, and plays as noise, where DVSI's encoders
+  send a pattern on 28.5% (P25) and 28.8% (D-STAR) of them (8,087 of P25's 28,384 frames with no
+  voiced band on the development and validation vectors, 8,222 of D-STAR's 28,555).
 - P25 tones sent as voice frames ([P25 tones sent as voice
   frames](#p25-tones-sent-as-voice-frames)). The first frame or two of a tone can fail the test and
   play as speech: a first frame passes the dual-tone limit with as little as a third of its energy
@@ -3755,7 +3941,11 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
     under 0.8, 22 reach 0.85 at any lag within 130 samples); rate 33 43 of 1825 runs holding 0.030,
     31 of them off from their first frames (0.012) and 12 starting aligned and losing it inside the
     run (0.018; median length 21 frames).
-  - Frames with no voiced band hold 0.003 in each codec: the pitch codes and V/UV rows that tell
+  - Frames with no voiced band hold 0.003 in each codec (measured before the pulsed state; in that
+    change's accounting, another selection, the frames with no voiced band that a pulsed model reaches
+    fall from 0.00203 to 0.00033 of the signal in P25 and from 0.00204 to 0.00033 in D-STAR on the
+    study's scratch build: [November 2026: the pulsed state](#november-2026-the-pulsed-state)):
+    the pitch codes and V/UV rows that tell
     DVSI's decoder more than is modelled (above).
   - Inside voiced runs rate 33 loses the alignment with DVSI's waveform on 0.6% of its frames
     (D-STAR 0.2%, P25 0.3%; frames whose two frames before correlate 0.9 or more and whose two
@@ -5371,6 +5561,232 @@ and it cannot show the gain, since nothing in it changes. The change's evidence 
 vectors', in sample (the twelve cases, the phase measurements, the one row-17 pair without channel
 errors), with validation moving by +3.8e-09.
 
+### November 2026: the pulsed state
+
+The row-17 train change's head (`74126a3`, whose library code is `8cbef45`'s) against the pulsed
+state ([D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state)): a P25 or D-STAR frame
+with no voiced band at one of the 56 reserved pitch codes plays the pattern of pulsed 500 Hz
+channels its code names. The study that found the rule read the development and validation vectors,
+DVSI's tone, hard-decision channel-error and D-STAR DTX vectors and the DVstick 30 package of
+[#157](https://github.com/arancormonk/mbelib-neo/issues/157), never `irstia` or `mark`. Its scratch
+build (outside the repository) was measured on those before the gate sets were declared, so the
+development and validation partitions are not out of sample here; the final partition is held out,
+to be scored once, after the review. The candidate is the branch's head at `d3fb70f`, whose
+library code is `834d001`'s (the commit after it changes tests only). Both builds aligned freely
+first and were then scored at their joint lags, both runs' encodings decoded by the candidate's
+decoder (Release, SIMD, IEEE arithmetic).
+
+**The library against the study's scratch build**, 16-bit samples, file for file. D-STAR: the
+library's decodes of the 25 development and validation vectors equal the scratch build's with the
+rule as written (its tag `pzm7`) on all 25. P25: they equal them on every frame of all 25 but the
+first, where the library leaves 79 samples (at most 11 units) as the head plays them: the initial
+state (`mbe_initMbeParms()`, all unvoiced) has eq 46's nominal pitch of b0 134, which is not the
+pitch the P25 decoder stores for b0 134, so by clause 1 it has no code, where the scratch build's
+test took the nearest code to any pitch (rounding, with no comparison of the bits) and gave it code
+6 (its own subframe pulsed in channel 3), a pulse at sample 24 of every P25 decode's first frame.
+Rate 33: the library's decodes equal the head's (`k1`) on all 25. On the other files the scratch build
+decoded (115 tone, hard-decision channel-error and D-STAR DTX files, under its tag `pzx3`, which
+applies clause 5 to every pair of frames with no voiced band) the library's decodes differ from
+the scratch build's in 48 of the 59 D-STAR files and all 56 P25 files, in frame 0 and in some
+elsewhere; a scratch copy of the library with the study's two tests switched
+in (the nearest code, and clause 5 on every pair) decodes 162 of the 165 files that tag holds (the
+50 speech files among them) exactly as the scratch build, and the other three, P25 `dtmf60`,
+`dtmf180` and `dtmfvbad`, in all but 19, 8 and 12 frames: the frames after a P25 tone model where
+the columns rule applies since the review of the mid-frame columns change (`e86afd0`), which the
+scratch build, made at `47d8cf3` with switches, leaves out for a tone model. With the nearest-code
+switch alone 54 of the 84 D-STAR files that tag holds still differ, and with clause 5 on every
+pair alone all 84 match: D-STAR's differences from `pzx3` are all clause 5's extent. In P25, with
+the nearest code alone 7 of its 81 files still differ (the three tone files above and the four
+hard-decision channel-error files, which need both switches), and with clause 5 on every pair
+alone all 81 differ (in frame 0 at least): P25's differences are mostly the nearest code's (in
+frame 0, the initial state's; where else it acts in the channel-error files was not traced). No difference is left
+unexplained; none is a difference in the rule as written.
+
+**Speech**, decoding DVSI's bits, on the scoreboard: the waveform correlation with DVSI's decode,
+sample for sample (`vs_dvsi.waveform_corr_unshifted`, over the frames where DVSI's decode lies within
+40 dB of its loudest), with the mean paired change and its 95% interval and the vectors whose
+correlation rises and falls by more than 1e-6; the log-spectral distance from DVSI's decode
+(`vs_dvsi.lsd_db`), the envelope correlation with it (`vs_dvsi.env_corr`), the level against it
+(`vs_dvsi.level_offset_db`) and the log-spectral distance from the input (`ours.lsd_db`), partition
+means, the library's builds:
+
+| Codec | Partition | Waveform corr. vs DVSI | Vectors up / down | LSD vs DVSI (dB) | Envelope corr. vs DVSI | Level vs DVSI (dB) | LSD vs input (dB) |
+|---|---|---|---|---|---|---|---|
+| D-STAR | development | 0.991645 → 0.992583 (+0.000938, 95% interval 0.000529 to 0.001492) | 20 / 0 (smallest `dam10` +0.000026, largest `p01mirs` +0.004036) | 1.1607 → 0.9915 | 0.98861 → 0.99727 | +0.0255 → +0.0233 | 6.4197 → 6.4243 |
+| D-STAR | validation | 0.993452 → 0.994654 (+0.001201, interval 0.000621 to 0.002134) | 5 / 0 (smallest `t03` +0.000373, largest `t04` +0.002722) | 1.0564 → 0.8656 | 0.98550 → 0.99410 | -0.0043 → -0.0099 | 4.8394 → 4.8628 |
+| P25 | development | 0.986679 → 0.987520 (+0.000841, interval 0.000467 to 0.001283) | 20 / 0 (smallest `damcar` +0.000036, largest `p01mirs` +0.002896) | 1.4750 → 1.3145 | 0.98965 → 0.99478 | +0.0465 → +0.0431 | 6.3169 → 6.3290 |
+| P25 | validation | 0.990761 → 0.991984 (+0.001223, interval 0.000644 to 0.002001) | 5 / 0 (smallest `t03` +0.000389, largest `t04` +0.002538) | 1.1252 → 0.9375 | 0.98768 → 0.99282 | -0.0125 → -0.0181 | 4.7209 → 4.7467 |
+
+Per vector, the distance from DVSI's decode falls on all 25 in both codecs (D-STAR by 0.027 to 0.292
+dB on development and 0.083 to 0.351 dB on validation; P25 by 0.031 to 0.323 dB and 0.082 to 0.304
+dB), and the envelope correlation rises on all 25. **The distance from the input rises**: on 15 of
+the 20 D-STAR development vectors (by at most 0.0254 dB, `tambf22a`; it falls by up to 0.0543 dB,
+`dam80`) and on all 5 validation vectors (0.0114 to 0.0442 dB, `t04` the most), and on 17 of the 20
+P25 development vectors (at most 0.0342 dB, `p01mirs`; down by up to 0.0532 dB, `dam80`) and all 5
+validation vectors (0.0145 to 0.0500 dB, `t04`). The level against DVSI's moves by at most 0.0081 dB
+on a D-STAR development vector and 0.0173 dB on a validation vector (P25 0.0150 and 0.0155 dB). Rate
+33's partition means and decodes are unchanged, and so is every encoder's bits.
+
+Over whole files, the measure of the study (the correlation of our decode with DVSI's, sample for
+sample over the whole file at lag 0, and the residual energy of the difference over the signal's,
+means over the vectors), on the library's decodes: P25 development 0.986625 → 0.987487 (+0.000862),
+residual 0.02733 → 0.02558, validation 0.990749 → 0.991983 (+0.001234), residual 0.01848 → 0.01602;
+D-STAR development 0.991634 → 0.992583 (+0.000949), 0.01717 → 0.01527, validation 0.993435 →
+0.994653 (+0.001218), 0.01315 → 0.01072; every one of the 25 vectors rises in both codecs (P25
++0.000036 `dam10` to +0.002910 `p01mirs` on development; D-STAR +0.000026 `dam10` to +0.004056
+`p01mirs`). These are the study's figures to six decimals: P25's first frame, the one difference
+from its scratch build, does not move them there.
+
+**By class of frame** (the study's accounting, on its scratch build; residual energy as a share of
+the vector's signal, mean over the 22 vectors with an rms of 300 or more, classes by the head's
+decode): P25 frames with no voiced band and no pulsed model in reach 0.00024 → 0.00020; with one
+(the frame's own code, or the frame before's own-subframe pattern) 0.00203 → 0.00033; voiced frames
+right after a frame whose own subframe is pulsed 0.00038 → 0.00008; all other frames 0.02037 →
+0.02037; total 0.02302 → 0.02099. D-STAR 0.00019 → 0.00012; 0.00204 → 0.00033; 0.00050 → 0.00014;
+0.01416 → 0.01416; total 0.01689 → 0.01475. **By code** (the study's: frames with no voiced band
+between two such frames, 23 vectors without `dam40` and `dam80`, residual over the frames' own
+signal per code): the median over the 56 codes 0.277 → 0.019 (P25) and 0.290 → 0.015 (D-STAR);
+every code improves but P25 b0 131 (0.101 → 0.106, 129 frames); codes left above 0.10: P25 181
+(0.132, 26 frames) and 131, D-STAR 118 (0.128, 108 frames).
+
+**Against the input and by ear-model** (the study's, on its scratch build: the cost of this change).
+PESQ-NB (pesq 0.0.4) on the 25 vectors, against DVSI's decode: P25 4.306 → 4.367 (+0.0605 ± 0.0056,
+24 of 25 rise), D-STAR 4.323 → 4.407 (+0.0838 ± 0.0093, 25 of 25); against the **input**: P25 3.040
+→ 3.017 (-0.0230 ± 0.0039, 2 of 25 rise), D-STAR 2.952 → 2.932 (-0.0198 ± 0.0027, 4 of 25), where
+DVSI's own decode scores 3.026 (P25) and 2.933 (D-STAR). The pulsed state takes the library to
+DVSI's own level against the input, below the level its noise rendering had. In `mbe_quality_eval`'s
+measures (each file aligned freely; development / validation changes of the means): the
+log-spectral distance from DVSI's decode P25 -0.1606 / -0.1878 dB (all 25 fall), D-STAR -0.1693 /
+-0.1908 (all 25 fall); the envelope correlation with it +0.0051 / +0.0051 (P25), +0.0087 / +0.0086
+(D-STAR); the level against it -0.0034 / -0.0056 dB (P25), -0.0023 / -0.0056 (D-STAR); the
+log-spectral distance from the input P25 5.9977 → 6.0092 dB (+0.0080 / +0.0258; 22 of 25 rise),
+D-STAR 6.1068 → 6.1091 (-0.0007 / +0.0140; 17 rise); the envelope correlation with the input
+-0.0023 / -0.0119 (P25), +0.0000 / -0.0114 (D-STAR). The project's rule is to match DVSI where
+DVSI's output and the input disagree; these are the figures where they do.
+
+**Tones.** By the scoreboard's hashes, 15 of the 52 D-STAR and 14 of the 52 P25 tone decodes change,
+and no rate-33 one; they change in 2 to 796 frames per file in D-STAR (`dtmfvbad` 796, `dtmf60`
+730, `dtmf180` 729, `dtmf` 662, `alltone` 418, `cpvbad` 150, `alert` 35, eight files 2) and 1 to 772
+in P25 (`dtmfvbad` 772, `dtmf180` 451, `dtmf60` 449, `dtmf` 414, `alltone` 299, `cpvbad` 98, `alert`
+35, five files 2, `cp0` and `cp1` 1; 16-bit samples, the library's builds). The five tone measures the gates check (the frequency, level and balance
+errors, the share of windows playing a wrong tone and the detector's agreement) do not move on any
+vector in any mode (a paired change of 0 on each), nor do the encoders' tone statistics; the
+scoreboard's `tone.alignment_corr`, which no gate checks, moves on 29 vectors, most up (D-STAR
+`alltone` 0.954084 → 0.998272, P25 `alltone` 0.968384 → 0.987903; 20 up, 9 down by more than
+1e-6), the largest fall -0.000993 (P25 `dtmf`). Of DVSI's 32 KNOX and dual-tone vectors (`knox_*`, `dtone_*`) none changes in either
+codec: the study's single-frame changes there (frame 0 of `knox_13` to `knox_16`, among others)
+are its tests' (above), not the rule's.
+
+**Channel errors.** No mute decision changes at any error rate, hard or soft, frame for frame: the
+mute flag of every frame of the 24 channel-error decodes (8 vectors in each of the three codecs,
+30,600 frames, 1,678 of them muted) is the same in both builds. Every D-STAR and P25 channel-error
+decode changes, and no rate-33 one. The scoreboard's log-spectral distance from DVSI's decode,
+`lsd_common_db` (over the frames loud in DVSI's decode of the clean bits that DVSI does not mute,
+with no muted frame at or next to them, each run's mutes mapped at its lag, a spectrum measured in
+both runs; coverage their share of the loud frames DVSI leaves unmuted), falls on all 16 D-STAR and
+P25 vectors: D-STAR by 0.0658, 0.0549, 0.0461 and 0.0223 dB with hard decisions (`dam_e1_hd` to
+`dam_e10_hd`) and 0.0658, 0.0583, 0.0411 and 0.0095 dB with soft ones, P25 by 0.0479, 0.0262, 0.0160
+and 0.0011 dB and 0.0434, 0.0231, 0.0092 and 0.0033 dB; the coverage is 0.937 at the least
+(D-STAR `dam_e10_sd`). The study's figures on the frames that change (hard decisions only; the
+residual over DVSI's signal there, its scratch build): D-STAR `dam_e1_hd` 0.0876 → 0.0212 (255 of
+1,275 frames change), `dam_e2_hd` 0.0888 → 0.0241, `dam_e5_hd` 0.1578 → 0.0579, `dam_e10_hd`
+2.1739 → 2.1727 (22 frames); P25 0.1746 → 0.1099 (276 frames), 0.6580 → 0.6117, 0.9177 → 0.8819,
+0.9932 → 0.9539. Soft decisions were not measured in the study; the library's soft-decision
+decodes change in 249, 240, 219 and 160 frames (D-STAR, `dam_e1_sd` to `dam_e10_sd`) and 268, 268,
+249 and 134 frames (P25), and their `lsd_common_db` falls (above).
+
+**Other modes and the encoders.** Of the bit files at the top of each mode's directory of DVSI's
+vectors (`irstia` and `mark` left out: 106 D-STAR, 103 P25 and 106 rate-33 files, the tone,
+channel-error, DTX and synthetic ones among them, the soft-decision ones decoded as soft), every
+rate-33 file decodes identically in the two builds; 62 of the 106 D-STAR files and 58 of the 103
+P25 files decode otherwise (the list, with the frames that change, is with the scoring run's
+records, outside the repository). D-STAR's DTX vectors, which the scoreboard does not score as
+speech: `clean_dtx` 595 of 3,700 frames change, `dam_dtx` 163 of 1,275, `noisy_dtx` 247 of 3,588;
+the study's residual over DVSI's signal in the frames that change, its scratch build: 0.4088 →
+0.1417 (627 frames), 0.0978 → 0.0235 and 0.3496 → 0.1603. All 285 encodings (95 input files,
+`irstia` and `mark` not among them, three encoders) are identical between the two builds. These
+were compared in the scoreboard's builds (Release, SIMD, IEEE arithmetic). In each of the ten local
+configurations (below), a differential harness outside the repository, built against the
+baseline's library and the head's, gives the same output, byte for byte, for the pitch every D-STAR
+and P25 pitch code decodes to and for rate 33's and ProVoice's data paths, `mbe_synthesizeSpeechf()`
+and the three encoders over constructed streams whose caller states hold reserved pitches with no
+voiced band, every frame mark, values in the new state slot and states without the subframe
+rendering's mark (hashes of the output and of all three returned states).
+
+**On hardware**, the DVstick 30's steps of [#157](https://github.com/arancormonk/mbelib-neo/issues/157)
+(the study's, on its scratch build): the three steps from frames with `b1` 0 at `b0` 100 to voiced
+frames come nearer the unit's curves (mean error 0.06577 → 0.01992), the three steps into such
+frames do not (0.13143 → 0.13520), and every other row of the package is unchanged to the digits
+printed ([D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state)).
+
+**Cost.** The median complete hard-decision frame decode moves by +5.6% in D-STAR (6.454 → 6.816
+us; the seven invocations' medians 6.445 to 6.482 and 6.791 to 6.880 us) and +5.6% in IMBE (6.864
+→ 7.246 us; 6.850 to 6.959 and 7.211 to 7.307), and by +0.9% for AMBE+2 (7.032 → 7.092 us; 7.013 to
+7.056 and 7.088 to 7.241), which the change does not reach (a control; its checksums are the same in
+both builds), `74126a3` against `d3fb70f`, `bench_replay hard <codec> 60 5` on the `dam` stream,
+seven alternating invocations pinned to one CPU, a portable Release build with SIMD, fast-math and
+LTO, on a lightly loaded machine (one-minute load 1.5 falling to 1.1; [benchmarks](testing.md#the-pulsed-state)).
+The ranges do not overlap in D-STAR or IMBE. Under callgrind (the same builds, the P25 `dam`
+stream once) the head executes 2.5% more instructions: the rendering of the emitted pulses
+(`render_pulse()` for them, and the setup of the pulsed bands' oscillators, `atan2` and `sincos`)
+and the code tests (`pulsed_code()`, `imbe_code_pitch()`, `pulse_bands()`) account for most of the
+increase, and `prepare_render()`, inlined in the baseline's build, is a function of its own in the
+head's (its instructions moved, not added). Why the time rises more than the instructions was not
+examined.
+
+**Gate sets**, declared in the branch's first commit, `525d017`, before any build of the branch was
+scored (the study's scratch build had been measured on the development and validation vectors and
+on the other material above before that, and the baseline's own scoreboard of the four partitions,
+a build of `git archive 74126a3` decoding its own encodings, was read to record each measure's
+coverage), and evaluated in one combined run over the development, validation, tone and channel
+partitions, `74126a3` against `d3fb70f`:
+
+| Gate set | Result | What it establishes |
+|---|---|---|
+| `pulsed-state-development` | passes all 18 checks | on the vectors the rule was found on, within the limits declared: D-STAR's and P25's correlation means rising by at least 0.0005 with intervals above 0 (observed +0.000938 and +0.000841) and no vector falling by more than 0.0005 (observed: none falls), the distance from DVSI's decode falling by at least 0.10 dB with its interval below 0 (observed -0.1692 and -0.1605 dB) and rising by no more than 0.02 dB on any vector (observed: falling on every vector), and the envelope correlation, the distance from the input (allowed to rise by 0.02 dB; observed +0.0046 and +0.0121 dB) and the level within theirs on the mean only, each check measured on all 20 vectors (`every_vector`); rate 33's speech decodes and every encoder's speech rows unchanged |
+| `pulsed-state-validation` | passes all 18 checks | the same on the validation vectors, the distance from the input allowed to rise by 0.04 dB on the mean (observed +0.0234 and +0.0258 dB), also read in the study |
+| `pulsed-state-tones` | passes all 18 checks | rate 33's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level over the frames where both send the same tone) unchanged, and D-STAR's and P25's five tone measures within their limits on the vectors both runs measure (observed: unchanged); not that the same tone frames or bits were sent |
+| `pulsed-state-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), D-STAR's and P25's mean distance from DVSI's decode on the loud frames (`lsd_common_db`) not rising past 0.01 dB with a coverage of at least 0.1 (observed: falling on every vector), rate 33's decodes and every encoder's speech rows unchanged |
+| `pulsed-state-final` | not yet scored | declared with the others; to be scored once, after the review |
+
+Notes on the declarations. A check that the mean rises (falls) by at least a value is the
+scoreboard's `increase` (`decrease`) rule, which also requires the 95% interval above (below) 0.
+Every paired check of the development, validation and final sets requires every vector
+(`every_vector`), and the baseline measured each of the development and validation ones on all 20
+and all 5 vectors; `every_vector` makes a check need a measurement on every vector, it does not make
+a limit on the mean a limit on each vector. The tones set requires every vector for the detector
+agreement and the D-STAR and rate-33 encoders' extra-tone rates, which cover all 52, and its
+description records the coverage of the others from the baseline's own scoreboard; a check on a
+metric that applies to part of a partition cannot require every vector, so a vector on which the
+metric went missing in both runs would pass it unnoticed, and in this run each such check covered
+the vectors listed there (the channel checks the four hard- and the four soft-decision vectors
+each). The identity counters (`speech.pcm_changed_vectors`, `tone.pcm_changed_vectors`,
+`channel.pcm_changed_vectors` and the encoder-row counter) count the vectors present in the run, so
+they were evaluated on the combined run; the encoder-row counter skips a vector whose baseline holds
+no row hash, and in this run all 75 speech entries (25 per mode) carry an encoder-row hash and a PCM
+hash in both reports, and all 156 tone and 24 channel entries a PCM hash. Bit identity of the
+encodings is the separate comparison of the 285 encodings above, and frame-for-frame mute identity
+the separate comparison of the 30,600 channel-error frames: the gates establish neither. The
+distance from the input rising is allowed by the limits, and observed: it is this change's cost
+(above). Where the descriptions, which stay as declared, say more than the checks or the
+measurements:
+
+- All five state the rule without its exceptions for the mid-frame model: the model a frame marked
+  `MBE_FRAME_MARK_TONE` or `MBE_FRAME_MARK_PREVIOUS_HELD` puts at mid-frame, and a mid-frame model
+  with a voiced band (a caller's `MBE_FRAME_MARK_PITCH_ABSENT` on a frame with a code can hold voiced
+  bands there), take no pattern ([D-STAR and P25: the pulsed state](#d-star-and-p25-the-pulsed-state),
+  clause 7). No decode of DVSI's bits reaches these but at a P25 tone model, which has voiced bands
+  and so no code.
+- The tones set's description says the scratch build changed some D-STAR and P25 tone decodes "in
+  frames at a tone's edge". The library changes 15 and 14 tone decodes in 1 to 796 frames each
+  (above); the scratch build's own caches show the same order of change against the head (`pzx3`
+  against the head's build: P25 `dtmfvbad` in 785 frames, D-STAR `dtmfvbad` in 797), and its
+  single-frame changes lie in frame 0 (its tests', above). The set gates the tone measures, not
+  where the decodes change.
+- The channel set's description gives the scratch build's residual "at all four hard-decision rates
+  in both codecs"; those are the study's figures on its scratch build (above); the library's
+  hard-decision decodes differ from that build's only as explained above.
+
 ### Scoring history
 
 The final partition was scored twice, with the library unchanged in between. The first scoring fixed
@@ -5505,3 +5921,14 @@ code (the build of `3840d2b`), against `r33-row17-train-final`, declared in `6a3
 12 checks; no decode of `irstia` or `mark` changes in any mode, so it shows no harm and cannot show
 the gain ([November 2026: the pulse train through a row-17
 frame](#november-2026-the-pulse-train-through-a-row-17-frame)).
+
+The pulsed state was scored once, `74126a3` against the head's code (the build of `d3fb70f`, whose
+library code is `834d001`'s), on the development, validation, tone and channel partitions in one
+combined run with the four gate sets declared in `525d017`, the branch's first commit, before any
+build of the branch was scored; all four pass, 87 of 87 checks ([November 2026: the pulsed
+state](#november-2026-the-pulsed-state)). Before that declaration the study's scratch build had been
+measured on the development, validation, tone, hard-decision channel-error and D-STAR DTX vectors,
+and the baseline alone was scored on the four partitions (a build of `git archive 74126a3`, its own
+encodings decoded by its own decoder) to record each measure's coverage in the sets' descriptions.
+The final partition is held out, to be scored once, after the review, against
+`pulsed-state-final`, declared in `525d017`.
