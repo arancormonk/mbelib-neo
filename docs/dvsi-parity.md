@@ -110,8 +110,9 @@ appear here.
   scoreboard's own measures for rate 33, before the gate sets were declared, in the branch's first
   commit, `5af6391`, before any build of the branch was scored, so none of those partitions is out of
   sample for it. The change was measured and gated on the development, validation, tone and channel
-  partitions; the final partition is to be scored once for it, after the review, against the gate
-  set `r33-pulsed-rows-final`, and is not yet scored ([November 2026: rate 33's pulsed
+  partitions; the final partition was scored once for it, on 2026-11-27, after the two reviews and
+  their fixes, against the gate set `r33-pulsed-rows-final` (the build of `1502dc0` against the
+  baseline's): passed, 12 of 12 checks ([November 2026: rate 33's pulsed
   rows](#november-2026-rate-33s-pulsed-rows)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
@@ -3347,11 +3348,18 @@ point - 80 to its point + 80, rising, then falling, linearly.
    samples is loaded as a lost frame's repeat, held word and all (clause 7).
 9. **Nothing else changes**: D-STAR, P25, ProVoice, the public `mbe_synthesizeSpeechf()`, every
    encoder, and rate 33 on any stream that holds no frame of rows 18..31. For rate 33 that holds of
-   the states the decoder writes and of a caller's word on a model that fails clause 1's test (in
-   `PHIl[0]`, or in the subframe state with a last model that fails it). A caller's state holding
-   a word on the band-grid model of its code, or that word in the subframe state with such a last
-   model, is to the library the state of a stream that had such a frame, and plays as one; two
-   codes of one harmonic count share a grid model, so the test cannot tell them apart.
+   the states the decoder writes, and of a caller's word on a model that fails the grid test (its
+   pitch, by bit pattern, and its harmonic count against the band-grid model of the word's code): in
+   `PHIl[0]`, or in the subframe state with a last model that fails it, the samples and the
+   returned states are the branch point's. On the grid model of the word's code a word is read
+   whatever the voicing: a model there with a voiced band plays no pulse, and its samples and slot
+   37 are the branch point's, but a lost frame's repeat gives its word the held form (rows 18..25)
+   or clears it (26..31), as it does for a decoded frame whose adaptive smoothing voiced a band, so
+   the returned `PHIl[0]` is not the branch point's (`test_r33_repeat_on_a_voiced_grid_model`). A
+   caller's state holding a word on the grid model of its code with no voiced band, or that word
+   in the subframe state with such a last model, is to the library the state of a stream that had
+   such a frame, and plays as one; two codes of one harmonic count share a grid model (codes 40 and
+   41, say), so the test cannot tell them apart.
 
 **The constants are fits.** In the study's alternatives (below) slopes 1.012 to 1.024 with the
 pulse of b0 87 between 7.25 and 8.0 samples after its model's point (the rule puts it at 7.50; the
@@ -3557,9 +3565,10 @@ band-grid model of the word's code (`L` equal to the code's harmonic count and t
 bit pattern to the grid pitch the decoder computes, through `mbe_ambe2450_pulsed_row_model()` in
 `src/internal/mbe_pulsed.h`, implemented in `ambe3600x2450.c` on the non-inlined function the
 decode itself stores the grid model with). A word that fails plays as no word. The word is read in
-one other place, the repeat loader (clause 7), which applies the same grid-model test before it
-writes the held form, so that a caller's word on any other model is copied as the branch point
-copied it. The grid pitch
+one other place, the repeat loader (clause 7), which applies the same grid test (pitch and harmonic
+count, not voicing) before it writes the held form, so that a caller's word on a model off the grid
+is copied as the branch point copied it, and one on the grid model is given the held form or
+cleared whatever the model's voicing. The grid pitch
 depends on L alone, so two codes of one L have the same model and the test cannot tell them apart: a
 word of another code of the model's L is taken (with that code's times). The last frame's own model
 takes its row from the new slot of the subframe state (`noiseOverlap[37]`, `MBE_PULSED_ROW_SLOT`:
@@ -3585,8 +3594,11 @@ kept as the registers allow) that moved the voiced samples of every path: on a s
 random streams (3,000 frames each of D-STAR's, P25's and rate 33's data paths and of ProVoice's,
 rate 33's holding no frame of rows 18..31) 2,791, 2,846, 2,735 and 2,939 frames, by 1 to 74,898
 ulps of the sample's own value (the large counts at samples near zero), at most 3 ulps of the
-frame's peak (9.8e-4 at the most, on samples up to 4,447), no 16-bit sample by each path's own
-conversion; the other nine configurations did not differ. Reached through the pointer the voiced
+frame's peak (9.8e-4 at the most, on samples up to 4,447), and so, rarely, a 16-bit sample by one
+unit: through the int16 entry points on the same streams five samples changed against the branch
+point, D-STAR frame 1626 sample 131 (-567 to -566), P25 frames 1352 and 1471 sample 123, rate 33
+frame 436 sample 23 and ProVoice frame 768 sample 156, and the head restores all five (the review
+found the same five); the other nine configurations did not differ, in float or int16. Reached through the pointer the voiced
 train compiles as before: the harness gives the branch point's output byte for byte in all ten
 configurations ([November 2026: rate 33's pulsed
 rows](#november-2026-rate-33s-pulsed-rows)). The C arithmetic is the same either way, but the rows'
@@ -3594,8 +3606,11 @@ own samples are not: over all 1,680 pairs of row and code, each between two fram
 the three entry points (parameter bits, hard and soft frames, alike), the pointer moves them against
 direct calls in the 32-bit Release build (654 pairs, 1,624 samples per entry point, all in the
 pair's frame) and in dev-release, GCC with fast-math, LTO and `-march=native` (1,544 pairs, 9,206
-samples, 3,046 of them in the frame after), at most 1.8e-7 of the frame's peak, no 16-bit sample;
-the other eight configurations, the 32-bit Debug build and both Clang ones among them, are
+samples, 3,046 of them in the frame after), by at most 3 ulps of the peak of the sample's own
+160-sample frame (2.0371e-7 of it in the 32-bit Release build, row 21 code 41 sample 141 of the
+pair's frame, and 2.2316e-7 in dev-release, row 19 code 59 sample 155; 1.31e-7 and 1.80e-7 of the
+peak of the three frames together, the figure given here before), no 16-bit sample; the other eight
+configurations, the 32-bit Debug build and both Clang ones among them, are
 identical. (The review that found it counted 644 pairs and 1,714 samples on its own streams.) Only
 the ten configurations of one x86-64 machine were checked; MSVC and macOS were not, and the
 construction binds no future compiler.
@@ -3603,9 +3618,12 @@ construction binds no future compiler.
 **What is not known or not matched.** Rows 29, 24, 28 and 26 stay at 0.41, 0.29, 0.29 and 0.22 of
 their own signal and row 20 at 0.19 (the others 0.07 to 0.18), where D-STAR's pulsed frames reach
 0.03 to 0.05 ([November 2026: the pulsed state](#november-2026-the-pulsed-state), its later frames,
-another selection); what DVSI's decoder plays where pulsed frames follow one another or border a
-voiced, silence, tone or lost frame, beyond this rule (0.24 and 0.22 of those frames' own signal,
-against 0.08 for a frame between two frames of row 16); why the change costs against the
+another selection); what DVSI's decoder plays beyond this rule on the frames of rows 18..31 whose
+neighbours are not both voice frames of row 16 with no voiced band (0.24 of their own signal for
+those whose two neighbours are voice frames with no voiced band, at least one of another row than
+16, 30 of whose 2,687 have only rows 16 and 17 for neighbours; 0.22 for those with a neighbour that
+is not a voice frame with no voiced band; against 0.08 for a frame between two frames of row 16);
+why the change costs against the
 input; what the decoder does on a lost frame beyond the six frames above (repeats of rows 19,
 26 and 27 only: the held position of the other rows, of rows 24 and 25 above all, is the rule's
 extension); what it plays on a frame of these rows that starts from silence, which the rule plays
@@ -3633,23 +3651,30 @@ window, the 160 samples around its point, has an rms of 20 or more; 371 frames):
 those channels over DVSI's energy there, by the frame's code, mid-frame pulses (rows 26..31) 0.098
 (b0 0..19, 12 frames), 0.262 (20..39, 15), 0.167 (40..59, 27), 0.161 (60..79, 44), 0.087 (80..99, 46)
 and 0.046 (100..119, 43); own pulses (rows 18..23) 0.761 (14), 0.513 (12), 0.520 (21), 0.178 (37),
-0.180 (60) and 0.116 (40). At own codes 0..19, where the pulse falls 54.7 samples before its model's
-point, playing no pulse there leaves less, 0.674. Each range's least-squares gain of the rule's
+0.180 (60) and 0.116 (40). At own codes 0..19, whose pulse time lies 80.89 to 61.586 samples before
+its model's point (the response's nominal peak, 16 samples after the pulse, 54.7 samples before it
+at code 10, the range's middle), playing no pulse there leaves less, 0.674. Each range's least-squares gain of the rule's
 pulse against DVSI's estimated pulse (DVSI's decode less the library's without its pulse; a numpy
 rendering of the rule, which matches the library's decodes to 0.0001 of the pulse's energy, from
 two scratch decodes that differ only in the pulse's gain) is 1.42, 1.37, 1.89, 1.19, 1.22 and 1.19
-for the mid-frame pulses and, for the own pulses, none at codes 0..19 (the two uncorrelated, -0.11),
-then 1.46, 1.04, 1.22, 1.03 and 1.04: DVSI's pulses are louder than the rule's, the mid-frame ones
-most, and what DVSI plays for an own pulse at the lowest codes is not this pulse.
+for the mid-frame pulses and, for the own pulses, -0.43 at codes 0..19 (at a correlation of
+-0.113: a poor fit), then 1.46, 1.04, 1.22, 1.03 and 1.04: DVSI's pulses are louder than the
+rule's, the mid-frame ones most, and what DVSI plays for an own pulse at the lowest codes is not
+this pulse.
 
 **Onsets.** On the voiced frame after a voice frame with no voiced band (the 22 vectors, the onset
 frame's DVSI rms 100 or more), the residual over the onset frame's own signal, by the row of the
 frame before, is 0.0186 after row 16 (955 onsets), 0.0747 after rows 18..23 (258; 0.3430 before
 the change), 0.2027 after rows 24 and 25 (111; 0.3334) and 0.0689 after rows 26..31 (263, unchanged):
-the onsets after a pulsed row hold 0.00024 of all the signal's residual energy against 0.000055 after
-row 16. Onset frames of row 15 make most of them: 772, 213, 63 and 192 at 0.018, 0.075, 0.257 and
-0.093. The lag of ours against DVSI's over the run's frames 1 to 3 stays near 0 in every class
-(medians +0.007, -0.006, -0.022, -0.008 sample): what is left is not a shift. After rows 24 and 25
+the residual energy of the 632 onsets after a pulsed row is 0.00024 of all of DVSI's signal energy
+of the 22 vectors, against 0.000055 for the 955 after row 16; as shares of all the residual energy
+of the 22 vectors (every frame, lag 0; itself 0.0168 of the signal energy), 1.45% and 0.33%. Onset
+frames of row 15 make most of them: 772, 213, 63 and 192 at 0.018, 0.075, 0.257 and 0.093. Over the
+next three frames of the runs whose first four frames are voiced (the onset frame excluded), the lag
+of ours against DVSI's stays near 0 in every class (medians +0.007, -0.006, -0.022, -0.008 sample):
+those frames are in line, which does not exclude a timing part in the onset frame's own residual or
+in a single run (`ucarm15a`'s onset at frame 1177, after a frame of row 18, fits a lag of -0.838
+sample over its next three frames). After rows 24 and 25
 one onset holds most of it: `lvl` frame 460 (row 15 after row 25 at b0 92) 58% of the class's
 residual energy, and `dam_10ov` frame 460, the same speech, 15% more.
 
@@ -4304,16 +4329,20 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   left: rows 29, 24, 28 and 26 stay at 0.41, 0.29, 0.29 and 0.22 of their own signal and row 20 at
   0.19 (the others 0.07 to 0.18; residual over the frames' own signal on the 22 vectors, the
   library's builds), where D-STAR's pulsed frames reach 0.03 to 0.05 (another selection); what
-  DVSI's decoder plays where pulsed frames follow one another or border a voiced, silence, tone or
-  lost frame, beyond the rule (0.24 and 0.22 of those frames' own signal, against 0.08 for a frame
-  between two frames of row 16); why the change costs a little against the input (+0.008 and +0.016 dB of log-spectral
+  DVSI's decoder plays beyond the rule on the frames of these rows whose neighbours are not both
+  voice frames of row 16 with no voiced band (0.24 of their own signal where both neighbours are
+  voice frames with no voiced band, at least one of another row than 16, a group that holds 30
+  frames whose neighbours are rows 16 and 17 only; 0.22 where a neighbour is not such a voice
+  frame; against 0.08 for a frame between two frames of row 16); why the change costs a little against the input (+0.008 and +0.016 dB of log-spectral
   distance from it on development and validation; PESQ against the input -0.0094 ± 0.0071, a 95%
   interval of -0.0250 to +0.0062 over the 12 recordings, which establishes neither a cost nor its
   absence); the pulses' level (DVSI's louder than the rule's, least-squares gains 1.19 to 1.89 for
   the mid-frame pulses, 1.03 to 1.46 for the own ones) and DVSI's own pulse at the lowest codes
-  (rows 18..23 at b0 0..19 leave 0.761 of DVSI's in-channel energy, more than no pulse, 0.674);
+  (rows 18..23 at b0 0..19 leave 0.761 of DVSI's in-channel energy, more than no pulse, 0.674, the
+  least-squares gain there -0.43 at a correlation of -0.113);
   the onsets after a pulsed row (0.0747, 0.2027 and 0.0689 of the onset frame's own signal after
-  rows 18..23, 24 and 25, and 26..31, against 0.0186 after row 16), which are no shift; what the
+  rows 18..23, 24 and 25, and 26..31, against 0.0186 after row 16; the runs' next three frames
+  stay in line, which does not exclude timing in the onset frame itself); what the
   decoder does on a lost frame beyond the six frames of the channel-error vectors the repeat rule
   rests on (rows 19, 26 and 27: the held position of the other rows, of rows 24 and 25 above all,
   is the rule's extension); what it plays on a frame of these rows that starts from silence (822
@@ -6493,17 +6522,26 @@ pulsed 500 Hz channels, each pulsed model its own pulse at the time the pitch co
 that found the rule read the development and validation vectors, DVSI's rate-33 tone, channel-error
 (hard and soft decisions) and DTX vectors, never `irstia` or `mark`. Its scratch build (outside the
 repository) was measured on those, with the scoreboard's own measures for rate 33 too, before the
-gate sets were declared, so none of those partitions is out of sample here; the final partition is
-held out and not yet scored. The baseline is a build of `git archive 2b6b6c2`, the candidate the
-branch's library code at `a1398df`; the branch's later library commit, `1bc657f`, changes only how
-the compiler builds the voiced train in the 32-bit Release build (below, **Other modes and the
-encoders**), and its rate-33 decodes of the 88 vectors of [Rate 33: the pulsed
-rows](#rate-33-the-pulsed-rows), the scoreboard's 85 rate-33 vectors among them, equal `a1398df`'s
-file for file; the review's fix, `326c89c` (a lost frame's repeat reads the word only on its code's
-band-grid model, and a held form of rows 26..31 is no word), decodes all 315 bit files below as
-`1bc657f` does, in every sample, every frame's flags and every frame's decoded, predicted and
-synthesized model (the scoreboard's Release configuration, both builds from `git archive`), so the
-scores below stand for the final code (the other commits change tests and documents only); both
+gate sets were declared, so none of those partitions is out of sample here; the final partition was
+held out and scored once, at the end (below). The baseline is a build of `git archive 2b6b6c2`, the
+candidate the branch's library code at `a1398df`; the branch's later library commit, `1bc657f`,
+changes how the compiler builds the voiced train in the 32-bit Release build (below, **Other modes
+and the encoders**) and with it moves rate 33's own float samples on frames of rows 18..31 in two
+builds, the 32-bit Release build and dev-release (GCC with fast-math, LTO and `-march=native`), by
+up to 3 ulps of a frame's peak ([Rate 33: the pulsed rows](#rate-33-the-pulsed-rows), **The
+pointer**); in the scoreboard's configuration its rate-33 decodes of the 88 vectors of [Rate 33:
+the pulsed rows](#rate-33-the-pulsed-rows), the scoreboard's 85 rate-33 vectors among them, equal
+`a1398df`'s file for file. The review's fix, `326c89c` (a lost frame's repeat reads the word only
+on its code's band-grid model, and a held form of rows 26..31 is no word), decodes all 315 bit
+files below as `1bc657f` does: the 16-bit WAV files are equal byte for byte, and so are the
+`--params` JSONL files, which hold every frame's flags, error count and bits and its decoded,
+predicted and synthesized model as `mbe_quality_eval` serializes it (`w0`, `L`, `Vl`, `Ml`,
+`log2Ml`, `gamma`, and the synthesized `PHIl` and `PSIl` from harmonic 1), but not `PHIl[0]`, slot
+37 or every other field of `mbe_parms`: evidence about the samples and the serialized model, not
+about caller state, for which the differential harness below is the evidence (the first review's
+defect kept the samples and changed exactly a field the JSONL omits). The scores below stand for the
+final code, `1502dc0`, which the held-out run scored (later commits change comments, tests and
+documents only); both
 aligned freely first and were then scored at their joint lags, both runs' encodings decoded by the
 candidate's decoder (Release, SIMD, IEEE arithmetic).
 
@@ -6543,10 +6581,13 @@ windows playing a wrong tone do not move on any vector; the detector's agreement
 `alltone` (+0.003175; +0.00006 in the mean, no vector down); the encoders' tone statistics do not
 move. `tone.alignment_corr`, which no gate checks, moves on the nine vectors (from -0.003136, `cpvbad`,
 to +0.005765, `cp1`). The frequency, level, balance and wrong-tone checks see only the windows where
-both decodes hold a tone the detector recognises; the detector's agreement also counts the windows
-where DVSI's decode and its two neighbours hold none, voice frames between and around the tones
-among them (`compare_tones()` takes three consecutive windows without a tone as steady), so it does
-see some of the frames where the change acts, and no more of them than those.
+both decodes hold a tone the detector recognises. The detector's agreement is taken over every
+window whose DVSI classification equals its two neighbours' (`compare_tones()`), with or without a
+tone: such a window agrees when both decodes hold no tone or the same tone, and disagrees when one
+holds a tone and the other none or another (a window where DVSI's decode holds a steady tone and
+ours none counts as checked and disagreeing: the saved `dtmf` comparison has one, at hop 3278);
+three consecutive windows of DVSI's decode without a tone, voice frames between and around the tones
+among them, count too, so the agreement does see some of the frames where the change acts.
 
 **Channel errors.** No mute decision changes, frame for frame: the flags of every frame of the 24
 channel-error decodes (8 vectors in each of the three codecs) are the same in both builds, as are
@@ -6591,7 +6632,8 @@ word is a band-grid model's), against `2b6b6c2` with the head's library, every c
 the same output byte for byte. At `a1398df` the 32-bit Release build differed there in D-STAR's,
 P25's, rate 33's and ProVoice's paths: the two new direct calls of `render_pulse()` made GCC clone it
 out of the voiced train, and x87's excess precision then moved most voiced frames' samples (by up to
-3 ulps of the frame's peak, no 16-bit sample; the states were equal); `1bc657f` reaches it through a
+3 ulps of the frame's peak, and five 16-bit samples by one unit through the int16 entry points; the
+states were equal); `1bc657f` reaches it through a
 const volatile pointer, and the ten configurations agree since (the pointer's own effect on the
 rows' samples: [Rate 33: the pulsed rows](#rate-33-the-pulsed-rows), **The pointer**). The golden PCM hashes that moved (rate 33's, scalar, SSE2 and AVX2; the
 dispatched AVX2 equal to a `-march=x86-64-v3` build's) pass under glibc 2.39 (an `ubuntu:24.04`
@@ -6620,7 +6662,7 @@ evaluated in one combined run over the development, validation, tone and channel
 | `r33-pulsed-rows-validation` | passes all 12 checks | the same on the validation vectors, the distance from the input allowed to rise by 0.04 dB on the mean (observed +0.0163 dB), also read in the study |
 | `r33-pulsed-rows-tones` | passes all 15 checks | D-STAR's and P25's speech and tone decodes unchanged, the D-STAR and rate-33 encoders' per-vector tone statistics (agreement, extra tones, level where both send the same tone) unchanged, and rate 33's five tone measures within their limits on the vectors both runs measure (observed: unchanged but for the detector's agreement on `alltone`, +0.003175); not that the frames between the tones, where the change acts, are right |
 | `r33-pulsed-rows-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by itself that no frame's mute decision changed), rate 33's mean distance from DVSI's decode on the loud frames (`lsd_common_db`) not rising at all, with a coverage of at least 0.1 (observed: falling on every vector, -0.0161 dB hard and -0.0123 dB soft), D-STAR's and P25's decodes and every encoder's speech rows unchanged |
-| `r33-pulsed-rows-final` | not yet scored | to be scored once, after the review, on `irstia` and `mark` |
+| `r33-pulsed-rows-final` | passes all 12 checks, scored once (below) | on `irstia` and `mark`, held out, a prediction: rate 33's correlation mean rising by at least 0.0003 with its interval above 0, which with two recordings asks for the gain on both vectors (observed +0.003599, both up), no vector falling by more than 0.0001, the distance from DVSI's decode falling by at least 0.02 dB with its interval below 0 (observed -0.151 dB) and rising on neither vector by more than 0.005 dB, the envelope correlation (falling by no more than 0.001), the distance from the input (rising by no more than 0.05 dB) and the level (moving by no more than 0.05 dB) within theirs on the mean; D-STAR's and P25's decodes and every encoder row unchanged |
 
 Notes on the declarations. The identity counters were evaluated on the combined run: all 75 speech
 entries (25 per mode) carry an encoder-row hash and a PCM hash in both reports, and all 156 tone and
@@ -6652,6 +6694,46 @@ or the measurements:
 - "No build was measured on the held-out partition" is true of this change's builds (the study's
   scratch build and the branch's); earlier changes' builds were scored on it, once each, as their
   sections record.
+
+**The final partition**, scored once, on 2026-11-27, after the two reviews and their fixes: the
+build of `git archive 2b6b6c2` against the build of `1502dc0` (`build/tools-final`, the
+scoreboard's Release configuration), both aligning freely first and then scored at their joint lags,
+both runs' encodings decoded by the candidate's decoder, gate set `r33-pulsed-rows-final`: passed,
+12 of 12 checks. The gate lines:
+
+```
+PASS dstar/final speech.pcm_changed_vectors max: value=0
+PASS p25/final speech.pcm_changed_vectors max: value=0
+PASS dstar/final encoder.rows_changed_vectors max: value=0
+PASS p25/final encoder.rows_changed_vectors max: value=0
+PASS r33/final encoder.rows_changed_vectors max: value=0
+PASS r33/final vs_dvsi.waveform_corr_unshifted increase: mean delta=+0.003599 ... min=+0.00319 (and all_no_decrease)
+PASS r33/final vs_dvsi.lsd_db decrease: mean delta=-0.151 ... max=-0.1462 (and all_no_increase)
+PASS r33/final vs_dvsi.env_corr no_decrease: mean delta=+0.01371
+PASS r33/final ours.lsd_db no_increase: mean delta=+0.003067 ci95=(-0.00661, 0.01274) worst=('irstia', 0.012739)
+PASS r33/final vs_dvsi.level_offset_db abs_delta_max: mean delta=-0.01399 worst=('irstia', -0.015191)
+```
+
+Rate 33, per vector:
+
+| Vector | Waveform corr. vs DVSI | LSD vs DVSI (dB) | Envelope corr. vs DVSI | LSD vs input (dB) | Level vs DVSI (dB) |
+|---|---|---|---|---|---|
+| `irstia` | 0.982794 → 0.985984 (+0.003190) | 1.409731 → 1.263516 (-0.146215) | 0.975280 → 0.994251 | 5.562402 → 5.575142 (+0.012739) | -0.031362 → -0.046553 |
+| `mark` | 0.989120 → 0.993127 (+0.004008) | 1.330127 → 1.174357 (-0.155770) | 0.987956 → 0.996401 | 5.511256 → 5.504649 (-0.006606) | -0.114772 → -0.127559 |
+
+The partition's mean correlation goes 0.985957 → 0.989556. D-STAR and P25: every measurement of
+both vectors is equal in the two runs; all six entries carry both PCM hashes and both encoder-row
+hashes in both reports, the four D-STAR and P25 PCM hashes and all six row hashes equal, the two
+rate-33 PCM hashes different. The prediction, a gain on both held-out vectors, is met. The mean gain
+in correlation there, +0.003599, is larger than on development (+0.000778) and validation
+(+0.001452); nothing was measured that explains the difference. The distance from the input rises
+on `irstia` (+0.012739 dB) and falls on `mark` (-0.006606 dB). It was one scoring, after the two
+reviews and their fixes, of the code of `1502dc0`. The baseline's rate-33 figures here are not those
+the row-17 run's table above gives for the same decode (rate 33's two PCM hashes, 0x4F2FBCFE and
+0x47687202, are those of rate 33's held-out run of the mid-frame pitch wave too): correlation mean
+0.985957 here, 0.985956 there; `irstia`'s distance from DVSI's decode 1.409731 here, 1.6848 there;
+`mark`'s 1.3301 in both. Each
+run scores at its own joint lags; the difference was not examined further.
 
 ### Scoring history
 
@@ -6812,4 +6894,8 @@ Before that declaration the study's scratch build had been measured on the devel
 tone, channel (hard and soft decisions) and rate-33 DTX vectors, with the scoreboard's own measures
 for rate 33 too, and the baseline alone was scored on the four partitions (a build of `git archive
 2b6b6c2`, its own encodings decoded by its own decoder) to record each measure's coverage in the
-sets' descriptions. The final partition, `r33-pulsed-rows-final`, is not yet scored.
+sets' descriptions. The final partition was scored once, on 2026-11-27, after the two reviews and
+their fixes, the build of `2b6b6c2` against the build of `1502dc0`: `r33-pulsed-rows-final` passed,
+12 of 12 checks, rate 33's correlation rising on both held-out vectors (mean 0.985957 → 0.989556),
+D-STAR's and P25's decodes and every encoder row unchanged ([November 2026: rate 33's pulsed
+rows](#november-2026-rate-33s-pulsed-rows)).

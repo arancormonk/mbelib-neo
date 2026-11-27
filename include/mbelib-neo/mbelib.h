@@ -663,8 +663,12 @@ MBE_API int mbe_classifyAmbe2450Frame(const char ambe_d[49]);
  * each half of the frame that sound one pulse each instead of noise, the pitch
  * code the pulse's time; a lost frame that repeats one carries the word with 2048 added
  * (rows 18 to 25) or none (rows 26 to 31). They read the word only on the
- * band-grid model of its code (w0 2.81 / L at the code's L), where a caller's
- * word is the history of such a frame; on any other model it is no word.
+ * band-grid model of its code (w0 2.81 / L at the code's L, by bit pattern),
+ * where a caller's word is the history of such a frame (a lost frame's repeat
+ * gives it the held form or clears it whatever the model's voicing, while a
+ * model with a voiced band plays no pulse), a word of another code of the same
+ * L included (codes 40 and 41 share a grid model); on any other model it is no
+ * word.
  * mbe_synthesizeSpeechf() and the other codecs' functions treat the word as no
  * mark. Tone
  * ID 255 returns `MBE_AMBE2450_FRAME_ERASURE`, as any unusable tone index

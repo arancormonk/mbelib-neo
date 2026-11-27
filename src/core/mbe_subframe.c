@@ -1423,13 +1423,17 @@ render_emitted_pulse(float* out, const struct rendered_model* from, const struct
  * Release build (x87, -std=gnu99, so excess precision kept as the registers
  * allow) the voiced frames of every path moved, D-STAR's, P25's and ProVoice's
  * included: on a scratch harness's random streams most frames, by 1 to tens of
- * thousands of ulps of the sample (samples near zero), at most 3 ulps of the
- * frame's peak, no 16-bit sample. The C arithmetic is the same either way, but
- * the rows' own samples are not: against direct calls, the pointer moves them
- * by up to about an ulp of the frame's peak in the 32-bit Release build and in
- * the native GCC fast-math LTO Release build. That was checked in ten configurations of one x86-64 host
- * with GCC and Clang (none moved in Debug, the 32-bit Debug build included, or
- * with Clang); MSVC and macOS were not, and nothing here binds a compiler. */
+ * thousands of ulps of the sample (samples near zero) and at most 3 ulps of
+ * the frame's peak, and so, rarely, a 16-bit sample by one unit (five on those
+ * streams through the int16 entry points: one each of D-STAR, rate 33 and
+ * ProVoice, two of P25). The C arithmetic is the same either way, but the
+ * rows' own samples are not: against direct calls, the pointer moves them by
+ * up to 3 ulps of the peak of their 160-sample frame (2.04e-7 and 2.23e-7 of
+ * it) in the 32-bit Release build and in the native GCC fast-math LTO Release
+ * build, no 16-bit sample on the 1,680 pairs of row and code. That was checked
+ * in ten configurations of one x86-64 host with GCC and Clang (nothing moved in
+ * Debug, the 32-bit Debug build included, or with Clang); MSVC and macOS were
+ * not, and nothing here binds a compiler. */
 static void (*const volatile row_render_pulse)(float*, const struct rendered_model*, float, int) = render_pulse;
 
 static void

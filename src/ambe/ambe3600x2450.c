@@ -1160,10 +1160,13 @@ ambe2450_mute(float* aout_buf, mbe_process_result* result, const struct ambe2450
  * code (mbe_ambe2450_pulsed_row_model(), the decoder's own grid function): on
  * any other model a caller's value in PHIl[0] is no word, and the repeat leaves
  * it as it stands, as it did before the word existed, so that no caller state
- * on a model that fails the test comes back changed. Voicing is not tested
- * here: a decoded pulsed-row frame whose adaptive smoothing voiced a band keeps
- * its word in the enhanced model, its repeat takes the held form, and the
- * rendering refuses a word on a voiced model either way. Not in
+ * on a model that fails this grid test (pitch by bit pattern, harmonic count)
+ * comes back changed. Voicing is not tested here: a decoded pulsed-row frame
+ * whose adaptive smoothing voiced a band keeps its word in the enhanced model,
+ * its repeat takes the held form, and the rendering refuses a word on a voiced
+ * model either way. So on the grid model of its code a caller's word is read
+ * whatever the voicing: given the held form or cleared, while the samples and
+ * slot 37 are those of the stream without it. Not in
  * TIA-102.BABA-1, which knows no mid-frame model.
  */
 static void

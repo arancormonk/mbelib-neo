@@ -157,8 +157,10 @@ The CTest suite includes:
   bands only, under that model's crossfade weight, rising in the interval that ends at its point and
   falling in the one that starts there, from its time or the interval's start
   (`reference_row_render()`), with the voiced response of the pulsed state's reference (its window,
-  the unvoiced factor taken out in the library's arithmetic, a float factor and the cap at 1e30,
-  `reference_pulsed_magnitude()`, the low-band roll-off in the test's own arithmetic). What it takes
+  the unvoiced factor taken out in the library's arithmetic, `reference_pulsed_magnitude()`: the
+  factor in float rounded to float, the quotient in double rounded to float and capped at `1e30f`,
+  which a fast-math build of the library may evaluate otherwise; the low-band roll-off in the test's
+  own arithmetic). What it takes
   from the library for the rows: the band-grid model of each code (its w0 and L) as the public
   decoder, `mbe_decodeAmbe2450Parms()`, gives it, and the three models as the pulsed state's
   reference takes them (`mbe_subframe_own_model()` and `mbe_subframe_mid_model()`, the mid-frame
@@ -190,27 +192,46 @@ The CTest suite includes:
   frames playing no noise (`test_r33_pulsed_bands_play_no_noise`, with and without the unvoiced
   synthesis); the 2,640 values that are words (the decoder's 1,680, rows 18..31 not held, and the
   repeat's 960, rows 18..25 held; a held form of rows 26..31 is none) and both float neighbours of
-  each, 77 bit patterns of every class (`k_slot_values` and `k_row_values`, 76 distinct, three of
-  them words), words of every row, code and held form in `PHIl[0]` on a grid model and in slot 37 of
+  each, 78 bit patterns of every class (`k_slot_values` and `k_row_values`, 77 distinct, three of
+  them words; 4088.0f, held row 25 with the code 120, and 4096.0f, held row 26 code 0, among the
+  others), words of every row, code and held form in `PHIl[0]` on a grid model and in slot 37 of
   the last frame's state, a word on a model with a voiced band (harmonic 1 only, its mid-frame model
   unvoiced), on a pitch an ulp off the grid, on the grid pitch with another harmonic count, of a
   code of another L, a held word of row 28, the stored word with the last model an ulp off its grid
   pitch, and a state without the subframe mark, each playing and storing as the state with no word,
-  or, taken, playing otherwise than it and storing its word (`test_untrusted_row_words`); the
+  or, taken, playing otherwise than it and storing in slot 37 its word for rows 18..25 and 0 for
+  rows 26..31, whose own mask is empty (`test_untrusted_row_words`); the
   repeat loader leaving a caller's word on a model that is not its code's grid model (a word of row
   20, one of row 28, a held word of row 20, and row 20's word of code 40 on code 0's grid model)
   through `mbe_processAmbe2450Dataf()`: an erasure returning the branch point's `PHIl[0]` in all
-  three states (the value in `cur_mp` and `prev_mp_enhanced`, 0 in `prev_mp`) and the samples and
-  states of the same stream without the value (`test_r33_repeat_leaves_foreign_words`); what is not
+  three states (the value in `cur_mp` and `prev_mp_enhanced`, 0 in `prev_mp`), and the samples and
+  the states but for that word of the same stream without the value
+  (`test_r33_repeat_leaves_foreign_words`); the scope of that guarantee: on the grid model of code 40
+  with harmonic 1 voiced, a word of row 20 or of row 28, then three repeats and the repeat limit's
+  mute, the loader, which tests the grid and not voicing, returning the held form 3368.0f in
+  `cur_mp` and `prev_mp_enhanced` (row 20) or clearing the word (row 28) where the branch point
+  returned the value, while the samples, slot 37 and every other field of the three states are
+  those of the stream without the word, its mute noise seeded alike
+  (`test_r33_repeat_on_a_voiced_grid_model`); what is not
   promised, as the limit of the representation: a caller's word on the grid model of its code plays
   as the history of a frame of that row, in `PHIl[0]` before an erasure and in slot 37 before a frame
   of row 16 (`test_r33_forged_history_plays`); a pulsed band at the cap, every `Ml` at 1e30, against
   the independent rendering at the capped magnitude (`test_r33_pulsed_magnitude_cap`); and every
   pair's pulse times by their bits, a float replica of the library's pulse rendering fed the times
-  in double rounded once reproducing the library's frame sample for sample in IEEE builds (within
-  1e-3 of each sample elsewhere): the times in float differ at 132 of rows 24 and 25's 480
-  evaluations (and the single law's at 212 of 360) (`test_r33_pulse_times_by_bits`); P25's slots 34 to 36 not read as a
-  row by rate 33's rendering, and slot 37 neither read nor stored by D-STAR's, P25's or ProVoice's
+  in double rounded once reproducing the library's frame and the frame after it sample for sample
+  (`test_r33_pulse_times_by_bits`): the times in float differ at 132 of rows 24 and 25's 480
+  evaluations (and the single law's at 212 of 360). It compares bit for bit where the test can
+  reproduce the library's arithmetic (`PULSE_REPLICA_EXACT`: the library built without fast-math,
+  float expressions in float or, unoptimized, stored at each statement as the library stores them,
+  and no contracted multiply-adds where the target fuses them, which CMake states for the private
+  tests with `MBELIB_TEST_FP_CONTRACT_OFF` in GCC's and Clang's Debug builds), and elsewhere within
+  a thousandth of the two frames' peak, a tolerance that cannot tell the times formed in float from
+  those formed in double. Of the ten local configurations, dev-debug, asan-ubsan-debug,
+  notones-debug, the Debug build with SIMD, the Debug `-march=x86-64-v3` build and the 32-bit Debug
+  build compare bit for bit, and the float-times mutation fails in each; dev-release, the two Clang
+  fast-math LTO builds and the 32-bit Release build take the tolerance, and the mutation passes in
+  each: it is caught only in the former six. P25's slots 34 to 36 not read as a row by rate 33's
+  rendering, and slot 37 not read by D-STAR's, P25's or ProVoice's rendering, each writing 0 there
   (`test_row_slot_between_renderings`); and words in each of the three states' `PHIl[0]` and in slot
   37 of D-STAR's, P25's and ProVoice's streams through their own entry points, then a lost frame and
   a voiced frame, playing as the same state with no mark there, the returned states alike but for
@@ -240,9 +261,15 @@ The CTest suite includes:
   (`test_r33_pulse_times_by_bits`) and the pulsed magnitude's cap removed
   (`test_r33_pulsed_magnitude_cap`); and the fix round's own two, the repeat loader acting on a word
   on any model (`test_r33_repeat_leaves_foreign_words`) and the reader taking a held form of rows
-  26..31 (`test_untrusted_row_words`), the latter with both of its guards removed: the range bound
-  (the last word, 4087) and the row test of a held word each reject those values alone, so either
-  removed by itself leaves the reader as it is and survives, an equivalent mutation. The word accepted on a model with a voiced band passed the tests until
+  26..31 (`test_untrusted_row_words`), the latter as the reader was before the fix (the range
+  bound back at 4855, the last value of the old form, and the row test of a held word removed): the
+  bound at 4087 and the row test each reject those values alone, so restoring the old bound alone,
+  or removing the row test alone, leaves the reader as it is and survives, an equivalent mutation
+  (removing the bound altogether was not run: it would accept 5120.0f as row 18 code 0 with a held
+  field of 2 and give out-of-range floats to the integer conversion); and the second fix round's
+  own, the loader testing voicing too (`test_r33_repeat_on_a_voiced_grid_model`), which the loader
+  acting on any model leaves passing (on the grid model it acts as the library does) and the
+  foreign-word test catches. The word accepted on a model with a voiced band passed the tests until
   the case of a model voiced at harmonic 1 alone was added (`pulse_bands()` refuses a model with a
   voiced band itself, so only a mid-frame model left unvoiced shows it). The shared pulsed state's
   mutations (the voiced train through pulsed bands, the reach, pulsed bands playing noise) fail the
