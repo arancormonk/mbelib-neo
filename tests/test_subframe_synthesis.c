@@ -9880,6 +9880,24 @@ test_low_cut_dstar_path(void) {
         (void)low_path_frame(LOW_DSTAR, lost, s, LOW_MOVES, NULL, -1);
     }
     (void)low_path_frame(LOW_DSTAR, tone, s, LOW_HOLDS, NULL, -1);
+    /* Lost frames after a single tone (index 20) render the tone's tail over a
+     * silent copy of the last speech model (its voicing kept): each moves it;
+     * after a dual tone (index 130) they go on playing the tone, holding it,
+     * until the repeat limit's 4th frame fades the tone out over a muted repeat
+     * of the speech model, which moves it, as do the muted repeats after it. */
+    char single[49];
+    dstar_special_bits(single, 126, 20);
+    for (int dual = 0; dual < 2; ++dual) {
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+        }
+        (void)low_path_frame(LOW_DSTAR, dual ? tone : single, s, LOW_MOVES, NULL, -1);
+        (void)low_path_frame(LOW_DSTAR, dual ? tone : single, s, LOW_HOLDS, NULL, -1);
+        for (int f = 0; f < 5; ++f) {
+            (void)low_path_frame(LOW_DSTAR, lost, s, (dual && f < 3) ? LOW_HOLDS : LOW_MOVES, NULL, -1);
+        }
+    }
 }
 
 /*
@@ -10075,7 +10093,9 @@ test_low_cut_r33_path(void) {
  * frame leaves it; a usable tone (ID 132) straight after heard voice leaves it
  * at an ordinary error rate (its first frame's repeat is a scratch state) and,
  * at one that mutes (0.2), takes the mute's fade of the last frame, which moves
- * it, as the review of the low-band change found.
+ * it; its next frame holds it, and a lost frame after it holds it while the
+ * tone is held and, after the muted tone (no tone held), repeats the kept
+ * speech model and moves it.
  */
 static void
 test_low_cut_r33_mutes(void) {
@@ -10116,6 +10136,14 @@ test_low_cut_r33_mutes(void) {
         s[1].errorRate = muting ? 0.2f : 0.0f;
         const unsigned flags = low_path_frame(LOW_R33, tone, s, muting ? LOW_MOVES : LOW_HOLDS, &copy, 0);
         assert((flags & MBE_PROCESS_FLAG_TONE) != 0u && ((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == muting);
+        /* The tone's next frame renders nothing; a lost frame after it plays
+         * the held tone (it holds), unless the error rate muted the tone,
+         * which then left no held tone: the lost frame repeats the kept speech
+         * model from silence and moves it. */
+        s[1].errorRate = muting ? 0.2f : 0.0f;
+        (void)low_path_frame(LOW_R33, tone, s, LOW_HOLDS, NULL, 0);
+        s[1].errorRate = 0.0f;
+        (void)low_path_frame(LOW_R33, invalid, s, muting ? LOW_MOVES : LOW_HOLDS, NULL, 4);
     }
 }
 
