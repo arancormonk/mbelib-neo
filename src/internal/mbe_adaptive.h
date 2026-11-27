@@ -152,7 +152,8 @@ enum mbe_voiced_synthesis {
      * (mbe_subframe_mid_model(); docs/dvsi-parity.md, "Rate 33: mid-frame
      * pitch"), and which honours the marks of the rate-33 rows 13, 15 and 17
      * (MBE_FRAME_MARK_MID_COLUMNS_0_1, MBE_FRAME_MARK_LATE_ONSET whatever the
-     * frame before, MBE_FRAME_MARK_MID_COLUMN_0). Every rate-33 synthesis call. */
+     * frame before, MBE_FRAME_MARK_MID_COLUMN_0, which on the frame before
+     * also carries the pulse train). Every rate-33 synthesis call. */
     MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
     /** MBE_VOICED_SYNTHESIS_DVSI as DVSI's P25 (IMBE 7200x4400) decoder
      * renders it: the mid-frame model voiced by P25's 500 Hz columns, from
@@ -240,7 +241,9 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * PITCH_ABSENT on a current model with no voiced band gives the columns' hold
  * in D-STAR's and P25's renderings and the 505 Hz hold in rate 33's;
  * PITCH_CARRIES, PITCH_ABSENT and PREVIOUS_HELD on the previous model act on
- * the mid-frame pitch and the pulse train. No mark of the previous model
+ * the mid-frame pitch and the pulse train; in rate 33's rendering
+ * MID_COLUMN_0 on the previous model carries the pulse train too (in the
+ * others it changes nothing there). No mark of the previous model
  * chooses the columns' bands. P25's rendering gives the model it renders a
  * mark of its own (MBE_FRAME_MARK_ONSET_COLUMNS on any model with a voiced
  * band that is not a tone model), so there a caller's mark on a voiced model,
@@ -297,8 +300,12 @@ enum mbe_frame_mark {
     /* A rate-33 voice frame of V/UV row 17: the mid-frame model voices the
      * 500 Hz column 0 (through mbe_ambe2450_harmonic_voiced(), at its own
      * harmonics) and no other, whatever the two frames' voicing; the frame's
-     * own voicing is Annex B's row 17, all unvoiced. Read only in the
-     * rate-33 rendering (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450). */
+     * own voicing is Annex B's row 17, all unvoiced. On the previous model
+     * the pulse train runs on from the frame, as from one marked
+     * MBE_FRAME_MARK_PITCH_ABSENT or MBE_FRAME_MARK_PREVIOUS_HELD: the train
+     * the row-17 frame stored, which ran through its voiced first half and
+     * out of its mid-frame model. Read only in the rate-33 rendering
+     * (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450). */
     MBE_FRAME_MARK_MID_COLUMN_0 = 6,
     /* A rate-33 voice frame of V/UV row 13: the mid-frame model voices the
      * 500 Hz columns 0 and 1 (as MBE_FRAME_MARK_MID_COLUMN_0 does column 0)

@@ -196,7 +196,11 @@ void mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, i
  * kept and the pulse phase) and the unvoiced overlap (previousUw) of
  * @p prev_mp, when that state is marked as this rendering's, and writes
  * cur_mp's, with the harmonic phases at the frame's end (PSIl, PHIl) and the
- * noise state.
+ * noise state. The train runs on from a previous frame that has a voiced
+ * band, or is marked MBE_FRAME_MARK_PITCH_ABSENT or
+ * MBE_FRAME_MARK_PREVIOUS_HELD, or, in the rate-33 rendering only,
+ * MBE_FRAME_MARK_MID_COLUMN_0 (V/UV row 17); after any other it starts
+ * afresh.
  *
  * A frame whose harmonic count, or the previous frame's, is not 1..56 renders
  * nothing and leaves the state as it is.

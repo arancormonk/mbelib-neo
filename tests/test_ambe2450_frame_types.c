@@ -2371,6 +2371,143 @@ test_rows_13_15_17_after_mute_or_tone(void) {
     }
 }
 
+/* Cycles per sample of pitch w0. */
+static double
+rate_of(float w0) {
+    return (double)w0 / (2.0 * M_PI);
+}
+
+/* The first pulse a synthesized frame launched, in samples from its start:
+ * the oldest of the pulses it kept (noiseOverlap after the count, most recent
+ * first, each its time less the frame's 160 samples), all of them its own
+ * when it kept fewer than MBE_PULSE_HISTORY. The count is read as a float and
+ * checked to be a whole number in range before it is an index. */
+static double
+first_pulse_of(const mbe_parms* mp) {
+    const float stored = mp->noiseOverlap[0];
+    assert(stored >= 1.0f && stored < (float)MBE_PULSE_HISTORY && floorf(stored) == stored);
+    const int count = (int)stored;
+    return (double)mp->noiseOverlap[count] + 160.0;
+}
+
+/* The rate-33 mid-frame model between two frames as synthesized (`before`
+ * and `frame` as the stream left them), for the frame's own mark. */
+static void
+rate33_mid(const mbe_parms* before, const mbe_parms* frame, struct mbe_subframe_model* mid) {
+    mbe_subframe_mid_model(before, frame, mbe_voicing_onset_delay(frame) != 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450, mid);
+}
+
+/* Advancing a frame (mbe_advance_subframes()) leaves the pulse train and the
+ * harmonic phases its rendering left: `rendered` is the frame as the stream
+ * left it after `before`. */
+static void
+assert_advance_matches(const mbe_parms* rendered, const mbe_parms* before, int from_silence) {
+    mbe_parms advanced = *rendered;
+    mbe_advance_subframes(&advanced, before, from_silence, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    assert(float_array_bits_equal(advanced.noiseOverlap, rendered->noiseOverlap,
+                                  sizeof(advanced.noiseOverlap) / sizeof(advanced.noiseOverlap[0])));
+    assert(float_array_bits_equal(&advanced.PSIl[1], &rendered->PSIl[1], 56));
+    assert(float_array_bits_equal(&advanced.PHIl[1], &rendered->PHIl[1], 56));
+}
+
+/*
+ * The pulse train through a row-17 frame, whose own model has no voiced band
+ * and whose mid-frame model voices column 0: the train runs through its first
+ * half (between the frame before and the mid-frame model, from the phase that
+ * frame left) and out of the mid-frame model over its second, at that
+ * model's pitch, and the frame after takes it on. A frame voiced in its first
+ * half after it (row 13, or row 5 at another pitch) launches its first pulse
+ * where the running train puts it, (1 - p) / f samples in, p the phase the
+ * row-17 frame stored and f the mid-frame pitch (cycles per sample), not at its
+ * first sample, and leaves p + 80 f + 40 (f + f') cycles, f' its own pitch;
+ * a row-15 frame, voiced in neither half's start, starts a new train at
+ * mid-frame (its first pulse at sample 80, leaving 80 f' cycles), as before.
+ * Rendering and mbe_advance_subframes() leave the same train. The same after
+ * a tone, where the row-17 frame starts from silence and launches a new train
+ * at its first sample (leaving 160 f cycles of its mid-frame pitch): the frame
+ * after takes that train on, which the rule gives (no DVSI vector shows a
+ * row-17 frame there; docs/dvsi-parity.md, "Rate 33: rows 13, 15 and 17").
+ * Under a mute the row-17 frame is not heard, and the frame that ends the mute
+ * starts from silence and drops the train the unheard frame stored: its first
+ * pulse at its first sample (row 15: at sample 80), leaving
+ * 80 f + 40 (f + f') cycles (row 15: 80 f').
+ */
+static void
+test_train_through_row17(void) {
+    static const int row13[9] = {50, 13, 20, 200, 90, 17, 11, 3, 6};
+    static const int row5[9] = {50, 5, 20, 200, 90, 17, 11, 3, 6};
+    static const int row15[9] = {50, 15, 20, 200, 90, 17, 11, 3, 6};
+    const int* thirds[3] = {row13, row5, row15};
+    char tone[49];
+    for (int before_row17 = 0; before_row17 < 3; ++before_row17) { /* speech, a tone, a mute */
+        for (int t = 0; t < 3; ++t) {
+            struct stream s;
+            if (before_row17 == 1) {
+                stream_into_tone(&s, tone, 7);
+            } else {
+                stream_settled(&s, k_voice_loud);
+            }
+            const mbe_parms before = s.prev_enh;
+            if (before_row17 == 2) {
+                s.prev.errorRate = 0.2f;
+            }
+            stream_frame_b(&s, k_vuv_row17, 0, 0);
+            assert(has_flag(&s, MBE_PROCESS_FLAG_MUTE) == (before_row17 == 2));
+            const mbe_parms row17 = s.prev_enh;
+            assert(mbe_frame_mark(&row17) == MBE_FRAME_MARK_MID_COLUMN_0);
+            struct mbe_subframe_model mid;
+            rate33_mid(&before, &row17, &mid);
+            assert(mid.any_voiced);
+            if (before_row17 != 2) {
+                /* Heard, with no voiced band of its own. (Under the mute the
+                 * error rate's adaptive smoothing can voice it; the frame
+                 * after drops its train either way.) */
+                for (int l = 1; l <= row17.L; ++l) {
+                    assert(row17.Vl[l] == 0);
+                }
+                const double f = rate_of(mid.w0);
+                const double stored = (before_row17 == 1)
+                                          ? 160.0 * f
+                                          : pulse_phase_of(&before) + (40.0 * (rate_of(before.w0) + f)) + (80.0 * f);
+                assert(fabs(cycles_between(pulse_phase_of(&row17), stored)) < 1e-4);
+            }
+            if (before_row17 == 1) {
+                assert(fabs(first_pulse_of(&row17)) < 1e-3);
+            }
+            assert(row17.noiseOverlap[0] >= 1.0f);
+
+            if (before_row17 == 2) {
+                s.prev.errorRate = 0.0f;
+            }
+            stream_frame_b(&s, thirds[t], 0, 0);
+            assert(!has_flag(&s, MBE_PROCESS_FLAG_MUTE));
+            const mbe_parms third = s.prev_enh;
+            rate33_mid(&row17, &third, &mid);
+            const double f3 = rate_of(mid.w0), own = rate_of(third.w0);
+            const int carried = (before_row17 != 2) && mid.any_voiced;
+            const double p = pulse_phase_of(&row17);
+            double want_phase, want_first;
+            if (!mid.any_voiced) {
+                assert(t == 2);
+                want_phase = 80.0 * own;
+                want_first = 80.0;
+            } else if (carried) {
+                assert(p > 0.01 && p < 0.99);
+                want_phase = p + (80.0 * f3) + (40.0 * (f3 + own));
+                want_first = (1.0 - p) / f3;
+                /* Starting afresh would leave another phase and launch at 0. */
+                assert(fabs(cycles_between(want_phase, (80.0 * f3) + (40.0 * (f3 + own)))) > 0.01);
+            } else {
+                want_phase = (80.0 * f3) + (40.0 * (f3 + own));
+                want_first = 0.0;
+            }
+            assert(fabs(cycles_between(pulse_phase_of(&third), want_phase)) < 1e-4);
+            assert(fabs(first_pulse_of(&third) - want_first) < 1e-3);
+            assert_advance_matches(&third, &row17, before_row17 == 2);
+        }
+    }
+}
+
 /*
  * A lost frame repeats the frame last played, a tone included: three lost
  * frames of any kind (an erasure, a tone frame with the zero-amplitude ID 255,
@@ -3248,6 +3385,7 @@ main(void) {
     test_mute_after_silence_frame();
     test_rows_13_15_17_mid_voicing();
     test_row15_keeps_the_train();
+    test_train_through_row17();
     test_repeat_of_rows_13_15_17();
     test_p25_mark_in_state();
     test_tone_after_rows_13_15_17();
