@@ -1900,7 +1900,7 @@ fundamentals in cycles per sample, y in [1, 2),
 
 the parabola through sqrt(y) at y = 1, 1.5 and 2, the mid-frame fundamental is
 `floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19`. Its relative error `q(y) / sqrt(y) - 1` is 0 at
-both ends of the octave and at y = 1.5, about +7.7e-4 near y = 1.2 and -1.2e-3 near y = 1.75: the
+both ends of the octave and at y = 1.5, about -1.2e-3 near y = 1.19 and +7.7e-4 near y = 1.77: the
 half-octave wave the library had fitted into each code's own pitch, at twice that law's size and in
 the place it measures. It applies at an unchanged code as at a step; at an onset or an offset (one
 of the two models with no voiced band) the voiced model's own pitch stands. Nothing in the rule is
@@ -7395,8 +7395,10 @@ were declared in the branch's first commit, `f1be05d`, so none of those partitio
 here. The baseline is a build of `git archive f725a66`, the candidate one of `999647e`, an earlier
 form of `aff61e5` whose `mid_pitch()` nested its branches otherwise (rewritten for the complexity
 limit; the two builds decode all 98 P25 speech, channel-error, tone and pulse-train vectors byte for
-byte alike, and the differential harness gives the same for every protected stream; the later
-commits change documents only); both aligned freely first and were then scored at their joint lags,
+byte alike, and the differential harness gives the same for every protected stream; of the later
+commits, `13ca553` states a harmonic-count check again where P25's mid-frame filler indexes, for the
+static analyzer, which renders nothing otherwise, and the others change documents only); both
+aligned freely first and were then scored at their joint lags,
 both runs' encodings decoded by the candidate's decoder (Release, SIMD, IEEE arithmetic). The
 measurements of the sections above that are not the scoreboard's were made on a copy of the library
 with environment switches (outside the repository) that decodes every P25 speech, channel-error and
@@ -7429,8 +7431,12 @@ the mean paired change and its extremes):
 | development | 0.989085 → 0.994727 (+0.005642; 20 up, the least `t01` +0.002228, the most `dam10` +0.013283) | 1.2510 → 1.0608 (-0.1902; all fall, the least `dam80` -0.0221, the most `lvl` -0.3258) | 0.99549 → 0.99565 (+0.00017; `dam40` -0.000007) | +0.0522 → +0.0549 (+0.0027) | 6.3446 → 6.3501 (+0.0055; 17 rise, the most `dam10` +0.0222) |
 | validation | 0.993818 → 0.996757 (+0.002939; 5 up, the least `t04` +0.001747) | 0.8783 → 0.7251 (-0.1532; all fall, the least `t03` -0.0870) | 0.99340 → 0.99347 | +0.0298 → +0.0324 | 4.7763 → 4.7745 (-0.0018; 4 fall, `t03` +0.0074) |
 
+The grid and the parabola alone (the library's scratch-switch copy, scored freely aligned against
+the baseline's own free alignment): correlation +0.002571 / +0.001383 (every vector up), distance
+from DVSI's decode -0.0148 / -0.0143 dB, from the input -0.0005 / -0.0006 dB (nearer it), level
+-0.0004 / -0.0003 dB, channel-error distance (hard / soft) 4.7868 → 4.7827 and 5.6805 → 5.6782 dB.
 The scratch build's run gave +0.005548 / +0.003036 of correlation and -0.1491 / -0.1317 dB of
-distance from DVSI's decode: the library's clause on the column-read states lowers the distance by a
+distance from DVSI's decode for the four: the library's clause on the column-read states lowers the distance by a
 further 0.04 / 0.02 dB (above). **The distance from the input rises on development**, by 0.0055 dB in
 the mean (17 of 20 vectors, the most `dam10`, +0.022): the own models' column reading voices
 harmonics that the analysis of the input left unvoiced, and a decode that follows DVSI's there moves
@@ -7489,7 +7495,7 @@ decoder sets. In each of the ten local configurations (dev-debug; dev-release, G
 SIMD, fast-math, LTO and `-march=native`; asan-ubsan-debug; notones-debug; a Debug build with SIMD;
 a Debug `-march=x86-64-v3` build; Clang Release with SIMD, fast-math and LTO, once with
 `MBELIB_ENABLE_NATIVE=ON` and once with `-march=x86-64-v3`; and 32-bit Release and Debug), after
-each of the four rule commits, a differential harness outside the repository, built against the
+each of the four rule commits and after `13ca553`, a differential harness outside the repository, built against the
 baseline's library and the commit's, gives the same output byte for byte for: the pitch and harmonic
 count every D-STAR code decodes to and every rate-33 code at rows 16 and 18; hashes of the output
 and of all three returned states of the D-STAR and rate-33 data paths (3,000 random frames each) and
