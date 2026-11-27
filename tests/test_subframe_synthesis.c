@@ -8749,15 +8749,20 @@ test_r33_pulse_times_by_bits(void) {
             }
             next_frame_with_word(out, &state, &model, 0, r33);
             next_frame_as(next_out, &state, &plain, 0, r33);
+            /* Elsewhere (fast-math, x87, fused multiply-adds) the library may
+             * order the oscillators' sums otherwise: within a thousandth of the
+             * pair's peak, a tolerance relative to the parts. */
             float peak = 0.0f;
+            for (int n = 0; n < 160; ++n) {
+                peak = fmaxf(peak, fmaxf(fabsf(want[n]), fabsf(next_want[n])));
+            }
             for (int n = 0; n < 160; ++n) {
                 if (!MID_PITCH_INEXACT) {
                     assert(same_bits(&out[n], &want[n], 1) && same_bits(&next_out[n], &next_want[n], 1));
                 } else {
-                    assert(fabsf(out[n] - want[n]) <= 1.0e-3f * (1.0f + fabsf(want[n])));
-                    assert(fabsf(next_out[n] - next_want[n]) <= 1.0e-3f * (1.0f + fabsf(next_want[n])));
+                    assert(fabsf(out[n] - want[n]) <= 1.0e-3f * peak
+                           && fabsf(next_out[n] - next_want[n]) <= 1.0e-3f * peak);
                 }
-                peak = fmaxf(peak, fmaxf(fabsf(want[n]), fabsf(next_want[n])));
             }
             checked += any_mid || any_own;
             heard += peak > 1.0f;
