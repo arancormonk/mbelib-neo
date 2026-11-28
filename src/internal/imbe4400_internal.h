@@ -31,4 +31,15 @@ void mbe_imbe4400_quantize_amplitudes(int b0, const unsigned char bands[12], con
 int mbe_imbe4400_tone_row(int i, int* b0, int* b1, int* l1, int* l2);
 int mbe_imbe4400_tone_first_row(int b0);
 
+/*
+ * P25's quiet-frame gain (imbe7200x4400.c; docs/dvsi-parity.md, "P25: quiet
+ * frames"), exposed for the tests: g = 2^clamp(K (x - X0), FLOOR, 0), x the
+ * mean of mp's log2Ml[1..L]. Returns 1 and stores g in *gain where g < 1, and
+ * returns 0 and stores 1 otherwise (x at or above X0, L outside 1..56, or a
+ * log2Ml in 1..L that is not finite). P25's data path multiplies every
+ * magnitude it renders by g, after adaptive smoothing (not on a tone model,
+ * not in ProVoice).
+ */
+int mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain);
+
 #endif /* MBELIB_NEO_INTERNAL_IMBE4400_INTERNAL_H */

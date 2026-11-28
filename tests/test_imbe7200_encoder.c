@@ -53,6 +53,16 @@ codec_process(float* out, mbe_process_result* result, const char* bits, mbe_parm
 
 /* Repeated, this voice frame takes the decoder's log2Ml to 34.8, about the
  * highest a search over repeated frames found. */
+/* P25's quiet-frame gain on the decoded model (the library's own function,
+ * mbe_imbe4400_quiet_gain()): the decoder plays a frame of a low mean log2
+ * magnitude lower, a pure tone among them. */
+static double
+codec_played_gain(const mbe_parms* history) {
+    double gain = 1.0;
+    (void)mbe_imbe4400_quiet_gain(history, &gain);
+    return gain;
+}
+
 static const struct enc_codec imbe_codec = {
     "IMBE",
     88,
@@ -66,6 +76,7 @@ static const struct enc_codec imbe_codec = {
     codec_process,
     "0100101111111111111111111100111111111110010000111101001001111111111111110101100001001011",
     NULL,
+    codec_played_gain,
 };
 
 /* Every data word encodes to a codeword the decoder accepts unchanged, and

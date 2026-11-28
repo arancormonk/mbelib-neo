@@ -1729,7 +1729,19 @@ struct mbe_speech_options {
     enum mbe_amplitude_limit limit;
     enum mbe_synthesis_start start;
     enum mbe_output_limit output;
+    /* A gain on the magnitudes the frame renders, after adaptive smoothing
+     * (P25's quiet frames, mbe_synthesizeSpeechScaledf()); NULL for none. */
+    const double* magnitude_gain;
 };
+
+/* Every magnitude of the model the core renders or advances, times gain, each
+ * product formed in double and rounded to float once. */
+static void
+mbe_scale_rendered_magnitudes(mbe_parms* cur_mp, double gain) {
+    for (int l = 1; l <= cur_mp->L; l++) {
+        cur_mp->Ml[l] = (float)((double)cur_mp->Ml[l] * gain);
+    }
+}
 
 static void
 mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, enum mbe_speech_smoothing smoothing,
@@ -1754,6 +1766,11 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
         mbe_applyAdaptiveSmoothingWithRm0Limit(cur_mp, prev_mp, pre_enh_rm0, options->limit);
     } else if (smoothing == MBE_SMOOTHING_FROM_MODEL) {
         mbe_applyAdaptiveSmoothing(cur_mp, prev_mp);
+    }
+    /* After smoothing and before the mute decision: the magnitudes smoothing
+     * left, scaled, are the model rendered or advanced unheard alike. */
+    if (options->magnitude_gain != NULL) {
+        mbe_scale_rendered_magnitudes(cur_mp, *options->magnitude_gain);
     }
 
     /* The shared core checks repeat count and the IMBE error-rate threshold.
@@ -1783,11 +1800,20 @@ mbe_synthesizeSpeechCore(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp,
 }
 
 void
+mbe_synthesizeSpeechScaledf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0, double magnitude_gain,
+                            enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
+                            enum mbe_amplitude_limit limit) {
+    const struct mbe_speech_options options = {mute_noise,         voiced,         limit, MBE_SYNTHESIS_CONTINUES,
+                                               MBE_OUTPUT_LIMITED, &magnitude_gain};
+    mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, &options);
+}
+
+void
 mbe_synthesizeSpeechWithPreEnhRm0Startf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
                                         enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis voiced,
                                         enum mbe_amplitude_limit limit, enum mbe_synthesis_start start,
                                         enum mbe_output_limit output) {
-    const struct mbe_speech_options options = {mute_noise, voiced, limit, start, output};
+    const struct mbe_speech_options options = {mute_noise, voiced, limit, start, output, NULL};
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_PRE_ENH_RM0, rm0, &options);
 }
 
@@ -1804,7 +1830,8 @@ mbe_synthesizeRepeatedSpeechStartf(float* aout_buf, mbe_parms* cur_mp, mbe_parms
                                    enum mbe_voiced_synthesis voiced, enum mbe_synthesis_start start,
                                    enum mbe_output_limit output) {
     /* Repeat paths, which never mute inside synthesis. */
-    const struct mbe_speech_options options = {MBE_MUTE_NOISE_SPEC, voiced, MBE_AMPLITUDE_LIMIT_SPEC, start, output};
+    const struct mbe_speech_options options = {
+        MBE_MUTE_NOISE_SPEC, voiced, MBE_AMPLITUDE_LIMIT_SPEC, start, output, NULL};
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_NONE, 0.0f, &options);
 }
 
@@ -1816,8 +1843,9 @@ mbe_synthesizeRepeatedSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* pre
 
 void
 mbe_synthesizeSpeechf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp) {
-    const struct mbe_speech_options options = {MBE_MUTE_NOISE_COMFORT, MBE_VOICED_SYNTHESIS_SPEC,
-                                               MBE_AMPLITUDE_LIMIT_SPEC, MBE_SYNTHESIS_CONTINUES, MBE_OUTPUT_LIMITED};
+    const struct mbe_speech_options options = {MBE_MUTE_NOISE_COMFORT,   MBE_VOICED_SYNTHESIS_SPEC,
+                                               MBE_AMPLITUDE_LIMIT_SPEC, MBE_SYNTHESIS_CONTINUES,
+                                               MBE_OUTPUT_LIMITED,       NULL};
     mbe_synthesizeSpeechCore(aout_buf, cur_mp, prev_mp, MBE_SMOOTHING_FROM_MODEL, 0.0f, &options);
 }
 

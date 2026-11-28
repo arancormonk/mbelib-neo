@@ -34,6 +34,9 @@ struct enc_codec {
                    mbe_parms* enhanced);
     const char* peak_frame;           /* parameter bits ('0'/'1') whose repetition takes the decoder's log2Ml highest */
     int (*tone_id)(const char* bits); /* the tone index a tone frame carries, else -1; NULL without tone frames */
+    /* The gain the codec's decoder plays a frame's magnitudes at, read from the prediction history its process path
+     * leaves (the frame's decoded model: P25's quiet frames), or NULL for a decoder that plays them as decoded. */
+    double (*played_gain)(const mbe_parms* history);
 };
 
 static uint32_t enc_rng = 0x2450u;
@@ -638,9 +641,12 @@ enc_test_pitch_cases(const struct enc_codec* c, void* enc) {
 
 /* Decoded level (process path, first 20 frames skipped) of a steady 140 Hz
  * voice amplitude * sum sin(h x) / h over the given number of harmonics, in dB
- * re an RMS of 32768 on the int16 scale (float output is int16 / 7). */
+ * re an RMS of 32768 on the int16 scale (float output is int16 / 7). With
+ * sent nonzero, each frame's samples are divided by the gain the decoder plays
+ * that frame's magnitudes at (c->played_gain, where the codec has one): the
+ * level the encoder sent, on a steady input. */
 static inline double
-enc_decoded_level_db(const struct enc_codec* c, void* enc, double amplitude, int harmonics) {
+enc_decoded_level_sent_db(const struct enc_codec* c, void* enc, double amplitude, int harmonics, int sent) {
     mbe_parms ec, ep, eh, dc, dp, dh;
     double phase = 0.0, sum = 0.0;
     int n = 0;
@@ -662,13 +668,19 @@ enc_decoded_level_db(const struct enc_codec* c, void* enc, double amplitude, int
             return 1e9;
         }
         mbe_moveMbeParms(&ec, &ep);
+        const double played = (sent && c->played_gain != NULL) ? c->played_gain(&dp) : 1.0;
         for (int i = 0; frame >= 20 && i < 160; i++) {
-            double x = 7.0 * (double)out[i];
+            double x = 7.0 * (double)out[i] / played;
             sum += x * x;
             n++;
         }
     }
     return 10.0 * log10((sum / n) + 1e-30) - (20.0 * log10(32768.0));
+}
+
+static inline double
+enc_decoded_level_db(const struct enc_codec* c, void* enc, double amplitude, int harmonics) {
+    return enc_decoded_level_sent_db(c, enc, amplitude, harmonics, 0);
 }
 
 /* The decoded level follows the input down 20 and 40 dB, and a -21 dBFS voice
@@ -685,8 +697,10 @@ enc_test_level(const struct enc_codec* c, void* enc) {
 }
 
 /* A quiet pure tone has a far lower mean log magnitude than the lowest gain
- * the codec can send; it still decodes at the input level instead of putting
- * the excess in its peak. */
+ * the codec can send; the encoder still sends it at the input level instead of
+ * putting the excess in its peak. A decoder that plays such a frame lower
+ * (P25's quiet frames, whose gain follows that mean) plays it lower by its own
+ * gain, which is taken out here (c->played_gain) and printed apart. */
 static inline int
 enc_test_quiet_tone_level(const struct enc_codec* c, void* enc) {
     int fails = 0;
@@ -694,8 +708,9 @@ enc_test_quiet_tone_level(const struct enc_codec* c, void* enc) {
     for (size_t k = 0; k < sizeof(amplitudes) / sizeof(amplitudes[0]); k++) {
         double input_db = 20.0 * log10(amplitudes[k] / sqrt(2.0));
         double decoded = enc_decoded_level_db(c, enc, amplitudes[k], 1);
-        printf("%s quiet tone: %.1f dBFS decodes at %.1f\n", c->name, input_db, decoded);
-        fails += fabs(decoded - input_db) > 3.0;
+        double sent = enc_decoded_level_sent_db(c, enc, amplitudes[k], 1, 1);
+        printf("%s quiet tone: %.1f dBFS sent at %.1f, decodes at %.1f\n", c->name, input_db, sent, decoded);
+        fails += fabs(sent - input_db) > 3.0;
     }
     return fails != 0;
 }

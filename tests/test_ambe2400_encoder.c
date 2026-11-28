@@ -1517,6 +1517,7 @@ static const struct enc_codec dstar_codec = {
     dstar_codec_process,
     "1110111111111111111110110010000000000000001111110",
     dstar_codec_tone_id,
+    NULL,
 };
 
 /* Every tone index is written with the selector (bits 6..8) the decoder's

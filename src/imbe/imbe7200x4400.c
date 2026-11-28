@@ -1388,6 +1388,57 @@ imbe_has_voiced_band(const mbe_parms* mp) {
     return 0;
 }
 
+/*
+ * P25's quiet frames (docs/dvsi-parity.md, "P25: quiet frames"). DVSI's P25
+ * decoder plays a frame whose decoded magnitudes are low lower still: on its
+ * decodes of its own vectors a steady frame's samples are the library's at a
+ * gain g of at most 1, truncated toward zero, and g follows the mean x of the
+ * frame's decoded log2 magnitudes, g = 2^clamp(K (x - X0), FLOOR, 0). The three
+ * constants are a fit by level to the library's own decodes of the development
+ * and validation vectors (per steady frame, the gain for which the library's
+ * samples, scaled and truncated as P25's 16-bit output is, come nearest
+ * DVSI's), not values from a document; what DVSI's decoder computes is not
+ * known. The floor lies near the lower limit of TIA-102.BABA's enhancement
+ * weights (0.5), which is a guess, not a derivation.
+ */
+#define IMBE_QUIET_SLOPE 1.41  /* K: log2 g per unit of the mean log2 magnitude under the knee */
+#define IMBE_QUIET_KNEE  -1.80 /* X0: the mean log2 magnitude under which the gain falls */
+#define IMBE_QUIET_FLOOR -1.01 /* FLOOR: log2 of the lowest gain */
+
+/*
+ * The quiet-frame gain of a model, read from its decoded log2 magnitudes
+ * (log2Ml[1..L], which no rendering step writes): x their mean, formed in
+ * double from the stored floats, and g formed in double. Returns 1 and stores
+ * g where g < 1; returns 0 and stores 1 where the model takes no gain: x at or
+ * above the knee, a harmonic count outside 1..56, or a log2 magnitude in 1..L
+ * that is not finite (read on its bit pattern, so that fast-math cannot fold
+ * the test; a sum of at most 56 finite floats is finite in double, so the mean
+ * of the others is). The exponent is clamped before exp2(), so no input
+ * reaches an overflow or a NaN. The slots past L are not read.
+ */
+int
+mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
+    *gain = 1.0;
+    if (mp == NULL || !mbe_harmonic_count_is_valid(mp->L)) {
+        return 0;
+    }
+    double sum = 0.0;
+    for (int l = 1; l <= mp->L; l++) {
+        uint32_t bits;
+        memcpy(&bits, &mp->log2Ml[l], sizeof(bits));
+        if ((bits & UINT32_C(0x7FFFFFFF)) >= UINT32_C(0x7F800000)) {
+            return 0;
+        }
+        sum += (double)mp->log2Ml[l];
+    }
+    const double exponent = IMBE_QUIET_SLOPE * ((sum / (double)mp->L) - IMBE_QUIET_KNEE);
+    if (!(exponent < 0.0)) {
+        return 0;
+    }
+    *gain = exp2((exponent < IMBE_QUIET_FLOOR) ? IMBE_QUIET_FLOOR : exponent);
+    return 1;
+}
+
 static void
 imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_mute_noise mute_noise,
                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
@@ -1417,6 +1468,17 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
     /* The prediction history (prev_mp) keeps the decoded frame; a tone frame's
      * synthesis model is the tone model, from its decoded magnitudes. */
     const int plays_tone = !imbe4400_is_provoice(result) && imbe4400_take_tone(cur_mp, &tone);
+    /* P25's quiet-frame gain, from the decoded log2 magnitudes of the model
+     * the frame plays; none on a tone model (a tone's level is its own rule)
+     * or in ProVoice. It is applied once, inside the synthesis, to the
+     * magnitudes adaptive smoothing leaves, and never stored where a model is
+     * decoded or repeated from: prev_mp, the prediction history and the
+     * repeat source, was committed above as decoded, and the gain is read from
+     * log2Ml, which no rendering step writes. A lost frame's repeat loads that
+     * history, so it plays the repeated frame's magnitudes at that frame's
+     * gain, applied once (the reset model's log2Ml are 0: no gain). */
+    double quiet_gain = 1.0;
+    const int quiet = !plays_tone && !imbe4400_is_provoice(result) && mbe_imbe4400_quiet_gain(cur_mp, &quiet_gain);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
     if (plays_tone) {
         imbe4400_play_tone(cur_mp, &tone);
@@ -1426,8 +1488,13 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
      * state (no DVSI ProVoice material shows one). */
     const enum mbe_voiced_synthesis rendering =
         imbe4400_is_provoice(result) ? MBE_VOICED_SYNTHESIS_DVSI_PROVOICE : MBE_VOICED_SYNTHESIS_DVSI_IMBE;
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
-                                       MBE_AMPLITUDE_LIMIT_NONE);
+    if (quiet) {
+        mbe_synthesizeSpeechScaledf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, quiet_gain, mute_noise, rendering,
+                                    MBE_AMPLITUDE_LIMIT_NONE);
+    } else {
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
+                                           MBE_AMPLITUDE_LIMIT_NONE);
+    }
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);

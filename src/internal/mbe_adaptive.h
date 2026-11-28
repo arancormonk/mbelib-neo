@@ -447,6 +447,22 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
                                         enum mbe_amplitude_limit limit);
 
 /**
+ * @brief mbe_synthesizeSpeechWithPreEnhRm0f() with every magnitude the frame
+ *        renders multiplied by a gain (P25's quiet frames: imbe7200x4400.c,
+ *        mbe_imbe4400_quiet_gain()).
+ *
+ * The gain applies after adaptive smoothing and before the mute decision, to
+ * the magnitudes smoothing left (voiced, unvoiced and pulsed bands alike), so
+ * a frame the core mutes advances the scaled model as rendering would leave
+ * it; each product is formed in double and rounded to float once. It changes
+ * cur_mp's Ml only (log2Ml, the voicing and everything else as without it).
+ * @param magnitude_gain The gain; the caller passes a positive finite value.
+ */
+void mbe_synthesizeSpeechScaledf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,
+                                 double magnitude_gain, enum mbe_mute_noise mute_noise,
+                                 enum mbe_voiced_synthesis voiced, enum mbe_amplitude_limit limit);
+
+/**
  * @brief mbe_synthesizeSpeechWithPreEnhRm0f() with the way its rendering starts
  *        and whether its output is limited.
  * @param start  How the frame's rendering starts (the subframe renderings only;
