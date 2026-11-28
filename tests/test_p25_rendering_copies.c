@@ -124,11 +124,11 @@ check_columns(const mbe_parms* prev, const mbe_parms* cur, const struct mbe_subf
         return 0;
     }
     assert(!rule.dstar);
+    const struct p25_column_readers none = {0, 0};
     for (int l = 1; l <= model->L; ++l) {
         assert(p25_columns_voice(&rule, model->w0, l) == columns_voice(&rule, model->w0, l));
-        if (!p25_reads_by_columns(prev) && !p25_reads_by_columns(cur)) {
-            assert(p25_column_band_state(prev, cur, &rule, model, l) == column_band_state(prev, cur, &rule, model, l));
-        }
+        assert(p25_column_band_state(prev, cur, &rule, &none, model, l)
+               == column_band_state(prev, cur, &rule, model, l));
     }
     return model->L;
 }
