@@ -428,7 +428,13 @@ The CTest suite includes:
   samples and all three returned states, through the P25 data path, ProVoice's frame entry point and
   the P25 data path with ProVoice's flag, and D-STAR's and rate 33's data paths (their own words
   kept); the real state, the ratio off by 2e-7 (inside 2^-20) and a `log2Ml` at the smallest
-  subnormal (finite) act in P25's alone, and differ from the history without them. The own models by columns
+  subnormal (finite) act in P25's alone, and differ from the history without them. The tone's levels
+  decided where it is taken (`test_tone_levels_decided_once`, `test_p25_tones`): a repeat of a played
+  DTMF 1 history whose tone magnitudes a caller set to `FLT_MIN`, the others 0, would be played at
+  subnormal levels; it plays as the same history with the word cleared, samples and all three states
+  alike but for the word, unmarked; over all 116 rows and levels from `FLT_MIN` to 1e30 (three floats
+  at each of 47 rungs: `FLT_MIN` times 31^k for k 0 to 45, and 1e30) every model the player marks passes `mbe_imbe4400_tone_model()` and every
+  repeat not taken is unmarked (16,008 marked, 348 refused). The own models by columns
   (`test_p25_own_columns`): at every code, with the voicing ending after, starting at and lying only
   at each harmonic, against the reading formed in the test, its own models built in the test
   (`reference_own_model()`, not the library's) and its magnitudes moved across the factor rounded to
@@ -445,7 +451,12 @@ The CTest suite includes:
   not the library's object, and the static analyzers see it whole (the models' harmonic counts
   bounded before the copies are called). The same test runs the floored train's grid test
   (`p25_grid_steps()`) on every point of the grid, 1 to 2^18 steps with the Nyquist point, each with
-  its canonical float giving its count, and on both floats beside each, which fail. The independent rendering of the waveform tests (`run_waveform()`) takes P25's
+  its canonical float giving its count, and on both floats beside each, which fail; and the phase a
+  floored interval stores at a whole cycle, tested as stored (6553 steps from 48 2^-19 - 2^-56 reach
+  1 - 2^-56 cycle, which leaves exactly 0, and the octave step to 3276 after it launches its pulse at
+  sample 80; with the phase tested unrounded the 32-bit Release build stores 1.0 and fails). Its
+  comparator fails an infinity or a NaN in either mode, its own bits included, and +0 against -0 in
+  the exact mode (`check_comparator()`). The independent rendering of the waveform tests (`run_waveform()`) takes P25's
   mid-frame pitch with the excess, the train's floored means, its phase inputs and its own models'
   voicing from its own arithmetic (`reference_p25_mid_pitch()`, `reference_advance()`,
   `reference_phase_input()`, `reference_own_model()`, `reference_own_voicing()`), over a stream that
@@ -466,12 +477,14 @@ The CTest suite includes:
   brackets on the whole numbers: 8736 then 5460 (exactly 8/5) from phase 0.25 floored, the nearest
   pairs on both sides of all four edges, and each edge exactly at 40 pairs, among them pairs whose
   floats' ratio a float test would put inside the bracket.
-  Mutations (the second fix round's list, 59, each applied to the head in a copy, the six tests
+  Mutations (the third fix round's list, 61, each applied to the head in a copy, the six tests
   `test_params`, `test_subframe_synthesis`, `test_frame_paths`, `test_p25_tones`, `test_golden_pcm`
-  and `test_p25_rendering_copies` built in Debug and run; on the merged head, `ecb78d0`, and again
-  on `5369c52`, the last commit that changes the library or a test, all 59 fail a test, the first-failing assertion
-  of each in `build/mut/mutations3-merged.log` and `build/mut/mutations3-final.log` outside the
-  repository): the grid 2^-18 and rounding in place of the floor; the mid-frame value rounded,
+  and `test_p25_rendering_copies` built in Debug and run, but the phase stored unrounded, built as
+  the 32-bit Release build, the only kind that shows it; on `e42a5a1`, the last commit that changes
+  the library or a test, all 61 fail a test, the first-failing assertion of each in
+  `build/mut/mutations4-final.log` outside the repository; the second round's 59 failed on
+  `ecb78d0` and `5369c52` too): the tone taken on its decoded magnitudes alone, without the levels'
+  normality (`test_p25_tones`); the phase stored unrounded (`test_p25_rendering_copies`); the grid 2^-18 and rounding in place of the floor; the mid-frame value rounded,
   unfloored, in float, with no excess (fails at b0 51, 53, 75, 80, 94, 95, 164), with its constant
   only (53, 75, 94), with twice the excess, with nodes 1, 1.4 and 2, only where the pitches differ, in
   ProVoice's, D-STAR's (also `test_golden_pcm`) or rate 33's rendering (also `test_params`), with no
@@ -538,14 +551,18 @@ The CTest suite includes:
   states is compared after every frame: `prev_mp.noiseOverlap[38]` and `[39]` differ after the first
   frame (they keep the values they entered with), and from the second frame on the states are
   equal; the baseline (`f725a66`) and the branch below (`1e531f8`) do the same, so
-  it is the branch point's behaviour, not this change set's. Built against the branch below's head `1e531f8` and the merged head `ecb78d0`, and again against `5369c52` (the last commit that changes the library: the tone predicate's structure loop moved into a helper), in the ten local
-  configurations, every PROTECTED line (4,252, the two coverage lines and the ProVoice lines among
-  them) is the same in each configuration, and only P25's lines change (215: the 208 decoded pitches,
-  its six streams and the IMBE encoder's `cur_mp`), P25's stream hashes being those of the head before
-  the merge; in the second fix round each library edit was first run against the commit before it,
-  every line the same: the pulses' ownership (`e249b64` against `f24ed64`, the first form of the
-  harness) in the 32-bit Release and GCC fast-math LTO builds, the analyzers' zeroed arrays (`edb277f`
-  against `e249b64`, this form) in those and the Clang LTO build. What it leaves out: MSVC
+  it is the branch point's behaviour, not this change set's. Built against the branch below's head
+  `1e531f8` and the merged head `ecb78d0`, again against `5369c52` (the tone predicate's structure
+  loop moved into a helper), each time with every PROTECTED line (4,252, the two coverage lines and
+  the ProVoice lines among them) the same in each of the ten local configurations; and, in its
+  present form (three coverage lines), against `c18d306`, the last commit that changes the library
+  or a test (the third review's fixes in), in the ten configurations: every PROTECTED line (4,253)
+  the same in each, and only P25's lines change (215: the 208 decoded pitches, its six streams and
+  the IMBE encoder's `cur_mp`), P25's lines in the dev-debug build those of the head before the
+  merge. In the second fix round each library edit was first run against the commit before it, every
+  line the same: the pulses' ownership (`e249b64` against `f24ed64`, the first form of the harness)
+  in the 32-bit Release and GCC fast-math LTO builds, the analyzers' zeroed arrays (`edb277f`
+  against `e249b64`) in those and the Clang LTO build. What it leaves out: MSVC
   and macOS builds, concurrent threads, caller states outside these classes, and combinations beyond
   the pairs crossed (no triple of factors is enumerated in full).
   Valgrind (memcheck, full leak check, the merged head's dev-debug build) on `test_params`,
@@ -555,11 +572,17 @@ The CTest suite includes:
   blocks "possibly lost" (1,095 and 4,167 bytes) and two still reachable (144 and 2,752 bytes), all
   the thread-local transform plan's (`mbe_fft_plan_alloc()`, which a thread keeps until it exits),
   which valgrind counts as two errors; a Debug build of the branch below (`1e531f8`) shows the same
-  four blocks in `test_params` and `test_subframe_synthesis`.
+  four blocks in `test_params` and `test_subframe_synthesis`. On `c18d306` (`test_p25_tones` again on
+  `e42a5a1`) the tests this round
+  changed (`test_p25_tones`, `test_p25_rendering_copies`, `test_subframe_synthesis`) show the same:
+  no invalid access or uninitialised read, the same two possibly-lost blocks in the two that
+  synthesize through the library, none in the copies test.
   Preflights: `tools/preflight_ci.sh` and `tools/quality_preflight.sh`, both with `--base 1e531f8`
   (the branch below as merged), pass on `5369c52` (their first run, on `0e08319`, failed Lizard's
   complexity limit on the tone predicate, 16, and IWYU on the copies test's include of `mbe_math.h`;
-  `5369c52` fixes both). The quality preflight's Gitleaks scan again covered no commit (`0 commits
+  `5369c52` fixes both); and again on `e42a5a1`, after the third review's fixes (their first run
+  there, on `c18d306`, failed clang-tidy and scan-build on the tone test's floating-point loop
+  counter, which `e42a5a1` replaces with an integer rung). The quality preflight's Gitleaks scan again covered no commit (`0 commits
   scanned`, `scanned ~0 bytes`: the container cannot resolve a linked worktree's Git directory, and
   the job reports success). Instead the pinned image (`tools/ci-dependency-pins.env`) with the
   repository's `.gitleaks.toml` scanned `f725a66..HEAD` in a clone of the branch outside the

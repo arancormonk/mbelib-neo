@@ -146,9 +146,9 @@ appear here.
   steps, and the mid-frame quadratic's excess), found on DVSI's pulse-train vectors and measured on
   the development and validation vectors on a scratch build before the library was scored: those are
   not out of sample for them either. The change set was measured and gated on the development,
-  validation, tone and channel partitions (three times: the four rules, the change set with the
-  review's fixes, and after the second review's fixes and the merge of the branch below, against
-  `1e531f8`); the final partition is to be scored once for it, after the review, against
+  validation, tone and channel partitions (four times: the four rules, the change set with the
+  review's fixes, after the second review's fixes and the merge of the branch below, against
+  `1e531f8`, and on the code as pushed, after the third review's fixes); the final partition is to be scored once for it, after the review, against
   `p25-decoder-final`, its baseline `1e531f8` ([November 2026: four rules of DVSI's P25
   decoder](#november-2026-four-rules-of-dvsis-p25-decoder)).
 - **A level error no parameter explains.** Before fitting a law to a level error that none of the
@@ -8751,7 +8751,11 @@ four streams in the 32-bit Release build alone, which is why it was reverted) ho
 covered. In its second form: built against the branch below's head `1e531f8` and the merged head
 `ecb78d0`, and again against `5369c52` (the tone predicate's loop moved into a helper), in the ten
 local configurations, its 4,252 protected lines are identical in each and the 215 that change are
-P25's (the 208 decoded pitches, its six streams, the IMBE encoder's `cur_mp`). ProVoice entered from
+P25's (the 208 decoded pitches, its six streams, the IMBE encoder's `cur_mp`); and with its coverage
+counted as the forged states hold them (a third coverage line: 255 of 288 mark-by-voicing pairs,
+10,176 distinct pairs of pitch and voicing, testing.md), against `c18d306`, the code as pushed
+after the third review's fixes, its 4,253 protected lines identical in each configuration and the
+same 215 P25 lines changing. ProVoice entered from
 the D-STAR and rate-33 streams' end states with the low cut's slots changed plays the same samples,
 and its returned states differ after the first frame in `prev_mp.noiseOverlap[38]` and `[39]` alone
 and are equal from the second frame on, in the baseline, the branch below and this change set alike:
@@ -8875,6 +8879,17 @@ rate 33's 170 scored decodes are the baseline's (the change set touches neither)
 and third candidates 32 of D-STAR's 85 and 37 of rate 33's 85 scored decodes differ: the branch
 below's changes (the block lengths at 20 harmonics, the low band's later commits), which the
 baseline has too. P25's figures of the second scoring above are therefore the third's.
+
+**The fourth scoring**, after the third review's fixes (the carried phase tested as stored, the tone
+levels decided where the tone is taken; `d6abf48`, `e3556d3`), on the code as pushed: a build of
+`c18d306` (the later commits change documents only) against the same clean build of `1e531f8`, the
+four stages scored the same way in a new output directory. All four sets pass, 77 of 77 checks;
+every P25 check line, its bootstrap intervals included, is literally the third scoring's; all 255
+scored decodes carry the third candidate's PCM hashes (P25's 85, and D-STAR's and rate 33's 170,
+which are the baseline's); all 75 speech entries carry an encoder-row hash and a PCM hash in both
+reports, every encoder row equal. All 315 permitted decodes (103 P25, 106 D-STAR, 106 rate 33) of a
+build of `e3556d3` are byte for byte, PCM and parameter dumps by hash, those of `19379a0` (P25) and
+of `1e531f8` (D-STAR and rate 33).
 
 **Notes on the declarations** (the sets stay as declared; these correct the account of them): the
 descriptions predate rule 2's pulse train and the mid-frame quadratic's excess, and state rule 2 as
