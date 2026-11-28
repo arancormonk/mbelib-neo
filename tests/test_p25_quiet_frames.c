@@ -978,6 +978,30 @@ arithmetic_model(int L, float w0, const float* logs, int n) {
     return cur;
 }
 
+/* Whether a gain that is a result of the platform's exp2() between the knees is pinned by its bits: with glibc
+ * (whose exp2() gave the expected values) and FLT_EVAL_METHOD 0; elsewhere (x87, another C library: MSVC's and
+ * macOS's in CI) within one last place. The gains that are not exp2() results between the knees (1 and 1/4
+ * exactly) are pinned everywhere (expect_gain()). */
+#if defined(__GLIBC__) && defined(FLT_EVAL_METHOD) && (FLT_EVAL_METHOD == 0)
+#define QUIET_EXP2_BY_BITS 1
+#else
+#define QUIET_EXP2_BY_BITS 0
+#endif
+
+static void
+expect_exp2_gain(const mbe_parms* mp, uint64_t gain_bits, const char* what) {
+    double gain = -1.0;
+    const int quiet = mbe_imbe4400_quiet_gain(mp, &gain);
+    const uint64_t got = bits_of_double(gain);
+    const int ok =
+        QUIET_EXP2_BY_BITS ? (got == gain_bits) : (got == gain_bits || got == gain_bits + 1u || got == gain_bits - 1u);
+    if (quiet != 1 || !ok) {
+        fprintf(stderr, "%s: flag %d gain %a, want bits %llx%s\n", what, quiet, gain, (unsigned long long)gain_bits,
+                QUIET_EXP2_BY_BITS ? "" : " within one place");
+    }
+    assert(quiet == 1 && ok);
+}
+
 static void
 expect_gain(const mbe_parms* mp, int quiet_want, uint64_t gain_bits, const char* what) {
     double gain = -1.0;
@@ -990,18 +1014,26 @@ expect_gain(const mbe_parms* mp, int quiet_want, uint64_t gain_bits, const char*
 }
 
 /*
- * The gain's arithmetic, exact in every build (no tolerance): each expected
- * value below was computed outside the test, in Python's IEEE binary64 (the
- * gains through glibc's exp2), and is written as its bit pattern.
+ * The gain's arithmetic: each expected value below was computed outside the
+ * test, in Python's IEEE binary64 (the gains through glibc's exp2()), and is
+ * written as its bit pattern. 1 and 1/4 are pinned by their bits in every
+ * build. The four gains that are exp2() results between the knees are pinned
+ * by their bits with glibc and FLT_EVAL_METHOD 0, within one last place
+ * elsewhere (QUIET_EXP2_BY_BITS); all four are the correctly rounded values,
+ * the exact result lying from the rounding midpoint by 0.051 (the double
+ * below the knee: the tightest, resting on exp2() being linear that close to
+ * 0), 0.313 (L 55), 0.462 (the history within the bound) and 0.353 (dtmf
+ * frame 3185) of a last place.
  * - The mean exactly on the knee: L 4, log2Ml -0x1.bae148p+2, 0x1.47ae14p-24,
  *   0x1p-49, 0 (summed in order, exactly 4 X0, the mean X0): no gain; L 51,
  *   -0x1.60eb86p+6, 0x1.c28f5cp-19, 0x1p-46 and 48 zeros (the mean X0 by its
  *   one rounded division, where K S / L - K X0, the order Clang's fast-math
  *   LTO builds once took, is -2^-51 and would take the gain): no gain.
  * - The doubles beside the knee: the next above (0x1.8p-49 in place of the
- *   last part), no gain; the next below (0x1p-50), the gain 0x1.ffffffffffffdp-1.
+ *   last part), no gain; the next below (0x1p-50), the gain
+ *   0x1.ffffffffffffdp-1 (an exp2() result: QUIET_EXP2_BY_BITS).
  * - L 55, forty-four -2 and eleven -1 (the mean -99/55): the gain
- *   0x1.d44562b64079ep-1.
+ *   0x1.d44562b64079ep-1 (QUIET_EXP2_BY_BITS).
  * - Cancelling histories beyond the bound, L 10: {2^58, -23, -2^58, 0, ...}
  *   (-32 in binary64, -23 in an extended register) and the review's
  *   {2^58, 32 + 2^-12, -2^58, -23, 0, ...} (41 in binary64, -23 under x87
@@ -1012,13 +1044,12 @@ expect_gain(const mbe_parms* mp, int quiet_want, uint64_t gain_bits, const char*
  *   floor).
  * - A history within the bound, {2^20, -2^-40, -2^20, -3.2 x 7}, whose
  *   binary64 sum loses the -2^-40 that an extended register keeps: the gain
- *   0x1.0b2ad7ecc9836p-1 (by its bits where FLT_EVAL_METHOD is 0, within one
- *   place under x87; a sum kept in an extended register gives ...9614p-1).
+ *   0x1.0b2ad7ecc9836p-1 (QUIET_EXP2_BY_BITS; a sum kept in an extended
+ *   register gives ...9614p-1, far more than a place away).
  * - A decoded frame on which x87 rounds twice: DVSI's `dtmf`, frame 3185 (L 14,
- *   its log2Ml as the decode stores them): the gain 0x1.32d283f8e55f5p-2 by
- *   its bits where FLT_EVAL_METHOD is 0 (the eight 64-bit configurations), and
- *   within one place of it where it is not (the two 32-bit x87 builds, which
- *   give 0x1.32d283f8e55f6p-2).
+ *   its log2Ml as the decode stores them): the gain 0x1.32d283f8e55f5p-2
+ *   (QUIET_EXP2_BY_BITS: by its bits in the eight 64-bit configurations here;
+ *   the two 32-bit x87 builds give 0x1.32d283f8e55f6p-2).
  * - The product: Ml 0x1.4affa2p+0 times the gain 0x1.2e561292a499p-1 through
  *   the scaled synthesis, 0x1.86e8dcp-1 (the binary64 product 0x1.86e8dbp-1,
  *   exactly halfway, rounded to even; one rounding of the exact product from
@@ -1040,7 +1071,7 @@ test_exact_arithmetic(void) {
     mp = arithmetic_model(4, 0.3f, above4, 4);
     expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the double above the knee");
     mp = arithmetic_model(4, 0.3f, below4, 4);
-    expect_gain(&mp, 1, UINT64_C(0x3FEFFFFFFFFFFFFD), "the double below the knee");
+    expect_exp2_gain(&mp, UINT64_C(0x3FEFFFFFFFFFFFFD), "the double below the knee");
     mp = arithmetic_model(51, 0.06f, knee51, 3);
     expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the mean on the knee, L 51");
     float logs55[55];
@@ -1048,7 +1079,7 @@ test_exact_arithmetic(void) {
         logs55[l] = (l < 44) ? -2.0f : -1.0f;
     }
     mp = arithmetic_model(55, 0.05f, logs55, 55);
-    expect_gain(&mp, 1, UINT64_C(0x3FED44562B64079E), "L 55, a mean of -99/55");
+    expect_exp2_gain(&mp, UINT64_C(0x3FED44562B64079E), "L 55, a mean of -99/55");
     const float cancel[] = {0x1p58f, -23.0f, -0x1p58f};
     const float review[] = {0x1p58f, 0x1.00008p+5f, -0x1p58f, -23.0f};
     mp = arithmetic_model(10, 0.28f, cancel, 3);
@@ -1086,15 +1117,7 @@ test_exact_arithmetic(void) {
             logs[l] = -3.2f;
         }
         mp = arithmetic_model(10, 0.28f, logs, 10);
-        double g = -1.0;
-        const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
-        const uint64_t want = UINT64_C(0x3FE0B2AD7ECC9836);
-        assert(quiet == 1);
-#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == 0
-        assert(bits_of_double(g) == want);
-#else
-        assert(bits_of_double(g) == want || bits_of_double(g) == want + 1u || bits_of_double(g) == want - 1u);
-#endif
+        expect_exp2_gain(&mp, UINT64_C(0x3FE0B2AD7ECC9836), "the history within the bound");
     }
     /* DVSI's dtmf, frame 3185, as decoded (the stored floats by their bits). */
     {
@@ -1104,15 +1127,7 @@ test_exact_arithmetic(void) {
         float logs[14];
         memcpy(logs, dtmf3185, sizeof(logs));
         mp = arithmetic_model(14, 0.3f, logs, 14);
-        double g = -1.0;
-        const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
-        const uint64_t want = UINT64_C(0x3FD32D283F8E55F5);
-        assert(quiet == 1);
-#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == 0
-        assert(bits_of_double(g) == want);
-#else
-        assert(bits_of_double(g) == want || bits_of_double(g) == want + 1u || bits_of_double(g) == want - 1u);
-#endif
+        expect_exp2_gain(&mp, UINT64_C(0x3FD32D283F8E55F5), "dtmf frame 3185");
     }
     /* The cancelling histories through a public repeat. */
     {
@@ -1160,7 +1175,7 @@ test_exact_arithmetic(void) {
     printf("the gain's arithmetic: the knee, the doubles beside it, two cancelling histories beyond the bound (at the "
            "helper and through a public repeat), the product, a mean of -2^20 and of -FLT_MAX, by their bits; dtmf "
            "frame 3185%s\n",
-           (FLT_EVAL_METHOD == 0) ? " by its bits" : " within one place");
+           QUIET_EXP2_BY_BITS ? " by its bits" : " within one place");
 }
 
 /*
