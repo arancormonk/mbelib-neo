@@ -320,7 +320,9 @@ same_floats(const float* a, const float* b, int n) {
  * cut's corner zero, in both subframes, each its own corner (160 Hz mid-frame,
  * 190 Hz own: under 160 bins 1 to 5, under 190 bins 1 to 6), against the
  * equations; the band that holds the corner keeps its scale from its whole
- * power (the bins above keep their level). A frame whose bands all lie above
+ * power (the bins above keep their level). A corner exactly at a bin's centre
+ * (62.5 and 187.5 Hz, bins 2 and 6) keeps that bin, which the float above the
+ * corner removes (a cut of bins at or under the corner fails). A frame whose bands all lie above
  * both corners plays the same bits with the cut as without it. The second-order
  * filter (ProVoice's) is test_subframes_match_equations()'s.
  */
@@ -363,6 +365,36 @@ test_dvsi_subframes_match_equations(mbe_fft_plan* plan) {
         moved = fmax(moved, fabs((double)output[n] - mid_out[n] - ((n >= 80) ? own_out[n - 80] : 0.0)));
     }
     assert(moved > 1.0);
+    /* A corner exactly at a bin's centre keeps that bin: at 62.5 Hz bin 2 and
+     * at 187.5 Hz bin 6 sound (only the bins under the corner are zero), and
+     * the floats above those corners remove them, by more than the tolerance. */
+    struct mbe_unvoiced_subframe mid_edge = mid, own_edge = own;
+    mid_edge.cut_hz = 62.5f;
+    own_edge.cut_hz = 187.5f;
+    mbe_parms edge_state = current;
+    edge_state.noiseSeed = (float)state;
+    memset(output, 0, sizeof(output));
+    mbe_synthesizeUnvoicedSubframes(output, &edge_state, &previous, plan, &mid_edge, &own_edge);
+    reference_subframe(noise, &mid_edge, mid_out);
+    reference_subframe(noise + 80, &own_edge, own_out);
+    for (int n = 0; n < 160; ++n) {
+        assert_close(output[n], mid_out[n] + ((n >= 80) ? own_out[n - 80] : 0.0), 0.01, 2.0e-4);
+    }
+    struct mbe_unvoiced_subframe mid_past = mid_edge, own_past = own_edge;
+    mid_past.cut_hz = nextafterf(62.5f, 1000.0f);
+    own_past.cut_hz = nextafterf(187.5f, 1000.0f);
+    for (int which = 0; which < 2; ++which) {
+        /* One subframe's corner past its bin, the other's at it. */
+        reference_subframe(noise, which ? &mid_edge : &mid_past, mid_out);
+        reference_subframe(noise + 80, which ? &own_past : &own_edge, own_out);
+        /* The largest difference in units of the comparison's tolerance. */
+        double edge_moved = 0.0;
+        for (int n = 0; n < 160; ++n) {
+            const double expected = mid_out[n] + ((n >= 80) ? own_out[n - 80] : 0.0);
+            edge_moved = fmax(edge_moved, fabs((double)output[n] - expected) / (0.01 + (2.0e-4 * fabs(expected))));
+        }
+        assert(edge_moved > 4.0);
+    }
     /* Bands above both corners (from 250 Hz): the same bits with the cut as without. */
     fill_subframe(&mid, 0.1963f, 14, 30.0f, 0);
     fill_subframe(&own, 0.2160f, 13, 60.0f, 0);

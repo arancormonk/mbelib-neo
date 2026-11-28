@@ -9040,6 +9040,638 @@
       }
     ]
   },
+  "block-lengths-development": {
+    "description": "The AMBE block lengths at 20 harmonics: this change set is to code the log-magnitude prediction residual of a frame of 20 harmonics in blocks of 4, 5, 5 and 6 harmonics, in place of the 4, 4, 6 and 6 that Annex C of TIA-102.BABA-1 prints for L = 20, in both AMBE decoders and both AMBE encoders measured against DVSI's AMBE-3000 (D-STAR and AMBE 3600x2450 rate 33), decoder and encoder alike. Nothing else is to change: no other row of the table, no codebook, pitch law, gain table or synthesis rule; P25 (IMBE decoding and the IMBE encoder), ProVoice, TETRA and the TIA-102.BABA rendering of mbe_synthesizeSpeechf() are to stay byte for byte as they are, and so are both AMBE decoders and both AMBE encoders on every stream that holds no frame of 20 harmonics. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the spectral shape error of the strong harmonics, split by the frame's harmonic count, stands out at 20 harmonics in D-STAR and rate 33 alike and nowhere else, and with the blocks 4, 5, 5, 6 it falls to the level of the other counts, as no other division tried does; and the decode of DVSI's own encodings with that division comes as near the input speech those encodings were made from as at the neighbouring counts, which says that DVSI's encoder divided the blocks so too. What DVSI's codec holds (a table or a rule) is not known, nor whether every product of DVSI's uses that division. That scratch build was measured on the development, validation, tone and channel vectors before this set was declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the change, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, development vectors (in sample: the row was found on them). The two max 0 checks on P25 say that no P25 decode of the run's speech vectors changes (speech.pcm_changed_vectors, the hashes of the decoded samples; a vector missing from either run counts as changed) and that no P25 encoder row changes (encoder.rows_changed_vectors, the hashes of the bits the IMBE encoder emits; this counter skips a vector whose baseline holds no row hash, so it rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result). They say nothing of inputs outside the run. For D-STAR and rate 33, decoding DVSI's bits: the increase rule asks for a mean gain in waveform correlation with DVSI's decode, sample against sample at lag 0 (vs_dvsi.waveform_corr_unshifted), of at least the stated value with its bootstrap 95% interval (resampling whole recordings) above 0, and all_no_decrease allows no vector's correlation to fall by more than the stated little; the decrease rule asks for a mean fall in log-spectral distance from DVSI's decode (vs_dvsi.lsd_db) with its interval below 0, and all_no_increase bounds any one vector's rise; the envelope correlation with DVSI's decode may fall by no more than the stated little in the mean; the log-spectral distance from the input speech (ours.lsd_db), which no earlier set of this series could ask to fall, is to fall in the mean with its interval below 0, no vector rising by more than the stated little: the change is to bring the decode nearer DVSI's and nearer the input at once; the level against DVSI's decode (vs_dvsi.level_offset_db) may move by no more than the stated mean and worst-vector amounts. The encoder checks compare the two runs' encodings, both decoded by the candidate's decoder: encoder.vs_dvsi_bits.* against DVSI's bits decoded by the same decoder, encoder.lsd_db against the input speech. Here the D-STAR and rate-33 encoders' bits are meant to change (every frame they send at 20 harmonics, and the frames whose prediction it reaches), while P25's must not. The encoder checks judge what the two encodings decode to under one decoder, not what DVSI's decoder would make of them. For the encoders: the distance of our decoded encoding from DVSI's decoded encoding is to fall in the mean with its interval below 0, no vector rising by more than the stated amount; its distance from the input may not rise in the mean; its level against DVSI's decoded encoding may move by no more than the stated mean and worst-vector amounts. What these checks do not establish: that the gain comes from the frames of 20 harmonics alone (the scoreboard's measures are whole-file), the listening quality, or anything of inputs outside the run. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely), compared with itself through the scoreboard's compare() and check_gates() before this set was declared: no check of this set reports missing pairs; every speech measure named is measured on all 20 development vectors in both codecs, the encoder measures on all 20, P25's hashes on all 20.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0007,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 2e-05,
+        "every_vector": true
+      },
+      {
+        "mode": "dstar",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.025,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "decrease",
+        "value": 0.004,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.003,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.04,
+        "worst": 0.1,
+        "every_vector": true
+      },
+      {
+        "mode": "dstar",
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "decrease",
+        "value": 0.008
+      },
+      {
+        "mode": "r33",
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "decrease",
+        "value": 0.004
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.012
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.12
+      }
+    ]
+  },
+  "block-lengths-validation": {
+    "description": "The AMBE block lengths at 20 harmonics: this change set is to code the log-magnitude prediction residual of a frame of 20 harmonics in blocks of 4, 5, 5 and 6 harmonics, in place of the 4, 4, 6 and 6 that Annex C of TIA-102.BABA-1 prints for L = 20, in both AMBE decoders and both AMBE encoders measured against DVSI's AMBE-3000 (D-STAR and AMBE 3600x2450 rate 33), decoder and encoder alike. Nothing else is to change: no other row of the table, no codebook, pitch law, gain table or synthesis rule; P25 (IMBE decoding and the IMBE encoder), ProVoice, TETRA and the TIA-102.BABA rendering of mbe_synthesizeSpeechf() are to stay byte for byte as they are, and so are both AMBE decoders and both AMBE encoders on every stream that holds no frame of 20 harmonics. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the spectral shape error of the strong harmonics, split by the frame's harmonic count, stands out at 20 harmonics in D-STAR and rate 33 alike and nowhere else, and with the blocks 4, 5, 5, 6 it falls to the level of the other counts, as no other division tried does; and the decode of DVSI's own encodings with that division comes as near the input speech those encodings were made from as at the neighbouring counts, which says that DVSI's encoder divided the blocks so too. What DVSI's codec holds (a table or a rule) is not known, nor whether every product of DVSI's uses that division. That scratch build was measured on the development, validation, tone and channel vectors before this set was declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the change, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, validation vectors (in sample for the scratch build, which was measured on them before this declaration). There are five, and one holds almost no frame of 20 harmonics in each codec, so this set asks no gain with an interval: it asks that the means not move the wrong way and that no vector lose by more than the stated little. The two max 0 checks on P25 say that no P25 decode of the run's speech vectors changes (speech.pcm_changed_vectors, the hashes of the decoded samples; a vector missing from either run counts as changed) and that no P25 encoder row changes (encoder.rows_changed_vectors, the hashes of the bits the IMBE encoder emits; this counter skips a vector whose baseline holds no row hash, so it rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result). They say nothing of inputs outside the run. For D-STAR and rate 33, decoding DVSI's bits: the mean waveform correlation with DVSI's decode may not fall and no vector's by more than the stated little; the mean log-spectral distance from DVSI's decode may not rise and no vector's by more than the stated amount; the envelope correlation with DVSI's decode may fall by no more than the stated little; the mean distance from the input may not rise and no vector's by more than the stated little; the level against DVSI's decode may move by no more than the stated mean and worst-vector amounts. The encoder checks compare the two runs' encodings, both decoded by the candidate's decoder: encoder.vs_dvsi_bits.* against DVSI's bits decoded by the same decoder, encoder.lsd_db against the input speech. Here the D-STAR and rate-33 encoders' bits are meant to change (every frame they send at 20 harmonics, and the frames whose prediction it reaches), while P25's must not. The encoder checks judge what the two encodings decode to under one decoder, not what DVSI's decoder would make of them. For the encoders: the mean distances of our decoded encoding from DVSI's decoded encoding and from the input may not rise, and its level against DVSI's decoded encoding may move by no more than the stated amounts. What these checks do not establish: a gain on this partition, or anything of inputs outside the run. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely), compared with itself through the scoreboard's compare() and check_gates() before this set was declared: no check of this set reports missing pairs; every measure named is measured on all 5 validation vectors in both codecs, P25's hashes on all 5.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 2e-05,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.006,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0001,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.003,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.04,
+        "worst": 0.1,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.12
+      }
+    ]
+  },
+  "block-lengths-tones": {
+    "description": "The AMBE block lengths at 20 harmonics: this change set is to code the log-magnitude prediction residual of a frame of 20 harmonics in blocks of 4, 5, 5 and 6 harmonics, in place of the 4, 4, 6 and 6 that Annex C of TIA-102.BABA-1 prints for L = 20, in both AMBE decoders and both AMBE encoders measured against DVSI's AMBE-3000 (D-STAR and AMBE 3600x2450 rate 33), decoder and encoder alike. Nothing else is to change: no other row of the table, no codebook, pitch law, gain table or synthesis rule; P25 (IMBE decoding and the IMBE encoder), ProVoice, TETRA and the TIA-102.BABA rendering of mbe_synthesizeSpeechf() are to stay byte for byte as they are, and so are both AMBE decoders and both AMBE encoders on every stream that holds no frame of 20 harmonics. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the spectral shape error of the strong harmonics, split by the frame's harmonic count, stands out at 20 harmonics in D-STAR and rate 33 alike and nowhere else, and with the blocks 4, 5, 5, 6 it falls to the level of the other counts, as no other division tried does; and the decode of DVSI's own encodings with that division comes as near the input speech those encodings were made from as at the neighbouring counts, which says that DVSI's encoder divided the blocks so too. What DVSI's codec holds (a table or a rule) is not known, nor whether every product of DVSI's uses that division. That scratch build was measured on the development, validation, tone and channel vectors before this set was declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the change, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, DVSI's tone vectors decoded and encoded by each run. The change touches no tone frame (a tone frame carries no spectral residual); the decodes of voice frames of 20 harmonics around the tones may change, and nothing of the tones is to move. The encoders' tone measures (agreement with DVSI's tone frames, extra tone frames, and the level of the tone frames sent: AD for rate 33, the volume for D-STAR) may not move at all; the decoders' tone measures, in all three modes, may not worsen beyond the stated little: frequency error on no vector, level and balance error in the worst vector, which the scoreboard's tone groups report, no vector's wrong-tone fraction rising, and no vector's detector agreement falling by more than the stated little (P25's not at all). P25's tone measures are to stay exactly as they are, which these limits allow but do not require; the byte-for-byte P25 requirement rests on the development and validation sets' hashes and on the library's own tests. What these checks do not establish: the frames of 20 harmonics around the tones being nearer DVSI's decode (no tone measure reads them). Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely), compared with itself through the scoreboard's compare() and check_gates() before this set was declared: no check of this set reports missing pairs; the encoders' extra-tone rate and every decoder's detector agreement are measured on all 52 tone vectors in each mode they gate; the encoders' agreement and level measures are measured only on the vectors where each encoder sends tone frames (D-STAR, which codes KNOX tones as voice, has none on cpvbad and the sixteen knox vectors; rate 33 none on cpvbad), and the decoders' frequency, level, balance and wrong-tone measures only on the vectors with a steady tone window the scoreboard's detector recognises (in D-STAR not on cp1, cpvbad, dtmfvbad and knox_2, knox_3, knox_5, knox_7 and knox_14; in P25 and rate 33 not on cp1, cpvbad and dtmfvbad; balance not on alert either): these checks say nothing of the vectors a measure does not reach.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "r33",
+        "metric": "tone.encoder_level_error_ad",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "dstar",
+        "metric": "tone.encoder_level_error_volume",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0001
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.balance_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.0
+      }
+    ]
+  },
+  "block-lengths-channel": {
+    "description": "The AMBE block lengths at 20 harmonics: this change set is to code the log-magnitude prediction residual of a frame of 20 harmonics in blocks of 4, 5, 5 and 6 harmonics, in place of the 4, 4, 6 and 6 that Annex C of TIA-102.BABA-1 prints for L = 20, in both AMBE decoders and both AMBE encoders measured against DVSI's AMBE-3000 (D-STAR and AMBE 3600x2450 rate 33), decoder and encoder alike. Nothing else is to change: no other row of the table, no codebook, pitch law, gain table or synthesis rule; P25 (IMBE decoding and the IMBE encoder), ProVoice, TETRA and the TIA-102.BABA rendering of mbe_synthesizeSpeechf() are to stay byte for byte as they are, and so are both AMBE decoders and both AMBE encoders on every stream that holds no frame of 20 harmonics. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the spectral shape error of the strong harmonics, split by the frame's harmonic count, stands out at 20 harmonics in D-STAR and rate 33 alike and nowhere else, and with the blocks 4, 5, 5, 6 it falls to the level of the other counts, as no other division tried does; and the decode of DVSI's own encodings with that division comes as near the input speech those encodings were made from as at the neighbouring counts, which says that DVSI's encoder divided the blocks so too. What DVSI's codec holds (a table or a rule) is not known, nor whether every product of DVSI's uses that division. That scratch build was measured on the development, validation, tone and channel vectors before this set was declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the change, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, DVSI's channel-error vectors (dam at four error rates, hard and soft decisions), each decoded by each run and measured against DVSI's decode of the same bits. The max 0 check on P25's encoder.rows_changed_vectors repeats, in this group, the count of P25 encoder rows that change over the speech vectors of the same run (the channel vectors are not encoded); with this set scored together with the development and validation partitions it is the same count as theirs, scored alone it counts nothing and says nothing. The eight mute checks, in all three modes, say that no mute decision moves (agreement with DVSI's mutes, mute rate, false and missed mutes, hard and soft decisions: the change touches no error count or mute rule, but a mute that followed the decoded level could move). The hard-decision log-spectral distance from DVSI's decode on the frames neither run mutes (channel.hd.lsd_common_db) is to fall for D-STAR and rate 33: the eight channel vectors are versions of one recording, so the scoreboard's bootstrap over recordings gives them no interval and a rule that needs one could never pass; the fall is therefore required on the mean (no_increase with a negative limit), with all_no_increase bounding the rise of any one hard-decision vector; the soft-decision distance may not rise in the mean; both require the common frames to cover the stated share of each vector. P25's two distances may not move at all. What these checks do not establish: that the fall comes from the frames of 20 harmonics, or anything of other channels. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely), compared with itself through the scoreboard's compare() and check_gates() before this set was declared: no check of this set reports missing pairs; the hard-decision measures are measured on the four hard-decision vectors and the soft-decision ones on the four soft-decision vectors, in each mode they gate, which is all a rule of either kind can read.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": -0.02,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "all_no_increase",
+        "value": 0.01,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      }
+    ]
+  },
+  "block-lengths-final": {
+    "description": "The AMBE block lengths at 20 harmonics: this change set is to code the log-magnitude prediction residual of a frame of 20 harmonics in blocks of 4, 5, 5 and 6 harmonics, in place of the 4, 4, 6 and 6 that Annex C of TIA-102.BABA-1 prints for L = 20, in both AMBE decoders and both AMBE encoders measured against DVSI's AMBE-3000 (D-STAR and AMBE 3600x2450 rate 33), decoder and encoder alike. Nothing else is to change: no other row of the table, no codebook, pitch law, gain table or synthesis rule; P25 (IMBE decoding and the IMBE encoder), ProVoice, TETRA and the TIA-102.BABA rendering of mbe_synthesizeSpeechf() are to stay byte for byte as they are, and so are both AMBE decoders and both AMBE encoders on every stream that holds no frame of 20 harmonics. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the spectral shape error of the strong harmonics, split by the frame's harmonic count, stands out at 20 harmonics in D-STAR and rate 33 alike and nowhere else, and with the blocks 4, 5, 5, 6 it falls to the level of the other counts, as no other division tried does; and the decode of DVSI's own encodings with that division comes as near the input speech those encodings were made from as at the neighbouring counts, which says that DVSI's encoder divided the blocks so too. What DVSI's codec holds (a table or a rule) is not known, nor whether every product of DVSI's uses that division. That scratch build was measured on the development, validation, tone and channel vectors before this set was declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the change, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, the held-out partition (irstia and mark), to be scored once for this change set, after its review: a prediction for two recordings that no build of this change has seen and whose share of frames of 20 harmonics is not known. It may be none, in which case nothing moves in D-STAR's and rate 33's decodes and this set shows no harm and cannot show the gain. It asks no gain: no loss on the mean or on either vector beyond the stated little, in any of the measures, with P25 untouched. The two max 0 checks on P25 say that no P25 decode of the run's speech vectors changes (speech.pcm_changed_vectors, the hashes of the decoded samples; a vector missing from either run counts as changed) and that no P25 encoder row changes (encoder.rows_changed_vectors, the hashes of the bits the IMBE encoder emits; this counter skips a vector whose baseline holds no row hash, so it rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result). They say nothing of inputs outside the run. For D-STAR and rate 33, decoding DVSI's bits: the mean waveform correlation with DVSI's decode may not fall and no vector's by more than the stated little; the mean log-spectral distance from DVSI's decode may not rise and no vector's by more than the stated amount; the envelope correlation with DVSI's decode may fall by no more than the stated little; the distance from the input may rise by no more than the stated amounts, in the mean and on each vector; the level against DVSI's decode may move by no more than the stated mean and worst-vector amounts. The encoder checks compare the two runs' encodings, both decoded by the candidate's decoder: encoder.vs_dvsi_bits.* against DVSI's bits decoded by the same decoder, encoder.lsd_db against the input speech. Here the D-STAR and rate-33 encoders' bits are meant to change (every frame they send at 20 harmonics, and the frames whose prediction it reaches), while P25's must not. The encoder checks judge what the two encodings decode to under one decoder, not what DVSI's decoder would make of them. For the encoders: the mean distances of our decoded encoding from DVSI's decoded encoding and from the input may rise by no more than the stated amounts. Coverage on this partition cannot be read before it is scored, and it is not to be: the measures named are those the other sets of this declaration read on every development and validation vector.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": "p25",
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 2e-05,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.006,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "ours.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "worst": 0.1,
+        "every_vector": true
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005
+      }
+    ]
+  },
   "p25-decoder-development": {
     "description": "Four rules of DVSI's P25 decoder: this change set is to make the P25 decoder's pitch and P25's subframe rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) follow four rules measured on DVSI's decodes of its own P25 encodings. 1. A frame's own pitch is TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19 cycle per sample, floor(2^21 / (2 b0 + 79)) / 2^19 (the value the library already plays for P25 tones sent as voice frames), in place of eq 46 times the fitted half-octave law now in the decoder; the harmonic and band counts and the bit layout stay on eq 46's nominal value. 2. Between two models that both have a voiced band, the mid-frame pitch is the parabola through the square root at 1, 1.5 and 2 of the mantissa y in [1, 2) of the product of the two fundamentals in cycles per sample, floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19, in place of the geometric mean; at an onset or an offset the voiced model's own pitch stays. 3. The phase kernel reads a band the model holds as unvoiced with the unvoiced factor taken out, its log2 amplitude plus -log2(0.2046 / sqrt(w0)) (2.289 plus half log2 of w0, the half-rate standard's TIA-102.BABA-1 log-magnitude domain, in which the AMBE codecs' decoded unvoiced amplitudes already are), decided by the decoded voicing, for a frame's own model and through the mid-frame envelope alike. 4. The frame's own models (the last frame's and this one's) are voiced by the 500 Hz columns the mid-frame rule already reads for P25: a harmonic is voiced if the column of its frequency, or of its frequency plus 250 Hz, is, a band that turns taking its magnitude across the unvoiced factor; what the mid-frame rule's first clause (a band in the same state in both frames keeps it) compares once the own models read by columns is to be decided on the development and validation vectors. No constant is fitted for any of the four: the grid is the tone path's, the parabola is the interpolant, 2.289 and one half are the half-rate standard's and the columns are the library's existing ones. Rules 2, 3 and 4 are properties of the rendering: the decoded models, their voicing, amplitudes and prediction history and everything the encoders read stay as decoded (the pitch apart, which rule 1 sets). ProVoice (which has no DVSI material: its nominal pitch and its own rendering stay in all four respects), D-STAR, rate 33, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors and of DVSI's synthetic pulse-train vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the lag of DVSI's decode against ours at frame boundaries and its change over each frame (which the mid-frame pitch alone sets), the per-code drift of the pulse train over runs at one pitch code, the phase of DVSI's voiced harmonics against ours by the frame's voiced share and by the distance to the voicing boundary, and the coherence of DVSI's decode with ours in the band of each unvoiced harmonic; each rule was found only once the one before it was in, and what DVSI's decoder computes is not known beyond its output. That scratch build was measured on the development, validation, tone and channel vectors before these sets were declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the rules, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, development vectors (in sample: the rules were found on them). The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of the run's speech vectors changes (the decoded PCM's hash, a vector without a hash on either side counting as changed). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. Neither says anything of other inputs. For P25 decoding DVSI's bits: the increase rule asks for a mean gain in waveform correlation with DVSI's decode, sample against sample at lag 0 (vs_dvsi.waveform_corr_unshifted), of at least 0.003 with its bootstrap 95% interval (resampling whole recordings) above 0, and all_no_decrease 0 lets no vector's correlation fall at all; the decrease rule asks for a mean fall in log-spectral distance from DVSI's decode (vs_dvsi.lsd_db) of at least 0.06 dB with its interval below 0, and all_no_increase 0 lets no vector's distance from DVSI's decode rise at all; the envelope correlation with DVSI's decode may fall by no more than 0.0002 in the mean; the log-spectral distance from the input speech (ours.lsd_db) may rise by no more than 0.012 dB in the mean and 0.04 dB on any vector, which is the change's cost and is allowed, not hidden: the column reading of rule 4 voices harmonics that the analysis of the input left unvoiced, and a decode that follows DVSI's there moves away from the input; the level against DVSI's decode (vs_dvsi.level_offset_db) may move by no more than 0.03 dB in the mean. Every paired check of P25's decode requires a measurement on every vector of the partition (every_vector), which makes a check need the figure everywhere and does not turn a limit on the mean into one on each vector: the envelope correlation, the level and the no_increase limit on ours.lsd_db bound the mean and no single vector. The two encoder measures (encoder.lsd_db, the IMBE encoder's decoded encoding against the input speech, and encoder.vs_dvsi_bits.lsd_db, against DVSI's decode of DVSI's bits) may rise by no more than 0.01 dB in the mean: both runs' encodings are decoded by the candidate's decoder, so with the encoder's bits unchanged the two are equal by construction, and the checks are there to catch a bit that does change. The measures are the scoreboard's, on the frames it measures; they do not say which of the four rules moved which frames, nor how the change sounds against the input beyond the log-spectral distance. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely, encoders on) before these sets were declared: every paired metric checked here is measured in P25 on all 20 vectors of the partition, and all 20 vectors carry an encoder-row hash and every speech vector a decoded-PCM hash in each of the three modes.",
     "partition": "development",

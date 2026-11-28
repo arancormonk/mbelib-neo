@@ -572,6 +572,49 @@ dvsi_band_phase(double hz) {
     return (1.5 * M_PI) - atan2(x, 1.0) - atan2(x, 1.0 - (x * x));
 }
 
+/* A float's bit pattern, and a float of a bit pattern. */
+static uint32_t
+low_band_bits(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    return bits;
+}
+
+static float
+low_band_float(uint32_t bits) {
+    float x;
+    memcpy(&x, &bits, sizeof(x));
+    return x;
+}
+
+/* The phase far above the corner from its series in u = 75 / hz (not the
+ * library's closed form): 2 u + u^3 / 3 + 2 u^5 / 5, whose next term lies
+ * under 1e-12 of the sum for hz from 75 kHz up. */
+static double
+dvsi_band_phase_far(double hz) {
+    const double u = 75.0 / hz;
+    return (2.0 * u) + ((u * u * u) / 3.0) + ((2.0 * u * u * u * u * u) / 5.0);
+}
+
+/* Whether `got` is `want` within `relative` of it. */
+static int
+low_band_near(float got, double want, double relative) {
+    return fabs((double)got - want) <= relative * fabs(want);
+}
+
+/*
+ * DVSI's fixed high-pass, mbe_low_band_dvsi_gain() and mbe_low_band_dvsi_phase(),
+ * over every class of float: against the factored form (dvsi_band_gain(),
+ * dvsi_band_phase()) at the transform's bins and a sweep within 2e-7; at the
+ * corner sqrt(1/2) and 3 pi / 4; by bit pattern 0 for both at +0, -0, every
+ * subnormal tried, negative values, -infinity and NaNs of either sign; 1 and 0
+ * at +infinity; at FLT_MIN, the smallest value that is a frequency, a gain of
+ * 0 and the limit 3 pi / 2 (to 1e-6); far above the corner, where the phase
+ * is about 2 / x, the series dvsi_band_phase_far() to 2e-7 of the value (1e30
+ * Hz included, where the difference of 3 pi / 2 and two arctangents gives 0)
+ * on both sides of the library's switch to the uncancelled form (x 1024,
+ * 76.8 kHz), and the gain exactly 1 up to FLT_MAX.
+ */
 static void
 test_low_band_dvsi(void) {
     for (int k = 1; k <= 128; ++k) {
@@ -588,14 +631,30 @@ test_low_band_dvsi(void) {
     const float at_corner = mbe_low_band_dvsi_gain(75.0f), corner_phase = mbe_low_band_dvsi_phase(75.0f);
     assert(fabs((double)at_corner - sqrt(0.5)) < 1e-7);
     assert(fabs((double)corner_phase - (0.75 * M_PI)) < 1e-6);
-    float subnormal;
-    const uint32_t tiny = 0x00000001u;
-    memcpy(&subnormal, &tiny, sizeof(subnormal));
-    const float zero_gain = mbe_low_band_dvsi_gain(0.0f), zero_phase = mbe_low_band_dvsi_phase(0.0f);
-    const float below_gain = mbe_low_band_dvsi_gain(-5.0f), below_phase = mbe_low_band_dvsi_phase(-5.0f);
-    const float tiny_gain = mbe_low_band_dvsi_gain(subnormal), tiny_phase = mbe_low_band_dvsi_phase(subnormal);
-    assert(zero_gain == 0.0f && zero_phase == 0.0f && below_gain == 0.0f && below_phase == 0.0f);
-    assert(tiny_gain == 0.0f && fabs((double)tiny_phase - (1.5 * M_PI)) < 1e-6);
+
+    /* No frequency: 0 for both, by the bits of +0. */
+    static const uint32_t none[] = {0x00000000u, 0x80000000u, 0x00000001u, 0x00400000u, 0x007FFFFFu, 0x80000001u,
+                                    0x807FFFFFu, 0x80800000u, 0xC0A00000u, 0xFF7FFFFFu, 0xFF800000u, 0x7F800001u,
+                                    0x7FC00000u, 0x7FFFFFFFu, 0xFFC00000u, 0xFFFFFFFFu};
+    for (size_t i = 0; i < sizeof(none) / sizeof(none[0]); ++i) {
+        const float hz = low_band_float(none[i]);
+        assert(low_band_bits(mbe_low_band_dvsi_gain(hz)) == 0u);
+        assert(low_band_bits(mbe_low_band_dvsi_phase(hz)) == 0u);
+    }
+    /* +infinity: the limits far above the corner. */
+    const float infinite = low_band_float(0x7F800000u);
+    assert(low_band_bits(mbe_low_band_dvsi_gain(infinite)) == low_band_bits(1.0f));
+    assert(low_band_bits(mbe_low_band_dvsi_phase(infinite)) == 0u);
+    /* FLT_MIN: no gain (x^3 underflows), the phase at its limit toward DC. */
+    assert(low_band_bits(mbe_low_band_dvsi_gain(FLT_MIN)) == 0u);
+    assert(fabs((double)mbe_low_band_dvsi_phase(FLT_MIN) - (1.5 * M_PI)) < 1e-6);
+    /* Far above: the phase from its series, the gain 1. */
+    static const float far[] = {7.5e4f, 76799.0f, 76800.0f, 76801.0f, 1.0e5f, 1.0e8f, 1.0e15f, 1.0e30f, FLT_MAX};
+    for (size_t i = 0; i < sizeof(far) / sizeof(far[0]); ++i) {
+        const float phase = mbe_low_band_dvsi_phase(far[i]);
+        assert(phase > 0.0f && low_band_near(phase, dvsi_band_phase_far((double)far[i]), 2e-7));
+        assert(low_band_bits(mbe_low_band_dvsi_gain(far[i])) == low_band_bits(1.0f));
+    }
     /* Above the corner it passes, as the second-order filter does. */
     assert(fabs((double)mbe_low_band_dvsi_gain(1000.0f) - 1.0) < 1e-6);
 }

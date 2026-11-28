@@ -86,8 +86,11 @@ prepare_subframe_tables(mbe_fft_plan* plan) {
         plan->output_filter[2u * (size_t)k] = gain * (float)cos(phase);
         plan->output_filter[2u * (size_t)k + 1u] = gain * (float)sin(phase);
     }
-    /* A loop of its own: in one with the table above, GCC's fast-math LTO build
-     * built that table's arithmetic otherwise, and ProVoice's samples moved. */
+    /* DVSI's filter's table, in a loop of its own. Nothing requires that: one
+     * loop for both tables left ProVoice's samples as they were in GCC's
+     * fast-math LTO build too (tried once, on the differential harness's
+     * streams). What moved them in that build was the unvoiced shaping written
+     * as one body for both filters (shape_subframe(), shape_subframe_dvsi()). */
     for (int k = 0; k <= MBE_FFT_SIZE / 2; ++k) {
         const float hz = (float)k * (8000.0f / (float)MBE_FFT_SIZE);
         const float gain = mbe_low_band_dvsi_gain(hz);
@@ -556,8 +559,13 @@ shape_subframe(mbe_fft_plan* plan, const struct mbe_unvoiced_subframe* sub) {
 /* The first bin the adaptive low cut keeps (mbe_low_band.h): the first whose
  * centre frequency, k 8000 / MBE_FFT_SIZE Hz (exact in float), is not under
  * the corner; 1 for no cut (bin 0 is real and the high-pass removes it). The
- * corner is a stored tracker's (at most MBE_LOW_CUT_CEILING_HZ) or 0; a
- * comparison of floats, so no conversion sees it. */
+ * corner is one the renderer read (MBE_LOW_CUT_TRACK_MIN_HZ to
+ * MBE_LOW_CUT_CEILING_HZ, from a stream's own tracker or a caller's stored
+ * value) or 0, so the bin is 2 to 7 (50 Hz gives 2, 200 Hz 7) or 1; it starts
+ * shape_subframe_dvsi()'s loop over a band no lower, and the loop stops at the
+ * band's upper edge, at most MBE_FFT_SIZE / 2. Whatever the float held, the
+ * result lies in 1 .. MBE_FFT_SIZE / 2 (the loop's own bound; a NaN compares
+ * false and gives 1): a comparison of floats, so no conversion sees it. */
 static int
 first_kept_bin(float cut_hz) {
     int k = 1;

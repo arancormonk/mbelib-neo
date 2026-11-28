@@ -15,6 +15,7 @@ The CTest suite includes:
 - IMBE 7200x4400 encoder: the (15,11) Hamming encoder over every data word, frame FEC round trips of all 88 bits and single-error correction, the alternating synchronization bit, and decoded frames of every harmonic count requantized to identical bits (`test_imbe7200_encoder`)
 - Shared by both (`tests/encoder_test_support.h`): `cur_mp` bit-identical to the decoder chain, its frame mark included, with `prev_mp` untouched, rejected samples leaving the stream unchanged, prediction boundary taps, 16-bit/float parity, independent contexts and reset replay, noise staying unvoiced, steady vowels from 70 to 310 Hz voiced and on pitch, no octave errors (240 Hz, missing fundamental, strong 2nd harmonic, glide, and 133, 200 and 390 Hz harmonic series), the decoded level following the input down 40 dB, quiet input coded as voice, and a one-frame flush. Also for the D-STAR encoder: a stale frame mark handed in with `cur_mp` replaced by the decoder's, and frames with no voiced band sent at the codec's fixed pitch code and harmonic count: noise decoding at the input level, vowels alternating with noise, a frame rejected at the fixed code (shown to take the fixed code with a valid history) leaving the stream and `cur_mp` untouched, and noise band-passed to 1-2 kHz and 2.4-3.2 kHz decoding with the harmonics inside the band at least 20 dB above those outside it on the fixed code's grid
 - AMBE joint vector search, for D-STAR's and AMBE+2's tables: its linear model reproduces the decoders' own mean-removed residual for random rows at every L from 9 to 56, the refinement never raises the amplitude-weighted error measured from the decoders' reconstruction and sends only rows the decoder receives (D-STAR's b8 even, 0 for blocks of at most two harmonics), and a frame the decoder reproduces exactly keeps the nearest-row search's rows (`test_ambe_vector_search`)
+- AMBE block lengths (`test_ambe_block_lengths`): the four tables, the D-STAR and rate-33 decoders' and the two encoders' (`mbe_ambe2400_enc_tables()`, `mbe_ambe2450_enc_tables()`), each row of L 9 to 56 summing to L and equal to the test's copy of TIA-102.BABA-1 Annex C but row 20, 4, 5, 5, 6 where the annex prints 4, 4, 6, 6 (rows 0 to 8 zero). The decoders, in each codec, on pairs of frames built from chosen codes at 19, 20 and 21 harmonics (every pair of the three, the second predicted from the first; every code of 20 harmonics, D-STAR b0 54 to 57 and rate 33 b0 51 to 53; four D-STAR voicing fields and twelve rate-33 V/UV rows, the band-grid rows 18, 21, 24, 26, 29 and 31 among them, which the encoder never sends, so only the decoder is tested there), through the public parameter decoder: (1) each frame's `log2Ml` within 2e-4 of a transform formed in double (PRBA rows, 8-point inverse DCT, each block's coefficients and inverse DCT at the expected lengths, the prediction at the position the decoder rounds), and every division that moves one harmonic between two neighbouring blocks (and 5, 5, 5, 5 at 20) more than 0.05 from it (least margin measured 0.405 D-STAR, 0.732 rate 33). The 2e-4 is about 210 single-precision ulps at a value of 10 (more below): the decoder's sums each round in float and the double reference does not; it catches a wrong row by three orders of magnitude and no smaller error. (2) Each frame's `log2Ml` and gamma against an exact result formed in float by the decoder's arithmetic written out (`exact_frame()`: the codebooks from the codecs' headers and D-STAR's three constants, `cosf()` and `log2f()`, every operation in the decoder's order), compared by bit pattern where the library is IEEE, `FLT_EVAL_METHOD` is 0 and contraction is off (dev-debug, asan-ubsan-debug, notones-debug, the SIMD Debug build and the `-march=x86-64-v3` Debug build: measured difference 0) and within 1.6e-5 elsewhere (dev-release 5.25e-6, the two Clang fast-math LTO builds 5.72e-6, 32-bit Release 1.43e-6, 32-bit Debug 0, the largest differences measured). An error of an ulp or a few (the review's 1e-6 at L 20) fails it in the five exact configurations and passes in the five others. The golden PCM sequences hold no frame of 20 harmonics, and rate 33's encoder takes its model from the same public decoder, so neither they nor the parity check pin the arithmetic at L 20: the exact comparison does, where it is exact. The encoders: (3) decoder and encoder state parity by bit pattern (w0, L, gamma, the frame mark, and Vl, log2Ml and Ml over 1..L, the fields the encoders document as the decoder's) over a 1,000-frame signal at about 180 Hz that sends frames of 20 harmonics (147 D-STAR, 120 rate 33; D-STAR's existing parity test reaches 35 such frames too), an encoder error ending it before its bits are read and a tone status told from an error. Parity shows that each encoder predicts from the history the decoder will hold, not that either uses the right row: a codec's table header serves its decoder and encoder alike (a wrong row in it leaves no parity mismatch), and rate 33's encoder takes its model from the decoder; only a table copied into one translation unit of D-STAR's breaks it. (4) The joint refinement acting at L 20: on 300 random frames of 20 harmonics the shared quantizer `ambe_enc_quantize_residual()` changes the nearest rows on most (225 D-STAR, 206 rate 33 measured) and lowers the weighted error in all (by 4.6% and 4.9%), and rate 33's codec path (`mbe_ambe2450_quantize_amplitudes()` at b0 52) sends the shared quantizer's rows on every frame; D-STAR's own encode path is static and not reached. (5) Residuals that blocks of 4, 5, 5, 6 represent exactly (random rows decoded by the search's model of the decoder) coded through the quantizer within 1e-4 rms with the encoders' own tables and at least 0.05 rms off in the mean with row 20 put back to the annex's (measured 1.6e-7 and 1e-7 against 0.209 and 0.206). An error that is not finite fails every comparison before it is aggregated. Mutations, each failing it (Debug, the whole suite run for each; other tests failing too named): row 20 back to 4, 4, 6, 6 in D-STAR's table, in rate 33's, in both; 4, 5, 6, 5 and 5, 5, 5, 5 in both; row 19 4, 5, 4, 6 in both and in D-STAR's; row 21 4, 5, 5, 7 in both and in rate 33's (`test_golden_pcm`); a local copy of the table with the annex's row 20 in D-STAR's encoder or decoder (`test_ambe2400_encoder`, `test_ambe2400_frame_types`) or rate 33's (`test_ambe2450_encoder`, `test_ambe_vector_search`); the annex's row restored for rate-33 band-grid frames of 20 harmonics only; `log2Ml[1]` off by 1e-6 at L 20 in rate 33's decoder and in D-STAR's (the latter `test_ambe2400_encoder`, `test_ambe2400_frame_types`); the joint refinement skipped at L 20; a NaN out of the search's model of the decoder at L 20 (`test_ambe_vector_search`), and only for the own row (the same); an encoder failing on its 400th call (`test_ambe2400_encoder`, `test_ambe2450_encoder`); and, in the test itself, a NaN for the own-table round trip's error and a NaN in an alternative row's reference. At `30249f6` the restored grid row, rate 33's 1e-6 error, the skipped refinement and the two NaNs in the test passed it (checked).
 - MBE speech analysis numerics: Kaiser windows, the window transform, harmonic fits and magnitudes of off-grid harmonics, noise statistics without magnitude ripple, the FFT autocorrelation against the direct sum, the voicing thresholds, and the measures taken again on another grid (`mbe_analysis_measure_at()`: five tones at unequal levels on harmonics of the IMBE fixed grid, which the analysis does not track, up to the top of the harmonics IMBE codes; every harmonic below Nyquist returned, each tone read in its own harmonic within 1 dB, its neighbours at least 10 dB and every other harmonic at least 25 dB below) (`test_speech_analysis`)
 - Encoder context, FFT and autocorrelation plan allocation failures (each of the eleven, for the D-STAR, AMBE+2 and IMBE encoders) clean up fully; after successful allocation, encoding (tone frames included) and reset allocate nothing (`test_ambe2400_encoder_oom`, `test_ambe2450_encoder_oom`, `test_imbe7200_encoder_oom`, GNU link wrapping when LTO is disabled)
 - noise determinism and frame-state determinism checks
@@ -281,69 +282,95 @@ The CTest suite includes:
   the other paths' (rate 33's own stream holding no frame of rows 18..31; its first form gave rate
   33's states no word and did not say so, which hid the repeat loader's defect) ([DVSI
   parity](dvsi-parity.md#november-2026-rate-33s-pulsed-rows)).
-- DVSI's low band (`test_subframe_synthesis`, `test_unvoiced_subframes`, `test_params`; [DVSI
-  parity](dvsi-parity.md#dvsis-low-band)): the fixed third-order high-pass at 75 Hz against its
+- DVSI's low band (`test_subframe_synthesis`, `test_unvoiced_subframes`, `test_params`, `test_p25_tones`;
+  [DVSI parity](dvsi-parity.md#dvsis-low-band)): the fixed third-order high-pass at 75 Hz against its
   factored form in double, gain and phase within 2e-7 at every bin of the unvoiced transform and on a
-  sweep of harmonic frequencies, 1/sqrt(2) and 3 pi / 4 at 75 Hz exactly, 0 at 0 and below, a gain of 0
-  and no NaN at a subnormal frequency (`test_low_band_dvsi`), the second-order filter's own tests
-  unchanged; the unvoiced subframes under DVSI's filter with each subframe's corner (160 and 190 Hz)
-  against the equations, the bins under the corner zero after the band's scale is taken from its
-  whole power, the frame shown to differ from its uncut equations, and bands above both corners
-  playing the same bits cut and uncut (`test_dvsi_subframes_match_equations`; ProVoice's filter is
-  `test_subframes_match_equations`'s); the tracker's rule in D-STAR's, P25's and rate 33's renderings
-  and none in ProVoice's (`test_low_cut_tracker`): 110 Hz on a fresh state and as the first frame's
-  corner, the step on a fully voiced frame against the rule formed in the test (f0 from the stored
-  w0 and the step in double, kept within 50 to 500 Hz, rounded to float once: by bits where IEEE
-  arithmetic gives the library and the test the same, within an ulp elsewhere), unmoved by a frame
-  with its top, bottom or a middle band unvoiced, a band with no state, no voiced band, a fully
-  voiced model marked as a tone model, a silence frame and a frame of a reserved pitch code with no
-  voiced band, the stored corner the tracker before the frame capped at 200 Hz, the ceiling while a
-  250 Hz stream takes the tracker past 240 Hz and the plateau coming down to 180 Hz (five frames or
-  more at 200 before the corner falls), a caller's pitch keeping the tracker at 500 and 50 Hz, and
-  advancing storing what rendering stores; the knee (`test_low_cut_knee`: `mbe_low_cut_gain()` exactly
-  1 at and above the corner and under 1 at the float above the frequency, and through the rendering
-  the corner forced to the fundamental as the renderer forms it, to the float under it and to 50 Hz
-  playing the same bits, the float above it otherwise); the cut's level (`test_low_cut_level`, each
-  DVSI rendering: harmonic 1 of a steady 100 Hz stream at (f / 150)^2 of its uncut level within 1e-4,
-  measured over 1280 samples holding whole periods of every harmonic, and with harmonic 1 silent the
-  stream forced to 150 Hz and to 50 Hz playing the same bits; the model's stored amplitudes kept);
-  the unvoiced cut through the rendering (`test_low_cut_unvoiced_frame`: a frame with no voiced band,
-  its tracker forced to 190 Hz, bit for bit the library's unvoiced synthesis of its mid-frame and own
-  models at that corner in both subframes; ProVoice's with the second-order filter and no cut); the
-  slots as caller state (`test_untrusted_low_cut`: 24 bit patterns, every float class and both
-  neighbours of 50, 200 and 500 Hz among them, in each slot, playing and storing as the value they
-  read as; a state without the subframe mark and one the TIA rendering wrote reading as a fresh one;
-  ProVoice reading neither and storing 0 in both) and moved between renderings
-  (`test_low_cut_between_renderings`); through D-STAR's data path (fully voiced frames, a frame with
-  no voiced band, lost frames through the repeat limit's mute, the first frame after it, a frame the
-  error level mutes, a tone's first frame and the tone frames after it, and the voice after them),
-  P25's (fully voiced frames, a frame the error rate mutes, lost frames through the reset model, a
-  frame at a reserved code) and rate 33's (voice, a silence frame, lost frames through the mute and
-  the muted frame after it, the frame from silence, a tone's frames and a lost frame under the tone,
-  the frame after the tone), each frame's stored tracker the rule's step on the model the frame left
-  as the last synthesized one, or the tracker before for a frame that renders none
-  (`test_low_cut_dstar_path`, `test_low_cut_p25_path`, `test_low_cut_r33_path`); and the independent
-  rendering of the waveform tests (`run_waveform()`), which renders the low band in its own
-  arithmetic in all four subframe renderings (the filters from their factors, the cut at each model's
-  corner from its own tracker in double, the knee at the frequency the library's rule states) and
-  checks each frame's stored tracker and corner within 1e-5 of its own, its streams cutting voiced
-  harmonics in all three models of a frame (the last frame's own at a corner other than the frame's,
-  counted). Mutations, each failing a test (the first named): the power 1 and 3; a Butterworth
-  magnitude for the knee (and `test_golden_pcm`); the ceiling removed; the ceiling on the tracker; a
-  first value of 100 and of 120 (the latter `test_ambe2450_frame_types` and `test_golden_pcm` too);
-  the rate halved and doubled; the tracker moved by a frame with one band unvoiced, by one with no
-  voiced band, by a tone model; not moved by `mbe_advance_subframes()`; the cut applied to ProVoice;
-  the third-order filter given to ProVoice's voiced harmonics; the old filter left in rate 33's,
-  P25's or D-STAR's rendering; the cut applied to the stored model; the last frame's own model at
-  this frame's corner; the mid-frame model at the last frame's; the stored tracker read without its
-  range or without the subframe mark; the pulsed bands not cut; the tracker not kept in range
-  (`test_subframe_synthesis`); the unvoiced bins scaled by (f / fc)^2 instead of zeroed, zeroed under
-  0.9 of the corner, the old filter table in DVSI's unvoiced bins, the third-order table in
-  ProVoice's (`test_unvoiced_subframes`); the unvoiced cut on the mid-frame subframe only
-  (`test_subframe_synthesis`, `test_golden_pcm`); the cut in the TIA rendering (`test_params`); the
-  tones' start phase on the old filter (`test_ambe2400_frame_types`, `test_ambe2450_frame_types`,
-  `test_frame_paths`). No encoder synthesizes a model, so a cut applied to the stored model changes
-  no encoder's bits; it is caught by the state the rendering returns.
+  sweep of harmonic frequencies, 1/sqrt(2) and 3 pi / 4 at 75 Hz, and every class of float by its bits
+  (`test_low_band_dvsi`): 0 for both at +0, -0, subnormals, negative values, -infinity and NaNs of
+  either sign, 1 and 0 at +infinity, a gain of 0 and the phase's limit 3 pi / 2 (to 1e-6) at FLT_MIN,
+  and far above the corner, from 75 kHz to FLT_MAX across the switch to the uncancelled form at 76.8
+  kHz, the phase against its series in 75 / f to 2e-7 of its value and the gain exactly 1; the
+  second-order filter's own tests unchanged; the unvoiced subframes under DVSI's filter with each
+  subframe's corner (160 and 190 Hz) against the equations, the bins under the corner zero after the
+  band's scale is taken from its whole power, a corner exactly at a bin's centre (62.5 and 187.5 Hz)
+  keeping that bin, which the float above it removes (each by more than four times the comparison's
+  tolerance), and bands above both corners playing the same bits cut and uncut
+  (`test_dvsi_subframes_match_equations`); the tracker's rule (`test_low_cut_tracker`, in D-STAR's,
+  P25's and rate 33's renderings, none in ProVoice's): 110 Hz on a fresh state and as the first
+  frame's corner, then fifteen kinds of model (fully voiced; a top, bottom or middle band unvoiced; a
+  band with no state; no voiced band; a tone mark; a silence mark on a fully voiced model; the AMBE
+  silence model fully voiced; the silence pitch with the other codec's harmonic count; a reserved
+  code with and without every band voiced; every band voiced at a subnormal and at an infinite pitch,
+  no pitch by the library's class), each moving it or not as the rule says in that rendering
+  and each advanced (`mbe_advance_subframes()`) storing what rendering stores, the stored corner the
+  tracker before capped at 200 Hz, the ceiling while a 252 Hz stream takes the tracker past 240 Hz and
+  the plateau coming down to 180 Hz, a caller's pitch keeping the tracker at 500 and 50 Hz; the range
+  and the silence models (`test_low_cut_range`: every pitch code of the three codecs, the pulsed rows'
+  grid and every D-STAR voicing included, decoding to 50 to 500 Hz; D-STAR's b0 124 at the silence
+  pitch with 14 harmonics, rate 33's b0 124 and 125 with 15 and the silence mark, and no voice code of
+  either at the silence pitch whatever its harmonic count); the knee (`test_low_cut_knee`); the cut's level (`test_low_cut_level`); the unvoiced
+  cut through the rendering (`test_low_cut_unvoiced_frame`); the slots as caller state
+  (`test_untrusted_low_cut`: 24 bit patterns in each slot, each playing and storing as the value it
+  reads as, and every value read, the bounds 50 and 500 (tracker), 50 and 200 (corner) among them,
+  playing otherwise than the value a rejected one falls back to; a state without the subframe mark and
+  one the TIA rendering wrote reading as a fresh one; ProVoice reading neither and storing 0 in both)
+  and moved between renderings (`test_low_cut_between_renderings`); through the public data paths,
+  one test per row of the table of frame kinds in [DVSI parity](dvsi-parity.md#dvsis-low-band), each
+  frame's stored tracker against the rule computed in the test on the model the frame renders (or the
+  tracker before, by bits, for one that holds it): D-STAR's voice, lost and repeat-limit frames, its
+  error-level mute, the resume, tone entry after an audible and an inaudible frame, tone tails
+  (`test_low_cut_dstar_path`), b0 124 and a reserved code voiced throughout by adaptive smoothing and
+  a caller's silence mark on the history (`test_low_cut_dstar_smoothed`); P25's voice, mute, repeats,
+  reset model at five error rates, a reserved code voiced throughout and a caller's silence mark
+  (`test_low_cut_p25_path`) and its tone model (`test_tone_model`); rate 33's voice, silence, repeat,
+  mute and tone frames (`test_low_cut_r33_path`), one to three valid frames the error rate mutes, a
+  muted invalid frame after them and after a heard frame, tone entry at an ordinary and at a muting
+  error rate (`test_low_cut_r33_mutes`), a silence frame voiced throughout heard and muted, its repeat
+  and the fade after it, a pulsed row voiced throughout and a caller's silence mark
+  (`test_low_cut_r33_smoothed`, the review's reproductions among them); the table's conditional rows
+  on the histories that hold the tracker (`test_low_cut_conditional_rows`: D-STAR's tone entry and
+  single-tone tails after a frame with no voiced band, a caller's silence mark through D-STAR's fade
+  and muted repeat, rate 33's muted row-16 frames, a fade that drops a caller's mark, the lost frame
+  after a muted tone with the error rate still high, the repeat limit under a held tone); and caller
+  states of every float class of pitch at harmonic counts 1 and 56 playing finite samples
+  (`test_low_cut_caller_pitches`). The independent rendering of the waveform tests (`run_waveform()`)
+  renders the low band in its own arithmetic in all four subframe renderings (the filters from their
+  factors at the one float frequency the library forms, the cut at each model's corner, the knee at
+  that frequency) and carries the tracker as the library does, a float rounded once a frame; each
+  frame's stored tracker is checked as one step of the rule from the tracker the frame before left,
+  and its stored corner by bits. The tracker comparisons (`track_is()`) are bit for bit in the builds
+  where the test forms the step as the library does (`MID_PITCH_INEXACT` 0: dev-debug,
+  asan-ubsan-debug, notones-debug and the Debug build with SIMD), and elsewhere (dev-release and both
+  Clang LTO builds with fast-math, the Debug `-march=x86-64-v3` build, which fuses multiply-adds, and
+  both 32-bit builds, whose evaluation method is 2) the stored value must be the exact step rounded to
+  nearest, within half its spacing and 1e-7 of it, which a value one ulp off fails unless the
+  exact step lies within 1e-7 of a spacing from a tie (`TRACK_TIE_BAND`), where either float passes:
+  every compared step is checked for that, and none of the file's 741 steps lies there
+  (`test_low_cut_ties`, which also takes a case inside the band: T 110 Hz, pitch bits 0x3d8504c0, 3.9e-8
+  of a spacing from the tie); what that bound cannot catch is a step formed
+  otherwise that rounds to the same float on every frame of the streams (none found: the step formed
+  in float rather than double and the tracker an ulp off fail both in the Debug build and in the Debug
+  `-march=x86-64-v3` build, where the bound applies, and so does the pitch's class weakened to
+  "greater than zero"). Mutations, each failing a test (`test_subframe_synthesis` unless named; the table, run
+  in the Debug build, is in the change's report): the power 1 and 3; a Butterworth magnitude for the
+  knee; the ceiling removed or on the tracker; a first value of 100 and of 120; the rate halved and
+  doubled; the tracker moved by a frame with one band unvoiced, by one with no voiced band, by a tone
+  model, by a silence mark, by the AMBE silence model; the silence model told by its pitch alone, or
+  given to P25's rendering too; not moved by `mbe_advance_subframes()`; stepped twice; the corner read
+  after the frame's own step; the cut on the mid-frame model only, applied to ProVoice, to the TIA
+  rendering (`test_params`) or to the stored model; the third-order filter in ProVoice; the old filter
+  in rate 33's, P25's or D-STAR's rendering, or in P25's unvoiced bins alone; the last frame's own model
+  at this frame's corner and the mid-frame model at the last frame's; the stored tracker read without
+  its range or without the subframe mark; stored corners of exactly 50 and of exactly 200 Hz
+  rejected; the pulsed bands not cut; the tracker not kept in range, an ulp off or its step formed in float;
+  the pitch's class weakened to "greater than zero"; the unvoiced bins
+  scaled instead of zeroed, zeroed under 0.9 of the corner, the bin at the corner removed, the old
+  table in DVSI's bins, the new one in ProVoice's (`test_unvoiced_subframes`); the unvoiced cut on the
+  mid-frame subframe only; the filter's gain at +infinity, subnormals and NaNs taken as frequencies,
+  the phase formed directly far above the corner (`test_params`); the tones' start phase on the old
+  filter (`test_ambe2400_frame_types`, `test_ambe2450_frame_types`, `test_frame_paths`). No encoder
+  synthesizes a model, so a cut applied to the stored model changes no encoder's bits; it is caught by
+  the state the rendering returns.
 - Four rules of DVSI's P25 decoder, and the two of its pulse train (`test_params`,
   `test_subframe_synthesis`, `test_frame_paths`, `test_p25_tones`, `test_p25_rendering_copies`; [DVSI
   parity](dvsi-parity.md#november-2026-four-rules-of-dvsis-p25-decoder)): the pitch of every P25
@@ -1339,7 +1366,32 @@ build with SIMD, fast-math and LTO (GCC 16.2.1), `9a101f8` against `0e3463e` (on
 | D-STAR, hard | 6.809 us (6.791 to 7.078) | 7.100 us (7.037 to 7.192) | +4.3% |
 | IMBE, hard | 7.279 us (7.231 to 7.574) | 7.528 us (7.492 to 7.560) | +3.4% |
 
-The ranges overlap a little in each row; every checksum differs (every decode changes).
+The ranges overlap a little in each row; every checksum differs (every decode changes). Timed again
+after the review's fixes (`c449a2d`, the same checksums as `0e3463e`), with the machine loaded by
+other work (one-minute load 8 to 13), medians of the seven invocations' medians: AMBE+2 10.804 →
+10.516 us (-2.7%), D-STAR 8.734 → 9.266 (+6.1%), IMBE 8.818 → 9.299 (+5.5%), the ranges overlapping
+widely; under that load these say nothing finer than the first run.
+
+### AMBE block lengths at 20 harmonics
+
+The block lengths at 20 harmonics ([DVSI parity](dvsi-parity.md#november-2026-the-ambe-block-lengths-at-20-harmonics))
+change one row of a table. Measured with `bench_replay hard <codec> 60 5` on DVSI's `dam`
+stream of each codec and with `bench_encode`, seven alternating invocations pinned to CPU 6, a portable
+Release build with SIMD, fast-math and LTO (GCC 16.2.1), `f725a66` against `59dddb3` (one-minute load 5.4
+to 8.8 during the run, another agent's builds running):
+
+| Median per frame | `f725a66` | Block lengths | Change |
+| --- | ---: | ---: | ---: |
+| AMBE+2 decode, hard | 8.167 us (8.067 to 8.478) | 8.157 us (8.096 to 8.269) | -0.1% |
+| D-STAR decode, hard | 7.723 us (7.520 to 9.698) | 7.701 us (7.558 to 9.414) | -0.3% |
+| IMBE decode, hard | 8.094 us (7.987 to 12.848) | 8.057 us (7.998 to 11.348) | -0.5% |
+| D-STAR encode | 30.32 us (29.61 to 31.71) | 30.16 us (29.66 to 30.44) | -0.5% |
+| AMBE+2 encode | 31.55 us (30.67 to 31.92) | 31.42 us (30.48 to 31.79) | -0.4% |
+| IMBE encode | 15.18 us (14.77 to 15.25) | 15.16 us (14.75 to 15.19) | -0.1% |
+
+Timed before the merge of the branch below's final head (`e345239`, whose decodes equal `f725a66`'s on every permitted vector). The ranges overlap in every row: no resolvable cost under that load, not a bound (the D-STAR encoder's -0.53% is the largest change); the D-STAR and AMBE+2 checksums differ (the `dam` streams hold frames of
+20 harmonics), the IMBE ones are equal. An earlier run under heavier load (10 to 20) scattered by -6.7% to
++1.9%, the unchanged IMBE decode by -5.3%.
 
 ### Four rules of DVSI's P25 decoder
 

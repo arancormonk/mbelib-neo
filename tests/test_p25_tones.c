@@ -263,8 +263,9 @@ play(float out[160], struct stream* s, const char imbe_d[88], int provoice) {
  * A tone frame's synthesis model is the tone model: the 2^-19 pitch of its
  * code, the tone's harmonics voiced at one amplitude (0.988 times the rms of
  * their decoded magnitudes, times sinc^2(pi l / 256)), every other harmonic
- * unvoiced at 0, L and the decoded log2Ml kept, marked as a tone; the
- * prediction history keeps the decoded frame. The mid-frame model of a marked
+ * unvoiced at 0, L and the decoded log2Ml kept, marked as a tone, the
+ * low cut's tracker left as it stood; the prediction history keeps the
+ * decoded frame. The mid-frame model of a marked
  * frame is its own, and advancing it unrendered leaves the pulse train and the
  * noise generator where rendering it does. A repeat of the tone frame plays the tone model again. The
  * same bits through the ProVoice path play the decoded model.
@@ -286,6 +287,9 @@ test_tone_model(void) {
 
     const mbe_parms* model = &s.enhanced;
     assert(mbe_frame_mark(model) == MBE_FRAME_MARK_TONE);
+    /* The tone model leaves DVSI's low-cut tracker where a fresh stream has
+     * it, 110 Hz (its mark, and two voiced bands only). */
+    assert(same_float(model->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], 110.0f));
     assert(same_float(model->w0, tone_pitch(53)) && model->L == decoded.L && model->K == decoded.K);
     const double rms = sqrt(0.5 * (((double)decoded.Ml[4] * decoded.Ml[4]) + ((double)decoded.Ml[7] * decoded.Ml[7])));
     assert(fabs((double)decoded.Ml[4] / (double)decoded.Ml[7] - 1.0) > 0.2);
