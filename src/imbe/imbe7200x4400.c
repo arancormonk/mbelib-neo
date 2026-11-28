@@ -1407,14 +1407,31 @@ imbe_has_voiced_band(const mbe_parms* mp) {
 
 /*
  * The quiet-frame gain of a model, read from its decoded log2 magnitudes
- * (log2Ml[1..L], which no rendering step writes): x their mean, formed in
- * double from the stored floats, and g formed in double. Returns 1 and stores
- * g where g < 1; returns 0 and stores 1 where the model takes no gain: x at or
- * above the knee, a harmonic count outside 1..56, or a log2 magnitude in 1..L
+ * (log2Ml[1..L], which no rendering step writes): x their mean and g
+ * 2^clamp(K (x - X0), FLOOR, 0). Returns 1 and stores g where x < X0 (then
+ * g < 1); returns 0 and stores 1 where the model takes no gain: x at or above
+ * the knee X0, a harmonic count outside 1..56, or a log2 magnitude in 1..L
  * that is not finite (read on its bit pattern, so that fast-math cannot fold
- * the test; a sum of at most 56 finite floats is finite in double, so the mean
- * of the others is). The exponent is clamped before exp2(), so no input
- * reaches an overflow or a NaN. The slots past L are not read.
+ * the test; a sum of at most 56 finite floats is finite in binary64, so the
+ * mean of the others is). The slots past L are not read.
+ *
+ * Each step is one binary64 operation whose result is stored (a volatile
+ * double), so that no compiler reorders it (fast-math: Clang's LTO builds
+ * otherwise multiplied the sum by K before dividing by L) and no extended
+ * register carries it (x87: 32-bit Release otherwise kept the running sum in
+ * an 80-bit register): the sum accumulated in order, harmonic 1 to L; the
+ * mean, one division; the knee decided on the mean itself; the exponent
+ * K (mean - X0), clamped before exp2(), so that no input reaches an underflow
+ * or a NaN there. On SSE and the other IEEE targets this is binary64 arithmetic
+ * exactly, the same in every build. On x87 each operation is computed in
+ * extended precision and rounded once to binary64 on its store: the same
+ * result for every input but one whose extended result falls exactly halfway
+ * between two doubles after the first rounding (double rounding), which
+ * needs an exact result whose bits span more than 64 binary places (a sum of 1
+ * and a log2 magnitude of 2^-53 + 2^-70, say); the tests' inputs, the review's
+ * included, give the same bits in every build. The gain itself is libm's exp2() of that exponent: the floor's 1/4 is
+ * exact in every libm; between the knees the golden hashes pin glibc's (2.39
+ * and 2.44 agree on the hashed sequences).
  */
 int
 mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
@@ -1422,20 +1439,24 @@ mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
     if (mp == NULL || !mbe_harmonic_count_is_valid(mp->L)) {
         return 0;
     }
-    double sum = 0.0;
+    volatile double sum = 0.0;
     for (int l = 1; l <= mp->L; l++) {
         uint32_t bits;
         memcpy(&bits, &mp->log2Ml[l], sizeof(bits));
         if ((bits & UINT32_C(0x7FFFFFFF)) >= UINT32_C(0x7F800000)) {
             return 0;
         }
-        sum += (double)mp->log2Ml[l];
+        sum = sum + (double)mp->log2Ml[l];
     }
-    const double exponent = IMBE_QUIET_SLOPE * ((sum / (double)mp->L) - IMBE_QUIET_KNEE);
-    if (!(exponent < 0.0)) {
+    volatile double mean = sum / (double)mp->L;
+    if (!(mean < IMBE_QUIET_KNEE)) {
         return 0;
     }
-    *gain = exp2((exponent < IMBE_QUIET_FLOOR) ? IMBE_QUIET_FLOOR : exponent);
+    volatile double below = mean - IMBE_QUIET_KNEE;
+    volatile double exponent = IMBE_QUIET_SLOPE * below;
+    const double clamped = (exponent < IMBE_QUIET_FLOOR) ? IMBE_QUIET_FLOOR : exponent;
+    volatile double g = exp2(clamped);
+    *gain = g;
     return 1;
 }
 

@@ -1734,12 +1734,19 @@ struct mbe_speech_options {
     const double* magnitude_gain;
 };
 
-/* Every magnitude of the model the core renders or advances, times gain, each
- * product formed in double and rounded to float once. */
+/* Every magnitude of the model the core renders or advances, times gain: each
+ * product one binary64 multiplication, stored (a volatile double, so that no
+ * x87 build converts the extended product to float directly, rounding it once
+ * where the others round it twice), then rounded to float. On x87 the
+ * multiplication is formed in extended precision and rounded to binary64 on
+ * its store: the SSE result but where that first rounding lands exactly
+ * halfway between two doubles (double rounding), which a product of a float
+ * and a double whose exact bits span more than 64 places can do. */
 static void
 mbe_scale_rendered_magnitudes(mbe_parms* cur_mp, double gain) {
     for (int l = 1; l <= cur_mp->L; l++) {
-        cur_mp->Ml[l] = (float)((double)cur_mp->Ml[l] * gain);
+        volatile double product = (double)cur_mp->Ml[l] * gain;
+        cur_mp->Ml[l] = mbe_round_to_float((float)product);
     }
 }
 
