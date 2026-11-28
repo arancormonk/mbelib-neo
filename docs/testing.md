@@ -444,7 +444,9 @@ The CTest suite includes:
   fills under the rule); the test compiles the file into its own translation unit with the test's
   flags, so in a library built with fast-math it compares the two bodies as those flags compile them,
   not the library's object, and the static analyzers see it whole (the models' harmonic counts
-  bounded before the copies are called). The independent rendering of the waveform tests (`run_waveform()`) takes P25's
+  bounded before the copies are called). The same test runs the floored train's grid test
+  (`p25_grid_steps()`) on every point of the grid, 1 to 2^18 steps with the Nyquist point, each with
+  its canonical float giving its count, and on both floats beside each, which fail. The independent rendering of the waveform tests (`run_waveform()`) takes P25's
   mid-frame pitch with the excess, the train's floored means, its phase inputs and its own models'
   voicing from its own arithmetic (`reference_p25_mid_pitch()`, `reference_advance()`,
   `reference_phase_input()`, `reference_own_model()`, `reference_own_voicing()`), over a stream that
@@ -465,8 +467,9 @@ The CTest suite includes:
   floats' ratio a float test would put inside the bracket.
   Mutations (the second fix round's list, 59, each applied to the head in a copy, the six tests
   `test_params`, `test_subframe_synthesis`, `test_frame_paths`, `test_p25_tones`, `test_golden_pcm`
-  and `test_p25_rendering_copies` built in Debug and run; on the merged head, `ecb78d0`, all 59 fail a
-  test, the first-failing assertion of each in `build/mut/mutations3-merged.log` outside the
+  and `test_p25_rendering_copies` built in Debug and run; on the merged head, `ecb78d0`, and again
+  on `93ed1a7`, the last commit that changes a test, all 59 fail a test, the first-failing assertion
+  of each in `build/mut/mutations3-merged.log` and `build/mut/mutations3-final.log` outside the
   repository): the grid 2^-18 and rounding in place of the floor; the mid-frame value rounded,
   unfloored, in float, with no excess (fails at b0 51, 53, 75, 80, 94, 95, 164), with its constant
   only (53, 75, 94), with twice the excess, with nodes 1, 1.4 and 2, only where the pitches differ, in
