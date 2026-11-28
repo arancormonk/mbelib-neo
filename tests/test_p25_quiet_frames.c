@@ -1,0 +1,859 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2026 by arancormonk <180709949+arancormonk@users.noreply.github.com>
+ */
+
+/**
+ * @file
+ * @brief P25's quiet frames: the quiet-frame gain and where P25's data path
+ * applies it (docs/dvsi-parity.md, "P25: quiet frames").
+ *
+ * DVSI's P25 decoder plays a frame whose decoded magnitudes are low lower
+ * still; the library multiplies every magnitude a P25 frame renders by
+ * g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded
+ * log2Ml[1..L], after adaptive smoothing. The gain here is this test's own
+ * arithmetic (QUIET_K, QUIET_X0, QUIET_FLOOR below, the documented constants).
+ * The frames are built with the IMBE encoder's quantizer
+ * (mbe_imbe4400_quantize_amplitudes()) and played through the public P25 entry
+ * points; the reference rendering ("replica") takes the model the data path
+ * committed to the history (prev_mp after the frame) and renders it with the
+ * library's enhancement (mbe_spectralAmpEnhanceWithRm0()), the library's
+ * smoothing where a case has channel errors
+ * (mbe_applyAdaptiveSmoothingWithRm0Limit()) and the library's synthesizer
+ * without a gain (mbe_synthesizeSpeechWithPreEnhRm0f(), or
+ * mbe_synthesizeRepeatedSpeechStartf() after the test's own smoothing), the
+ * test's gain applied to the magnitudes in between. The decode is the
+ * library's (mbe_decodeImbe4400Parms()).
+ *
+ * Where it compares exactly: the gain, the rendered magnitudes and the samples
+ * of a scaled frame by their bits in builds without fast-math whose float and
+ * double expressions are evaluated in their own types (QUIET_EXACT: FLT_EVAL_METHOD
+ * 0; the GCC and Clang x86-64 builds other than dev-release and the two Clang
+ * LTO builds); elsewhere the gain within 1e-12 of it, each magnitude within two
+ * float ulps, the samples within 1e-5 of the frame's peak (the library's scaled
+ * rendering is another inlined copy of the synthesis core than the replica's).
+ * The tolerance cannot catch: the mean or the gain formed in float rather than
+ * double, the product formed in float, the exponent clamped after exp2() (each
+ * moves the result by about an ulp). A loud frame, a frame of no gain (a tone
+ * model, ProVoice, a non-finite mean) and a repeat's magnitudes against the
+ * frame it repeats are compared by their bits in every build: they run the
+ * same code as their reference.
+ */
+#include <assert.h>
+#include <float.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "imbe4400_internal.h"
+#include "mbe_adaptive.h"
+#include "mbelib-neo/mbelib.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+/* The documented constants (docs/dvsi-parity.md, "P25: quiet frames"). */
+#define QUIET_K     1.41
+#define QUIET_X0    (-1.80)
+#define QUIET_FLOOR (-1.01)
+
+#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
+#define QUIET_FAST_MATH 1
+#else
+#define QUIET_FAST_MATH 0
+#endif
+#if !QUIET_FAST_MATH && defined(FLT_EVAL_METHOD) && (FLT_EVAL_METHOD == 0)
+#define QUIET_EXACT 1
+#else
+#define QUIET_EXACT 0
+#endif
+
+/* MBE_FRAME_MARK_TONE in PHIl[0], by its bits (4.0f). */
+#define TONE_MARK_BITS 0x40800000u
+
+static uint32_t
+bits_of(float x) {
+    uint32_t b;
+    memcpy(&b, &x, sizeof(b));
+    return b;
+}
+
+static uint64_t
+bits_of_double(double x) {
+    uint64_t b;
+    memcpy(&b, &x, sizeof(b));
+    return b;
+}
+
+/* Whether a gain is exactly 1, by its bits. */
+static int
+is_one(double g) {
+    return bits_of_double(g) == bits_of_double(1.0);
+}
+
+static int
+same_float(float a, float b) {
+    return bits_of(a) == bits_of(b);
+}
+
+static int
+same_floats(const float* a, const float* b, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (!same_float(a[i], b[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+same_ints(const int* a, const int* b, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Two states alike, every field by its bits; with uw_and_mute 0, previousUw (which only a rendered frame fills)
+ * and mutingThreshold (which the replica of a muted frame raises) are left out. */
+static int
+same_parms(const mbe_parms* a, const mbe_parms* b, int uw_and_mute) {
+    return same_float(a->w0, b->w0) && a->L == b->L && a->K == b->K && same_ints(a->Vl, b->Vl, 57)
+           && same_floats(a->Ml, b->Ml, 57) && same_floats(a->log2Ml, b->log2Ml, 57)
+           && same_floats(a->PHIl, b->PHIl, 57) && same_floats(a->PSIl, b->PSIl, 57) && same_float(a->gamma, b->gamma)
+           && a->tonePhase == b->tonePhase && a->swn == b->swn && same_float(a->localEnergy, b->localEnergy)
+           && a->amplitudeThreshold == b->amplitudeThreshold && same_float(a->errorRate, b->errorRate)
+           && a->errorCountTotal == b->errorCountTotal && a->errorCount4 == b->errorCount4
+           && a->repeatCount == b->repeatCount && (!uw_and_mute || same_float(a->mutingThreshold, b->mutingThreshold))
+           && (!uw_and_mute || same_floats(a->previousUw, b->previousUw, 256)) && same_float(a->noiseSeed, b->noiseSeed)
+           && same_floats(a->noiseOverlap, b->noiseOverlap, 96);
+}
+
+static int
+finite_float(float x) {
+    return (bits_of(x) & 0x7FFFFFFFu) < 0x7F800000u;
+}
+
+/* The test's own gain: 1 for L outside 1..56 or a log2Ml in 1..L that is not
+ * finite, else 2^clamp(K (x - X0), FLOOR, 0) in double. */
+static double
+own_gain(const mbe_parms* mp) {
+    if (mp->L < 1 || mp->L > 56) {
+        return 1.0;
+    }
+    double sum = 0.0;
+    for (int l = 1; l <= mp->L; ++l) {
+        if (!finite_float(mp->log2Ml[l])) {
+            return 1.0;
+        }
+        sum += (double)mp->log2Ml[l];
+    }
+    const double exponent = QUIET_K * ((sum / (double)mp->L) - QUIET_X0);
+    if (!(exponent < 0.0)) {
+        return 1.0;
+    }
+    return exp2((exponent < QUIET_FLOOR) ? QUIET_FLOOR : exponent);
+}
+
+static double
+mean_log2(const mbe_parms* mp) {
+    double sum = 0.0;
+    for (int l = 1; l <= mp->L; ++l) {
+        sum += (double)mp->log2Ml[l];
+    }
+    return sum / (double)mp->L;
+}
+
+/* The library's gain and this test's agree: by their bits where QUIET_EXACT,
+ * else within 1e-12; and the return says whether g < 1. */
+static void
+check_gain(const mbe_parms* mp, const char* what) {
+    double gain = -1.0;
+    const int quiet = mbe_imbe4400_quiet_gain(mp, &gain);
+    const double want = own_gain(mp);
+    if (QUIET_EXACT) {
+        if (bits_of_double(gain) != bits_of_double(want)) {
+            fprintf(stderr, "%s: gain %.17g, want %.17g\n", what, gain, want);
+        }
+        assert(bits_of_double(gain) == bits_of_double(want));
+    } else {
+        assert(fabs(gain - want) <= 1e-12);
+    }
+    assert(quiet == (want < 1.0));
+    if (!quiet) {
+        assert(is_one(gain));
+    }
+}
+
+/* A model of L harmonics, log2Ml[1..L] = x, the slots past L NaN (which must not be read). */
+static mbe_parms
+flat_model(int L, float x) {
+    mbe_parms cur, prev, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    cur.L = L;
+    for (int l = 1; l <= 56; ++l) {
+        cur.log2Ml[l] = (l <= L) ? x : NAN;
+    }
+    return cur;
+}
+
+static double
+gain_at(int L, float x) {
+    const mbe_parms mp = flat_model(L, x);
+    double gain = -1.0;
+    (void)mbe_imbe4400_quiet_gain(&mp, &gain);
+    check_gain(&mp, "flat model");
+    return gain;
+}
+
+static float
+float_step(float x, int steps) {
+    uint32_t b = bits_of(x);
+    /* x < 0 here, where a larger pattern is more negative: steps > 0 move toward 0, steps < 0 away from it. */
+    b = (uint32_t)((int64_t)b - steps);
+    float y;
+    memcpy(&y, &b, sizeof(y));
+    return y;
+}
+
+/*
+ * The gain function: exactly 1 at and above the knee X0 (the magnitudes bit
+ * for bit untouched), falling below it as 2^(K (x - X0)), the floor 2^FLOOR
+ * exactly from X0 + FLOOR / K down (the lowest gain level the bits express,
+ * B2[0] = -2.842205, among it, and -FLT_MAX), no gain for a mean that is not
+ * finite or a harmonic count outside 1..56, and monotone and continuous across
+ * both knees (sweeps of 4,000 float neighbours each).
+ */
+static void
+test_gain_function(void) {
+    const double floor_gain = exp2(QUIET_FLOOR);
+    const float loud[] = {0.0f, 5.0f, -1.3f, FLT_MAX, (float)QUIET_X0};
+    for (size_t i = 0; i < sizeof(loud) / sizeof(loud[0]); ++i) {
+        /* (float)-1.80 lies just above X0 in double: no gain. */
+        const double g = gain_at(20, loud[i]);
+        assert(is_one(g));
+    }
+    /* The next float below (float)-1.80: a gain just under 1. */
+    const double below = gain_at(20, float_step((float)QUIET_X0, -1));
+    assert(below < 1.0 && below > 1.0 - 1e-6);
+    /* Between the knees. */
+    const double g2 = gain_at(20, -2.0f), g22 = gain_at(20, -2.2f);
+    assert(fabs(g2 - exp2(QUIET_K * (-2.0 - QUIET_X0))) < 1e-6);
+    assert(fabs(g22 - exp2(QUIET_K * (-2.2 - QUIET_X0))) < 1e-6);
+    assert(g22 < g2 && g2 < 1.0 && g22 > floor_gain);
+    /* At and below the lower knee: the floor exactly. */
+    const float knee = (float)(QUIET_X0 + (QUIET_FLOOR / QUIET_K));
+    const float under[] = {float_step(knee, -2), -2.6f, -2.842205f, -10.0f, -1e30f, -FLT_MAX};
+    for (size_t i = 0; i < sizeof(under) / sizeof(under[0]); ++i) {
+        const double g = gain_at(20, under[i]);
+        if (QUIET_EXACT) {
+            assert(bits_of_double(g) == bits_of_double(floor_gain));
+        } else {
+            assert(fabs(g - floor_gain) <= 1e-12);
+        }
+    }
+    const double over_knee = gain_at(20, float_step(knee, 2));
+    assert(over_knee > floor_gain);
+    /* Harmonic counts: 1 and 56 take the gain, 0, 57 and -1 do not. */
+    const double g1 = gain_at(1, -2.2f), g56 = gain_at(56, -2.2f);
+    const double g0 = gain_at(0, -2.2f), g57 = gain_at(57, -2.2f), gm1 = gain_at(-1, -2.2f);
+    assert(g1 < 1.0 && g56 < 1.0 && is_one(g0) && is_one(g57) && is_one(gm1));
+    /* A mean that is not finite: NaN or either infinity in one band of 1..L; the slots past L are NaN in every
+     * flat model above and are not read. */
+    const float bad[] = {NAN, -NAN, INFINITY, -INFINITY};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        for (int at = 1; at <= 20; at += 19) {
+            mbe_parms mp = flat_model(20, -2.6f);
+            mp.log2Ml[at] = bad[i];
+            double g = -1.0;
+            const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
+            assert(quiet == 0 && is_one(g));
+        }
+    }
+    /* Huge finite values: a mix of +FLT_MAX and -FLT_MAX averages to 0; subnormals to about 0. */
+    {
+        mbe_parms mp = flat_model(20, FLT_MAX);
+        for (int l = 1; l <= 10; ++l) {
+            mp.log2Ml[l] = -FLT_MAX;
+        }
+        check_gain(&mp, "a +-FLT_MAX mix");
+        mp = flat_model(20, 1e-45f);
+        check_gain(&mp, "subnormals");
+        double g = -1.0;
+        const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
+        assert(quiet == 0);
+        const int none = mbe_imbe4400_quiet_gain(NULL, &g);
+        assert(none == 0 && is_one(g));
+    }
+    /* Monotone and continuous across both knees, float neighbour by float neighbour. */
+    const float centres[] = {(float)QUIET_X0, knee};
+    for (size_t c = 0; c < 2; ++c) {
+        double last = gain_at(20, float_step(centres[c], -2000));
+        for (int s = -1999; s <= 2000; ++s) {
+            const double g = gain_at(20, float_step(centres[c], s));
+            assert(g >= last);
+            assert(g - last < 1e-6);
+            last = g;
+        }
+    }
+    printf("quiet-frame gain: 1 at and above X0, 2^(K (x - X0)) between (x -2.0: %.6f, -2.2: %.6f), the floor %.6f "
+           "from x %.6f down; none for a non-finite mean or L outside 1..56\n",
+           g2, g22, floor_gain, (double)knee);
+}
+
+/* ---- P25 frames ---- */
+
+static int
+harmonics_of(int b0, int* K) {
+    const float w0 = (float)(4 * M_PI) / (float)((float)b0 + 39.5);
+    const int L = (int)(0.9254 * (int)((M_PI / w0) + 0.25));
+    *K = (L < 37) ? (L + 2) / 3 : 12;
+    return L;
+}
+
+/* A P25 voice frame at pitch code b0, voicing word `word` over the K bands (band 1 the most significant bit), log2
+ * amplitude base + swing cos(0.4 l), quantized against the decoder's history. */
+static void
+build_frame(char imbe_d[88], int b0, unsigned word, float base, float swing, const mbe_parms* history) {
+    int K;
+    const int L = harmonics_of(b0, &K);
+    unsigned char bands[12] = {0};
+    float logm[57] = {0.0f};
+    for (int band = 1; band <= K; ++band) {
+        bands[band - 1] = (unsigned char)((word >> (K - band)) & 1u);
+    }
+    for (int l = 1; l <= L; ++l) {
+        logm[l] = base + (swing * (float)cos(0.4 * (double)l));
+    }
+    mbe_imbe4400_quantize_amplitudes(b0, bands, logm, history, 0, imbe_d);
+}
+
+/* A lost frame: b0 255 (no pitch). */
+static void
+lost_frame(char imbe_d[88]) {
+    static const int idx[8] = {0, 1, 2, 3, 4, 5, 85, 86};
+    memset(imbe_d, 0, 88);
+    for (int i = 0; i < 8; ++i) {
+        imbe_d[idx[i]] = 1;
+    }
+}
+
+/* play() with its status checked outside assert(). */
+#define PLAY(s, d, pv, o, fl)                                                                                          \
+    do {                                                                                                               \
+        const int play_rc = play((s), (d), (pv), (o), (fl));                                                           \
+        assert(play_rc >= 0);                                                                                          \
+        (void)play_rc;                                                                                                 \
+    } while (0)
+
+struct stream {
+    mbe_parms cur, prev, enh;
+};
+
+static void
+stream_init(struct stream* s) {
+    mbe_initMbeParms(&s->cur, &s->prev, &s->enh);
+}
+
+/* One frame through the public float data path; status and flags returned. */
+static int
+play(struct stream* s, const char imbe_d[88], int provoice, float out[160], unsigned* flags) {
+    mbe_process_result r;
+    mbe_initProcessResult(&r);
+    if (provoice) {
+        r.flags |= MBE_PROCESS_FLAG_PROVOICE;
+    }
+    const int rc = mbe_processImbe4400Dataf(out, &r, imbe_d, &s->cur, &s->prev, &s->enh);
+    *flags = r.flags;
+    return rc;
+}
+
+/*
+ * The replica of the frame a stream just played: the model the data path
+ * committed (`history`, the stream's prev_mp after the frame), enhanced by the
+ * library, smoothed by the library where `smooth` (errors), times `gain` (1:
+ * none), rendered by the library's synthesizer from `enh_before` (the stream's
+ * prev_mp_enhanced before the frame). Leaves the rendered model in *rendered
+ * and the new prev_mp_enhanced in *enh_after.
+ */
+static void
+replica(float out[160], const mbe_parms* history, const mbe_parms* enh_before, double gain, int provoice, int smooth,
+        mbe_parms* rendered, mbe_parms* enh_after) {
+    mbe_parms cur = *history;
+    *enh_after = *enh_before;
+    const float rm0 = mbe_spectralAmpEnhanceWithRm0(&cur, MBE_HIGH_BAND_GAIN_IMBE);
+    const enum mbe_voiced_synthesis rendering =
+        provoice ? MBE_VOICED_SYNTHESIS_DVSI_PROVOICE : MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    if (smooth) {
+        mbe_applyAdaptiveSmoothingWithRm0Limit(&cur, enh_after, rm0, MBE_AMPLITUDE_LIMIT_NONE);
+    }
+    if (gain < 1.0) {
+        for (int l = 1; l <= cur.L; ++l) {
+            cur.Ml[l] = (float)((double)cur.Ml[l] * gain);
+        }
+    }
+    if (smooth) {
+        /* Rendered, not muted, whatever the error rate: the muted case's state is compared with this one. */
+        cur.mutingThreshold = 1e9f;
+        mbe_synthesizeRepeatedSpeechStartf(out, &cur, enh_after, rendering, MBE_SYNTHESIS_CONTINUES,
+                                           MBE_OUTPUT_LIMITED);
+    } else {
+        mbe_synthesizeSpeechWithPreEnhRm0f(out, &cur, enh_after, rm0,
+                                           provoice ? MBE_MUTE_NOISE_COMFORT : MBE_MUTE_NOISE_SPEC, rendering,
+                                           MBE_AMPLITUDE_LIMIT_NONE);
+    }
+    *rendered = cur;
+    *enh_after = cur;
+}
+
+static double
+peak(const float* x, int n) {
+    double m = 0.0;
+    for (int i = 0; i < n; ++i) {
+        m = fmax(m, fabs((double)x[i]));
+    }
+    return m;
+}
+
+/* Samples equal by their bits (exact), or within 1e-5 of the frame's peak. */
+static void
+check_samples(const float* a, const float* b, int exact, const char* what) {
+    if (exact) {
+        for (int i = 0; i < 160; ++i) {
+            if (!same_float(a[i], b[i])) {
+                fprintf(stderr, "%s: sample %d %.9g against %.9g\n", what, i, (double)a[i], (double)b[i]);
+            }
+            assert(same_float(a[i], b[i]));
+        }
+        return;
+    }
+    const double bound = 1e-5 * fmax(peak(a, 160), peak(b, 160)) + 1e-30;
+    for (int i = 0; i < 160; ++i) {
+        assert(fabs((double)a[i] - (double)b[i]) <= bound);
+    }
+}
+
+/* Magnitudes 1..L equal by their bits (exact), or within two float ulps. */
+static void
+check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* what) {
+    assert(a->L == b->L);
+    for (int l = 1; l <= a->L; ++l) {
+        if (exact) {
+            if (!same_float(a->Ml[l], b->Ml[l])) {
+                fprintf(stderr, "%s: Ml[%d] %.9g against %.9g\n", what, l, (double)a->Ml[l], (double)b->Ml[l]);
+            }
+            assert(same_float(a->Ml[l], b->Ml[l]));
+        } else {
+            assert(fabs((double)a->Ml[l] - (double)b->Ml[l]) <= 2.4e-7 * fabs((double)b->Ml[l]) + 1e-38);
+        }
+    }
+}
+
+/* The decoded model in the history: what the public parameter decoder gives for the frame's bits from the
+ * history before it (w0, L, voicing, Ml and log2Ml by their bits). */
+static void
+check_history(const mbe_parms* history, const char imbe_d[88], const mbe_parms* prev_before) {
+    mbe_parms cur = *prev_before, prev = *prev_before;
+    const int rc = mbe_decodeImbe4400Parms(imbe_d, &cur, &prev);
+    assert(rc == 0);
+    assert(history->L == cur.L && same_float(history->w0, cur.w0));
+    for (int l = 1; l <= cur.L; ++l) {
+        assert(history->Vl[l] == cur.Vl[l]);
+        assert(same_float(history->Ml[l], cur.Ml[l]) && same_float(history->log2Ml[l], cur.log2Ml[l]));
+    }
+}
+
+/* Every magnitude the frame rendered over the enhanced one it would render without the gain: g in every band,
+ * voiced and unvoiced alike (to 1e-6), and how many of each. */
+static void
+check_ratio(const mbe_parms* rendered, const mbe_parms* history, double gain, int* voiced, int* unvoiced) {
+    mbe_parms plain = *history;
+    (void)mbe_spectralAmpEnhanceWithRm0(&plain, MBE_HIGH_BAND_GAIN_IMBE);
+    for (int l = 1; l <= plain.L; ++l) {
+        if (plain.Ml[l] > 0.0f) {
+            assert(fabs(((double)rendered->Ml[l] / (double)plain.Ml[l]) - gain) <= 1e-6);
+        }
+        *voiced += rendered->Vl[l] == 1;
+        *unvoiced += rendered->Vl[l] != 1;
+    }
+}
+
+struct quiet_target {
+    int b0;
+    unsigned word;
+    float base, swing;
+};
+
+/*
+ * A P25 stream of quiet frames (at the lowest gain index and across the
+ * curve, with and without voiced bands) and loud ones: each frame's samples
+ * and rendered magnitudes against the replica with the test's gain (bits where
+ * QUIET_EXACT, else the tolerances above; loud frames by their bits in every
+ * build), every band's magnitude g times the unscaled one, the history the
+ * decoder's model (Ml and log2Ml not scaled, so the next frame decodes from
+ * the decoded values), and log2Ml of the rendered model the decoded one.
+ */
+static void
+test_quiet_stream(void) {
+    static const struct quiet_target targets[] = {
+        {60, 0x000u, -4.0f, 0.0f},  {60, 0x000u, -3.2f, 0.6f},  {60, 0x7E0u, -3.0f, 0.8f},  {60, 0x000u, -2.7f, 0.4f},
+        {100, 0x000u, -2.5f, 0.8f}, {100, 0xF00u, -2.4f, 0.0f}, {20, 0x00u, -2.2f, 0.8f},   {20, 0x3Fu, -2.1f, 0.5f},
+        {60, 0x000u, -2.0f, 0.8f},  {60, 0xFFFu, -1.9f, 0.3f},  {100, 0x000u, -1.6f, 0.8f}, {60, 0x000u, 1.0f, 0.8f},
+        {60, 0xFF0u, 2.0f, 0.5f},   {20, 0x3Fu, 3.0f, 0.0f},    {100, 0x000u, -3.5f, 0.8f},
+    };
+    struct stream s;
+    stream_init(&s);
+    int floor_frames = 0, slope_frames = 0, loud_frames = 0, voiced = 0, unvoiced = 0;
+    for (int round = 0; round < 3; ++round) {
+        for (size_t t = 0; t < sizeof(targets) / sizeof(targets[0]); ++t) {
+            char imbe_d[88];
+            float out[160], want[160];
+            unsigned flags;
+            const struct stream before = s;
+            build_frame(imbe_d, targets[t].b0, targets[t].word, targets[t].base, targets[t].swing, &s.prev);
+            PLAY(&s, imbe_d, 0, out, &flags);
+            assert((flags & (MBE_PROCESS_FLAG_REPEAT | MBE_PROCESS_FLAG_MUTE)) == 0);
+            check_history(&s.prev, imbe_d, &before.prev);
+            const double g = own_gain(&s.prev);
+            mbe_parms rendered, enh;
+            replica(want, &s.prev, &before.enh, g, 0, 0, &rendered, &enh);
+            const int exact = QUIET_EXACT || is_one(g);
+            check_samples(out, want, exact, "quiet stream");
+            check_magnitudes(&s.enh, &rendered, exact, "quiet stream");
+            check_ratio(&s.enh, &s.prev, g, &voiced, &unvoiced);
+            for (int l = 1; l <= s.prev.L; ++l) {
+                assert(same_float(s.enh.log2Ml[l], s.prev.log2Ml[l]));
+            }
+            if (is_one(g)) {
+                ++loud_frames;
+                assert(same_parms(&s.enh, &enh, 1));
+            } else if (g <= exp2(QUIET_FLOOR) * (1.0 + 1e-12)) {
+                ++floor_frames;
+            } else {
+                ++slope_frames;
+            }
+        }
+    }
+    assert(floor_frames >= 6 && slope_frames >= 6 && loud_frames >= 6);
+    printf("quiet P25 stream: %d frames at the floor, %d on the slope, %d loud ones untouched; %d voiced and %d "
+           "unvoiced bands rendered (%s)\n",
+           floor_frames, slope_frames, loud_frames, voiced, unvoiced, QUIET_EXACT ? "by bits" : "within tolerances");
+}
+
+/* A quiet frame then n lost frames; returns the stream. Checks each repeat against a second rendering of the
+ * stored model (its magnitudes the first rendering's by their bits, its samples the replica's), the 4th muted, and
+ * the reset model after it played without a gain. */
+static void
+test_repeats(void) {
+    struct stream s;
+    stream_init(&s);
+    char imbe_d[88];
+    float out[160];
+    unsigned flags;
+    for (int f = 0; f < 4; ++f) {
+        build_frame(imbe_d, 60, 0x7E0u, -2.4f, 0.6f, &s.prev);
+        PLAY(&s, imbe_d, 0, out, &flags);
+    }
+    const double g = own_gain(&s.prev);
+    assert(g < 1.0);
+    const mbe_parms stored = s.prev, first = s.enh;
+    for (int lost = 1; lost <= 7; ++lost) {
+        const struct stream before = s;
+        lost_frame(imbe_d);
+        PLAY(&s, imbe_d, 0, out, &flags);
+        assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0);
+        if (lost <= MBE_MAX_FRAME_REPEATS) {
+            /* The repeat loads the history: the stored model again, the gain read from it once. */
+            assert(s.prev.L == stored.L && same_float(s.prev.w0, stored.w0));
+            for (int l = 1; l <= stored.L; ++l) {
+                assert(same_float(s.prev.Ml[l], stored.Ml[l]) && same_float(s.prev.log2Ml[l], stored.log2Ml[l]));
+                assert(same_float(s.enh.Ml[l], first.Ml[l]));
+            }
+        } else {
+            /* The repeat limit's reset model (and its repeats): log2Ml 0, no gain. */
+            for (int l = 1; l <= s.prev.L; ++l) {
+                assert(bits_of(s.prev.log2Ml[l]) == 0u);
+            }
+            assert(is_one(own_gain(&s.prev)));
+        }
+        const int muted = (flags & MBE_PROCESS_FLAG_MUTE) != 0;
+        assert(muted == (lost == MBE_MAX_FRAME_REPEATS));
+        mbe_parms rendered, enh;
+        float want[160];
+        const double gr = own_gain(&s.prev);
+        replica(want, &s.prev, &before.enh, gr, 0, 0, &rendered, &enh);
+        check_magnitudes(&s.enh, &rendered, QUIET_EXACT || is_one(gr), "repeat");
+        if (!muted) {
+            check_samples(out, want, QUIET_EXACT || is_one(gr), "repeat");
+        }
+    }
+    printf("lost frames after a quiet frame (gain %.4f): repeats 1 to 3 play the stored model at its gain once, the "
+           "4th is muted and advances it, the reset model after takes none\n",
+           g);
+}
+
+/*
+ * A quiet frame the error rate mutes (the history's error rate set high): the
+ * state it leaves is the one rendering the scaled model leaves (but for
+ * previousUw, which only a rendered frame fills, and the muting threshold the
+ * replica raises), its magnitudes scaled. A quiet frame whose smoothing voices
+ * harmonics it decoded unvoiced (a moderate error rate, the local energy at
+ * its lowest): the rendered magnitudes are what smoothing left, times the gain
+ * read from the decoded log2Ml.
+ */
+/* A quiet frame at b0 60 with no voiced band, log2 amplitude -3.6 but at harmonic 5. */
+static void
+spiked_frame(char imbe_d[88], float spike, const mbe_parms* history) {
+    int K;
+    const int L = harmonics_of(60, &K);
+    unsigned char bands[12] = {0};
+    float logm[57] = {0.0f};
+    for (int l = 1; l <= L; ++l) {
+        logm[l] = (l == 5) ? spike : -3.6f;
+    }
+    mbe_imbe4400_quantize_amplitudes(60, bands, logm, history, 0, imbe_d);
+}
+
+#define SPIKE 9.0f
+
+static void
+test_errors(void) {
+    for (int c = 0; c < 2; ++c) {
+        struct stream s;
+        stream_init(&s);
+        char imbe_d[88];
+        float out[160], want[160];
+        unsigned flags;
+        /* Ten frames of the target, so that the prediction carries the spike. */
+        for (int f = 0; f < 10; ++f) {
+            spiked_frame(imbe_d, (c == 0) ? -1.0f : SPIKE, &s.prev);
+            PLAY(&s, imbe_d, 0, out, &flags);
+        }
+        s.prev.errorRate = (c == 0) ? 0.5f : 0.03f;
+        s.enh.localEnergy = 10000.0f;
+        const struct stream before = s;
+        spiked_frame(imbe_d, (c == 0) ? -1.0f : SPIKE, &s.prev);
+        PLAY(&s, imbe_d, 0, out, &flags);
+        const double g = own_gain(&s.prev);
+        assert(g < 1.0);
+        mbe_parms rendered, enh;
+        replica(want, &s.prev, &before.enh, g, 0, 1, &rendered, &enh);
+        check_magnitudes(&s.enh, &rendered, QUIET_EXACT, "errors");
+        int newly_voiced = 0;
+        for (int l = 1; l <= s.prev.L; ++l) {
+            assert(s.prev.Vl[l] == 0);
+            newly_voiced += s.enh.Vl[l] == 1;
+            assert(s.enh.Vl[l] == rendered.Vl[l]);
+        }
+        if (c == 0) {
+            assert((flags & MBE_PROCESS_FLAG_MUTE) != 0);
+            if (QUIET_EXACT) {
+                assert(same_parms(&s.enh, &enh, 0));
+            }
+            printf("a quiet frame muted by the error rate advances the scaled model: its state is the rendered "
+                   "case's%s\n",
+                   QUIET_EXACT ? " byte for byte (previousUw aside)" : "'s magnitudes within tolerance");
+        } else {
+            assert((flags & MBE_PROCESS_FLAG_MUTE) == 0);
+            assert(newly_voiced > 0);
+            check_samples(out, want, QUIET_EXACT, "smoothed");
+            printf("a quiet frame smoothing voices (%d of %d harmonics): what smoothing left, times the gain of the "
+                   "decoded log2Ml\n",
+                   newly_voiced, s.prev.L);
+        }
+    }
+}
+
+static double
+droop(int l) {
+    const double x = M_PI * (double)l / 256.0;
+    return (sin(x) / x) * (sin(x) / x);
+}
+
+/* A DTMF tone (DTMF 1: b0 53, word 1110000, harmonics 4 and 7) sent as voice frames at low magnitudes, its mean
+ * log2 magnitude under X0: it plays its tone model at its own level, no gain (the tone harmonics at 0.988 times
+ * their decoded rms times the droop). */
+static void
+test_tone(void) {
+    struct stream s;
+    stream_init(&s);
+    char imbe_d[88];
+    float out[160];
+    unsigned flags;
+    int K;
+    const int L = harmonics_of(53, &K);
+    for (int f = 0; f < 10; ++f) {
+        unsigned char bands[12] = {0};
+        float logm[57] = {0.0f};
+        for (int band = 1; band <= K; ++band) {
+            bands[band - 1] = (unsigned char)((0x70u >> (K - band)) & 1u);
+        }
+        for (int l = 1; l <= L; ++l) {
+            logm[l] = (l == 4 || l == 7) ? 1.0f : -3.4f;
+        }
+        mbe_imbe4400_quantize_amplitudes(53, bands, logm, &s.prev, 0, imbe_d);
+        PLAY(&s, imbe_d, 0, out, &flags);
+    }
+    assert(bits_of(s.enh.PHIl[0]) == TONE_MARK_BITS);
+    assert(own_gain(&s.prev) < 1.0);
+    const double rms =
+        sqrt(0.5 * ((double)s.prev.Ml[4] * (double)s.prev.Ml[4] + (double)s.prev.Ml[7] * (double)s.prev.Ml[7]));
+    for (int l = 4; l <= 7; l += 3) {
+        const double want = 0.988 * rms * droop(l);
+        assert(fabs((double)s.enh.Ml[l] - want) <= 1e-6 * want);
+    }
+    printf("a P25 tone at a mean log2 magnitude of %.3f (gain %.4f were it speech) plays its tone model unscaled\n",
+           mean_log2(&s.prev), own_gain(&s.prev));
+}
+
+/* ProVoice through the P25 data path with its flag, on the same quiet frames, lost frames and an error-rate mute:
+ * every frame's samples and states those of the replica without a gain, by their bits in every build. */
+static void
+test_provoice(void) {
+    struct stream s;
+    stream_init(&s);
+    int frames = 0;
+    for (int f = 0; f < 16; ++f) {
+        char imbe_d[88];
+        float out[160], want[160];
+        unsigned flags;
+        const struct stream before = s;
+        if (f >= 8 && f < 13) {
+            lost_frame(imbe_d);
+        } else {
+            build_frame(imbe_d, 60, (f % 2) ? 0x7E0u : 0x000u, -2.6f + 0.1f * (float)(f % 5), 0.6f, &s.prev);
+        }
+        if (f == 14) {
+            s.prev.errorRate = 0.5f;
+        }
+        PLAY(&s, imbe_d, 1, out, &flags);
+        mbe_parms rendered, enh;
+        replica(want, &s.prev, &before.enh, 1.0, 1, 0, &rendered, &enh);
+        if ((flags & MBE_PROCESS_FLAG_MUTE) == 0) {
+            check_samples(out, want, 1, "provoice");
+            assert(same_parms(&s.enh, &enh, 1));
+        } else {
+            check_magnitudes(&s.enh, &rendered, 1, "provoice muted");
+        }
+        frames += own_gain(&s.prev) < 1.0;
+    }
+    assert(frames >= 8);
+    printf("ProVoice on %d frames P25 would play lower (quiet, repeated, muted): as without the gain\n", frames);
+}
+
+/*
+ * Caller states: a lost frame repeats the history, whose log2Ml a caller can
+ * set to anything. NaN, either infinity in one band or in all, subnormals,
+ * +FLT_MAX or -FLT_MAX in all bands, a mix; values past L (NaN) that must not
+ * be read; L out of range. The samples are finite; where the mean is not
+ * finite (and L out of range) they are the replica's without a gain by their
+ * bits; -FLT_MAX plays at the floor; NaN past L changes nothing.
+ */
+static void
+test_caller_states(void) {
+    static const struct {
+        const char* name;
+        float value;
+        int all;
+    } cases[] = {{"NaN in band 3", NAN, 0},     {"+inf in band 3", INFINITY, 0},    {"-inf in band 3", -INFINITY, 0},
+                 {"NaN in every band", NAN, 1}, {"subnormals", 1e-45f, 1},          {"+FLT_MAX", FLT_MAX, 1},
+                 {"-FLT_MAX", -FLT_MAX, 1},     {"-FLT_MAX in band 3", -FLT_MAX, 0}};
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]) + 2; ++c) {
+        struct stream s;
+        stream_init(&s);
+        char imbe_d[88];
+        float out[160], want[160];
+        unsigned flags;
+        for (int f = 0; f < 3; ++f) {
+            build_frame(imbe_d, 60, 0x000u, -2.4f, 0.6f, &s.prev);
+            PLAY(&s, imbe_d, 0, out, &flags);
+        }
+        if (c < sizeof(cases) / sizeof(cases[0])) {
+            for (int l = 1; l <= s.prev.L; ++l) {
+                if (cases[c].all || l == 3) {
+                    s.prev.log2Ml[l] = cases[c].value;
+                }
+            }
+        } else if (c == sizeof(cases) / sizeof(cases[0])) {
+            s.prev.L = 57;
+        } else {
+            s.prev.L = 0;
+        }
+        struct stream past = s;
+        for (int l = s.prev.L + 1; l <= 56 && s.prev.L >= 0; ++l) {
+            past.prev.log2Ml[l] = NAN;
+        }
+        const struct stream before = s;
+        lost_frame(imbe_d);
+        PLAY(&s, imbe_d, 0, out, &flags);
+        float out_past[160];
+        PLAY(&past, imbe_d, 0, out_past, &flags);
+        check_samples(out, out_past, 1, "NaN past L");
+        for (int i = 0; i < 160; ++i) {
+            assert(finite_float(out[i]));
+        }
+        const double g = own_gain(&s.prev);
+        if (s.prev.L >= 1 && s.prev.L <= 56) {
+            mbe_parms rendered, enh;
+            replica(want, &s.prev, &before.enh, g, 0, 0, &rendered, &enh);
+            check_samples(out, want, QUIET_EXACT || is_one(g), "caller state");
+            if (c == 6) {
+                assert(g < 1.0);
+            }
+        }
+    }
+    printf("caller states (non-finite, subnormal and huge log2Ml, NaN past L, L 0 and 57): finite samples, no gain "
+           "where the mean is not finite, the floor for -FLT_MAX\n");
+}
+
+/* The public mbe_synthesizeSpeechf() takes no gain: a model of quiet log2Ml plays as the same model with log2Ml 0. */
+static void
+test_public_synthesizer(void) {
+    mbe_parms a, b, pa, pb, e;
+    mbe_initMbeParms(&a, &pa, &e);
+    a.w0 = 0.105f;
+    a.L = 27;
+    for (int l = 1; l <= a.L; ++l) {
+        a.Vl[l] = (l % 3) == 0;
+        a.Ml[l] = 0.12f + 0.01f * (float)(l % 5);
+        a.log2Ml[l] = -2.8f;
+    }
+    pa = a;
+    b = a;
+    for (int l = 1; l <= b.L; ++l) {
+        b.log2Ml[l] = 0.0f;
+    }
+    pb = pa;
+    for (int l = 1; l <= pb.L; ++l) {
+        pb.log2Ml[l] = 0.0f;
+    }
+    float oa[160], ob[160];
+    mbe_setThreadRngSeed(0x5157u);
+    mbe_synthesizeSpeechf(oa, &a, &pa);
+    mbe_setThreadRngSeed(0x5157u);
+    mbe_synthesizeSpeechf(ob, &b, &pb);
+    check_samples(oa, ob, 1, "public synthesizer");
+    for (int l = 1; l <= a.L; ++l) {
+        assert(same_float(a.Ml[l], b.Ml[l]));
+    }
+    printf("mbe_synthesizeSpeechf(): a quiet model plays as the same model with log2Ml 0\n");
+}
+
+int
+main(void) {
+    test_gain_function();
+    test_quiet_stream();
+    test_repeats();
+    test_errors();
+    test_tone();
+    test_provoice();
+    test_caller_states();
+    test_public_synthesizer();
+    printf("P25 quiet frames: ok\n");
+    return 0;
+}
