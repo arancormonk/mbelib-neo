@@ -1394,20 +1394,22 @@ imbe_has_voiced_band(const mbe_parms* mp) {
  * decodes of its own test vectors (the steady frames compared there, chiefly
  * those of two near-silent recordings), DVSI's P25 decoder plays a frame whose
  * decoded magnitudes are low lower still, by a gain that follows the mean x of
- * the frame's decoded log2 magnitudes: read through its rounding 16-bit
- * conversion (DVSI's quiet samples are round(g v), not trunc(g v), v this
- * library's sample before the conversion: the steps of |d| lie at 0.5/g, 1.5/g,
- * 2.5/g with one g per frame), the gain is 1/4 at the lowest means and rises
- * to about 1 at the knee. The library plays g = 2^clamp(K (x - X0), FLOOR, 0):
+ * the frame's decoded log2 magnitudes. On those quiet frames DVSI's samples are
+ * round(g v), not trunc(g v), v this library's sample before the conversion:
+ * pooled per 0.05 bin of the decoded mean, the steps of |d| lie at 0.5/g,
+ * 1.5/g, 2.5/g with one g per bin. Read through that rounding, the gain is 1/4
+ * at the lowest means and rises to about 1 at the knee. The library plays g = 2^clamp(K (x - X0), FLOOR, 0):
  * K and X0 a fit by level (per 0.05 bin of x, the one gain that brings
  * round(g v) nearest DVSI's samples over all the bin's steady frames with no
  * voiced band, normalised by the same gain above the knee), FLOOR -2, a gain of
  * 1/4, taken so because the data are flat there at 0.244 to 0.250, not
  * because a document says so. What DVSI's decoder computes is not known.
  */
-#define IMBE_QUIET_SLOPE 1.84    /* K: log2 g per unit of the mean log2 magnitude under the knee */
-#define IMBE_QUIET_KNEE  (-1.73) /* X0: the mean log2 magnitude under which the gain falls */
-#define IMBE_QUIET_FLOOR (-2.00) /* FLOOR: log2 of the lowest gain, 1/4 */
+#define IMBE_QUIET_SLOPE     1.84    /* K: log2 g per unit of the mean log2 magnitude under the knee */
+#define IMBE_QUIET_KNEE      (-1.73) /* X0: the mean log2 magnitude under which the gain falls */
+#define IMBE_QUIET_FLOOR     (-2.00) /* FLOOR: log2 of the lowest gain, 1/4 */
+/* The largest |log2Ml| the gain reads, 2^20 as a float bit pattern without its sign. */
+#define IMBE_QUIET_LOG_BOUND UINT32_C(0x49800000)
 
 /*
  * The quiet-frame gain of a model, read from its decoded log2 magnitudes
@@ -1415,9 +1417,14 @@ imbe_has_voiced_band(const mbe_parms* mp) {
  * 2^clamp(K (x - X0), FLOOR, 0). Returns 1 and stores g where x < X0 (then
  * g < 1); returns 0 and stores 1 where the model takes no gain: x at or above
  * the knee X0, a harmonic count outside 1..56, or a log2 magnitude in 1..L
- * that is not finite (read on its bit pattern, so that fast-math cannot fold
- * the test; a sum of at most 56 finite floats is finite in binary64, so the
- * mean of the others is). The slots past L are not read.
+ * whose magnitude exceeds 2^20 (IMBE_QUIET_LOG_BOUND: a NaN or an infinity
+ * among them; read on its bit pattern, so that fast-math cannot fold the test).
+ * The bound is the one the encoders put on the same field (a decode stays
+ * within a few tens); it removes the inputs on which builds differ materially:
+ * with every term within 2^20, each stored step's error is under 2^-26 in
+ * every build, where a caller's history such as {2^58, 32 + 2^-12, -2^58, -23,
+ * 0, ...} summed to 41 in binary64 and to -23 under x87. The slots past L are
+ * not read.
  *
  * Each step is one binary64 operation whose result is stored (a volatile
  * double), so that no compiler reorders it (fast-math: Clang's LTO builds
@@ -1426,16 +1433,18 @@ imbe_has_voiced_band(const mbe_parms* mp) {
  * an 80-bit register): the sum accumulated in order, harmonic 1 to L; the
  * mean, one division; the knee decided on the mean itself; the exponent
  * K (mean - X0), clamped before exp2(), so that no input reaches an underflow
- * or a NaN there. On SSE and the other IEEE targets this is binary64 arithmetic
- * exactly, the same in every build. On x87 each operation is computed in
- * extended precision and rounded once to binary64 on its store: the same
- * result for every input but one whose extended result falls exactly halfway
- * between two doubles after the first rounding (double rounding), which
- * needs an exact result whose bits span more than 64 binary places (a sum of 1
- * and a log2 magnitude of 2^-53 + 2^-70, say); the tests' inputs, the review's
- * included, give the same bits in every build. The gain itself is libm's exp2() of that exponent: the floor's 1/4 is
- * exact in every libm; between the knees the golden hashes pin glibc's (2.39
- * and 2.44 agree on the hashed sequences).
+ * or a NaN there. What is guaranteed: on SSE and the other IEEE targets this
+ * is binary64 arithmetic exactly, so the IEEE builds give the same gain and
+ * the same products given the same libm. Under x87 each operation is computed
+ * in extended precision and rounded again to binary64 on its store, which can
+ * leave a stored double one place off (double rounding: the extended result
+ * rounded to a midpoint and the store rounding it away from the binary64
+ * result), on decoded input too (DVSI's `dtmf`, frame 3185: gains
+ * 0x1.32d283f8e55f5p-2 and ...f6p-2); a rendered magnitude then moves by one
+ * float step only where its product lies at a float's rounding edge. The gain
+ * itself is the platform's exp2(): the floor's 1/4 is exact in every libm;
+ * between the knees the golden hashes pin glibc's (2.39 and 2.44 agree on the
+ * hashed sequences).
  */
 int
 mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
@@ -1447,7 +1456,7 @@ mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
     for (int l = 1; l <= mp->L; l++) {
         uint32_t bits;
         memcpy(&bits, &mp->log2Ml[l], sizeof(bits));
-        if ((bits & UINT32_C(0x7FFFFFFF)) >= UINT32_C(0x7F800000)) {
+        if ((bits & UINT32_C(0x7FFFFFFF)) > IMBE_QUIET_LOG_BOUND) {
             return 0;
         }
         sum = sum + (double)mp->log2Ml[l];

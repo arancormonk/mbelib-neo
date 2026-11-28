@@ -150,9 +150,13 @@ finite_float(float x) {
     return (bits_of(x) & 0x7FFFFFFFu) < 0x7F800000u;
 }
 
-/* The test's own gain: 1 for L outside 1..56 or a log2Ml in 1..L that is not
- * finite, or a mean at or above X0; else 2^clamp(K (x - X0), FLOOR, 0), each
- * step a stored binary64 operation (the sum in order, harmonic 1 to L). */
+/* The test's own gain: 1 for L outside 1..56 or a log2Ml in 1..L beyond 2^20 in
+ * magnitude (a NaN or an infinity among them), or a mean at or above X0; else
+ * 2^clamp(K (x - X0), FLOOR, 0), each step a stored binary64 operation (the
+ * sum in order, harmonic 1 to L). */
+/* 2^20, the largest |log2Ml| the gain reads, as a float bit pattern without its sign. */
+#define QUIET_LOG_BOUND 0x49800000u
+
 static double
 own_gain(const mbe_parms* mp) {
     if (mp->L < 1 || mp->L > 56) {
@@ -160,7 +164,7 @@ own_gain(const mbe_parms* mp) {
     }
     volatile double sum = 0.0;
     for (int l = 1; l <= mp->L; ++l) {
-        if (!finite_float(mp->log2Ml[l])) {
+        if ((bits_of(mp->log2Ml[l]) & 0x7FFFFFFFu) > QUIET_LOG_BOUND) {
             return 1.0;
         }
         sum = sum + (double)mp->log2Ml[l];
@@ -244,9 +248,11 @@ float_step(float x, int steps) {
  * The gain function: exactly 1 at and above the knee X0 (the magnitudes bit
  * for bit untouched), falling below it as 2^(K (x - X0)), the floor 2^FLOOR
  * exactly from X0 + FLOOR / K down (the lowest gain level the bits express,
- * B2[0] = -2.842205, among it, and -FLT_MAX), no gain for a mean that is not
- * finite or a harmonic count outside 1..56, and monotone and continuous across
- * both knees (sweeps of 4,000 float neighbours each).
+ * B2[0] = -2.842205 and -2^20 among it), no gain for a log2 magnitude beyond
+ * 2^20 in magnitude (a NaN or an infinity among them; -1e30 and -FLT_MAX), or
+ * a harmonic count outside 1..56, the bound's two sides at 2^20 and the floats
+ * beside it, and monotone and continuous across both knees (sweeps of 4,000
+ * float neighbours each).
  */
 static void
 test_gain_function(void) {
@@ -273,10 +279,32 @@ test_gain_function(void) {
     assert(g22 < g2 && g2 < 1.0 && g22 > floor_gain);
     /* At and below the lower knee: the floor exactly. */
     const float knee = (float)(QUIET_X0 + (QUIET_FLOOR / QUIET_K));
-    const float under[] = {float_step(knee, -2), -2.9f, -2.842205f, -10.0f, -1e30f, -FLT_MAX};
+    const float under[] = {float_step(knee, -2), -2.9f, -2.842205f, -10.0f, -0x1p20f};
     for (size_t i = 0; i < sizeof(under) / sizeof(under[0]); ++i) {
         const double g = gain_at(20, under[i]);
         assert(bits_of_double(g) == UINT64_C(0x3FD0000000000000)); /* 1/4 */
+    }
+    /* Beyond the bound in every band: no gain, 1 exactly. */
+    const float beyond[] = {float_step(-0x1p20f, -1), -1e30f, -FLT_MAX};
+    for (size_t i = 0; i < sizeof(beyond) / sizeof(beyond[0]); ++i) {
+        const double g = gain_at(20, beyond[i]);
+        assert(is_one(g));
+    }
+    /* The bound's two sides in one band of a quiet model of 56 harmonics (the others -2.9), the pair +a, -b keeping
+     * the mean under the knee: |a| and |b| at 2^20 and the float under it take the gain, the float over it none. */
+    {
+        const float sides[] = {float_step(-0x1p20f, 1), -0x1p20f, float_step(-0x1p20f, -1)};
+        for (int k = 0; k < 3; ++k) {
+            for (int sign = 0; sign < 2; ++sign) {
+                mbe_parms mp = flat_model(56, -2.9f);
+                mp.log2Ml[5] = sign ? -sides[k] : -0x1p20f;
+                mp.log2Ml[9] = sign ? -0x1p20f : sides[k];
+                check_gain(&mp, "the bound's sides");
+                double g = -1.0;
+                const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
+                assert(quiet == (k < 2));
+            }
+        }
     }
     const double over_knee = gain_at(20, float_step(knee, 2));
     assert(over_knee > floor_gain);
@@ -296,13 +324,15 @@ test_gain_function(void) {
             assert(quiet == 0 && is_one(g));
         }
     }
-    /* Huge finite values: a mix of +FLT_MAX and -FLT_MAX averages to 0; subnormals to about 0. */
+    /* Huge finite values, beyond the bound: a mix of +FLT_MAX and -FLT_MAX gives no gain; subnormals average to
+     * about 0. */
     {
         mbe_parms mp = flat_model(20, FLT_MAX);
         for (int l = 1; l <= 10; ++l) {
             mp.log2Ml[l] = -FLT_MAX;
         }
         check_gain(&mp, "a +-FLT_MAX mix");
+        assert(is_one(own_gain(&mp)));
         mp = flat_model(20, 1e-45f);
         check_gain(&mp, "subnormals");
         double g = -1.0;
@@ -311,10 +341,10 @@ test_gain_function(void) {
         const int none = mbe_imbe4400_quiet_gain(NULL, &g);
         assert(none == 0 && is_one(g));
     }
-    /* Every class of float in every harmonic 1..56 of a quiet model of 56 harmonics (the others -2.6, a gain at
+    /* Every class of float in every harmonic 1..56 of a quiet model of 56 harmonics (the others -2.9, a gain at
      * the floor): NaNs of either sign and both infinities give no gain, exactly 1, with any other content;
-     * zeros of either sign, subnormals, FLT_MIN, +-FLT_MAX and 1e30 the test's gain from the mean (a finite value
-     * however large: -FLT_MAX in one band takes the mean far under the knee, the floor; +FLT_MAX far over it, 1). */
+     * zeros of either sign, subnormals, FLT_MIN, +-FLT_MAX and +-1e30 the test's gain (the last four beyond the
+     * bound: none, 1 exactly; the others the gain of their mean). */
     {
         static const uint32_t none_classes[] = {0x7FC00000u, 0xFFC00000u, 0x7F800001u,
                                                 0xFFFFFFFFu, 0x7F800000u, 0xFF800000u};
@@ -338,7 +368,7 @@ test_gain_function(void) {
             }
         }
         printf("quiet-frame gain: %d states with a NaN or infinity in one harmonic give 1 exactly, %d with another "
-               "class of float the gain of their mean\n",
+               "class of float the test's gain (none beyond 2^20)\n",
                none, finite);
     }
     {
@@ -357,7 +387,7 @@ test_gain_function(void) {
         }
     }
     printf("quiet-frame gain: 1 at and above X0, 2^(K (x - X0)) between (x -2.0: %.6f, -2.4: %.6f), the floor %.6f "
-           "from x %.6f down; none for a non-finite mean or L outside 1..56\n",
+           "from x %.6f down; none beyond 2^20 in a band or L outside 1..56\n",
            g2, g22, floor_gain, (double)knee);
 }
 
@@ -519,6 +549,9 @@ check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* 
             }
             assert(same_float(a->Ml[l], b->Ml[l]));
         } else {
+            /* Both finite first (ulp_distance() takes two identical non-finite patterns as 0), then at most two
+             * float steps apart with the same sign. */
+            assert(finite_float(a->Ml[l]) && finite_float(b->Ml[l]));
             const int64_t d = ulp_distance(a->Ml[l], b->Ml[l]);
             assert(d >= 0 && d <= 2);
         }
@@ -954,19 +987,28 @@ expect_gain(const mbe_parms* mp, int quiet_want, uint64_t gain_bits, const char*
  *   last part), no gain; the next below (0x1p-50), the gain 0x1.ffffffffffffdp-1.
  * - L 55, forty-four -2 and eleven -1 (the mean -99/55): the gain
  *   0x1.d44562b64079ep-1.
- * - A cancelling history, L 10, {2^58, -23, -2^58, 0, ...}: summed in order in
- *   binary64, -32 (the mean -3.2, the floor, 1/4 exactly); an extended register
- *   holds -23 (the mean -2.3, another gain): at the helper, and through the
- *   public repeat path, where the rendered magnitudes equal those of the same
- *   model with every log2Ml -3.2 (the floor too) by their bits, and differ from
- *   those of the model with every log2Ml -2.3.
+ * - Cancelling histories beyond the bound, L 10: {2^58, -23, -2^58, 0, ...}
+ *   (-32 in binary64, -23 in an extended register) and the review's
+ *   {2^58, 32 + 2^-12, -2^58, -23, 0, ...} (41 in binary64, -23 under x87
+ *   after double rounding, a gain of 1 against 0.483): no gain, 1 exactly, at
+ *   the helper and through the public repeat path, where the rendered
+ *   magnitudes equal those of the same model with every log2Ml 0 by their
+ *   bits, and differ from those of the model with every log2Ml -3.2 (the
+ *   floor).
+ * - A decoded frame on which x87 rounds twice: DVSI's `dtmf`, frame 3185 (L 14,
+ *   its log2Ml as the decode stores them): the gain 0x1.32d283f8e55f5p-2 by
+ *   its bits where FLT_EVAL_METHOD is 0 (the eight 64-bit configurations), and
+ *   within one place of it where it is not (the two 32-bit x87 builds, which
+ *   give 0x1.32d283f8e55f6p-2).
  * - The product: Ml 0x1.4affa2p+0 times the gain 0x1.2e561292a499p-1 through
  *   the scaled synthesis, 0x1.86e8dcp-1 (the binary64 product 0x1.86e8dbp-1,
  *   exactly halfway, rounded to even; one rounding of the exact product from
  *   an extended register gives 0x1.86e8dap-1).
- * - A mean of -FLT_MAX: the floor, and no overflow, underflow or invalid
- *   exception raised (the exponent is clamped before exp2(); exp2() of the
- *   unclamped exponent underflows).
+ * - A mean of -2^20, the bound: the floor, and no overflow, underflow or
+ *   invalid exception raised (the exponent is clamped before exp2(); exp2() of
+ *   the unclamped exponent underflows); FE_INEXACT is not checked (the mean's
+ *   and the exponent's roundings may raise it). A mean of -FLT_MAX: beyond the
+ *   bound, no gain.
  */
 static void
 test_exact_arithmetic(void) {
@@ -989,33 +1031,57 @@ test_exact_arithmetic(void) {
     mp = arithmetic_model(55, 0.05f, logs55, 55);
     expect_gain(&mp, 1, UINT64_C(0x3FED44562B64079E), "L 55, a mean of -99/55");
     const float cancel[] = {0x1p58f, -23.0f, -0x1p58f};
+    const float review[] = {0x1p58f, 0x1.00008p+5f, -0x1p58f, -23.0f};
     mp = arithmetic_model(10, 0.28f, cancel, 3);
-    expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "the cancelling history");
+    expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the cancelling history");
+    mp = arithmetic_model(10, 0.28f, review, 4);
+    expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the review's cancelling history");
     {
-        float huge[20];
+        float bound[20], huge[20];
         for (int l = 0; l < 20; ++l) {
+            bound[l] = -0x1p20f;
             huge[l] = -FLT_MAX;
         }
-        mp = arithmetic_model(20, 0.15f, huge, 20);
+        mp = arithmetic_model(20, 0.15f, bound, 20);
 #if defined(FE_UNDERFLOW) && defined(FE_OVERFLOW) && defined(FE_INVALID)
         feclearexcept(FE_ALL_EXCEPT);
-        expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "a mean of -FLT_MAX");
+        expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "a mean of -2^20");
         assert(!fetestexcept(FE_UNDERFLOW | FE_OVERFLOW | FE_INVALID));
 #else
-        expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "a mean of -FLT_MAX");
+        expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "a mean of -2^20");
+#endif
+        mp = arithmetic_model(20, 0.15f, huge, 20);
+        expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "a mean of -FLT_MAX");
+    }
+    /* DVSI's dtmf, frame 3185, as decoded (the stored floats by their bits). */
+    {
+        static const uint32_t dtmf3185[14] = {0xbf9b19ddu, 0xc054b2c2u, 0xc0281f94u, 0xc05e9ddcu, 0xc0250bf8u,
+                                              0xc0549754u, 0xc0361568u, 0xc025a23au, 0xc048461eu, 0xc0068d26u,
+                                              0xc0289808u, 0xc0197ab0u, 0xc051a41eu, 0xbff7c669u};
+        float logs[14];
+        memcpy(logs, dtmf3185, sizeof(logs));
+        mp = arithmetic_model(14, 0.3f, logs, 14);
+        double g = -1.0;
+        const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
+        const uint64_t want = UINT64_C(0x3FD32D283F8E55F5);
+        assert(quiet == 1);
+#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == 0
+        assert(bits_of_double(g) == want);
+#else
+        assert(bits_of_double(g) == want || bits_of_double(g) == want + 1u || bits_of_double(g) == want - 1u);
 #endif
     }
-    /* The cancelling history through a public repeat. */
+    /* The cancelling histories through a public repeat. */
     {
-        float flat32[10], flat23[10];
+        float flat0[10], flat32[10];
         for (int l = 0; l < 10; ++l) {
+            flat0[l] = 0.0f;
             flat32[l] = -3.2f;
-            flat23[l] = -2.3f;
         }
-        const float* histories[3] = {cancel, flat32, flat23};
-        const int counts[3] = {3, 10, 10};
-        mbe_parms rendered[3];
-        for (int h = 0; h < 3; ++h) {
+        const float* histories[4] = {cancel, review, flat0, flat32};
+        const int counts[4] = {3, 4, 10, 10};
+        mbe_parms rendered[4];
+        for (int h = 0; h < 4; ++h) {
             struct stream s;
             stream_init(&s);
             s.prev = arithmetic_model(10, 0.28f, histories[h], counts[h]);
@@ -1030,8 +1096,9 @@ test_exact_arithmetic(void) {
             }
             rendered[h] = s.enh;
         }
-        assert(same_floats(rendered[0].Ml, rendered[1].Ml, 57));
-        assert(!same_floats(rendered[0].Ml, rendered[2].Ml, 57));
+        assert(same_floats(rendered[0].Ml, rendered[2].Ml, 57));
+        assert(same_floats(rendered[1].Ml, rendered[2].Ml, 57));
+        assert(!same_floats(rendered[0].Ml, rendered[3].Ml, 57));
     }
     /* The product, through the scaled synthesis (no smoothing change: the model has no error state). */
     {
@@ -1047,8 +1114,10 @@ test_exact_arithmetic(void) {
         assert(same_float(cur.Ml[1], 0x1.86e8dcp-1f));
         assert(same_float(own_product(0x1.4affa2p+0f, gain), 0x1.86e8dcp-1f));
     }
-    printf("the gain's arithmetic: the knee, the doubles beside it, the cancelling history (at the helper and through "
-           "a public repeat), the product and a mean of -FLT_MAX, by their bits\n");
+    printf("the gain's arithmetic: the knee, the doubles beside it, two cancelling histories beyond the bound (at the "
+           "helper and through a public repeat), the product, a mean of -2^20 and of -FLT_MAX, by their bits; dtmf "
+           "frame 3185%s\n",
+           (FLT_EVAL_METHOD == 0) ? " by its bits" : " within one place");
 }
 
 /*
@@ -1298,10 +1367,11 @@ test_provoice(void) {
 /*
  * Caller states: a lost frame repeats the history, whose log2Ml a caller can
  * set to anything. NaN, either infinity in one band or in all, subnormals,
- * +FLT_MAX or -FLT_MAX in all bands, a mix; values past L (NaN) that must not
- * be read; L out of range. The samples are finite; where the mean is not
- * finite (and L out of range) they are the replica's without a gain by their
- * bits; -FLT_MAX plays at the floor; NaN past L changes nothing.
+ * +FLT_MAX or -FLT_MAX in all bands or in one, -2^20 in all bands; values past
+ * L (NaN) that must not be read; L out of range. The samples are finite; where
+ * a log2Ml lies beyond 2^20 (and L out of range) they are the replica's
+ * without a gain by their bits; -2^20 plays at the floor; NaN past L changes
+ * nothing.
  */
 static void
 test_caller_states(void) {
@@ -1309,9 +1379,9 @@ test_caller_states(void) {
         const char* name;
         float value;
         int all;
-    } cases[] = {{"NaN in band 3", NAN, 0},     {"+inf in band 3", INFINITY, 0},    {"-inf in band 3", -INFINITY, 0},
-                 {"NaN in every band", NAN, 1}, {"subnormals", 1e-45f, 1},          {"+FLT_MAX", FLT_MAX, 1},
-                 {"-FLT_MAX", -FLT_MAX, 1},     {"-FLT_MAX in band 3", -FLT_MAX, 0}};
+    } cases[] = {{"NaN in band 3", NAN, 0},     {"+inf in band 3", INFINITY, 0},     {"-inf in band 3", -INFINITY, 0},
+                 {"NaN in every band", NAN, 1}, {"subnormals", 1e-45f, 1},           {"+FLT_MAX", FLT_MAX, 1},
+                 {"-FLT_MAX", -FLT_MAX, 1},     {"-FLT_MAX in band 3", -FLT_MAX, 0}, {"-2^20", -0x1p20f, 1}};
 
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]) + 2; ++c) {
         struct stream s;
@@ -1352,13 +1422,16 @@ test_caller_states(void) {
             mbe_parms rendered, enh;
             replica(want, &s.prev, &before.enh, g, 0, 0, &rendered, &enh);
             check_samples(out, want, QUIET_EXACT || is_one(g), "caller state");
-            if (c == 6) {
-                assert(g < 1.0);
+            if (c == 6 || c == 7) {
+                assert(is_one(g));
+            }
+            if (c == 8) {
+                assert(bits_of_double(g) == UINT64_C(0x3FD0000000000000));
             }
         }
     }
     printf("caller states (non-finite, subnormal and huge log2Ml, NaN past L, L 0 and 57): finite samples, no gain "
-           "where the mean is not finite, the floor for -FLT_MAX\n");
+           "beyond 2^20, the floor for -2^20\n");
 }
 
 /* The public mbe_synthesizeSpeechf() takes no gain: a model of quiet log2Ml plays as the same model with log2Ml 0. */

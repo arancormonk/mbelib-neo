@@ -1741,7 +1741,9 @@ struct mbe_speech_options {
  * multiplication is formed in extended precision and rounded to binary64 on
  * its store: the SSE result but where that first rounding lands exactly
  * halfway between two doubles (double rounding), which a product of a float
- * and a double whose exact bits span more than 64 places can do. */
+ * and a double whose exact bits span more than 64 places can do; the IEEE
+ * builds agree, an x87 build can differ by one float step where the product
+ * lies at a float's rounding edge. */
 static void
 mbe_scale_rendered_magnitudes(mbe_parms* cur_mp, double gain) {
     for (int l = 1; l <= cur_mp->L; l++) {
