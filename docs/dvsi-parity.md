@@ -119,9 +119,10 @@ appear here.
   development, validation, tone, channel and pulse-train vectors, with the scoreboard's own measures
   too, before the gate sets were declared, in the branch's first commit, `4677a41`, before any build of
   the branch was scored, so none of those partitions is out of sample for it. The change was measured
-  and gated on the development, validation, tone and channel partitions; the final partition is to be
-  scored once for it, after the review, against `low-band-final` ([November 2026: DVSI's low
-  band](#november-2026-dvsis-low-band)).
+  and gated on the development, validation, tone and channel partitions; the final partition was
+  scored once for it, on 2026-11-27, after the two reviews and their two fix rounds, against
+  `low-band-final` (the build of `git archive 9a101f8` against the build of `159aa46`): passed, 24 of
+  24 checks ([November 2026: DVSI's low band](#november-2026-dvsis-low-band)).
 - **PESQ and ESTOI.** Where a section gives them, PESQ is ITU-T P.862 narrow-band, from the Python
   package pesq 0.0.4, on the decoded signal and the input from their starts; ESTOI is from pystoi
   0.4.1, at the lag within 60 samples of the envelope alignment, in steps of 10, that maximises it.
@@ -7379,7 +7380,7 @@ combined run over the development, validation, tone and channel partitions, `9a1
 | `low-band-validation` | passes all 24 checks | the same on the validation vectors (the level allowed 0.1 dB in the mean: +0.048 to +0.057, `t04` +0.156 at the most), also read in the study |
 | `low-band-tones` | passes all 21 checks | the D-STAR and rate-33 encoders' tone statistics unchanged and the decoders' tone measures within their limits on the windows the detector calls steady; not that the frames between and around the tones are right |
 | `low-band-channel` | passes all 33 checks | the per-vector mute statistics unchanged in every mode (not by themselves that no frame's mute decision changed: the flags say that), the distance from DVSI's decode on the loud frames falling in every mode and decision type, every encoder's speech rows unchanged |
-| `low-band-final` | not scored | the prediction for `irstia` and `mark` |
+| `low-band-final` | passes all 24 checks, scored once (below) | on `irstia` and `mark`, held out, a prediction: in every codec the correlation with DVSI's decode not falling in the mean and, for P25, rising by at least 0.0003 with its interval above 0, which with two recordings asks for the gain on both vectors (on no vector falling by more than 0.0003 in D-STAR, 0.0005 in rate 33, at all in P25), the distance from DVSI's decode falling by at least 0.01 dB with its interval below 0 and rising on neither vector, the envelope correlation (falling by no more than 0.0005), the distance from the input (rising by no more than 0.08 dB) and the level (moving by no more than 0.15 dB in the mean and 0.3 dB on either vector) within theirs; every encoder row unchanged |
 
 **Scored again after the review**, the same scripts and the same combined run, `9a101f8` against
 `8fce556` (library `cebeafd`; the commits after it change comments, tests and documents only): all
@@ -7394,6 +7395,61 @@ modes (the held-out vectors left out), the second candidate's decodes equal the 
 well (above, "Other modes"). Off these vectors the fixes do change behaviour: a silence frame that
 smoothing voices throughout, as in `test_low_cut_r33_smoothed` and the review's public reproduction
 of it, now holds the tracker where the first candidate moved it.
+
+**The final partition**, scored once, on 2026-11-27, after the two reviews and their two fix rounds:
+the build of `git archive 9a101f8` against the build of `159aa46` (`build/tools-final`, the
+scoreboard's Release configuration), both aligning freely first and then scored at their joint lags,
+both runs' encodings decoded by the candidate's decoder, gate set `low-band-final`: passed, 24 of 24
+checks. The gate lines:
+
+```
+PASS dstar/final encoder.rows_changed_vectors max: value=0
+PASS p25/final encoder.rows_changed_vectors max: value=0
+PASS r33/final encoder.rows_changed_vectors max: value=0
+PASS p25/final vs_dvsi.waveform_corr_unshifted increase: mean delta=+0.001113 ... min=+0.0006666 (and all_no_decrease)
+PASS dstar/final vs_dvsi.waveform_corr_unshifted no_decrease: mean delta=+0.001222 ... min=+0.0003593 (and all_no_decrease)
+PASS r33/final vs_dvsi.waveform_corr_unshifted no_decrease: mean delta=+0.0008658 ... min=+4.636e-05 (and all_no_decrease)
+PASS dstar/final vs_dvsi.lsd_db decrease: mean delta=-0.0274 ... max=-0.02415 (and all_no_increase)
+PASS p25/final vs_dvsi.lsd_db decrease: mean delta=-0.02576 ... max=-0.02057 (and all_no_increase)
+PASS r33/final vs_dvsi.lsd_db decrease: mean delta=-0.0337 ... max=-0.03001 (and all_no_increase)
+PASS dstar/final vs_dvsi.env_corr no_decrease: mean delta=+0.0001861
+PASS p25/final vs_dvsi.env_corr no_decrease: mean delta=+8.793e-05
+PASS r33/final vs_dvsi.env_corr no_decrease: mean delta=+0.0001204
+PASS dstar/final ours.lsd_db no_increase: mean delta=-0.001931
+PASS p25/final ours.lsd_db no_increase: mean delta=+0.002078 ci95=(-0.0037636, 0.0079190) worst=('mark', 0.007919)
+PASS r33/final ours.lsd_db no_increase: mean delta=-0.0002089 ci95=(-0.0021453, 0.0017276)
+PASS dstar/final vs_dvsi.level_offset_db abs_delta_max: mean delta=+0.08033 worst=('mark', 0.148956)
+PASS p25/final vs_dvsi.level_offset_db abs_delta_max: mean delta=+0.07331 worst=('mark', 0.137556)
+PASS r33/final vs_dvsi.level_offset_db abs_delta_max: mean delta=+0.07447 worst=('mark', 0.137076)
+```
+
+Per vector:
+
+| Codec, vector | Waveform corr. vs DVSI | LSD vs DVSI (dB) | Envelope corr. vs DVSI | LSD vs input (dB) | Level vs DVSI (dB) |
+|---|---|---|---|---|---|
+| D-STAR `irstia` | 0.984752 → 0.985112 (+0.000359) | 1.075569 → 1.044922 (-0.030648) | 0.994875 → 0.994951 | 5.531385 → 5.529865 (-0.001520) | +0.084595 → +0.096304 (+0.011710) |
+| D-STAR `mark` | 0.993839 → 0.995923 (+0.002084) | 0.918694 → 0.894540 (-0.024154) | 0.996914 → 0.997211 | 5.538883 → 5.536541 (-0.002342) | +0.016243 → +0.165199 (+0.148956) |
+| P25 `irstia` | 0.988222 → 0.988889 (+0.000667) | 0.960866 → 0.929909 (-0.030957) | 0.995483 → 0.995492 | 5.329658 → 5.325894 (-0.003764) | +0.009995 → +0.019067 (+0.009072) |
+| P25 `mark` | 0.993407 → 0.994967 (+0.001559) | 1.027293 → 1.006725 (-0.020568) | 0.996379 → 0.996545 | 5.438684 → 5.446603 (+0.007919) | -0.099290 → +0.038266 (+0.137556) |
+| Rate 33 `irstia` | 0.985984 → 0.986031 (+0.000046) | 1.263516 → 1.233503 (-0.030013) | 0.994251 → 0.994282 | 5.575142 → 5.572996 (-0.002145) | -0.046553 → -0.034693 (+0.011859) |
+| Rate 33 `mark` | 0.993127 → 0.994812 (+0.001685) | 1.174357 → 1.136964 (-0.037393) | 0.996401 → 0.996610 | 5.504649 → 5.506377 (+0.001728) | -0.127559 → +0.009517 (+0.137076) |
+
+The partition's mean correlation goes D-STAR 0.989296 → 0.990517 (+0.001222), P25 0.990815 →
+0.991928 (+0.001113), rate 33 0.989556 → 0.990422 (+0.000866). The prediction, a gain on both
+held-out vectors, is met in all three codecs; the gain is larger on `mark` than on `irstia` in each
+(D-STAR +0.002084 against +0.000359, P25 +0.001559 against +0.000667, rate 33 +0.001685 against
++0.000046), and rate 33's on `irstia`, +0.000046, is the smallest of the six, near no change. The
+distance from DVSI's decode falls on all six entries (by 0.0206 to 0.0374 dB) and the envelope
+correlation rises a little on all six. The distance from the input, which rises by 0.022 to 0.030 dB
+in the mean on development and validation (the change's cost there), falls on four entries here
+(D-STAR's two, P25's and rate 33's `irstia`) and rises on two, P25's `mark` (+0.007919 dB) and rate
+33's (+0.001728 dB); in the mean D-STAR -0.0019, P25 +0.0021, rate 33 -0.0002 dB, under the gate's
+0.08 dB, so no cost against the input is established on these two recordings. The level against
+DVSI's decode moves most on `mark`, by +0.149 (D-STAR), +0.138 (P25) and +0.137 dB (rate 33),
+against +0.009 to +0.012 dB on `irstia`; the gate allowed 0.15 dB in the mean (observed +0.073 to
++0.080) and 0.3 dB on either vector. All six entries carry an encoder-row hash in both reports (six
+in each), and all six are equal; every PCM hash differs. The commits after `159aa46` change documents
+only.
 
 **Notes on the declarations.** The channel set's description says the log-spectral distance on the
 loud frames may not rise "on at least a tenth of the frames measured (min_coverage)"; the scorer's
@@ -7590,4 +7646,9 @@ check's line the same in both ([November 2026: DVSI's low band](#november-2026-d
 declaration the study's scratch build had been measured on the development, validation, tone, channel
 and pulse-train vectors, with the scoreboard's own measures too, and the baseline alone was scored on
 the four partitions (a build of `git archive 9a101f8`, its own encodings decoded by its own decoder) to
-record each measure's coverage in the sets' descriptions. The final partition is not yet scored.
+record each measure's coverage in the sets' descriptions. The final partition was scored once, on
+2026-11-27, after the two reviews and their two fix rounds, the build of `git archive 9a101f8`
+against the build of `159aa46`: `low-band-final` passed, 24 of 24 checks, the correlation rising on
+both held-out vectors in all three codecs (means D-STAR 0.989296 → 0.990517, P25 0.990815 → 0.991928,
+rate 33 0.989556 → 0.990422) and every encoder row unchanged ([November 2026: DVSI's low
+band](#november-2026-dvsis-low-band)).
