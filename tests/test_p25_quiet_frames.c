@@ -8,11 +8,16 @@
  * @brief P25's quiet frames: the quiet-frame gain and where P25's data path
  * applies it (docs/dvsi-parity.md, "P25: quiet frames").
  *
- * DVSI's P25 decoder plays a frame whose decoded magnitudes are low lower
- * still; the library multiplies every magnitude a P25 frame renders by
- * g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded
- * log2Ml[1..L], after adaptive smoothing. The gain here is this test's own
- * arithmetic (QUIET_K, QUIET_X0, QUIET_FLOOR below, the documented constants).
+ * On DVSI's decodes of its vectors DVSI's P25 decoder plays a frame whose
+ * decoded magnitudes are low lower still; the library multiplies every
+ * magnitude a P25 frame renders by g = 2^clamp(K (x - X0), FLOOR, 0), x the
+ * mean of the frame's decoded log2Ml[1..L], after adaptive smoothing, and
+ * rounds P25's 16-bit output to nearest (test_frame_paths pins the 16-bit entry
+ * points). The gain here is this test's own arithmetic (QUIET_K, QUIET_X0,
+ * QUIET_FLOOR below, the documented constants), each step a stored binary64
+ * operation, as the library's; the arithmetic tests (test_exact_arithmetic())
+ * hold expected values written out as hexadecimal literals, computed outside
+ * the test.
  * The frames are built with the IMBE encoder's quantizer
  * (mbe_imbe4400_quantize_amplitudes()) and played through the public P25 entry
  * points; the reference rendering ("replica") takes the model the data path
@@ -25,21 +30,25 @@
  * test's gain applied to the magnitudes in between. The decode is the
  * library's (mbe_decodeImbe4400Parms()).
  *
- * Where it compares exactly: the gain, the rendered magnitudes and the samples
- * of a scaled frame by their bits in builds without fast-math whose float and
- * double expressions are evaluated in their own types (QUIET_EXACT: FLT_EVAL_METHOD
- * 0; the GCC and Clang x86-64 builds other than dev-release and the two Clang
- * LTO builds); elsewhere the gain within 1e-12 of it, each magnitude within two
- * float ulps, the samples within 1e-5 of the frame's peak (the library's scaled
- * rendering is another inlined copy of the synthesis core than the replica's).
- * The tolerance cannot catch: the mean or the gain formed in float rather than
- * double, the product formed in float, the exponent clamped after exp2() (each
- * moves the result by about an ulp). A loud frame, a frame of no gain (a tone
- * model, ProVoice, a non-finite mean) and a repeat's magnitudes against the
- * frame it repeats are compared by their bits in every build: they run the
- * same code as their reference.
+ * Where it compares exactly: the gain, by its bits, in every build (the
+ * library's and this test's are stored binary64 steps), and the arithmetic
+ * tests' gains and products in every build; the rendered magnitudes and the
+ * samples of a scaled frame against the replica by their bits in builds
+ * without fast-math whose float expressions are evaluated in float
+ * (QUIET_EXACT: dev-debug, asan-ubsan-debug, notones-debug, the SIMD and the
+ * x86-64-v3 Debug builds); elsewhere (dev-release, both Clang LTO builds, both
+ * 32-bit builds) each magnitude within two float ulps (two steps of its bit
+ * pattern) and each sample within 1e-5 of the frame's peak, a non-finite
+ * magnitude only as the same bit pattern: the replica's enhancement and
+ * synthesis are other compiled copies than the library's there. Those
+ * tolerances cannot catch a magnitude or a sample an ulp off; the gain's own
+ * mutations are caught by the exact gain comparisons in every build. A loud
+ * frame, a frame of no gain (a tone model, ProVoice, a non-finite mean) and a
+ * repeat's magnitudes against the frame it repeats are compared by their bits
+ * in every build: they run the same code as their reference.
  */
 #include <assert.h>
+#include <fenv.h>
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
@@ -55,9 +64,9 @@
 #endif
 
 /* The documented constants (docs/dvsi-parity.md, "P25: quiet frames"). */
-#define QUIET_K     1.41
-#define QUIET_X0    (-1.80)
-#define QUIET_FLOOR (-1.01)
+#define QUIET_K     1.84
+#define QUIET_X0    (-1.73)
+#define QUIET_FLOOR (-2.00)
 
 #if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
 #define QUIET_FAST_MATH 1
@@ -139,24 +148,36 @@ finite_float(float x) {
 }
 
 /* The test's own gain: 1 for L outside 1..56 or a log2Ml in 1..L that is not
- * finite, else 2^clamp(K (x - X0), FLOOR, 0) in double. */
+ * finite, or a mean at or above X0; else 2^clamp(K (x - X0), FLOOR, 0), each
+ * step a stored binary64 operation (the sum in order, harmonic 1 to L). */
 static double
 own_gain(const mbe_parms* mp) {
     if (mp->L < 1 || mp->L > 56) {
         return 1.0;
     }
-    double sum = 0.0;
+    volatile double sum = 0.0;
     for (int l = 1; l <= mp->L; ++l) {
         if (!finite_float(mp->log2Ml[l])) {
             return 1.0;
         }
-        sum += (double)mp->log2Ml[l];
+        sum = sum + (double)mp->log2Ml[l];
     }
-    const double exponent = QUIET_K * ((sum / (double)mp->L) - QUIET_X0);
-    if (!(exponent < 0.0)) {
+    volatile double mean = sum / (double)mp->L;
+    if (!(mean < QUIET_X0)) {
         return 1.0;
     }
-    return exp2((exponent < QUIET_FLOOR) ? QUIET_FLOOR : exponent);
+    volatile double below = mean - QUIET_X0;
+    volatile double exponent = QUIET_K * below;
+    volatile double g = exp2((exponent < QUIET_FLOOR) ? QUIET_FLOOR : exponent);
+    return g;
+}
+
+/* The test's own product: one stored binary64 multiplication, then float. */
+static float
+own_product(float magnitude, double gain) {
+    volatile double product = (double)magnitude * gain;
+    volatile float rounded = (float)product;
+    return rounded;
 }
 
 static double
@@ -168,21 +189,17 @@ mean_log2(const mbe_parms* mp) {
     return sum / (double)mp->L;
 }
 
-/* The library's gain and this test's agree: by their bits where QUIET_EXACT,
- * else within 1e-12; and the return says whether g < 1. */
+/* The library's gain and this test's agree by their bits, in every build; and
+ * the return says whether g < 1. */
 static void
 check_gain(const mbe_parms* mp, const char* what) {
     double gain = -1.0;
     const int quiet = mbe_imbe4400_quiet_gain(mp, &gain);
     const double want = own_gain(mp);
-    if (QUIET_EXACT) {
-        if (bits_of_double(gain) != bits_of_double(want)) {
-            fprintf(stderr, "%s: gain %.17g, want %.17g\n", what, gain, want);
-        }
-        assert(bits_of_double(gain) == bits_of_double(want));
-    } else {
-        assert(fabs(gain - want) <= 1e-12);
+    if (bits_of_double(gain) != bits_of_double(want)) {
+        fprintf(stderr, "%s: gain %.17g, want %.17g\n", what, gain, want);
     }
+    assert(bits_of_double(gain) == bits_of_double(want));
     assert(quiet == (want < 1.0));
     if (!quiet) {
         assert(is_one(gain));
@@ -231,43 +248,45 @@ float_step(float x, int steps) {
 static void
 test_gain_function(void) {
     const double floor_gain = exp2(QUIET_FLOOR);
-    const float loud[] = {0.0f, 5.0f, -1.3f, FLT_MAX, (float)QUIET_X0};
+    const float loud[] = {0.0f, 5.0f, -1.3f, FLT_MAX};
     for (size_t i = 0; i < sizeof(loud) / sizeof(loud[0]); ++i) {
-        /* (float)-1.80 lies just above X0 in double: no gain. */
         const double g = gain_at(20, loud[i]);
         assert(is_one(g));
     }
-    /* The next float below (float)-1.80: a gain just under 1. */
-    const double below = gain_at(20, float_step((float)QUIET_X0, -1));
+    /* The two floats beside X0 (-1.73 is no float): the upper one no gain, the lower one a gain just under 1. */
+    float upper = (float)QUIET_X0, lower = float_step(upper, -1);
+    if ((double)upper < QUIET_X0) {
+        lower = upper;
+        upper = float_step(upper, 1);
+    }
+    const double at_upper = gain_at(20, upper);
+    assert(is_one(at_upper));
+    const double below = gain_at(20, lower);
     assert(below < 1.0 && below > 1.0 - 1e-6);
     /* Between the knees. */
-    const double g2 = gain_at(20, -2.0f), g22 = gain_at(20, -2.2f);
+    const double g2 = gain_at(20, -2.0f), g22 = gain_at(20, -2.4f);
     assert(fabs(g2 - exp2(QUIET_K * (-2.0 - QUIET_X0))) < 1e-6);
-    assert(fabs(g22 - exp2(QUIET_K * (-2.2 - QUIET_X0))) < 1e-6);
+    assert(fabs(g22 - exp2(QUIET_K * (-2.4 - QUIET_X0))) < 1e-6);
     assert(g22 < g2 && g2 < 1.0 && g22 > floor_gain);
     /* At and below the lower knee: the floor exactly. */
     const float knee = (float)(QUIET_X0 + (QUIET_FLOOR / QUIET_K));
-    const float under[] = {float_step(knee, -2), -2.6f, -2.842205f, -10.0f, -1e30f, -FLT_MAX};
+    const float under[] = {float_step(knee, -2), -2.9f, -2.842205f, -10.0f, -1e30f, -FLT_MAX};
     for (size_t i = 0; i < sizeof(under) / sizeof(under[0]); ++i) {
         const double g = gain_at(20, under[i]);
-        if (QUIET_EXACT) {
-            assert(bits_of_double(g) == bits_of_double(floor_gain));
-        } else {
-            assert(fabs(g - floor_gain) <= 1e-12);
-        }
+        assert(bits_of_double(g) == UINT64_C(0x3FD0000000000000)); /* 1/4 */
     }
     const double over_knee = gain_at(20, float_step(knee, 2));
     assert(over_knee > floor_gain);
     /* Harmonic counts: 1 and 56 take the gain, 0, 57 and -1 do not. */
-    const double g1 = gain_at(1, -2.2f), g56 = gain_at(56, -2.2f);
-    const double g0 = gain_at(0, -2.2f), g57 = gain_at(57, -2.2f), gm1 = gain_at(-1, -2.2f);
+    const double g1 = gain_at(1, -2.4f), g56 = gain_at(56, -2.4f);
+    const double g0 = gain_at(0, -2.4f), g57 = gain_at(57, -2.4f), gm1 = gain_at(-1, -2.4f);
     assert(g1 < 1.0 && g56 < 1.0 && is_one(g0) && is_one(g57) && is_one(gm1));
     /* A mean that is not finite: NaN or either infinity in one band of 1..L; the slots past L are NaN in every
      * flat model above and are not read. */
     const float bad[] = {NAN, -NAN, INFINITY, -INFINITY};
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         for (int at = 1; at <= 20; at += 19) {
-            mbe_parms mp = flat_model(20, -2.6f);
+            mbe_parms mp = flat_model(20, -2.9f);
             mp.log2Ml[at] = bad[i];
             double g = -1.0;
             const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
@@ -301,7 +320,7 @@ test_gain_function(void) {
         int none = 0, finite = 0;
         for (int at = 1; at <= 56; ++at) {
             for (size_t i = 0; i < sizeof(none_classes) / sizeof(none_classes[0]); ++i) {
-                mbe_parms mp = flat_model(56, -2.6f);
+                mbe_parms mp = flat_model(56, -2.9f);
                 memcpy(&mp.log2Ml[at], &none_classes[i], sizeof(float));
                 double g = -1.0;
                 const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
@@ -309,7 +328,7 @@ test_gain_function(void) {
                 ++none;
             }
             for (size_t i = 0; i < sizeof(finite_classes) / sizeof(finite_classes[0]); ++i) {
-                mbe_parms mp = flat_model(56, -2.6f);
+                mbe_parms mp = flat_model(56, -2.9f);
                 memcpy(&mp.log2Ml[at], &finite_classes[i], sizeof(float));
                 check_gain(&mp, "a class of float in one harmonic");
                 ++finite;
@@ -334,7 +353,7 @@ test_gain_function(void) {
             last = g;
         }
     }
-    printf("quiet-frame gain: 1 at and above X0, 2^(K (x - X0)) between (x -2.0: %.6f, -2.2: %.6f), the floor %.6f "
+    printf("quiet-frame gain: 1 at and above X0, 2^(K (x - X0)) between (x -2.0: %.6f, -2.4: %.6f), the floor %.6f "
            "from x %.6f down; none for a non-finite mean or L outside 1..56\n",
            g2, g22, floor_gain, (double)knee);
 }
@@ -427,7 +446,7 @@ replica(float out[160], const mbe_parms* history, const mbe_parms* enh_before, d
     }
     if (gain < 1.0) {
         for (int l = 1; l <= cur.L; ++l) {
-            cur.Ml[l] = (float)((double)cur.Ml[l] * gain);
+            cur.Ml[l] = own_product(cur.Ml[l], gain);
         }
     }
     if (smooth) {
@@ -465,7 +484,9 @@ check_samples(const float* a, const float* b, int exact, const char* what) {
         }
         return;
     }
-    const double bound = 1e-5 * fmax(peak(a, 160), peak(b, 160)) + 1e-30;
+    /* Within 1e-5 of the larger of the two frames' peaks (the largest magnitude of the 160 samples); frames that
+     * are silent must be equal. */
+    const double bound = 1e-5 * fmax(peak(a, 160), peak(b, 160));
     for (int i = 0; i < 160; ++i) {
         /* A non-finite sample fails here whatever the other (inf <= inf would pass the bound). */
         assert(finite_float(a[i]) && finite_float(b[i]));
@@ -473,7 +494,18 @@ check_samples(const float* a, const float* b, int exact, const char* what) {
     }
 }
 
-/* Magnitudes 1..L equal by their bits (exact), or within two float ulps (a non-finite one by its bits). */
+/* Float ulps between two finite floats of the same sign (the distance of their bit patterns); -1 otherwise. */
+static int64_t
+ulp_distance(float a, float b) {
+    const uint32_t x = bits_of(a), y = bits_of(b);
+    if (!finite_float(a) || !finite_float(b) || ((x ^ y) & 0x80000000u) != 0u) {
+        return (x == y) ? 0 : -1;
+    }
+    return (x > y) ? (int64_t)(x - y) : (int64_t)(y - x);
+}
+
+/* Magnitudes 1..L equal by their bits (exact), or at most two ulps apart, two steps of the bit pattern of the
+ * same sign (a non-finite one only as the same pattern, which a caller's NaN carried through both renderings is). */
 static void
 check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* what) {
     assert(a->L == b->L);
@@ -484,13 +516,8 @@ check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* 
             }
             assert(same_float(a->Ml[l], b->Ml[l]));
         } else {
-            /* A magnitude that is not finite (a caller's NaN carried through) must be the same pattern in both;
-             * the tolerance takes finite values only (inf <= inf would pass it). */
-            if (!finite_float(a->Ml[l]) || !finite_float(b->Ml[l])) {
-                assert(same_float(a->Ml[l], b->Ml[l]));
-                continue;
-            }
-            assert(fabs((double)a->Ml[l] - (double)b->Ml[l]) <= 2.4e-7 * fabs((double)b->Ml[l]) + 1e-38);
+            const int64_t d = ulp_distance(a->Ml[l], b->Ml[l]);
+            assert(d >= 0 && d <= 2);
         }
     }
 }
@@ -883,6 +910,180 @@ test_tone_forgeries(void) {
            speech);
 }
 
+/* A model of L harmonics at pitch w0, Ml[1..L] 1, no voiced band, log2Ml[1..L] from `logs` (the rest 0). */
+static mbe_parms
+arithmetic_model(int L, float w0, const float* logs, int n) {
+    mbe_parms cur, prev, enh;
+    mbe_initMbeParms(&cur, &prev, &enh);
+    cur.L = L;
+    cur.K = (L < 37) ? (L + 2) / 3 : 12;
+    cur.w0 = w0;
+    for (int l = 1; l <= 56; ++l) {
+        cur.Vl[l] = 0;
+        cur.Ml[l] = 1.0f;
+        cur.log2Ml[l] = (l <= n) ? logs[l - 1] : 0.0f;
+    }
+    return cur;
+}
+
+static void
+expect_gain(const mbe_parms* mp, int quiet_want, uint64_t gain_bits, const char* what) {
+    double gain = -1.0;
+    const int quiet = mbe_imbe4400_quiet_gain(mp, &gain);
+    if (quiet != quiet_want || bits_of_double(gain) != gain_bits) {
+        fprintf(stderr, "%s: flag %d gain %a, want %d and bits %llx\n", what, quiet, gain, quiet_want,
+                (unsigned long long)gain_bits);
+    }
+    assert(quiet == quiet_want && bits_of_double(gain) == gain_bits);
+}
+
+/*
+ * The gain's arithmetic, exact in every build (no tolerance): each expected
+ * value below was computed outside the test, in Python's IEEE binary64 (the
+ * gains through glibc's exp2), and is written as its bit pattern.
+ * - The mean exactly on the knee: L 4, log2Ml -0x1.bae148p+2, 0x1.47ae14p-24,
+ *   0x1p-49, 0 (summed in order, exactly 4 X0, the mean X0): no gain; L 51,
+ *   -0x1.60eb86p+6, 0x1.c28f5cp-19, 0x1p-46 and 48 zeros (the mean X0 by its
+ *   one rounded division, where K S / L - K X0, the order Clang's fast-math
+ *   LTO builds once took, is -2^-51 and would take the gain): no gain.
+ * - The doubles beside the knee: the next above (0x1.8p-49 in place of the
+ *   last part), no gain; the next below (0x1p-50), the gain 0x1.ffffffffffffdp-1.
+ * - L 55, forty-four -2 and eleven -1 (the mean -99/55): the gain
+ *   0x1.d44562b64079ep-1.
+ * - A cancelling history, L 10, {2^58, -23, -2^58, 0, ...}: summed in order in
+ *   binary64, -32 (the mean -3.2, the floor, 1/4 exactly); an extended register
+ *   holds -23 (the mean -2.3, another gain): at the helper, and through the
+ *   public repeat path, where the rendered magnitudes equal those of the same
+ *   model with every log2Ml -3.2 (the floor too) by their bits, and differ from
+ *   those of the model with every log2Ml -2.3.
+ * - The product: Ml 0x1.4affa2p+0 times the gain 0x1.2e561292a499p-1 through
+ *   the scaled synthesis, 0x1.86e8dcp-1 (the binary64 product 0x1.86e8dbp-1,
+ *   exactly halfway, rounded to even; one rounding of the exact product from
+ *   an extended register gives 0x1.86e8dap-1).
+ * - A mean of -FLT_MAX: the floor, and no overflow, underflow or invalid
+ *   exception raised (the exponent is clamped before exp2(); exp2() of the
+ *   unclamped exponent underflows).
+ */
+static void
+test_exact_arithmetic(void) {
+    const float knee4[] = {-0x1.bae148p+2f, 0x1.47ae14p-24f, 0x1p-49f, 0.0f};
+    const float above4[] = {-0x1.bae148p+2f, 0x1.47ae14p-24f, 0x1.8p-49f, 0.0f};
+    const float below4[] = {-0x1.bae148p+2f, 0x1.47ae14p-24f, 0x1p-50f, 0.0f};
+    const float knee51[] = {-0x1.60eb86p+6f, 0x1.c28f5cp-19f, 0x1p-46f};
+    mbe_parms mp = arithmetic_model(4, 0.3f, knee4, 4);
+    expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the mean on the knee, L 4");
+    mp = arithmetic_model(4, 0.3f, above4, 4);
+    expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the double above the knee");
+    mp = arithmetic_model(4, 0.3f, below4, 4);
+    expect_gain(&mp, 1, UINT64_C(0x3FEFFFFFFFFFFFFD), "the double below the knee");
+    mp = arithmetic_model(51, 0.06f, knee51, 3);
+    expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "the mean on the knee, L 51");
+    float logs55[55];
+    for (int l = 0; l < 55; ++l) {
+        logs55[l] = (l < 44) ? -2.0f : -1.0f;
+    }
+    mp = arithmetic_model(55, 0.05f, logs55, 55);
+    expect_gain(&mp, 1, UINT64_C(0x3FED44562B64079E), "L 55, a mean of -99/55");
+    const float cancel[] = {0x1p58f, -23.0f, -0x1p58f};
+    mp = arithmetic_model(10, 0.28f, cancel, 3);
+    expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "the cancelling history");
+    {
+        float huge[20];
+        for (int l = 0; l < 20; ++l) {
+            huge[l] = -FLT_MAX;
+        }
+        mp = arithmetic_model(20, 0.15f, huge, 20);
+#if defined(FE_UNDERFLOW) && defined(FE_OVERFLOW) && defined(FE_INVALID)
+        feclearexcept(FE_ALL_EXCEPT);
+        expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "a mean of -FLT_MAX");
+        assert(!fetestexcept(FE_UNDERFLOW | FE_OVERFLOW | FE_INVALID));
+#else
+        expect_gain(&mp, 1, UINT64_C(0x3FD0000000000000), "a mean of -FLT_MAX");
+#endif
+    }
+    /* The cancelling history through a public repeat. */
+    {
+        float flat32[10], flat23[10];
+        for (int l = 0; l < 10; ++l) {
+            flat32[l] = -3.2f;
+            flat23[l] = -2.3f;
+        }
+        const float* histories[3] = {cancel, flat32, flat23};
+        const int counts[3] = {3, 10, 10};
+        mbe_parms rendered[3];
+        for (int h = 0; h < 3; ++h) {
+            struct stream s;
+            stream_init(&s);
+            s.prev = arithmetic_model(10, 0.28f, histories[h], counts[h]);
+            char imbe_d[88];
+            float out[160];
+            unsigned flags;
+            lost_frame(imbe_d);
+            PLAY(&s, imbe_d, 0, out, &flags);
+            assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+            for (int i = 0; i < 160; ++i) {
+                assert(finite_float(out[i]));
+            }
+            rendered[h] = s.enh;
+        }
+        assert(same_floats(rendered[0].Ml, rendered[1].Ml, 57));
+        assert(!same_floats(rendered[0].Ml, rendered[2].Ml, 57));
+    }
+    /* The product, through the scaled synthesis (no smoothing change: the model has no error state). */
+    {
+        mbe_parms cur = arithmetic_model(10, 0.28f, cancel, 0);
+        mbe_parms prev = cur;
+        cur.Ml[1] = 0x1.4affa2p+0f;
+        float out[160];
+        uint64_t gb = UINT64_C(0x3FE2E561292A4990);
+        double gain;
+        memcpy(&gain, &gb, sizeof(gain));
+        mbe_synthesizeSpeechScaledf(out, &cur, &prev, 10.0f, gain, MBE_MUTE_NOISE_SPEC, MBE_VOICED_SYNTHESIS_DVSI_IMBE,
+                                    MBE_AMPLITUDE_LIMIT_NONE);
+        assert(same_float(cur.Ml[1], 0x1.86e8dcp-1f));
+        assert(same_float(own_product(0x1.4affa2p+0f, gain), 0x1.86e8dcp-1f));
+    }
+    printf("the gain's arithmetic: the knee, the doubles beside it, the cancelling history (at the helper and through "
+           "a public repeat), the product and a mean of -FLT_MAX, by their bits\n");
+}
+
+/*
+ * The model the data path returns and a scaled frame the error rate mutes:
+ * after a quiet frame the returned cur_mp is the rendered (scaled) model,
+ * every field the model left in prev_mp_enhanced; a quiet frame muted by the
+ * error rate plays the P25 mute noise (TIA-102.BABA 7.8's +-5 on s(n), the
+ * thread's generator seeded alike), not silence.
+ */
+static void
+test_returned_and_muted(void) {
+    struct stream s;
+    stream_init(&s);
+    char imbe_d[88];
+    float out[160];
+    unsigned flags;
+    for (int f = 0; f < 4; ++f) {
+        build_frame(imbe_d, 60, 0x000u, -2.6f, 0.5f, &s.prev);
+        PLAY(&s, imbe_d, 0, out, &flags);
+        assert(own_gain(&s.prev) < 1.0);
+        assert(same_parms(&s.cur, &s.enh, 1));
+    }
+    s.prev.errorRate = 0.5f;
+    build_frame(imbe_d, 60, 0x000u, -2.6f, 0.5f, &s.prev);
+    mbe_setThreadRngSeed(0x0517u);
+    PLAY(&s, imbe_d, 0, out, &flags);
+    assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u && own_gain(&s.prev) < 1.0);
+    float want[160];
+    mbe_setThreadRngSeed(0x0517u);
+    mbe_synthesizeUniformNoisef(want, MBE_SPEC_MUTE_NOISE_AMPLITUDE * MBE_SPEECH_OUTPUT_GAIN);
+    double energy = 0.0;
+    for (int i = 0; i < 160; ++i) {
+        energy += (double)out[i] * (double)out[i];
+    }
+    assert(energy > 0.0);
+    check_samples(out, want, !QUIET_FAST_MATH, "the scaled frame's mute noise");
+    printf("the returned model is the rendered one; a scaled frame the error rate mutes plays the mute noise\n");
+}
+
 /* ---- ProVoice frames (IMBE 7100x4400), packed from parameter bits ---- */
 
 /* A Golay (23,12) word whose data bits 11..22 are set in `word`: the parity bits 0..10 for which the decoder
@@ -1005,7 +1206,7 @@ static void
 test_provoice_frames(void) {
     struct stream s;
     stream_init(&s);
-    int lower = 0, frames = 0;
+    int lower = 0, frames = 0, muted = 0;
     for (int f = 0; f < 18; ++f) {
         char imbe_d[88], fr[7][24], scratch[88];
         float out[160], want[160];
@@ -1023,6 +1224,8 @@ test_provoice_frames(void) {
         struct stream twin = s;
         mbe_process_result r;
         mbe_initProcessResult(&r);
+        /* The mute noise is the thread's generator's: seeded alike before each of the three renderings. */
+        mbe_setThreadRngSeed(0x7100u + (unsigned)f);
         const int rc =
             mbe_processImbe7100x4400Framef(out, &r, (const char (*)[24])fr, scratch, &s.cur, &s.prev, &s.enh);
         assert(rc >= 0 && (r.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
@@ -1033,26 +1236,25 @@ test_provoice_frames(void) {
             mbe_processImbe7100x4400Frame(pcm, &r2, (const char (*)[24])fr, scratch, &twin.cur, &twin.prev, &twin.enh);
         assert(rc2 >= 0);
         mbe_parms rendered, enh;
+        mbe_setThreadRngSeed(0x7100u + (unsigned)f);
         replica(want, &s.prev, &before.enh, 1.0, 1, 0, &rendered, &enh);
         assert(same_parms(&twin.enh, &s.enh, 1));
-        if ((r.flags & MBE_PROCESS_FLAG_MUTE) == 0) {
-            check_samples(out, want, 1, "provoice frames");
-            assert(same_parms(&s.enh, &enh, 1));
-            short trunc[160];
-            mbe_floattoshort(out, trunc);
-            for (int i = 0; i < 160; ++i) {
-                assert(trunc[i] == pcm[i]);
-            }
-        } else {
-            check_magnitudes(&s.enh, &rendered, 1, "provoice frames, muted");
+        /* Heard or muted (comfort noise), the samples, the 16-bit samples truncated and every field of the state. */
+        check_samples(out, want, 1, "provoice frames");
+        assert(same_parms(&s.enh, &enh, 1));
+        short trunc[160];
+        mbe_floattoshort(out, trunc);
+        for (int i = 0; i < 160; ++i) {
+            assert(trunc[i] == pcm[i]);
         }
+        muted += (r.flags & MBE_PROCESS_FLAG_MUTE) != 0u;
         lower += own_gain(&s.prev) < 1.0;
         ++frames;
     }
-    assert(2 * lower >= frames);
-    printf("ProVoice through its own frame entry points, %d frames (%d P25 would play lower; repeats, the reset "
-           "model and a mute among them): as without the gain\n",
-           frames, lower);
+    assert(2 * lower >= frames && muted >= 2);
+    printf("ProVoice through its own frame entry points, %d frames (%d P25 would play lower, %d muted; repeats and the "
+           "reset model among them): as without the gain\n",
+           frames, lower, muted);
 }
 
 /* ProVoice through the P25 data path with its flag, on the same quiet frames, lost frames and an error-rate mute:
@@ -1075,15 +1277,14 @@ test_provoice(void) {
         if (f == 14) {
             s.prev.errorRate = 0.5f;
         }
+        mbe_setThreadRngSeed(0x4400u + (unsigned)f);
         PLAY(&s, imbe_d, 1, out, &flags);
         mbe_parms rendered, enh;
+        mbe_setThreadRngSeed(0x4400u + (unsigned)f);
         replica(want, &s.prev, &before.enh, 1.0, 1, 0, &rendered, &enh);
-        if ((flags & MBE_PROCESS_FLAG_MUTE) == 0) {
-            check_samples(out, want, 1, "provoice");
-            assert(same_parms(&s.enh, &enh, 1));
-        } else {
-            check_magnitudes(&s.enh, &rendered, 1, "provoice muted");
-        }
+        /* Heard or muted (comfort noise, the generator seeded alike), the samples and every field of the state. */
+        check_samples(out, want, 1, "provoice");
+        assert(same_parms(&s.enh, &enh, 1));
         frames += own_gain(&s.prev) < 1.0;
     }
     assert(frames >= 8);
@@ -1192,12 +1393,14 @@ test_public_synthesizer(void) {
 int
 main(void) {
     test_gain_function();
+    test_exact_arithmetic();
     test_quiet_stream();
     test_repeats();
     test_errors();
     test_tone();
     test_provoice();
     test_provoice_frames();
+    test_returned_and_muted();
     test_tone_forgeries();
     test_caller_states();
     test_public_synthesizer();

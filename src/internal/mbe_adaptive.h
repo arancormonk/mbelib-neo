@@ -454,8 +454,12 @@ void mbe_synthesizeSpeechWithPreEnhRm0f(float* aout_buf, mbe_parms* cur_mp, mbe_
  * The gain applies after adaptive smoothing and before the mute decision, to
  * the magnitudes smoothing left (voiced, unvoiced and pulsed bands alike), so
  * a frame the core mutes advances the scaled model as rendering would leave
- * it; each product is formed in double and rounded to float once. It changes
- * cur_mp's Ml only (log2Ml, the voicing and everything else as without it).
+ * it; each product is one stored binary64 multiplication, then rounded to
+ * float (mbelib.c, mbe_scale_rendered_magnitudes()). Of the model itself it
+ * changes Ml only (log2Ml, the voicing and every other field are as the same
+ * call without the gain leaves them); the samples it renders and the
+ * synthesis state it leaves (previousUw, the overlap) are those of the scaled
+ * magnitudes.
  * @param magnitude_gain The gain; the caller passes a positive finite value.
  */
 void mbe_synthesizeSpeechScaledf(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp, float rm0,

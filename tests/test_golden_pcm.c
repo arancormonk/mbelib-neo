@@ -82,18 +82,28 @@
  * int16 hashes equal the SIMD ones again in both. The public hashes did not
  * move: mbe_synthesizeSpeechf() keeps the second-order filter and no cut.
  * P25's quiet frames (every magnitude a frame of a low decoded mean log2
- * magnitude renders times 2^clamp(1.41 (x + 1.80), -1.01, 0)) came with three
- * P25 sequences through the IMBE 4400 data path (golden_sequences.h): a loud
- * one, whose hashes are those of the build before the change (no frame under
- * the knee), a quiet one, whose hashes moved (every frame takes the gain), and
- * the quiet one tagged as ProVoice, whose hashes are the build before's
- * (ProVoice takes no gain). Their int16 hashes are the same for every kernel
- * ISA; their float hashes are SSE2's and AVX2's alike.
+ * magnitude renders times 2^clamp(1.84 (x + 1.73), -2, 0), and P25's 16-bit
+ * output rounded to nearest) came with three P25 sequences through the IMBE
+ * 4400 data path (golden_sequences.h): a loud one, whose float hashes are those
+ * of the build before the change (no frame under the knee) and whose int16
+ * hash moved with the rounding; a quiet one, whose float and int16 hashes moved
+ * (every frame takes the gain); and the quiet one tagged as ProVoice, whose
+ * hashes are the build before's (ProVoice takes no gain and keeps truncating).
+ * Their int16 hashes are the same for every kernel ISA and are checked in the
+ * 32-bit Debug build too; their float hashes are SSE2's and AVX2's alike.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
 #else
 #define GOLDEN_AMBE_STRICT 0
+#endif
+
+/* The P25 sequences' int16 hashes are checked wherever the int16 hashes are strict on x86, the 32-bit x87 Debug
+ * build included (its float hashes are not: x87 evaluates otherwise). */
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
+#define GOLDEN_IMBE_STRICT_INT16 1
+#else
+#define GOLDEN_IMBE_STRICT_INT16 0
 #endif
 
 struct golden_ambe_expect {
@@ -111,7 +121,7 @@ golden_ambe_expected(int isa) {
         e.ambe2400_f32 = 0xECAEA43Bu;
         e.ambe2400_s16 = 0x57511F5Au;
         e.imbe_loud_f32 = 0xF62DC2FAu;
-        e.imbe_quiet_f32 = 0x33DD701Au;
+        e.imbe_quiet_f32 = 0x047311ACu;
         e.provoice_quiet_f32 = 0xE8B7AA45u;
     } else {
         e.ambe2450_f32 = 0x77F99B90u;
@@ -119,11 +129,11 @@ golden_ambe_expected(int isa) {
         e.ambe2400_f32 = 0x5BE6D192u;
         e.ambe2400_s16 = 0x57511F5Au;
         e.imbe_loud_f32 = 0x33CAE1E4u;
-        e.imbe_quiet_f32 = 0x9D36AADDu;
+        e.imbe_quiet_f32 = 0x8AD90364u;
         e.provoice_quiet_f32 = 0xF356E69Cu;
     }
-    e.imbe_loud_s16 = 0xC2AF6F5Eu;
-    e.imbe_quiet_s16 = 0x42E3B380u;
+    e.imbe_loud_s16 = 0xFE7E4351u;
+    e.imbe_quiet_s16 = 0x7264E1CEu;
     e.provoice_quiet_s16 = 0xDBC888BCu;
     return e;
 }
@@ -193,7 +203,7 @@ check_imbe_sequence(const char* name, uint32_t seed, int quiet, int provoice, ui
         fprintf(stderr, "%s: sanity: mean square out of range: %g\n", name, mean_sq);
         return 1;
     }
-    if (GOLDEN_AMBE_STRICT && (first.f32 != exp_f32 || first.s16 != exp_s16)) {
+    if ((GOLDEN_AMBE_STRICT && first.f32 != exp_f32) || (GOLDEN_IMBE_STRICT_INT16 && first.s16 != exp_s16)) {
         fprintf(stderr, "%s: hash mismatch: f32 got=0x%08X exp=0x%08X, s16 got=0x%08X exp=0x%08X\n", name,
                 (unsigned)first.f32, (unsigned)exp_f32, (unsigned)first.s16, (unsigned)exp_s16);
         return 1;

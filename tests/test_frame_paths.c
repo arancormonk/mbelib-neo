@@ -347,16 +347,16 @@ round_pcm_sample(float sample) {
 }
 
 /* The 16-bit samples a codec's short entry points return for its float output:
- * the D-STAR and AMBE 3600x2450 paths round to nearest, the IMBE paths
- * truncate as mbe_floattoshort() does. Returns how many samples differ from
- * truncation. */
+ * the D-STAR, AMBE 3600x2450 and P25 (IMBE 7200x4400) paths round to nearest,
+ * the ProVoice (IMBE 7100x4400) paths truncate as mbe_floattoshort() does.
+ * Returns how many samples differ from truncation. */
 static int
 short_from_float(enum fixture_mode mode, const float* pcm, short* out) {
     short truncated[160];
     int differ = 0;
     mbe_floattoshort(pcm, truncated);
     for (int i = 0; i < 160; ++i) {
-        out[i] = (mode == IMBE7200 || mode == IMBE7100) ? truncated[i] : round_pcm_sample(pcm[i]);
+        out[i] = (mode == IMBE7100) ? truncated[i] : round_pcm_sample(pcm[i]);
         differ += out[i] != truncated[i];
     }
     return differ;
@@ -642,8 +642,8 @@ assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* r
                 }                                                                                                      \
             }                                                                                                          \
         }                                                                                                              \
-        /* The fixture tells rounding from truncation on the AMBE paths. */                                            \
-        assert(((MODE) == IMBE7200 || (MODE) == IMBE7100) ? rounded == 0 : rounded > 0);                               \
+        /* The fixture tells rounding from truncation on the rounding paths. */                                        \
+        assert(((MODE) == IMBE7100) ? rounded == 0 : rounded > 0);                                                     \
     }
 
 DEFINE_FRAME_EQUIVALENCE(test_imbe7200_equivalence, IMBE7200, 23, mbe_processImbe7200x4400, mbe_processImbe4400)

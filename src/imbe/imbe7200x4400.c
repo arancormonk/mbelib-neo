@@ -24,6 +24,7 @@
 #include "mbe_bitpack.h"
 #include "mbe_compiler.h"
 #include "mbe_math.h"
+#include "mbe_pcm_convert.h"
 #include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
@@ -1389,21 +1390,24 @@ imbe_has_voiced_band(const mbe_parms* mp) {
 }
 
 /*
- * P25's quiet frames (docs/dvsi-parity.md, "P25: quiet frames"). DVSI's P25
- * decoder plays a frame whose decoded magnitudes are low lower still: on its
- * decodes of its own vectors a steady frame's samples are the library's at a
- * gain g of at most 1, truncated toward zero, and g follows the mean x of the
- * frame's decoded log2 magnitudes, g = 2^clamp(K (x - X0), FLOOR, 0). The three
- * constants are a fit by level to the library's own decodes of the development
- * and validation vectors (per steady frame, the gain for which the library's
- * samples, scaled and truncated as P25's 16-bit output is, come nearest
- * DVSI's), not values from a document; what DVSI's decoder computes is not
- * known. The floor lies near the lower limit of TIA-102.BABA's enhancement
- * weights (0.5), which is a guess, not a derivation.
+ * P25's quiet frames (docs/dvsi-parity.md, "P25: quiet frames"). On DVSI's
+ * decodes of its own test vectors (the steady frames compared there, chiefly
+ * those of two near-silent recordings), DVSI's P25 decoder plays a frame whose
+ * decoded magnitudes are low lower still, by a gain that follows the mean x of
+ * the frame's decoded log2 magnitudes: read through its rounding 16-bit
+ * conversion (DVSI's quiet samples are round(g v), not trunc(g v), v this
+ * library's sample before the conversion: the steps of |d| lie at 0.5/g, 1.5/g,
+ * 2.5/g with one g per frame), the gain is 1/4 at the lowest means and rises
+ * to about 1 at the knee. The library plays g = 2^clamp(K (x - X0), FLOOR, 0):
+ * K and X0 a fit by level (per 0.05 bin of x, the one gain that brings
+ * round(g v) nearest DVSI's samples over all the bin's steady frames with no
+ * voiced band, normalised by the same gain above the knee), FLOOR -2, a gain of
+ * 1/4, taken so because the data are flat there at 0.244 to 0.250, not
+ * because a document says so. What DVSI's decoder computes is not known.
  */
-#define IMBE_QUIET_SLOPE 1.41    /* K: log2 g per unit of the mean log2 magnitude under the knee */
-#define IMBE_QUIET_KNEE  (-1.80) /* X0: the mean log2 magnitude under which the gain falls */
-#define IMBE_QUIET_FLOOR (-1.01) /* FLOOR: log2 of the lowest gain */
+#define IMBE_QUIET_SLOPE 1.84    /* K: log2 g per unit of the mean log2 magnitude under the knee */
+#define IMBE_QUIET_KNEE  (-1.73) /* X0: the mean log2 magnitude under which the gain falls */
+#define IMBE_QUIET_FLOOR (-2.00) /* FLOOR: log2 of the lowest gain, 1/4 */
 
 /*
  * The quiet-frame gain of a model, read from its decoded log2 magnitudes
@@ -1588,6 +1592,19 @@ mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char
     return mbe_processImbe4400Dataf_internal(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
+/* P25's 16-bit samples round to nearest (halves away from zero, as D-STAR's
+ * and rate 33's): DVSI's P25 decoder rounds (docs/dvsi-parity.md, "16-bit
+ * output"). ProVoice, with no DVSI material, keeps truncating, as do its own
+ * frame entry points (imbe7100x4400.c) and the public mbe_floattoshort(). */
+static void
+imbe4400_to_short(const mbe_process_result* result, const float float_buf[160], short aout_buf[160]) {
+    if (imbe4400_is_provoice(result)) {
+        mbe_floattoshort(float_buf, aout_buf);
+    } else {
+        mbe_floattoshort_nearest(float_buf, aout_buf);
+    }
+}
+
 int
 mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
@@ -1600,7 +1617,7 @@ mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char 
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    imbe4400_to_short(result, float_buf, aout_buf);
     return ret;
 }
 
@@ -1655,7 +1672,7 @@ mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result, c
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }
 
@@ -1676,6 +1693,6 @@ mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* result, const
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }
