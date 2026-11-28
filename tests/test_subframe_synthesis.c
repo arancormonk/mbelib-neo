@@ -4862,17 +4862,23 @@ static void
 test_p25_code_tests_on_the_grid(void) {
     for (int b0 = 0; b0 <= 207; ++b0) {
         const float w0 = decoded_pitch(0, b0);
-        assert(mbe_imbe4400_pitch_code(w0) == b0);
-        assert(mbe_imbe4400_pulsed_code(w0) == ((b0 >= 128 && b0 <= 183) ? b0 - 128 : -1));
+        const int code = mbe_imbe4400_pitch_code(w0), pulsed = mbe_imbe4400_pulsed_code(w0);
+        assert(code == b0);
+        assert(pulsed == ((b0 >= 128 && b0 <= 183) ? b0 - 128 : -1));
         const float below = nextafterf(w0, 0.0f), above = nextafterf(w0, 1.0f);
-        assert(mbe_imbe4400_pitch_code(below) == -1 && mbe_imbe4400_pitch_code(above) == -1);
-        assert(mbe_imbe4400_pulsed_code(below) == -1 && mbe_imbe4400_pulsed_code(above) == -1);
+        const int codes_beside[4] = {mbe_imbe4400_pitch_code(below), mbe_imbe4400_pitch_code(above),
+                                     mbe_imbe4400_pulsed_code(below), mbe_imbe4400_pulsed_code(above)};
+        for (int i = 0; i < 4; ++i) {
+            assert(codes_beside[i] == -1);
+        }
         const float nominal = mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
-        assert(mbe_imbe4400_pitch_code(nominal) == -1 && mbe_imbe4400_pulsed_code(nominal) == -1);
+        const int nominal_code = mbe_imbe4400_pitch_code(nominal), nominal_pulsed = mbe_imbe4400_pulsed_code(nominal);
+        assert(nominal_code == -1 && nominal_pulsed == -1);
     }
     mbe_parms cur, prev, enhanced;
     mbe_initMbeParms(&cur, &prev, &enhanced);
-    assert(mbe_imbe4400_pitch_code(cur.w0) == -1);
+    const int initial_code = mbe_imbe4400_pitch_code(cur.w0);
+    assert(initial_code == -1);
 }
 
 /* ---- D-STAR's and P25's mid-frame voicing by 500 Hz columns ---- */
@@ -5769,7 +5775,8 @@ test_p25_mid_pitch_pairs(int tolerant, int inexact) {
     for (size_t i = 0; i < 2 * (sizeof(bad) / sizeof(bad[0])); ++i) {
         mbe_parms prev = codes[60], cur = codes[90];
         set_pitch_bits(((i % 2) == 0) ? &prev : &cur, bad[i / 2]);
-        assert(!mid_pitch_gives(&prev, &cur, 0.0));
+        const int gives = mid_pitch_gives(&prev, &cur, 0.0);
+        assert(!gives);
     }
     /* The accepted range of the fundamentals' product, P = a b / (2 pi)^2 in
      * double from the stored floats: up to 2^64. At equal pitches a, the
@@ -5801,7 +5808,8 @@ test_p25_mid_pitch_pairs(int tolerant, int inexact) {
         cur.w0 = edges[i].b;
         const double want = edges[i].accepted ? reference_p25_mid_pitch((double)prev.w0, (double)cur.w0) : 0.0;
         assert(!edges[i].accepted || want > 0.0);
-        assert(mid_pitch_gives(&prev, &cur, want) == edges[i].accepted);
+        const int gives = mid_pitch_gives(&prev, &cur, want);
+        assert(gives == edges[i].accepted);
     }
     /* At the low end: a product of 2^-37 (a mean of 2^-18.5 cycle) gives at
      * least a step, one of 2^-40 none, and pairs at FLT_MIN none. */
@@ -5819,7 +5827,8 @@ test_p25_mid_pitch_pairs(int tolerant, int inexact) {
         cur.w0 = lows[i].b;
         const double want = lows[i].accepted ? reference_p25_mid_pitch((double)prev.w0, (double)cur.w0) : 0.0;
         assert(!lows[i].accepted || want > 0.0);
-        assert(mid_pitch_gives(&prev, &cur, want) == lows[i].accepted);
+        const int gives = mid_pitch_gives(&prev, &cur, want);
+        assert(gives == lows[i].accepted);
     }
 }
 
@@ -5851,8 +5860,8 @@ frame_advance(int a, int b) {
  * `last` in `rendering`. */
 static void
 train_frame(mbe_parms* last, const mbe_parms* model, enum mbe_voiced_synthesis rendering, int advance) {
-    float out[160];
     if (!advance) {
+        float out[160];
         next_frame_as(out, last, model, 0, rendering);
         return;
     }
@@ -5907,9 +5916,10 @@ grid_model(mbe_parms* mp, long n) {
 /* The test's own count of the pulses one floored interval launches: the whole
  * numbers c, from 1 (from 0 when the phase is 0), with c 2^19 below the phase
  * reached, S + total steps, strictly (S = s + f steps, s whole, f in [0, 1)),
- * counted one by one; and the steps left, s and f, after the interval. */
+ * counted one by one; and the whole steps left, s, after the interval (the
+ * fraction f stays as it was). */
 static long
-count_crossings(long* s, double* f, long total) {
+count_crossings(long* s, const double* f, long total) {
     long count = 0;
     const long reach = *s + total;
     for (long c = (*s == 0 && !(*f > 0.0)) ? 0 : 1;; ++c) {
@@ -6432,7 +6442,8 @@ test_p25_phase_source(int tolerant) {
                 assert(phases_agree(got.phase, want, odd.L, tolerant));
                 kernel_phases(&at_floor, 1, floor_phases);
                 assert(phases_agree(got.phase, floor_phases, odd.L, tolerant));
-                assert(fabs(shifted_input(&odd, l) - (double)MBE_PHASE_LOG2_FLOOR) == 0.0);
+                const double entered = shifted_input(&odd, l), floor_value = (double)MBE_PHASE_LOG2_FLOOR;
+                assert(same_double_bits(entered, floor_value));
             }
         }
     }
@@ -7338,10 +7349,10 @@ test_p25_tone_model_forgeries(void) {
         row17_frame_for(path, (path == ROW17_RATE33) ? 50 : ((path == ROW17_DSTAR) ? 50 : 80),
                         (path == ROW17_DSTAR) ? 0xF : 0, "111110000", &next);
         mbe_parms base[3];
-        float out[160];
         if (path == ROW17_P25) {
             memcpy(base, tone_s, sizeof(base));
         } else {
+            float out[160];
             mbe_initMbeParms(&base[0], &base[1], &base[2]);
             for (int f = 0; f < 3; ++f) {
                 row17_path_frame(path, &lead, out, base);
@@ -7373,7 +7384,7 @@ test_p25_tone_model_forgeries(void) {
             if (path == ROW17_P25) {
                 /* ProVoice through the data path with its flag, on the P25 states. */
                 mbe_parms pv_f[3], pv_p[3];
-                float pv_fo[160], pv_po[160];
+                float pv_fo[160] = {0}, pv_po[160] = {0};
                 memcpy(pv_f, forged, sizeof(pv_f));
                 memcpy(pv_p, plain, sizeof(pv_p));
                 for (int w = 0; w < 2; ++w) {
@@ -7892,13 +7903,14 @@ test_p25_rendering_marks_the_model_it_renders(void) {
          * 28, with the unvoiced factor taken out. */
         render_marked(other, &other_state, &last, &model, MBE_FRAME_MARK_NONE, MBE_VOICED_SYNTHESIS_DVSI);
         assert(!same_rendering(other, &other_state, onset, &onset_state));
-        struct mbe_subframe_model dstar_mid, p25_mid;
-        mbe_subframe_mid_model(&last, &onset_model, 0, MBE_VOICED_SYNTHESIS_DVSI, &dstar_mid);
+        struct mbe_subframe_model dstar_mid_model, p25_mid;
+        mbe_subframe_mid_model(&last, &onset_model, 0, MBE_VOICED_SYNTHESIS_DVSI, &dstar_mid_model);
         mbe_subframe_mid_model(&last, &onset_model, 0, p25, &p25_mid);
         if (voiced_before) {
-            assert(dstar_mid.voiced[22] == 1 && p25_mid.voiced[22] == 0);
+            assert(dstar_mid_model.voiced[22] == 1 && p25_mid.voiced[22] == 0);
         } else {
-            assert(dstar_mid.L == p25_mid.L && memcmp(dstar_mid.voiced, p25_mid.voiced, sizeof(p25_mid.voiced)) == 0);
+            assert(dstar_mid_model.L == p25_mid.L
+                   && memcmp(dstar_mid_model.voiced, p25_mid.voiced, sizeof(p25_mid.voiced)) == 0);
         }
         for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); ++m) {
             render_marked(marked, &marked_state, &last, &model, marks[m], p25);

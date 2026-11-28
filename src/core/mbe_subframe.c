@@ -215,7 +215,7 @@ p25_phase_log2_inputs(const mbe_parms* mp, double out[57]) {
 
 void
 mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
-    double log2_amplitudes[57];
+    double log2_amplitudes[57] = {0};
     float envelope[57] = {0};
 
     memset(model, 0, sizeof(*model));
@@ -980,7 +980,7 @@ p25_column_voicing(const mbe_parms* mp, struct mbe_subframe_model* model) {
  * own, so that the other renderings' code stays as it was. */
 static void
 p25_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
-    double log2_amplitudes[57];
+    double log2_amplitudes[57] = {0};
     float envelope[57] = {0};
 
     memset(model, 0, sizeof(*model));

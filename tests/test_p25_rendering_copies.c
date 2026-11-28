@@ -28,20 +28,13 @@
  * mid-frame state with neither frame's own model read by the columns, the
  * mid-frame bands with no unvoiced band carrying a finite log2Ml (no step)
  * and no column rule (or one with neither frame's own model read by it), and
- * the own model with no step, the columns applied to the shared one.
+ * the own model with no step, the columns applied to the shared one. What it
+ * does not cover: it compiles mbe_subframe.c into its own translation unit,
+ * with the test's flags, so in a library built with fast-math it compares the
+ * two bodies as the test's flags compile them, not the library's object (the
+ * differential harness and the waveform tests see the library's).
  */
-/* clang-tidy (which defines __clang_analyzer__) sees an empty test: its
- * analyzer follows this file's direct calls of the library's static
- * functions on models whose harmonic count it cannot bound (they come from
- * the public decoder) and reports paths no caller in the library reaches; the
- * library's own translation unit is analyzed as always. */
-#ifdef __clang_analyzer__
-int
-main(void) {
-    return 0;
-}
-#else
-#include "../src/core/mbe_subframe.c"
+#include "../src/core/mbe_subframe.c" // NOLINT(bugprone-suspicious-include): the test compiles the library's static functions
 
 #include <assert.h>
 #include <float.h>
@@ -73,34 +66,62 @@ same_float(const float* a, const float* b) {
 #define COPIES_INEXACT 0
 #endif
 
-static double worst_apart;
-
-/* Whether two floats agree: by their bits, or, where the copies can round
- * apart (`inexact`), within 1e-5 of the larger magnitude (or of 1). */
+/* Whether a float is finite, by its bit pattern. */
 static int
-close_float(const float* a, const float* b, int inexact) {
-    if (same_float(a, b)) {
-        return 1;
-    }
-    const double d = fabs((double)*a - (double)*b);
-    const double scale = fmax(1.0, fmax(fabs((double)*a), fabs((double)*b)));
-    worst_apart = fmax(worst_apart, d / scale);
-    return inexact && d <= 1.0e-5 * scale;
+finite_float(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & 0x7FFFFFFFu) < 0x7F800000u;
 }
 
+/* How far two floats lie apart, relative to the larger magnitude (or to 1):
+ * 0 for the same bits, +infinity where either is not finite (so that no
+ * tolerance accepts it). */
+static double
+float_apart(const float* a, const float* b) {
+    if (same_float(a, b)) {
+        return 0.0;
+    }
+    if (!finite_float(a) || !finite_float(b)) {
+        return INFINITY;
+    }
+    const double d = fabs((double)*a - (double)*b);
+    return d / fmax(1.0, fmax(fabs((double)*a), fabs((double)*b)));
+}
+
+/* How far two subframe models lie apart: -1 where the pitch, the counts or a
+ * band state differ; else the largest float_apart() of their magnitudes and
+ * phases. */
+static double
+subframe_apart(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
+    if (!same_float(&a->w0, &b->w0) || a->L != b->L || a->any_voiced != b->any_voiced
+        || a->any_pulsed != b->any_pulsed) {
+        return -1.0;
+    }
+    double apart = 0.0;
+    for (int l = 0; l < 57; ++l) {
+        if (a->voiced[l] != b->voiced[l]) {
+            return -1.0;
+        }
+        apart =
+            fmax(apart, fmax(float_apart(&a->magnitude[l], &b->magnitude[l]), float_apart(&a->phase[l], &b->phase[l])));
+    }
+    return apart;
+}
+
+static double worst_apart;
+
 /* Whether two subframe models are the same: pitch, counts and band states
- * exactly; magnitudes and phases by their bits, or within close_float()'s
- * tolerance where the copies can round apart (COPIES_INEXACT). */
+ * exactly; magnitudes and phases by their bits, or, where the copies can
+ * round apart (COPIES_INEXACT), within 1e-5 of the larger magnitude (or of 1),
+ * both finite. Records the largest difference seen. */
 static int
 same_subframe(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
-    const int inexact = COPIES_INEXACT;
-    int same =
-        same_float(&a->w0, &b->w0) && a->L == b->L && a->any_voiced == b->any_voiced && a->any_pulsed == b->any_pulsed;
-    for (int l = 0; l < 57; ++l) {
-        same &= a->voiced[l] == b->voiced[l] && close_float(&a->magnitude[l], &b->magnitude[l], inexact)
-                && close_float(&a->phase[l], &b->phase[l], inexact);
+    const double apart = subframe_apart(a, b);
+    if (apart > worst_apart) {
+        worst_apart = apart;
     }
-    return same;
+    return apart == 0.0 || (COPIES_INEXACT && apart > 0.0 && apart <= 1.0e-5);
 }
 
 /* The model P25's decoder gives pitch code b0 (w0, L and K), its bands in
@@ -175,10 +196,14 @@ check_columns(const mbe_parms* prev, const mbe_parms* cur, const struct mbe_subf
         return 0;
     }
     assert(!rule.dstar);
+    const int readers = p25_reads_by_columns(prev) || p25_reads_by_columns(cur);
     for (int l = 1; l <= model->L; ++l) {
-        assert(p25_columns_voice(&rule, model->w0, l) == columns_voice(&rule, model->w0, l));
-        if (!p25_reads_by_columns(prev) && !p25_reads_by_columns(cur)) {
-            assert(p25_column_band_state(prev, cur, &rule, model, l) == column_band_state(prev, cur, &rule, model, l));
+        const int copy = p25_columns_voice(&rule, model->w0, l), shared = columns_voice(&rule, model->w0, l);
+        assert(copy == shared);
+        if (!readers) {
+            const int copy_state = p25_column_band_state(prev, cur, &rule, model, l);
+            const int shared_state = column_band_state(prev, cur, &rule, model, l);
+            assert(copy_state == shared_state);
         }
     }
     return model->L;
@@ -188,13 +213,19 @@ check_columns(const mbe_parms* prev, const mbe_parms* cur, const struct mbe_subf
  * where neither frame's own model is read by it. */
 static int
 check_fill(const mbe_parms* prev, const mbe_parms* cur, const struct mbe_subframe_model* model, int late) {
-    mbe_parms a = *prev, b = *cur;
-    without_step(&a);
-    without_step(&b);
+    mbe_parms stepless_prev = *prev, stepless_cur = *cur;
+    without_step(&stepless_prev);
+    without_step(&stepless_cur);
+    /* const objects: what the copies are handed cannot change under them */
+    const mbe_parms a = stepless_prev, b = stepless_cur;
+    if (a.L < 1 || a.L > 56 || b.L < 1 || b.L > 56 || model->L < 1 || model->L > 56) {
+        return 0; /* every code's L is 9..56; the bound tells the analyzer */
+    }
     struct mbe_subframe_model shared = *model, copy = *model;
     fill_mid_bands(&a, &b, &b, late, NULL, NULL, &shared);
     p25_fill_mid_bands(&a, &b, &b, late, NULL, NULL, &copy);
-    assert(same_subframe(&shared, &copy));
+    const int alike = same_subframe(&shared, &copy);
+    assert(alike);
     struct column_rule rule;
     memset(&rule, 0, sizeof(rule));
     if (column_rule(&a, &b, MBE_VOICED_SYNTHESIS_DVSI_IMBE, &rule) && !p25_reads_by_columns(&a)
@@ -203,7 +234,8 @@ check_fill(const mbe_parms* prev, const mbe_parms* cur, const struct mbe_subfram
         copy = *model;
         fill_mid_bands(&a, &b, &b, late, &rule, NULL, &shared);
         p25_fill_mid_bands(&a, &b, &b, late, &rule, NULL, &copy);
-        assert(same_subframe(&shared, &copy));
+        const int ruled_alike = same_subframe(&shared, &copy);
+        assert(ruled_alike);
         return 1;
     }
     return 0;
@@ -213,13 +245,18 @@ check_fill(const mbe_parms* prev, const mbe_parms* cur, const struct mbe_subfram
  * applied to it. */
 static void
 check_own(const mbe_parms* mp) {
-    mbe_parms a = *mp;
-    without_step(&a);
+    mbe_parms stepless = *mp;
+    without_step(&stepless);
+    const mbe_parms a = stepless;
+    if (a.L < 1 || a.L > 56) {
+        return; /* every code's L is 9..56; the bound tells the analyzer */
+    }
     struct mbe_subframe_model shared, copy;
     mbe_subframe_own_model(&a, &shared);
     p25_column_voicing(&a, &shared);
     p25_own_model(&a, &copy);
-    assert(same_subframe(&shared, &copy));
+    const int alike = same_subframe(&shared, &copy);
+    assert(alike);
 }
 
 int
@@ -263,4 +300,3 @@ main(void) {
            pairs, bands, ruled, COPIES_INEXACT ? "within 1e-5" : "bit for bit", worst_apart);
     return 0;
 }
-#endif /* __clang_analyzer__ */
