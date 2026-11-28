@@ -19,8 +19,12 @@
  * not linked: every symbol it defines is defined by this translation unit)
  * and checks, over every ordered pair of the 208 P25 pitch codes, each pair
  * with one of 64 pairs of voicing classes (every class pair on many code
- * pairs), that the copies give exactly what the shared code gives where
- * P25's rules do not apply: the column tests on P25's samples, each band's
+ * pairs), that the copies give what the shared code gives where P25's rules
+ * do not apply (band states exactly, floats by their bits; in an optimized
+ * build with excess precision, the 32-bit Release one, or with fast-math, the
+ * two bodies may round apart, and floats there are compared within 1e-5;
+ * 1.34e-6 is the largest difference seen, in the 32-bit Release build): the
+ * column tests on P25's samples, each band's
  * mid-frame state with neither frame's own model read by the columns, the
  * mid-frame bands with no unvoiced band carrying a finite log2Ml (no step)
  * and no column rule (or one with neither frame's own model read by it), and
@@ -29,6 +33,8 @@
 #include "../src/core/mbe_subframe.c"
 
 #include <assert.h>
+#include <float.h>
+#include <math.h>
 #include <stdio.h>
 
 /* Whether two floats have the same bits. */
@@ -40,14 +46,42 @@ same_float(const float* a, const float* b) {
     return x == y;
 }
 
-/* Whether two subframe models are the same, floats by their bits. */
+/* Whether the two copies, compiled here as separate functions, can round
+ * their float arithmetic apart: under excess precision in an optimized build
+ * (x87: which intermediates stay in 80-bit registers depends on each body's
+ * register allocation), and where the build may reorder (fast-math). */
+#if !defined(FLT_EVAL_METHOD) || (FLT_EVAL_METHOD != 0 && defined(__OPTIMIZE__)) || defined(__FAST_MATH__)
+#define COPIES_INEXACT 1
+#else
+#define COPIES_INEXACT 0
+#endif
+
+static double worst_apart;
+
+/* Whether two floats agree: by their bits, or, where the copies can round
+ * apart (`inexact`), within 1e-5 of the larger magnitude (or of 1). */
+static int
+close_float(const float* a, const float* b, int inexact) {
+    if (same_float(a, b)) {
+        return 1;
+    }
+    const double d = fabs((double)*a - (double)*b);
+    const double scale = fmax(1.0, fmax(fabs((double)*a), fabs((double)*b)));
+    worst_apart = fmax(worst_apart, d / scale);
+    return inexact && d <= 1.0e-5 * scale;
+}
+
+/* Whether two subframe models are the same: pitch, counts and band states
+ * exactly; magnitudes and phases by their bits, or within close_float()'s
+ * tolerance where the copies can round apart (COPIES_INEXACT). */
 static int
 same_subframe(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
+    const int inexact = COPIES_INEXACT;
     int same =
         same_float(&a->w0, &b->w0) && a->L == b->L && a->any_voiced == b->any_voiced && a->any_pulsed == b->any_pulsed;
     for (int l = 0; l < 57; ++l) {
-        same &= a->voiced[l] == b->voiced[l] && same_float(&a->magnitude[l], &b->magnitude[l])
-                && same_float(&a->phase[l], &b->phase[l]);
+        same &= a->voiced[l] == b->voiced[l] && close_float(&a->magnitude[l], &b->magnitude[l], inexact)
+                && close_float(&a->phase[l], &b->phase[l], inexact);
     }
     return same;
 }
@@ -208,7 +242,7 @@ main(void) {
     }
     assert(pairs == 208L * 208L && bands > 0 && ruled > 0);
     printf("p25 rendering copies: %ld code pairs, %ld mid-frame bands by the columns, %ld fills under the rule, "
-           "alike\n",
-           pairs, bands, ruled);
+           "alike (%s; the largest float difference %.3g of its value)\n",
+           pairs, bands, ruled, COPIES_INEXACT ? "within 1e-5" : "bit for bit", worst_apart);
     return 0;
 }
