@@ -13,15 +13,20 @@
  * MBE_LOW_BAND_DVSI_CORNER_HZ, in magnitude and in phase. And an adaptive low
  * cut: a tracker that starts each stream at MBE_LOW_CUT_START_HZ moves toward
  * the fundamental of every frame the synthesis renders with every band voiced
- * (T <- T + MBE_LOW_CUT_RATE (f0 - T)) and stands still through every other
- * frame; the corner a frame applies is min(T, MBE_LOW_CUT_CEILING_HZ); a voiced
+ * (T <- T + MBE_LOW_CUT_RATE (f0 - T)), but for a P25 tone model and a silence
+ * frame (mbe_subframe.c, low_cut_moves()), and stands still through every
+ * other frame; the corner a frame applies is min(T, MBE_LOW_CUT_CEILING_HZ); a voiced
  * harmonic at f under the corner is scaled by (f / corner)^2 (the power, 2, is
  * a fit too), its phase untouched, one at or above it not at all; and the bins
  * of the unvoiced transform whose centre frequency lies under the corner are
  * zero. What DVSI's decoders compute is not known: the filter and the tracker
- * are the simplest forms found to fit, and every constant here is a fit to
- * DVSI's decodes of the development and validation vectors and of its
- * synthetic pulse-train vectors, not a value from a document.
+ * are the simplest forms found to fit. The corner of the filter, the tracker's
+ * first value, its rate, the ceiling and the cut's power are fits to DVSI's
+ * decodes of the development and validation vectors and of its synthetic
+ * pulse-train vectors, not values from a document; the tracker's range
+ * (MBE_LOW_CUT_TRACK_MIN_HZ, MBE_LOW_CUT_TRACK_MAX_HZ: the clamp, and with the
+ * ceiling the range a stored tracker or corner is read in) is the library's
+ * choice, no fit.
  *
  * ProVoice (no DVSI material) keeps the second-order filter at 100 Hz
  * (mbe_low_band_gain(), mbe_adaptive.h) and no cut; so does the public
@@ -51,8 +56,8 @@
 #define MBE_LOW_CUT_CEILING_HZ      200.0f
 
 /* The range a stored tracker is read in, Hz: every pitch code of the three
- * codecs decodes to a fundamental inside it (test_low_cut_range in
- * test_subframe_synthesis.c), so a tracker that starts at
+ * codecs decodes to a fundamental inside it, the pulsed rows' band grid
+ * included (test_low_cut_range() in test_subframe_synthesis.c), so a tracker that starts at
  * MBE_LOW_CUT_START_HZ and moves only toward such fundamentals stays inside it.
  * A caller's model at a pitch outside it moves the tracker to the bound at
  * most, and a stored value outside it (or any value no frame stores) reads as
@@ -63,25 +68,30 @@
 /**
  * @brief Gain of DVSI's fixed high-pass at a frequency: x^3 / sqrt(1 + x^6),
  *        x = hz / MBE_LOW_BAND_DVSI_CORNER_HZ, formed in double and rounded to
- *        float once; 0 for hz not above 0.
+ *        float once, for a positive normal finite hz; by the bit pattern, 0 for
+ *        zero, a subnormal, a negative value or a NaN, and 1 for +infinity.
  */
 float mbe_low_band_dvsi_gain(float hz);
 
 /**
  * @brief Phase (radians) of the same high-pass: the argument of
  *        s^3 / ((s + 1)(s^2 + s + 1)) at s = j x, 3 pi / 2 toward DC, 3 pi / 4
- *        at the corner, near 0 far above; formed in double with the
- *        double-precision functions and rounded to float once; 0 for hz not
- *        above 0.
+ *        at the corner, about 2 / x far above (formed there so that it does
+ *        not cancel); in double with the double-precision functions and
+ *        rounded to float once, for a positive normal finite hz; by the bit
+ *        pattern, 0 for zero, a subnormal, a negative value, a NaN and
+ *        +infinity.
  */
 float mbe_low_band_dvsi_phase(float hz);
 
 /**
  * @brief The cut's scale on a voiced harmonic at @p hz under a corner:
  *        (hz / corner)^2 when hz < corner, formed in double and rounded to float
- *        once, and exactly 1 when hz is at or above it. @p corner is a stored
- *        tracker's corner (positive and normal); @p hz the harmonic's frequency
- *        as the renderer forms it (one float, also the filter's argument).
+ *        once, and exactly 1 when hz is at or above it. @p corner is a corner
+ *        the renderer read (50 to 200 Hz); @p hz the harmonic's frequency as
+ *        the renderer forms it (one float, also the filter's argument), for a
+ *        harmonic under Nyquist of a positive normal pitch, so a positive
+ *        normal value of at most about 4 kHz whatever a caller's state holds.
  */
 float mbe_low_cut_gain(float hz, float corner);
 

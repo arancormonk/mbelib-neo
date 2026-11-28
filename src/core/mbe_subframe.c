@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "ambe3600x2450_internal.h"
+#include "ambe_common.h"
 #include "mbe_adaptive.h"
 #include "mbe_low_band.h"
 #include "mbe_math.h"
@@ -1266,13 +1267,46 @@ stored_within(const mbe_parms* mp, int slot, float low, float high, float* value
     return 1;
 }
 
+/* Whether a model is the AMBE silence model of its rendering: the pitch both
+ * AMBE decoders give a silence frame, 2 pi / 32 (MBE_AMBE_SILENCE_W0), by bit
+ * pattern, with D-STAR's 14 harmonics (b0 124, which carries no mark of its own)
+ * in D-STAR's rendering and rate 33's 15 in rate 33's. No voice code of either
+ * codec, the pulsed rows' band grid included, decodes to that pitch
+ * (test_low_cut_range in test_subframe_synthesis.c), so on the decoders' own
+ * streams this is the silence frame, a repeat of it, or the fade's silent copy
+ * of it; a caller's model of that pitch and count is taken for one too. */
+static int
+ambe_silence_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
+    int silence_l;
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI) {
+        silence_l = MBE_AMBE_SILENCE_L;
+    } else if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) {
+        silence_l = MBE_AMBE2450_SILENCE_L;
+    } else {
+        return 0;
+    }
+    const float silence_w0 = MBE_AMBE_SILENCE_W0;
+    uint32_t have, want;
+    memcpy(&have, &mp->w0, sizeof(have));
+    memcpy(&want, &silence_w0, sizeof(want));
+    return mp->L == silence_l && have == want;
+}
+
 /* Whether a rendered model moves the tracker: speech with every band 1..L
  * voiced (a state of exactly 1: as the synthesis renders it, after adaptive
- * smoothing), a positive normal pitch, and no tone model (a P25 tone sent as
- * voice frames, MBE_FRAME_MARK_TONE). Its harmonic count is 1..56 here. */
+ * smoothing, so that a frame decoded as a pulsed row or at a reserved code
+ * that smoothing voices throughout moves it), a positive normal pitch, no
+ * tone model (a P25 tone sent as voice frames, MBE_FRAME_MARK_TONE), no
+ * silence frame (rate 33's carry MBE_FRAME_MARK_PREVIOUS_HELD, which holds
+ * the tracker as a mark in every rendering, a caller's included; P25's
+ * rendering has replaced the mark of a voiced model before this is read,
+ * mark_rendered_model()) and no AMBE silence model (ambe_silence_model()).
+ * Its harmonic count is 1..56 here. */
 static int
-low_cut_moves(const mbe_parms* mp) {
-    if (!positive_normal(&mp->w0) || mbe_frame_mark(mp) == MBE_FRAME_MARK_TONE) {
+low_cut_moves(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
+    const enum mbe_frame_mark mark = mbe_frame_mark(mp);
+    if (!positive_normal(&mp->w0) || mark == MBE_FRAME_MARK_TONE || mark == MBE_FRAME_MARK_PREVIOUS_HELD
+        || ambe_silence_model(mp, rendering)) {
         return 0;
     }
     for (int l = 1; l <= mp->L; l++) {
@@ -1286,11 +1320,12 @@ low_cut_moves(const mbe_parms* mp) {
 /* The tracker one frame on: T + MBE_LOW_CUT_RATE (f0 - T) toward a fully
  * voiced frame's fundamental f0 = w0 8000 / (2 pi) Hz, in double from the
  * stored floats, kept within MBE_LOW_CUT_TRACK_MIN_HZ..MBE_LOW_CUT_TRACK_MAX_HZ
- * (which only a caller's pitch outside the codecs' reaches) and rounded to
- * float once; any other frame leaves it. */
+ * (which only a caller's pitch outside the codecs' reaches: w0 is positive,
+ * normal and finite here, so f0 is finite, up to about 4.3e41 Hz for FLT_MAX)
+ * and rounded to float once; any other frame leaves it. */
 static float
-low_cut_step(float track, const mbe_parms* mp) {
-    if (!low_cut_moves(mp)) {
+low_cut_step(float track, const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
+    if (!low_cut_moves(mp, rendering)) {
         return track;
     }
     const double f0 = (double)mp->w0 * (8000.0 / (2.0 * M_PI));
@@ -1328,7 +1363,7 @@ prepare_low_band(const mbe_parms* cur_mp, const mbe_parms* prev_mp, enum mbe_voi
     low->corner[1] = corner;
     low->corner[2] = corner;
     low->applied = corner;
-    low->track = low_cut_step(track, cur_mp);
+    low->track = low_cut_step(track, cur_mp, rendering);
 }
 
 /* What a frame's pulsed state leaves the next (pulsed_frame()): which of the

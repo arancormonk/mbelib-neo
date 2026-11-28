@@ -76,11 +76,17 @@
  * 1 dB of DVSI's. It was re-derived so (from 1.02) with the joint choice of the
  * spectral vectors (ambe_enc_search.c), which fits the peaks better and so
  * raised the decoded level (docs/dvsi-parity.md, "Joint choice of the AMBE
- * spectral vectors"). Measured again with DVSI's block lengths at 20 harmonics
+ * spectral vectors"). That median rests on the decoder it was measured with:
+ * DVSI's low band (docs/dvsi-parity.md, "DVSI's low band") moved it from
+ * -0.0004 dB on the decoder before it to +0.0292 dB on the decoder with it.
+ * The scale was left as it is (changing it changes the encoder's bits); no
+ * measurement here says which scale is now best.
+ * Measured again with DVSI's block lengths at 20 harmonics
  * (docs/dvsi-parity.md, "AMBE block lengths at 20 harmonics"), both encodings
  * decoded by that change's decoder: the development median +0.0316 dB (+0.0346
  * for the branch point's encodings under the same decoder, +0.0292 under the
- * branch point's own), under the scale's precision; the scale stays.
+ * branch point's own); the change moved it by -0.0029 dB, under the scale's
+ * precision, and the scale stays.
  */
 #define AMBE2400_ENC_MAG_SCALE 1.075f
 
