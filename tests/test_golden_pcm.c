@@ -74,6 +74,13 @@
  * frames of those rows, 1 (row 27), 2 (20), 3 (22), 4 (28), 6 (26), 8 (27), 10
  * (28), 16 (20) and 20 (22), and the frames after them; the D-STAR and public
  * hashes did not move.
+ * DVSI's low band (a third-order high-pass at 75 Hz in place of the
+ * second-order one at 100 Hz, and the adaptive low cut, in D-STAR's, P25's and
+ * rate 33's renderings and their unvoiced synthesis) moved the AMBE+2 and
+ * D-STAR float and int16 hashes (scalar, SSE2 and AVX2): every voiced and
+ * unvoiced frame of both sequences renders through the new filter. The scalar
+ * int16 hashes equal the SIMD ones again in both. The public hashes did not
+ * move: mbe_synthesizeSpeechf() keeps the second-order filter and no cut.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -90,15 +97,15 @@ golden_ambe_expected(int isa) {
     struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
-        e.ambe2450_f32 = 0x570F290Eu;
-        e.ambe2450_s16 = 0xB514B5D3u;
-        e.ambe2400_f32 = 0x8A37B0D7u;
-        e.ambe2400_s16 = 0x4FB4B896u;
+        e.ambe2450_f32 = 0xAE5328B0u;
+        e.ambe2450_s16 = 0xD2EB6902u;
+        e.ambe2400_f32 = 0xECAEA43Bu;
+        e.ambe2400_s16 = 0x57511F5Au;
     } else {
-        e.ambe2450_f32 = 0x622FC3CBu;
-        e.ambe2450_s16 = 0x174E3EA0u;
-        e.ambe2400_f32 = 0xD1702F7Bu;
-        e.ambe2400_s16 = 0x4FB4B896u;
+        e.ambe2450_f32 = 0x77F99B90u;
+        e.ambe2450_s16 = 0xD2EB6902u;
+        e.ambe2400_f32 = 0x5BE6D192u;
+        e.ambe2400_s16 = 0x57511F5Au;
     }
     return e;
 }

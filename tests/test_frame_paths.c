@@ -764,12 +764,14 @@ test_imbe_fundamental_roundtrip(void) {
             assert_float_pcm_sane(pcm7100);
             /* The same model but for the pitch: P25 plays DVSI's for b0,
              * ProVoice the nominal one (L and K are the nominal pitch's for
-             * both); a repeated frame is the same. */
+             * both); a repeated frame repeats the same model, which the two
+             * render each its own way (P25 under DVSI's low band, ProVoice
+             * under the second-order filter at 100 Hz; docs/dvsi-parity.md,
+             * "DVSI's low band"), so their samples are not compared. */
             assert(p25.L == prev.L && p25.K == prev.K);
             assert(float_array_equal_exact(p25.log2Ml, prev.log2Ml, 57));
             if (b0 > 207) {
                 assert(float_array_equal_exact(&p25.w0, &prev.w0, 1));
-                assert(float_array_equal_exact(pcm7200, pcm7100, 160));
             } else {
                 /* ProVoice: eq 46's pitch in float. P25: that times 1 + g, so
                  * no further from it than the law's largest |g|. */
@@ -888,17 +890,17 @@ samples_match_reference(const float* out, const float* want, size_t count, int t
  * tone so only after a frame with no voiced band, and continue a voiced
  * frame's train into the tone): A cos(2 pi F (t - 16) + p),
  * F = 2048 ID / 2^19 cycle per sample (harmonic ID / 16 + 1 = 1 of the
- * fundamental 2048 ID / 1 steps of 2^-19), p the output high-pass's phase at F
- * (a second-order Butterworth at 100 Hz: pi - atan2(sqrt(2) x, 1 - x^2), x =
- * F 8000 / 100), A the amplitude of the volume's level (3.540 + 0.35495
+ * fundamental 2048 ID / 1 steps of 2^-19), p the phase of DVSI's fixed
+ * high-pass at F (a third-order Butterworth at 75 Hz: 3 pi / 2 - atan(x) -
+ * atan2(x, 1 - x^2), x = F 8000 / 75), A the amplitude of the volume's level (3.540 + 0.35495
  * (volume - 255) dB re an rms of 32768, over the output gain of 7). In double,
  * from the documented formula alone, so that a wrong start phase fails.
  */
 static double
 ambe2400_fresh_tone(int id, int volume, int t) {
     const double f = (double)(2048 * id) / 524288.0;
-    const double x = f * 8000.0 / 100.0;
-    const double p = M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+    const double x = f * 8000.0 / 75.0;
+    const double p = (1.5 * M_PI) - atan(x) - atan2(x, 1.0 - (x * x));
     const double db = 3.540 + (0.35495 * (double)(volume - 255));
     const double amplitude = sqrt(2.0) * 32768.0 * pow(10.0, db / 20.0) / 7.0;
     return amplitude * cos((2.0 * M_PI * f * (double)(t - 16)) + p);

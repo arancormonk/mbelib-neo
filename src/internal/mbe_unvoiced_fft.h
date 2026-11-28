@@ -247,6 +247,12 @@ struct mbe_unvoiced_subframe {
     float w0;            /**< Fundamental, radians per sample. */
     int L;               /**< Harmonic count. */
     float amplitude[57]; /**< [1..L]: scaled amplitude of each band's noise; 0 for a band with none. */
+    int dvsi_low_band;   /**< Nonzero: DVSI's fixed high-pass (mbe_low_band_dvsi_gain(), mbe_low_band.h), as D-STAR,
+                              P25 and rate 33 render it; 0: the second-order one at 100 Hz (mbe_low_band_gain()),
+                              ProVoice's. */
+    float cut_hz;        /**< The adaptive low cut's corner (mbe_low_band.h): a bin whose centre frequency,
+                              k 8000 / MBE_FFT_SIZE Hz, lies under it is zero, after its band is scaled against the
+                              band's own noise power; 0 for no cut. */
 };
 
 /** @brief Mark a state's overlap buffers as the subframe rendering's. */

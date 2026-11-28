@@ -41,6 +41,7 @@
 #endif
 
 #include "mbe_adaptive.h"
+#include "mbe_low_band.h"
 #include "mbe_math.h"
 #include "mbe_result.h"
 #include "mbe_subframe.h"
@@ -684,6 +685,88 @@ mbe_low_band_phase(float hz) {
     return (float)(M_PI - atan2(M_SQRT2 * x, 1.0 - (x * x)));
 }
 
+/*
+ * DVSI's fixed high-pass (mbe_low_band.h): a third-order Butterworth at
+ * MBE_LOW_BAND_DVSI_CORNER_HZ, H(s) = s^3 / ((s + 1)(s^2 + s + 1)) at
+ * s = j hz / corner, which the D-STAR, P25 and rate-33 renderings render in
+ * place of the second-order filter above. In double with the double-precision
+ * functions and rounded to float once, for the reason mbe_low_band_phase()
+ * gives. Total over every float, by the class of its bit pattern
+ * (dvsi_filter_class(): under fast-math a float test of a NaN or an infinity
+ * folds away): zero, a subnormal (zero under flush-to-zero and
+ * denormals-are-zero, which audio hosts set, as the synthesis treats a
+ * subnormal pitch), a negative value and a NaN give 0 for both (the
+ * second-order pair gives 0 for both at a NaN too, and is left as it is);
+ * +infinity gives the limits, a gain of 1 and a phase of 0; every positive
+ * normal value the formulas below. Near zero the gain is x^3 over a
+ * denominator of about 1 (never a division by zero): at FLT_MIN x^3 is about
+ * 3.85e-120 in double, which converts to 0 in float; the phase tends to
+ * 3 pi / 2. Bin 0 of the transform's table (mbe_unvoiced_fft.c) calls both at
+ * zero and takes 0 from them, as from the functions before.
+ */
+enum dvsi_filter_class { DVSI_FILTER_NONE, DVSI_FILTER_FINITE, DVSI_FILTER_INFINITE };
+
+static enum dvsi_filter_class
+dvsi_filter_class(float hz) {
+    uint32_t bits;
+    memcpy(&bits, &hz, sizeof(bits));
+    if (bits == UINT32_C(0x7F800000)) {
+        return DVSI_FILTER_INFINITE;
+    }
+    /* Under FLT_MIN (+0 and the subnormals), above +infinity (the positive
+     * NaNs) or with the sign bit set (every negative value, -0 and the
+     * negative NaNs among them). */
+    if (bits < UINT32_C(0x00800000) || bits > UINT32_C(0x7F800000)) {
+        return DVSI_FILTER_NONE;
+    }
+    return DVSI_FILTER_FINITE;
+}
+
+float
+mbe_low_band_dvsi_gain(float hz) {
+    const enum dvsi_filter_class kind = dvsi_filter_class(hz);
+    if (kind != DVSI_FILTER_FINITE) {
+        return (kind == DVSI_FILTER_INFINITE) ? 1.0f : 0.0f;
+    }
+    /* x is at most FLT_MAX / 75, so x^6 (under 1e220) stays finite in double. */
+    const double x = (double)hz / MBE_LOW_BAND_DVSI_CORNER_HZ;
+    const double cube = x * x * x;
+    return (float)(cube / sqrt(1.0 + (cube * cube)));
+}
+
+/* Above this x the phase is formed so that it does not cancel. */
+#define DVSI_PHASE_DIRECT_MAX_X 1024.0
+
+float
+mbe_low_band_dvsi_phase(float hz) {
+    if (dvsi_filter_class(hz) != DVSI_FILTER_FINITE) {
+        return 0.0f;
+    }
+    const double x = (double)hz / MBE_LOW_BAND_DVSI_CORNER_HZ;
+    if (x <= DVSI_PHASE_DIRECT_MAX_X) {
+        /* arg s^3 = 3 pi / 2, arg (s + 1) = atan x, arg (s^2 + s + 1) = atan2(x, 1 - x^2).
+         * The phase falls with x, toward its high-frequency asymptote 2 / x:
+         * here it is at least its value at x 1024, about 0.00195 rad, and the
+         * difference's rounding error a few ulps of 3 pi / 2 in double (under
+         * 1e-15 rad), far under a float ulp of the result. Every frequency the
+         * renderings give (under 4 kHz, x under 54) is formed so. */
+        return (float)((1.5 * M_PI) - atan(x) - atan2(x, 1.0 - (x * x)));
+    }
+    /* The same angle with nothing cancelled: pi / 2 - atan x = atan(1 / x) and
+     * pi - atan2(x, 1 - x^2) = atan2(x, x^2 - 1) for x > 1; it tends to 2 / x,
+     * so 1.5e-28 rad at 1e30 Hz rather than 0 from the difference above. */
+    return (float)(atan(1.0 / x) + atan2(x, (x * x) - 1.0));
+}
+
+float
+mbe_low_cut_gain(float hz, float corner) {
+    if (!(hz < corner)) {
+        return 1.0f;
+    }
+    const double ratio = (double)hz / (double)corner;
+    return (float)(ratio * ratio);
+}
+
 /* A model's decoded amplitudes and phases, kept while it is rendered. */
 struct mbe_render_saved {
     float Ml[57];
@@ -971,10 +1054,14 @@ mbe_renderTonef(float* out, mbe_parms* mp, uint32_t step1, uint32_t step2, float
  * start a tone after a frame with no voiced band: as a fresh pulse train from
  * the frame's start, so that sample n (0..159) of the frame is
  * cos(2 pi F (n - MBE_PULSE_PEAK) + p), F the frequency in cycles per sample
- * and p the output high-pass's phase at it (mbe_low_band_phase()). Measured on
- * DVSI's rate-33 and D-STAR tone vectors: the phase is the same at every such
- * onset of a tone within 0.0002 cycle, and within 0.005 cycle of this over the
- * 64 DTMF and KNOX components. After a voiced frame DVSI's decoders continue
+ * and p the phase of DVSI's fixed high-pass at it (mbe_low_band_dvsi_phase(),
+ * the third-order filter at 75 Hz of D-STAR's and rate 33's renderings; before
+ * the low-band change the second-order one at 100 Hz). Measured on DVSI's
+ * rate-33 and D-STAR tone vectors: within one vector the phase at such
+ * onsets of one component varies by 0.00013 cycle at the most (between vectors
+ * by up to 0.00158), and the measured phase less this one is +0.0003 cycle on
+ * average over the 64 DTMF and KNOX components (766 starts), +0.0016 with the
+ * second-order filter (docs/dvsi-parity.md, "DVSI's low band"). After a voiced frame DVSI's decoders continue
  * that frame's pulse train into the tone instead (cp2, cp31); the codec paths
  * start every tone after a frame that was not a tone frame this way, the
  * voiced case included, which is a known difference (docs/dvsi-parity.md,
@@ -986,7 +1073,7 @@ static uint32_t
 tone_start_phase(unsigned m) {
     const uint32_t step = tone_phase_step(m);
     const float hz = (float)((double)m * (8000.0 / (double)(1u << MBE_TONE_GRID_BITS)));
-    const double turn = 0.5 + ((double)mbe_low_band_phase(hz) / (2.0 * M_PI));
+    const double turn = 0.5 + ((double)mbe_low_band_dvsi_phase(hz) / (2.0 * M_PI));
     const uint32_t offset = (uint32_t)(uint64_t)floor(((turn - floor(turn)) * 4294967296.0) + 0.5);
     return offset - (step * (uint32_t)(1 + MBE_PULSE_PEAK));
 }

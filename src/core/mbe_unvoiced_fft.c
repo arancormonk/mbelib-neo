@@ -3,6 +3,7 @@
 #include "mbe_unvoiced_fft.h"
 #include "mbe_adaptive.h"
 #include "mbe_compiler.h"
+#include "mbe_low_band.h"
 #include "mbe_voiced.h"
 
 #include "pffft.h"
@@ -24,9 +25,13 @@ struct transform_storage {
 struct mbe_fft_plan {
     struct transform_storage fft;
     /* DVSI's unvoiced subframes: the square-root triangular window and the
-     * output high-pass at each bin (real, imaginary). */
+     * output high-pass at each bin (real, imaginary): the second-order filter
+     * at 100 Hz (ProVoice's) and DVSI's third-order one at 75 Hz (D-STAR's,
+     * P25's and rate 33's). The plan is thread-local and shared by every
+     * codec, so it holds both, and each subframe names its own. */
     float subframe_window[MBE_SUBFRAME_WINDOW];
     float output_filter[2 * (MBE_FFT_SIZE / 2 + 1)];
+    float dvsi_output_filter[2 * (MBE_FFT_SIZE / 2 + 1)];
 };
 
 struct mbe_acf_plan {
@@ -63,9 +68,11 @@ prepare_transform(struct transform_storage* fft, int size) {
     return 1;
 }
 
-/* The subframe window, sqrt of a triangle over two subframes, and the output
- * high-pass the synthesis renders (mbe_low_band_gain(), mbe_low_band_phase())
- * at the transform's bins. */
+/* The subframe window, sqrt of a triangle over two subframes, and the two
+ * output high-passes the synthesis renders (mbe_low_band_gain() and
+ * mbe_low_band_phase(), ProVoice's; mbe_low_band_dvsi_gain() and
+ * mbe_low_band_dvsi_phase(), D-STAR's, P25's and rate 33's) at the transform's
+ * bins. */
 static void
 prepare_subframe_tables(mbe_fft_plan* plan) {
     for (int n = 0; n < MBE_SUBFRAME_WINDOW; ++n) {
@@ -78,6 +85,18 @@ prepare_subframe_tables(mbe_fft_plan* plan) {
         const double phase = (double)mbe_low_band_phase(hz);
         plan->output_filter[2u * (size_t)k] = gain * (float)cos(phase);
         plan->output_filter[2u * (size_t)k + 1u] = gain * (float)sin(phase);
+    }
+    /* DVSI's filter's table, in a loop of its own. Nothing requires that: one
+     * loop for both tables left ProVoice's samples as they were in GCC's
+     * fast-math LTO build too (tried once, on the differential harness's
+     * streams). What moved them in that build was the unvoiced shaping written
+     * as one body for both filters (shape_subframe(), shape_subframe_dvsi()). */
+    for (int k = 0; k <= MBE_FFT_SIZE / 2; ++k) {
+        const float hz = (float)k * (8000.0f / (float)MBE_FFT_SIZE);
+        const float gain = mbe_low_band_dvsi_gain(hz);
+        const double phase = (double)mbe_low_band_dvsi_phase(hz);
+        plan->dvsi_output_filter[2u * (size_t)k] = gain * (float)cos(phase);
+        plan->dvsi_output_filter[2u * (size_t)k + 1u] = gain * (float)sin(phase);
     }
 }
 
@@ -503,7 +522,12 @@ subframe_band_edge(float frequency) {
 }
 
 /* Scale each band that carries noise against its own noise power and put it
- * through the output high-pass; a band's edges round to the nearest bin. */
+ * through the output high-pass; a band's edges round to the nearest bin. The
+ * second-order filter at 100 Hz and no cut: ProVoice's subframes, as before the
+ * low-band change (shape_subframe_dvsi() is D-STAR's, P25's and rate 33's).
+ * Kept apart from it, the body as it was: with the two in one loop GCC's
+ * fast-math LTO build built ProVoice's arithmetic otherwise, and its samples
+ * moved. */
 static void
 shape_subframe(mbe_fft_plan* plan, const struct mbe_unvoiced_subframe* sub) {
     struct transform_storage* fft = &plan->fft;
@@ -532,6 +556,57 @@ shape_subframe(mbe_fft_plan* plan, const struct mbe_unvoiced_subframe* sub) {
     }
 }
 
+/* The first bin the adaptive low cut keeps (mbe_low_band.h): the first whose
+ * centre frequency, k 8000 / MBE_FFT_SIZE Hz (exact in float), is not under
+ * the corner; 1 for no cut (bin 0 is real and the high-pass removes it). The
+ * corner is one the renderer read (MBE_LOW_CUT_TRACK_MIN_HZ to
+ * MBE_LOW_CUT_CEILING_HZ, from a stream's own tracker or a caller's stored
+ * value) or 0, so the bin is 2 to 7 (50 Hz gives 2, 200 Hz 7) or 1; it starts
+ * shape_subframe_dvsi()'s loop over a band no lower, and the loop stops at the
+ * band's upper edge, at most MBE_FFT_SIZE / 2. Whatever the float held, the
+ * result lies in 1 .. MBE_FFT_SIZE / 2 (the loop's own bound; a NaN compares
+ * false and gives 1): a comparison of floats, so no conversion sees it. */
+static int
+first_kept_bin(float cut_hz) {
+    int k = 1;
+    while (k < MBE_FFT_SIZE / 2 && (float)k * (8000.0f / (float)MBE_FFT_SIZE) < cut_hz) {
+        ++k;
+    }
+    return k;
+}
+
+/* shape_subframe() under DVSI's low band: DVSI's fixed high-pass (its table,
+ * mbe_low_band_dvsi_gain(), mbe_low_band_dvsi_phase()), and the bins under the
+ * adaptive low cut's corner (sub->cut_hz) left zero after the band's scale is
+ * taken from its whole power, so the bins above keep the level they had. */
+static void
+shape_subframe_dvsi(mbe_fft_plan* plan, const struct mbe_unvoiced_subframe* sub) {
+    struct transform_storage* fft = &plan->fft;
+    const float spacing = MBE_256_OVER_2PI * sub->w0;
+    const int first = first_kept_bin(sub->cut_hz);
+    memset(fft->shaped, 0, MBE_FFT_SIZE * sizeof(float));
+    for (int l = 1; l <= sub->L; ++l) {
+        const int lower = subframe_band_edge(((float)l - 0.5f) * spacing);
+        const int upper = subframe_band_edge(((float)l + 0.5f) * spacing);
+        if (!(sub->amplitude[l] > 0.0f) || upper <= lower) {
+            continue;
+        }
+        const float power = band_power(fft->spectrum, lower, upper);
+        if (power <= 1.0e-10f) {
+            continue;
+        }
+        const float scale = sub->amplitude[l] / sqrtf(power / (float)(upper - lower));
+        for (int k = (lower < first) ? first : lower; k < upper; ++k) {
+            const float real = fft->spectrum[2u * (size_t)k] * scale;
+            const float imag = fft->spectrum[2u * (size_t)k + 1u] * scale;
+            const float filter_real = plan->dvsi_output_filter[2u * (size_t)k];
+            const float filter_imag = plan->dvsi_output_filter[2u * (size_t)k + 1u];
+            fft->shaped[2u * (size_t)k] = (real * filter_real) - (imag * filter_imag);
+            fft->shaped[2u * (size_t)k + 1u] = (real * filter_imag) + (imag * filter_real);
+        }
+    }
+}
+
 /* One subframe: MBE_SUBFRAME_WINDOW noise samples in, as many windowed output samples out. */
 static void
 unvoiced_subframe(mbe_fft_plan* plan, const float* noise, const struct mbe_unvoiced_subframe* sub, float* out) {
@@ -545,7 +620,11 @@ unvoiced_subframe(mbe_fft_plan* plan, const float* noise, const struct mbe_unvoi
     }
     memset(fft->time + MBE_SUBFRAME_WINDOW, 0, (MBE_FFT_SIZE - MBE_SUBFRAME_WINDOW) * sizeof(float));
     pffft_transform_ordered(fft->setup, fft->time, fft->spectrum, fft->work, PFFFT_FORWARD);
-    shape_subframe(plan, sub);
+    if (sub->dvsi_low_band) {
+        shape_subframe_dvsi(plan, sub);
+    } else {
+        shape_subframe(plan, sub);
+    }
     pffft_transform_ordered(fft->setup, fft->shaped, fft->time, fft->work, PFFFT_BACKWARD);
     for (int i = 0; i < MBE_SUBFRAME_WINDOW; ++i) {
         out[i] = fft->time[i] * (1.0f / MBE_FFT_SIZE) * plan->subframe_window[i];

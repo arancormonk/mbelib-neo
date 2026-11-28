@@ -52,7 +52,10 @@
  * Level: IMBE_ENC_MAG_SCALE scales the analysis amplitudes so the decoded
  * level matches DVSI's encoding of the same input, both decoded by this
  * library: the median, over DVSI's P25 development vectors, of the level that
- * puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR).
+ * puts our encoding at DVSI's (as AMBE2400_ENC_MAG_SCALE for D-STAR). The
+ * median rests on the decoder it was measured with: DVSI's low band moved it
+ * from -0.148 to -0.112 dB; the scale was left as it is (changing it changes
+ * the encoder's bits).
  */
 #define IMBE_ENC_MAG_SCALE 1.06f
 

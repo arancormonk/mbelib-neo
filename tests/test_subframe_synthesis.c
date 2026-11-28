@@ -20,7 +20,9 @@
 #include "ambe_common.h"
 #include "imbe4400_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_low_band.h"
 #include "mbe_math.h"
+#include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_subframe.h"
 #include "mbe_tone.h"
@@ -308,11 +310,34 @@ same_bits(const float* a, const float* b, int n) {
     return 1;
 }
 
-/* The low-band roll-off every subframe rendering plays, from its statement
- * (mbe_adaptive.h): a second-order high-pass at 100 Hz, H(s) = s^2 / (s^2 +
- * sqrt2 s + 1) at s = j hz / 100, its gain and its phase, in double. */
+/* The low band every subframe rendering plays, from its statement
+ * (mbe_low_band.h, mbe_adaptive.h; docs/dvsi-parity.md, "DVSI's low band"), in
+ * double. D-STAR's, P25's and rate 33's renderings: a third-order Butterworth
+ * high-pass at 75 Hz, H(s) = s^3 / ((s + 1)(s^2 + s + 1)) at s = j hz / 75, and
+ * the adaptive cut, (f / corner)^2 on a band under the corner; ProVoice's
+ * (and every other value's): a second-order Butterworth high-pass at 100 Hz,
+ * H(s) = s^2 / (s^2 + sqrt2 s + 1) at s = j hz / 100, and no cut. */
+struct reference_band {
+    int dvsi;      /* DVSI's filter and the cut */
+    double corner; /* the cut's corner, Hz; 0 for none */
+};
+
+static int
+reference_dvsi_band(enum mbe_voiced_synthesis rendering) {
+    return rendering == MBE_VOICED_SYNTHESIS_DVSI || rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE
+           || rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
+}
+
+/* A rendering's low band with no cut (a stream whose corner lies under every
+ * harmonic the test reads). */
+static struct reference_band
+reference_band_of(enum mbe_voiced_synthesis rendering) {
+    const struct reference_band band = {reference_dvsi_band(rendering), 0.0};
+    return band;
+}
+
 static double
-reference_low_band_gain(double hz) {
+reference_second_order_gain(double hz) {
     if (!(hz > 0.0)) {
         return 0.0;
     }
@@ -321,12 +346,270 @@ reference_low_band_gain(double hz) {
 }
 
 static double
-reference_low_band_phase(double hz) {
+reference_second_order_phase(double hz) {
     if (!(hz > 0.0)) {
         return 0.0;
     }
     const double x = hz / 100.0;
     return M_PI - atan2(sqrt(2.0) * x, 1.0 - (x * x));
+}
+
+/* The third-order filter from its pole-zero form, |H| and arg H as the
+ * product of its three factors (not the library's closed form). */
+static double
+reference_third_order_gain(double hz) {
+    if (!(hz > 0.0)) {
+        return 0.0;
+    }
+    const double x = hz / 75.0;
+    const double first = sqrt(1.0 + (x * x));                                  /* |j x + 1| */
+    const double second = sqrt(((1.0 - (x * x)) * (1.0 - (x * x))) + (x * x)); /* |(j x)^2 + j x + 1| */
+    return (x * x * x) / (first * second);
+}
+
+static double
+reference_third_order_phase(double hz) {
+    if (!(hz > 0.0)) {
+        return 0.0;
+    }
+    const double x = hz / 75.0;
+    return (1.5 * M_PI) - atan2(x, 1.0) - atan2(x, 1.0 - (x * x));
+}
+
+/* A harmonic's frequency as the library's low band compares it with the
+ * corner (the arithmetic its rule states: w0 times 8000 / (2 pi) in float,
+ * rounded to float, times l, rounded again). */
+static float
+reference_knee_hz(float w0, int l) {
+    volatile float per_harmonic = w0 * (8000.0f / (2.0f * (float)M_PI));
+    volatile float hz = per_harmonic * (float)l;
+    return hz;
+}
+
+/* The cut's scale on harmonic l of pitch w0: (f / corner)^2 under the corner
+ * (f compared as the library forms it), 1 at or above it or with no cut. */
+static double
+reference_cut(const struct reference_band* band, float w0, int l) {
+    const double hz = (double)reference_knee_hz(w0, l);
+    if (!band->dvsi || !(band->corner > 0.0) || !(hz < band->corner)) {
+        return 1.0;
+    }
+    return (hz / band->corner) * (hz / band->corner);
+}
+
+/* The frequency a band's filter is taken at: under DVSI's low band the one
+ * float the cut is compared at too (reference_knee_hz()), else l w0 8000 /
+ * (2 pi) in double. */
+static double
+reference_band_hz(const struct reference_band* band, float w0, int l) {
+    return band->dvsi ? (double)reference_knee_hz(w0, l) : (double)w0 * l * 8000.0 / (2.0 * M_PI);
+}
+
+static double
+reference_band_gain(const struct reference_band* band, double hz) {
+    return band->dvsi ? reference_third_order_gain(hz) : reference_second_order_gain(hz);
+}
+
+static double
+reference_band_phase(const struct reference_band* band, double hz) {
+    return band->dvsi ? reference_third_order_phase(hz) : reference_second_order_phase(hz);
+}
+
+/* The adaptive low cut's tracker, from its statement (mbe_low_band.h): 110 Hz
+ * at a stream's start; one frame on, a frame whose model has every band 1..L
+ * voiced, a positive pitch, no tone mark, no silence mark and is no AMBE
+ * silence model moves it toward its fundamental, T + 0.043 (f0 - T), in double
+ * from the stored floats, kept within 50 to 500 Hz and rounded to float once,
+ * as the library carries it; the corner a frame applies is min(T, 200) of the
+ * tracker the frame before left, its own model and its mid-frame model at that
+ * corner, the last frame's own model at the corner that frame applied. */
+struct reference_tracker {
+    float track;  /* the tracker; 0 before the stream's first frame (110 then) */
+    float corner; /* the corner the last frame applied; 0 before the first frame */
+};
+
+static float
+reference_track(const struct reference_tracker* tracker) {
+    return (tracker->track > 0.0f) ? tracker->track : 110.0f;
+}
+
+static float
+reference_corner_now(const struct reference_tracker* tracker) {
+    const float track = reference_track(tracker);
+    return (track < 200.0f) ? track : 200.0f;
+}
+
+/* Whether a model is the AMBE silence model in `rendering`: 2 pi / 32 (as
+ * this test rounds it to float) with 14 harmonics in D-STAR's rendering, 15 in
+ * rate 33's. */
+static int
+reference_silence_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
+    const float silence = (float)(2.0 * M_PI / 32.0);
+    uint32_t a, b;
+    memcpy(&a, &mp->w0, sizeof(a));
+    memcpy(&b, &silence, sizeof(b));
+    if (a != b) {
+        return 0;
+    }
+    return (rendering == MBE_VOICED_SYNTHESIS_DVSI && mp->L == 14)
+           || (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && mp->L == 15);
+}
+
+/* Whether a frame's model, as the synthesis is handed it, moves the tracker in
+ * `rendering`: every band 1..L voiced, a positive pitch, not marked as a tone
+ * model; not marked as a silence frame (MBE_FRAME_MARK_PREVIOUS_HELD), but for
+ * P25's rendering, which gives every voiced model its own mark before it is
+ * read; and no AMBE silence model. */
+static int
+reference_moves_tracker(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
+    /* A pitch is one when it is positive, finite and normal, by its bit
+     * pattern: a subnormal is zero under flush-to-zero, and infinity and NaN
+     * are no pitch (the library's class of a pitch). */
+    uint32_t pitch_bits;
+    memcpy(&pitch_bits, &mp->w0, sizeof(pitch_bits));
+    if (pitch_bits - UINT32_C(0x00800000) >= UINT32_C(0x7F000000) || mbe_frame_mark(mp) == MBE_FRAME_MARK_TONE
+        || mp->L < 1) {
+        return 0;
+    }
+    for (int l = 1; l <= mp->L; ++l) {
+        if (mp->Vl[l] != 1) {
+            return 0;
+        }
+    }
+    if (mbe_frame_mark(mp) == MBE_FRAME_MARK_PREVIOUS_HELD && rendering != MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        return 0;
+    }
+    return !reference_silence_model(mp, rendering);
+}
+
+/* The tracker one frame on by the rule, before it is rounded: f0 = w0 8000 /
+ * (2 pi) and T + 0.043 (f0 - T) in double from the stored floats, kept within
+ * 50 to 500 Hz (for a model that moves it). */
+static double
+reference_track_exact(float track, const mbe_parms* model) {
+    const double f0 = (double)model->w0 * (8000.0 / (2.0 * M_PI));
+    return fmin(fmax((double)track + (0.043 * (f0 - (double)track)), 50.0), 500.0);
+}
+
+/* The tracker one frame on, rounded to float once (volatile, so that x87
+ * rounds it too); a frame that does not move it leaves it. */
+static float
+rule_track(float track, const mbe_parms* model, enum mbe_voiced_synthesis rendering) {
+    if (!reference_moves_tracker(model, rendering)) {
+        return track;
+    }
+    volatile float rounded = (float)reference_track_exact(track, model);
+    return rounded;
+}
+
+/* The smaller of the spacings either side of a positive float. */
+static double
+float_spacing(float x) {
+    const double above = (double)nextafterf(x, INFINITY) - (double)x;
+    const double below = (double)x - (double)nextafterf(x, 0.0f);
+    return (above < below) ? above : below;
+}
+
+/* How near a rounding tie, in units of the float spacing, the exact step may lie
+ * for the tolerance below to accept the float on its other side. */
+#define TRACK_TIE_BAND 1.0e-7
+
+/* The comparisons of a tracker step whose exact value lies within
+ * TRACK_TIE_BAND of a tie (counted on every build; test_low_cut_ties() states
+ * how many the test's inputs give). */
+static long g_track_near_ties;
+static long g_track_steps;
+
+/* Whether a frame stored the tracker the rule gives from `track` on `model`:
+ * the same bits where the build lets this test form the step as the library
+ * does (MID_PITCH_INEXACT 0: IEEE double, no contraction, no excess
+ * precision); elsewhere (fast-math, fused multiply-adds, excess precision,
+ * where the library's double may differ from this test's by a few units in
+ * its last place, about 1e-9 of a float spacing here) the stored value must
+ * be the exact step rounded to nearest: within half its spacing and
+ * TRACK_TIE_BAND of it. The one exception, as docs/testing.md states it: where
+ * the exact step lies within TRACK_TIE_BAND of the spacing from a tie between
+ * two floats, either float passes, the wrong one an ulp off included. Every
+ * step compared is checked for that (g_track_near_ties). A frame that does not
+ * move the tracker must store `track` itself. */
+static int
+track_is(float stored, float track, const mbe_parms* model, enum mbe_voiced_synthesis rendering) {
+    const float want = rule_track(track, model, rendering);
+    const int moves = reference_moves_tracker(model, rendering);
+    if (moves) {
+        const double exact = reference_track_exact(track, model);
+        const double spacing = float_spacing(want);
+        const double tie = (double)want + ((exact > (double)want) ? 0.5 : -0.5) * spacing;
+        g_track_steps++;
+        g_track_near_ties += fabs(exact - tie) <= TRACK_TIE_BAND * spacing;
+    }
+    if (same_bits(&stored, &want, 1)) {
+        return 1;
+    }
+    if (!MID_PITCH_INEXACT || !moves) {
+        return 0;
+    }
+    const double exact = reference_track_exact(track, model);
+    return stored > 0.0f && fabs((double)stored - exact) <= (0.5 + TRACK_TIE_BAND) * float_spacing(stored);
+}
+
+/* The three models' bands of a frame in `rendering` (the last frame's own, the
+ * mid-frame one, this frame's own) from the tracker the frame starts from; the
+ * reference's tracker is taken one frame on after the frame
+ * (reference_tracker_next()). */
+static void
+reference_tracker_frame(const struct reference_tracker* tracker, enum mbe_voiced_synthesis rendering,
+                        struct reference_band band[3]) {
+    const double now = (double)reference_corner_now(tracker);
+    const int dvsi = reference_dvsi_band(rendering);
+    band[0].dvsi = band[1].dvsi = band[2].dvsi = dvsi;
+    band[0].corner = dvsi ? ((tracker->corner > 0.0f) ? (double)tracker->corner : now) : 0.0;
+    band[1].corner = band[2].corner = dvsi ? now : 0.0;
+}
+
+/* Whether a frame stored the tracker and corner the reference gives one frame
+ * on from `tracker` on the frame's model `cur` (track_is(): by bits where the
+ * build allows, else to half an ulp; the corner, min(T, 200) of the tracker
+ * before, by bits), and 0 in both slots in a rendering without the low cut;
+ * then the reference takes the stored tracker, so that each frame is checked
+ * as one step from the state the frame before left. */
+static int
+reference_tracker_next(struct reference_tracker* tracker, const mbe_parms* mp, const mbe_parms* cur,
+                       enum mbe_voiced_synthesis rendering) {
+    const float stored_track = mp->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT];
+    const float stored_corner = mp->noiseOverlap[MBE_LOW_CUT_CORNER_SLOT];
+    if (!reference_dvsi_band(rendering)) {
+        uint32_t a, b;
+        memcpy(&a, &stored_track, sizeof(a));
+        memcpy(&b, &stored_corner, sizeof(b));
+        return a == 0u && b == 0u;
+    }
+    const float corner = reference_corner_now(tracker);
+    const int ok =
+        track_is(stored_track, reference_track(tracker), cur, rendering) && same_bits(&stored_corner, &corner, 1);
+    tracker->track = stored_track;
+    tracker->corner = corner;
+    return ok;
+}
+
+/* The voiced harmonics the reference's waveform streams (run_waveform()) cut,
+ * by model: [0] the last frame's own model where its corner is not the frame's
+ * (the tracker moved in the frame before), [1] the mid-frame model, [2] the
+ * frame's own model; so that a test can say the cut reached all three. */
+static long g_low_cut_counts[3];
+
+static void
+count_low_cut(const struct mbe_subframe_model models[3], const struct reference_band band[3]) {
+    for (int i = 0; i < 3; ++i) {
+        if (!band[i].dvsi || (i == 0 && fabs(band[0].corner - band[1].corner) < 1.0e-3)) {
+            continue;
+        }
+        for (int l = 1; l <= models[i].L; ++l) {
+            if (models[i].voiced[l] == 1 && reference_cut(&band[i], models[i].w0, l) < 1.0) {
+                g_low_cut_counts[i]++;
+            }
+        }
+    }
 }
 
 /* P25 parameter bits with pitch code b0. */
@@ -388,14 +671,18 @@ test_steady_model_is_its_harmonics(void) {
     for (int f = 0; f < 10; ++f) {
         next_frame(out + ((size_t)f * 160u), &last, &model);
     }
-    /* Thirty periods from the third frame on. */
+    /* Thirty periods from the third frame on. The low cut's corner stays under
+     * the fundamental (the tracker rises toward 187.5 Hz from 110 and never
+     * reaches it), so no harmonic is cut: D-STAR's filter alone. */
+    const struct reference_band band = reference_band_of(MBE_VOICED_SYNTHESIS_DVSI);
+    assert(last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] < 187.0f);
     for (int l = 1; l <= model.L; ++l) {
         const double hz = 187.5 * l;
-        const double want = 2.0 * (double)model.Ml[l] * reference_low_band_gain(hz);
+        const double want = 2.0 * (double)model.Ml[l] * reference_band_gain(&band, hz);
         const double got = component_amplitude(out + 320, 1280, hz);
         assert(fabs(got / want - 1.0) < 2e-3);
         const double phase = component_phase(&out[1344], 256, hz, 256); /* the last 256 samples */
-        const double stored = (double)last.PHIl[l] + reference_low_band_phase(hz);
+        const double stored = (double)last.PHIl[l] + reference_band_phase(&band, hz);
         assert(fabs(atan2(sin(phase - stored), cos(phase - stored))) < 0.02);
     }
     /* The gain argument scales the voiced part. */
@@ -644,21 +931,23 @@ reference_mid_phases(const mbe_parms* prev, const mbe_parms* cur, double w0, int
     reference_phases(envelope, L, phase);
 }
 
-/* What a model plays t samples after a pulse, its harmonics at `phase`. */
+/* What a model plays t samples after a pulse, its harmonics at `phase`, under
+ * its low band (`band`: the filter, and the cut at the model's corner). */
 static double
-reference_response(const struct mbe_subframe_model* model, const double phase[57], double t) {
+reference_response(const struct mbe_subframe_model* model, const struct reference_band* band, const double phase[57],
+                   double t) {
     double sum = 0.0;
     if (!model->any_voiced) {
         return 0.0;
     }
     for (int l = 1; l <= model->L; ++l) {
         const double w = (double)model->w0 * l;
-        const double hz = w * 8000.0 / (2.0 * M_PI);
+        const double hz = reference_band_hz(band, model->w0, l);
         if (model->voiced[l] != 1 || !below_nyquist(model->w0, l)) {
             continue;
         }
-        sum += 2.0 * (double)model->magnitude[l] * reference_low_band_gain(hz)
-               * cos((w * (t - 16.0)) + phase[l] + reference_low_band_phase(hz));
+        sum += 2.0 * (double)model->magnitude[l] * reference_band_gain(band, hz) * reference_cut(band, model->w0, l)
+               * cos((w * (t - 16.0)) + phase[l] + reference_band_phase(band, hz));
     }
     return reference_window(t, 2.0 * M_PI / (double)model->w0) * sum;
 }
@@ -709,13 +998,15 @@ reference_advance(struct reference_train* train, double start, const struct mbe_
  * and model b coming in, at their phases. */
 static void
 reference_render(double* out, double start, const struct reference_train* train, const struct mbe_subframe_model* a,
-                 const double a_phase[57], const struct mbe_subframe_model* b, const double b_phase[57]) {
+                 const struct reference_band* a_band, const double a_phase[57], const struct mbe_subframe_model* b,
+                 const struct reference_band* b_band, const double b_phase[57]) {
     for (int n = 0; n < 80; ++n) {
         const double fade = (double)n / 80.0;
         double sum = 0.0;
         for (int i = 0; i < train->count; ++i) {
             const double t = start + (double)n - train->time[i];
-            sum += ((1.0 - fade) * reference_response(a, a_phase, t)) + (fade * reference_response(b, b_phase, t));
+            sum += ((1.0 - fade) * reference_response(a, a_band, a_phase, t))
+                   + (fade * reference_response(b, b_band, b_phase, t));
         }
         out[n] = sum;
     }
@@ -962,18 +1253,18 @@ reference_pulsed_magnitude(const struct mbe_subframe_model* model, int l) {
  * response, each band at its magnitude with the unvoiced factor taken out
  * (reference_pulsed_magnitude()). */
 static double
-reference_pulsed_response(const struct mbe_subframe_model* model, const int pulsed[57], const double phase[57],
-                          double t) {
+reference_pulsed_response(const struct mbe_subframe_model* model, const struct reference_band* band,
+                          const int pulsed[57], const double phase[57], double t) {
     double sum = 0.0;
     for (int l = 1; l <= model->L; ++l) {
         const double w = (double)model->w0 * l;
-        const double hz = w * 8000.0 / (2.0 * M_PI);
+        const double hz = reference_band_hz(band, model->w0, l);
         if (!pulsed[l] || !below_nyquist(model->w0, l)) {
             continue;
         }
         const double magnitude = reference_pulsed_magnitude(model, l);
-        sum += 2.0 * magnitude * reference_low_band_gain(hz)
-               * cos((w * (t - 16.0)) + phase[l] + reference_low_band_phase(hz));
+        sum += 2.0 * magnitude * reference_band_gain(band, hz) * reference_cut(band, model->w0, l)
+               * cos((w * (t - 16.0)) + phase[l] + reference_band_phase(band, hz));
     }
     return reference_window(t, 2.0 * M_PI / (double)model->w0) * sum;
 }
@@ -982,14 +1273,14 @@ reference_pulsed_response(const struct mbe_subframe_model* model, const int puls
  * through its pulsed bands going out and model b's coming in, within the
  * interval's 80 samples. */
 static void
-reference_pulsed_render(double* out, const struct mbe_subframe_model* a, const int a_pulsed[57],
-                        const double a_phase[57], const struct mbe_subframe_model* b, const int b_pulsed[57],
-                        const double b_phase[57]) {
+reference_pulsed_render(double* out, const struct mbe_subframe_model* a, const struct reference_band* a_band,
+                        const int a_pulsed[57], const double a_phase[57], const struct mbe_subframe_model* b,
+                        const struct reference_band* b_band, const int b_pulsed[57], const double b_phase[57]) {
     for (int n = 24; n < 80; ++n) {
         const double fade = (double)n / 80.0;
         const double t = (double)n - 24.0;
-        out[n] += ((1.0 - fade) * reference_pulsed_response(a, a_pulsed, a_phase, t))
-                  + (fade * reference_pulsed_response(b, b_pulsed, b_phase, t));
+        out[n] += ((1.0 - fade) * reference_pulsed_response(a, a_band, a_pulsed, a_phase, t))
+                  + (fade * reference_pulsed_response(b, b_band, b_pulsed, b_phase, t));
     }
 }
 
@@ -1121,8 +1412,8 @@ reference_row_time(int row, int b0, int held, int index) {
  * its point (index - 1), falling in the one that starts there (index), from
  * its time (or the interval's start) until its response or the interval ends. */
 static void
-reference_row_render(double out[160], const struct mbe_subframe_model* model, const int pulsed[57],
-                     const double phase[57], int index, double time) {
+reference_row_render(double out[160], const struct mbe_subframe_model* model, const struct reference_band* band,
+                     const int pulsed[57], const double phase[57], int index, double time) {
     for (int k = index - 1; k <= index; ++k) {
         if (k < 0 || k > 1) {
             continue;
@@ -1134,7 +1425,8 @@ reference_row_render(double out[160], const struct mbe_subframe_model* model, co
             if (t < 0.0) {
                 continue;
             }
-            out[(80 * k) + n] += (rising ? fade : (1.0 - fade)) * reference_pulsed_response(model, pulsed, phase, t);
+            out[(80 * k) + n] +=
+                (rising ? fade : (1.0 - fade)) * reference_pulsed_response(model, band, pulsed, phase, t);
         }
     }
 }
@@ -1648,12 +1940,27 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering, int inexact) 
         {56.0, 56, 40, 16.0f, MBE_FRAME_MARK_NONE, 0, 0}, /* each subframe's period 1.64 times the last: octaves down */
         {170.0, 22, 20, 16.0f, MBE_FRAME_MARK_NONE, 0, 0}, /* 0.57 times: octaves up */
         {70.8, 52, 40, 16.0f, MBE_FRAME_MARK_NONE, 0, 0},  /* 1.55 times: a glide */
+        {230.0, 16, 16, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},  /* fully voiced high: the low cut's tracker rises, */
+        {230.0, 16, 16, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},
+        {230.0, 16, 16, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},
+        {120.0, 30, 30, 6.0f, MBE_FRAME_MARK_NONE, 0, 0}, /* then low: each frame's fundamental under its corner, */
+        {120.0, 30, 30, 6.0f, MBE_FRAME_MARK_NONE, 0, 0}, /* the last frame's own at the corner it had */
+        {95.0, 38, 38, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},
+        {95.0, 38, 38, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},
+        {95.0, 38, 20, 6.0f, MBE_FRAME_MARK_NONE, 0, 0}, /* not fully voiced: the tracker holds */
     };
+    long counts[3];
+    memcpy(counts, g_low_cut_counts, sizeof(counts));
     const struct waveform_levels levels = run_waveform(rendering, inexact, frames, sizeof(frames) / sizeof(frames[0]));
     /* The comparison saw speech, at a level that makes the tolerance a
-     * thousandth of it; no frame here has a reserved code. */
+     * thousandth of it; no frame here has a reserved code. Under DVSI's low
+     * band the cut reached each of a frame's three models (the last frame's
+     * own at a corner other than the frame's), and none in ProVoice's. */
     assert(levels.rms > 50.0);
     assert(levels.pulsed_rms <= 0.0);
+    for (int i = 0; i < 3; ++i) {
+        assert(reference_dvsi_band(rendering) ? g_low_cut_counts[i] > counts[i] + 3 : g_low_cut_counts[i] == counts[i]);
+    }
 }
 
 /* The reserved codes of each kind: own pattern only, mid-frame pattern only,
@@ -2000,6 +2307,7 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
     double energy = 0.0, pulsed_energy = 0.0, worst = 0.0;
     struct reference_stream stream = {0, 0, 0};
     struct reference_rows rows = {0, 0};
+    struct reference_tracker tracker = {0.0f, 0.0f};
 
     fresh_stream(&last);
     for (size_t f = 0; f < frame_count; ++f) {
@@ -2136,20 +2444,28 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
             }
         }
         train.count = kept;
+        /* The low band: the filter of the rendering, and the cut at each
+         * model's corner, from the reference's own tracker. */
+        struct reference_band band[3];
+        reference_tracker_frame(&tracker, rendering, band);
+        count_low_cut(models, band);
         reference_advance(&train, start, &models[0], &models[1]);
-        reference_render(want, start, &train, &models[0], phases[0], &models[1], phases[1]);
+        reference_render(want, start, &train, &models[0], &band[0], phases[0], &models[1], &band[1], phases[1]);
         reference_advance(&train, start + 80.0, &models[1], &models[2]);
-        reference_render(want + 80, start + 80.0, &train, &models[1], phases[1], &models[2], phases[2]);
+        reference_render(want + 80, start + 80.0, &train, &models[1], &band[1], phases[1], &models[2], &band[2],
+                         phases[2]);
         double pulses[160] = {0.0};
         if (emits[0]) {
-            reference_pulsed_render(pulses, &models[0], pulsed[0], phases[0], &models[1], pulsed[1], phases[1]);
+            reference_pulsed_render(pulses, &models[0], &band[0], pulsed[0], phases[0], &models[1], &band[1], pulsed[1],
+                                    phases[1]);
         }
         if (emits[1]) {
-            reference_pulsed_render(pulses + 80, &models[1], pulsed[1], phases[1], &models[2], pulsed[2], phases[2]);
+            reference_pulsed_render(pulses + 80, &models[1], &band[1], pulsed[1], phases[1], &models[2], &band[2],
+                                    pulsed[2], phases[2]);
         }
         for (int i = 0; i < 3; ++i) {
             if (row_emits[i]) {
-                reference_row_render(pulses, &models[i], row_pulsed[i], phases[i], i, row_time[i]);
+                reference_row_render(pulses, &models[i], &band[i], row_pulsed[i], phases[i], i, row_time[i]);
             }
         }
         for (int n = 0; n < 160; ++n) {
@@ -2171,6 +2487,7 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
         assert(fabs(cycles_apart(pulse_phase(&last), train.phase)) < 1e-4);
         assert(stored_as(&last, &stream, rendering));
         assert(stored_row_as(&last, &rows));
+        assert(reference_tracker_next(&tracker, &last, &cur, rendering));
     }
     assert(worst < 0.05);
     const struct waveform_levels levels = {sqrt(energy / (160.0 * (double)frame_count)),
@@ -2594,13 +2911,16 @@ test_phases_follow_decoded_amplitudes(void) {
     assert(same_bits(own[0].magnitude, own[2].magnitude, 57) && !same_bits(own[0].phase, own[2].phase, 57));
     assert(same_bits(last[0].PHIl, last[1].PHIl, 57));
 
+    /* D-STAR's filter; the corner stays under 187.5 Hz, so no harmonic is cut. */
+    const struct reference_band band = reference_band_of(MBE_VOICED_SYNTHESIS_DVSI);
     double moved = 0.0;
     for (int l = 1; l <= 18; ++l) {
         const double hz = 187.5 * l;
         for (int k = 0; k < 3; ++k) {
-            const double want = 2.0 * (double)model[k].Ml[l] * reference_low_band_gain(hz);
+            assert(last[k].noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] < 187.0f);
+            const double want = 2.0 * (double)model[k].Ml[l] * reference_band_gain(&band, hz);
             assert(fabs(component_amplitude(out[k] + 320, 1280, hz) / want - 1.0) < 2e-3);
-            const double stored = (double)last[k].PHIl[l] + reference_low_band_phase(hz);
+            const double stored = (double)last[k].PHIl[l] + reference_band_phase(&band, hz);
             assert(phase_apart(end_phase(out[k], hz), stored) < 0.02);
         }
         assert(phase_apart(end_phase(out[0], hz), end_phase(out[1], hz)) < 0.02);
@@ -3368,7 +3688,18 @@ test_from_silence(void) {
     }
     assert(fabsf(rising[0]) < 1e-6f);
     assert(same_bits(rising, other, 160));
-    assert(same_bits(carried.noiseOverlap, emptied.noiseOverlap, 96));
+    /* The train is dropped from silence; the low cut's tracker, no part of it,
+     * goes on from the state's (its corner under the fundamental in both, so
+     * the samples are the same). */
+    mbe_parms carried_train = carried, emptied_train = emptied;
+    for (int i = MBE_LOW_CUT_TRACK_SLOT; i <= MBE_LOW_CUT_CORNER_SLOT; ++i) {
+        carried_train.noiseOverlap[i] = 0.0f;
+        emptied_train.noiseOverlap[i] = 0.0f;
+    }
+    assert(same_bits(carried_train.noiseOverlap, emptied_train.noiseOverlap, 96));
+    assert(last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] > 110.5f);
+    assert(carried.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] > last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT]);
+    assert(emptied.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] < last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT]);
     assert(same_bits(carried.PSIl, emptied.PSIl, 57));
     assert(fabs(cycles_apart(pulse_phase(&carried), cycles_of(187.5, 160.0))) < 1e-5);
 
@@ -6332,11 +6663,22 @@ reference_path_frame(const mbe_parms* last, const mbe_parms* cur, float seed, en
             phase[i][l] = (double)models[i].phase[l];
         }
     }
+    /* The low band: the rendering's filter and, in D-STAR's and P25's, the cut
+     * at the corner of the tracker the state before stored (its rule is
+     * test_low_cut_tracker()'s; a frame with no voiced band leaves it, so the
+     * last frame's own model takes the same corner). */
+    struct reference_band band = reference_band_of(rendering);
+    if (band.dvsi) {
+        const double track =
+            mbe_subframe_state_is_marked(last) ? (double)last->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] : 0.0;
+        band.corner = fmin((track >= 50.0 && track <= 500.0) ? track : 110.0, 200.0);
+    }
     if (emits[0]) {
-        reference_pulsed_render(pulses, &models[0], pulsed[0], phase[0], &models[1], pulsed[1], phase[1]);
+        reference_pulsed_render(pulses, &models[0], &band, pulsed[0], phase[0], &models[1], &band, pulsed[1], phase[1]);
     }
     if (emits[1]) {
-        reference_pulsed_render(pulses + 80, &models[1], pulsed[1], phase[1], &models[2], pulsed[2], phase[2]);
+        reference_pulsed_render(pulses + 80, &models[1], &band, pulsed[1], phase[1], &models[2], &band, pulsed[2],
+                                phase[2]);
     }
     struct mbe_unvoiced_subframe sub[2];
     memset(sub, 0, sizeof(sub));
@@ -6344,6 +6686,8 @@ reference_path_frame(const mbe_parms* last, const mbe_parms* cur, float seed, en
         const struct mbe_subframe_model* model = &models[k + 1];
         sub[k].w0 = model->w0;
         sub[k].L = model->L;
+        sub[k].dvsi_low_band = band.dvsi;
+        sub[k].cut_hz = (float)band.corner;
         for (int l = 1; l <= model->L; ++l) {
             if (model->voiced[l] == 0 && !pulsed[k + 1][l]) {
                 sub[k].amplitude[l] = MBE_UNVOICED_SUBFRAME_SCALE * model->magnitude[l];
@@ -8673,7 +9017,9 @@ test_r33_pulsed_magnitude_cap(void) {
     (void)any_pulsed;
     double phase[57], want[160] = {0.0};
     reference_own_phases(&cur, phase);
-    reference_row_render(want, &own, pulsed, phase, 2, reference_row_time(24, 30, 0, 2));
+    /* A fresh stream's corner, 110 Hz, and rate 33's filter. */
+    const struct reference_band band = {1, 110.0};
+    reference_row_render(want, &own, &band, pulsed, phase, 2, reference_row_time(24, 30, 0, 2));
     next_frame_with_word(out, &last, &model, 0, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
     double peak = 0.0;
     for (int n = 0; n < 160; ++n) {
@@ -8690,13 +9036,15 @@ test_r33_pulsed_magnitude_cap(void) {
  * arithmetic (PULSE_REPLICA_EXACT; elsewhere the library and this test may
  * round apart, and a tolerance cannot tell the times in float from the times
  * in double). A replica of the library's float rendering of one
- * pulse (prepare_render(), start_oscillators(), render_pulse() and
+ * pulse (prepare_render_dvsi(), start_oscillators(), render_pulse() and
  * response_window() in mbe_subframe.c, op for op), fed the time the rule gives,
  * formed in double and rounded to float once, reproduces the library's frame
  * sample for sample. Taken from the library: the three models
  * (mbe_subframe_own_model(), mbe_subframe_mid_model()), their pulsed bands
  * chosen here as the rule says, and the helpers the rendering itself calls
- * (mbe_sincosf(), mbe_low_band_gain(), mbe_low_band_phase()). Every row at every
+ * (mbe_sincosf(), mbe_low_band_dvsi_gain(), mbe_low_band_dvsi_phase(),
+ * mbe_low_cut_gain(), at a fresh stream's corner, 110 Hz: no frame of these
+ * streams has a voiced band, so the tracker stays where it starts). Every row at every
  * code after a frame with no voiced band and no pulse, and the plain frame
  * after it, which plays the rest of an own pulse that falls past the frame;
  * every pair sounds in one of the two. Computing the grid rows' times in float,
@@ -8710,9 +9058,10 @@ struct exact_render {
     short harmonic[56];
 };
 
+/* prepare_render_dvsi() op for op, at the corner `corner`. */
 static void
-exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], struct exact_render* r) {
-    const float hz_per_harmonic = model->w0 * (8000.0f / (2.0f * (float)M_PI));
+exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], float corner, struct exact_render* r) {
+    const float hz_per_harmonic = mbe_round_to_float(model->w0 * (8000.0f / (2.0f * (float)M_PI)));
     const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
     r->count = 0;
     r->w0 = model->w0;
@@ -8724,11 +9073,12 @@ exact_prepare(const struct mbe_subframe_model* model, const int pulsed[57], stru
         }
         const double magnitude = (double)model->magnitude[l] / (double)factor;
         const float m = (magnitude < (double)1.0e30f) ? (float)magnitude : 1.0e30f;
-        const float hz = hz_per_harmonic * (float)l;
-        const float amplitude = 2.0f * m * 1.0f * mbe_low_band_gain(hz);
+        const float hz = mbe_round_to_float(hz_per_harmonic * (float)l);
+        const float cut = mbe_low_cut_gain(hz, corner);
+        const float amplitude = 2.0f * m * 1.0f * mbe_low_band_dvsi_gain(hz) * cut;
         const int k = r->count++;
         float sn, cs;
-        mbe_sincosf(model->phase[l] + mbe_low_band_phase(hz), &sn, &cs);
+        mbe_sincosf(model->phase[l] + mbe_low_band_dvsi_phase(hz), &sn, &cs);
         r->real[k] = amplitude * cs;
         r->imag[k] = amplitude * sn;
         mbe_sincosf(w, &r->step_s[k], &r->step_c[k]);
@@ -8812,8 +9162,8 @@ test_r33_pulse_times_by_bits(void) {
             const int any_mid = reference_row_bands(&models[1], row, 1, pulsed[1]);
             const int any_own = reference_row_bands(&models[2], row, 0, pulsed[2]);
             struct exact_render render[3];
-            exact_prepare(&models[1], pulsed[1], &render[1]);
-            exact_prepare(&models[2], pulsed[2], &render[2]);
+            exact_prepare(&models[1], pulsed[1], MBE_LOW_CUT_START_HZ, &render[1]);
+            exact_prepare(&models[2], pulsed[2], MBE_LOW_CUT_START_HZ, &render[2]);
             const float t1 = (float)reference_row_time(row, b0, 0, 1);
             const float t2 = (float)reference_row_time(row, b0, 0, 2);
             float want[160] = {0.0f};
@@ -8856,6 +9206,1247 @@ test_r33_pulse_times_by_bits(void) {
     assert(checked == 14 * 120 && heard == 14 * 120);
     (void)checked;
     (void)heard;
+}
+
+/* ---- DVSI's low band: the tracker, the corner, the cut ---- */
+
+/* The low cut's slots of a state, as floats. */
+static float
+stored_track(const mbe_parms* mp) {
+    return mp->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT];
+}
+
+static float
+stored_corner(const mbe_parms* mp) {
+    return mp->noiseOverlap[MBE_LOW_CUT_CORNER_SLOT];
+}
+
+/* Whether a float is exactly `want`, by its bits. */
+static int
+is_value(float x, float want) {
+    return same_bits(&x, &want, 1);
+}
+
+/* A float of the given bits. */
+static float
+float_of(uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+/* A stream's state with its low cut's slots set (and the subframe mark). */
+static void
+force_low_cut(mbe_parms* mp, float track, float corner) {
+    mbe_subframe_state_adopt(mp);
+    mp->noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] = track;
+    mp->noiseOverlap[MBE_LOW_CUT_CORNER_SLOT] = corner;
+}
+
+/* One frame of `model` (with its mark) after `last` in `rendering`, the voiced
+ * part alone (no plan), at unit gain; the new state in `last`. */
+static void
+low_frame(float out[160], mbe_parms* last, const mbe_parms* model, enum mbe_voiced_synthesis rendering) {
+    next_frame_as(out, last, model, 0, rendering);
+}
+
+/* A model of every kind the tracker's rule tells apart (kind 0..14), at 180
+ * Hz but for the silence models (250 Hz) and the reserved code: see
+ * test_low_cut_tracker(). */
+static void
+low_cut_kind(mbe_parms* model, int kind, enum mbe_voiced_synthesis rendering) {
+    blank_model(model, 180.0, 21, 21, 10.0f);
+    switch (kind) {
+        case 1: model->Vl[21] = 0; break;                              /* the top band unvoiced */
+        case 2: model->Vl[1] = 0; break;                               /* the bottom one */
+        case 3: model->Vl[10] = 0; break;                              /* one in the middle */
+        case 4: model->Vl[7] = 2; break;                               /* a band with no state */
+        case 5: set_model(model, 180.0, 21, 0, 10.0f); break;          /* no voiced band */
+        case 6: mbe_set_frame_mark(model, MBE_FRAME_MARK_TONE); break; /* a tone model */
+        case 7:
+            mbe_set_frame_mark(model, MBE_FRAME_MARK_PREVIOUS_HELD); /* a silence mark, fully voiced */
+            break;
+        case 8: /* the AMBE silence model of the rendering, fully voiced (as adaptive smoothing can leave it) */
+            set_model(model, 250.0, (rendering == MBE_VOICED_SYNTHESIS_DVSI) ? 14 : 15, 15, 1.6f);
+            break;
+        case 9: /* the silence pitch with the other AMBE codec's harmonic count, fully voiced */
+            set_model(model, 250.0, (rendering == MBE_VOICED_SYNTHESIS_DVSI) ? 15 : 14, 15, 1.6f);
+            break;
+        case 10: /* a reserved code with no voiced band: D-STAR's pulsed state at b0 76, P25's at b0 140 */
+            set_model(model, 125.0, 30, 0, 8.0f);
+            model->w0 = decoded_pitch(rendering == MBE_VOICED_SYNTHESIS_DVSI,
+                                      (rendering == MBE_VOICED_SYNTHESIS_DVSI) ? 76 : 140);
+            model->L = (int)floor(0.9254 * M_PI / (double)model->w0);
+            break;
+        case 11: /* the same reserved code, every band voiced (as smoothing can leave it) */
+            set_model(model, 125.0, 30, 56, 8.0f);
+            model->w0 = decoded_pitch(rendering == MBE_VOICED_SYNTHESIS_DVSI,
+                                      (rendering == MBE_VOICED_SYNTHESIS_DVSI) ? 76 : 140);
+            model->L = (int)floor(0.9254 * M_PI / (double)model->w0);
+            break;
+        case 13: model->w0 = float_of(0x00000001u); break; /* a subnormal pitch, every band voiced */
+        case 14: model->w0 = float_of(0x7F800000u); break; /* an infinite pitch, every band voiced */
+        default: break;                                    /* 0, 12: fully voiced */
+    }
+}
+
+/* Whether kind `kind` of low_cut_kind() moves the tracker in `rendering`, as
+ * the rule states it: fully voiced speech (0, 12), a fully voiced reserved
+ * code (11), the silence pitch with the other codec's count (9); the silence
+ * mark (7) and the AMBE silence model (8) only in P25's rendering, which
+ * replaces a voiced model's mark and has no silence model. */
+static int
+low_cut_kind_moves(int kind, enum mbe_voiced_synthesis rendering) {
+    const int imbe = rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    return kind == 0 || kind == 9 || kind == 11 || kind == 12 || ((kind == 7 || kind == 8) && imbe);
+}
+
+/*
+ * The tracker's rule in D-STAR's, P25's and rate 33's renderings, and none in
+ * ProVoice's: 110 Hz on a fresh state (the corner the first frame applies too);
+ * a fully voiced frame moves it by the rule (track_is(): the step in double,
+ * rounded once), the corner the frame stores being the one it applied, min of
+ * the tracker before it and 200 Hz; the kinds of low_cut_kind() move it or
+ * leave it as low_cut_kind_moves() says (one band unvoiced at the top, at the
+ * bottom or in the middle, a band with no state, no voiced band, a tone model,
+ * a reserved code with no voiced band leave it; a silence mark on a fully
+ * voiced model and the AMBE silence model of the rendering, fully voiced, leave
+ * it but in P25's rendering; the silence pitch with the other codec's harmonic
+ * count and a fully voiced model at a reserved code move it), and advancing
+ * each (mbe_advance_subframes(), a frame the core mutes) leaves the tracker and
+ * the corner where rendering it does. Above 200 Hz the corner stands at the
+ * ceiling while the tracker goes on (a stream at 252 Hz takes the tracker past
+ * 240), and coming down to 180 Hz the corner stays at 200 (a plateau) until the
+ * tracker falls under it. A caller's pitch outside the codecs' keeps the
+ * tracker within 50 to 500 Hz. ProVoice's rendering stores 0 in both slots.
+ */
+static void
+test_low_cut_tracker(enum mbe_voiced_synthesis rendering) {
+    const int dvsi = reference_dvsi_band(rendering);
+    float out[160];
+    mbe_parms last, model;
+    fresh_stream(&last);
+    blank_model(&model, 150.0, 26, 0, 8.0f);
+    low_frame(out, &last, &model, rendering);
+    const float fresh = dvsi ? 110.0f : 0.0f;
+    assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], &fresh, 1));
+    assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_CORNER_SLOT], &fresh, 1));
+
+    for (int kind = 0; kind <= 14; ++kind) {
+        low_cut_kind(&model, kind, rendering);
+        const float before = stored_track(&last);
+        /* Advanced from the same state, it stores what rendering stores. */
+        mbe_parms advanced = with_model(&last, &model);
+        mbe_set_frame_mark(&advanced, mbe_frame_mark(&model));
+        mbe_advance_subframes(&advanced, &last, 0, rendering);
+        low_frame(out, &last, &model, rendering);
+        assert(
+            same_bits(&advanced.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], &last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], 2));
+        if (!dvsi) {
+            assert(is_value(stored_track(&last), 0.0f) && is_value(stored_corner(&last), 0.0f));
+            continue;
+        }
+        const float corner = (before < 200.0f) ? before : 200.0f;
+        assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_CORNER_SLOT], &corner, 1));
+        const int moves = low_cut_kind_moves(kind, rendering);
+        assert(moves == reference_moves_tracker(&model, rendering));
+        assert(track_is(stored_track(&last), before, &model, rendering));
+        assert(moves ? !is_value(stored_track(&last), before)
+                     : same_bits(&last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], &before, 1));
+    }
+
+    /* The ceiling: the corner stands at 200 Hz while the tracker passes it. */
+    blank_model(&model, 252.0, 14, 14, 10.0f);
+    for (int f = 0; f < 80; ++f) {
+        const float before = stored_track(&last);
+        low_frame(out, &last, &model, rendering);
+        if (dvsi) {
+            assert(track_is(stored_track(&last), before, &model, rendering));
+            assert(!is_value(stored_track(&last), before));
+            const float corner = (before < 200.0f) ? before : 200.0f;
+            assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_CORNER_SLOT], &corner, 1));
+        }
+    }
+    if (dvsi) {
+        assert(stored_track(&last) > 240.0f);
+    }
+    /* Down to 180 Hz: a plateau at the ceiling while the tracker comes down. */
+    blank_model(&model, 180.0, 21, 21, 10.0f);
+    int plateau = 0, below = 0;
+    for (int f = 0; f < 80; ++f) {
+        const float before = stored_track(&last);
+        low_frame(out, &last, &model, rendering);
+        if (!dvsi) {
+            continue;
+        }
+        assert(track_is(stored_track(&last), before, &model, rendering));
+        if (before > 200.0f) {
+            assert(is_value(stored_corner(&last), 200.0f));
+            plateau++;
+        } else {
+            assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_CORNER_SLOT], &before, 1));
+            below++;
+        }
+    }
+    assert(!dvsi || (plateau >= 5 && below >= 5));
+
+    /* A caller's pitch outside the codecs' keeps the tracker within 50..500 Hz. */
+    blank_model(&model, 1000.0, 3, 3, 10.0f);
+    for (int f = 0; f < 200; ++f) {
+        low_frame(out, &last, &model, rendering);
+    }
+    assert(!dvsi || is_value(stored_track(&last), 500.0f));
+    blank_model(&model, 40.0, 56, 56, 10.0f);
+    for (int f = 0; f < 200; ++f) {
+        low_frame(out, &last, &model, rendering);
+    }
+    assert(!dvsi || is_value(stored_track(&last), 50.0f));
+}
+
+/*
+ * The tolerance's near-tie exception, bounded: the review's case (T 110 Hz,
+ * pitch bits 0x3d8504c0, whose exact step lies 3.9e-8 of a spacing from the tie
+ * between 108.825989 and 108.825996) is within TRACK_TIE_BAND, the only place
+ * where track_is() accepts the float on the wrong side; a step 2e-7 of a
+ * spacing from a tie is not. On this file's inputs, every tracker step that
+ * moves the tracker and is compared up to here (the direct tests, the data
+ * paths and the waveform streams: 741 of them) lies outside the band, so on them no
+ * value an ulp off can pass by the exception.
+ */
+static void
+test_low_cut_ties(void) {
+    assert(g_track_steps > 700 && g_track_near_ties == 0);
+    mbe_parms model;
+    blank_model(&model, 108.0, 20, 20, 10.0f);
+    model.w0 = float_of(0x3d8504c0u);
+    const long before = g_track_near_ties;
+    const float right = 108.82599639892578f, wrong = 108.82598876953125f;
+    assert(track_is(right, 110.0f, &model, MBE_VOICED_SYNTHESIS_DVSI));
+    assert(g_track_near_ties == before + 1);
+    assert(MID_PITCH_INEXACT == track_is(wrong, 110.0f, &model, MBE_VOICED_SYNTHESIS_DVSI));
+    g_track_near_ties = before;
+}
+
+/*
+ * The tracker's range and the silence models: every pitch code of the three
+ * codecs decodes to a fundamental from 50 to 500 Hz (mbe_low_band.h, the
+ * range a stored tracker is read in: D-STAR b0 0..124, P25 b0 0..207, rate 33
+ * b0 0..119 on every V/UV row (the pulsed rows' band grid, rows 18 to 31,
+ * included) and its silence frames, b0 124 and 125 on the rows whose bits do
+ * not make a tone frame of them), so that a tracker moved only by the decoders'
+ * models stays inside it; and the AMBE silence pitch, 2 pi / 32: D-STAR's b0 124
+ * decodes to it with 14 harmonics, rate 33's b0 124 and 125 with 15 (and the
+ * silence mark), and no voice code of either codec decodes to that pitch at
+ * any harmonic count (the pitch alone, by bit pattern).
+ */
+static void
+test_low_cut_range(void) {
+    const float silence = (float)(2.0 * M_PI / 32.0);
+    for (int b0 = 0; b0 <= 124; ++b0) {
+        for (int b1 = 0; b1 < 16; ++b1) {
+            char ambe_d[49];
+            mbe_parms cur, prev, enhanced;
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            set_ambe2400(ambe_d, b0, b1);
+            const int status = mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev);
+            assert(status == 0);
+            (void)status;
+            const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
+            assert(f0 >= 50.0 && f0 <= 500.0);
+            assert((b0 == 124) == same_bits(&cur.w0, &silence, 1));
+            assert(b0 != 124 || cur.L == 14);
+        }
+    }
+    for (int b0 = 0; b0 <= 207; ++b0) {
+        const double f0 = (double)decoded_pitch(0, b0) * 8000.0 / (2.0 * M_PI);
+        assert(f0 >= 50.0 && f0 <= 500.0);
+    }
+    for (int row = 0; row < 32; ++row) {
+        /* b0 124 and 125 with rows 24 to 31 set the first six bits of u0: tone frames. */
+        for (int b0 = 0; b0 <= ((row < 24) ? 125 : 119); b0 += ((b0 == 119) ? 5 : 1)) {
+            char ambe_d[49];
+            mbe_parms cur, prev, enhanced;
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            set_ambe2450(ambe_d, b0, row);
+            const int status = mbe_decodeAmbe2450Parms(ambe_d, &cur, &prev);
+            assert(status >= 0);
+            (void)status;
+            const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
+            assert(f0 >= 50.0 && f0 <= 500.0);
+            const int is_silence = b0 >= 124;
+            assert(is_silence == same_bits(&cur.w0, &silence, 1));
+            assert(!is_silence || (cur.L == 15 && mbe_frame_mark(&cur) == MBE_FRAME_MARK_PREVIOUS_HELD));
+        }
+    }
+}
+
+/*
+ * The cut's knee: mbe_low_cut_gain() is exactly 1 at the corner and above it,
+ * (f / corner)^2 in double rounded once under it, a float under 1 a float
+ * above f; and through the rendering, a fully voiced 120 Hz stream whose
+ * tracker is forced to its fundamental as the renderer forms it
+ * (reference_knee_hz()) plays the same bits as with the tracker forced to
+ * 50 Hz (no cut) and with it forced to the float under the fundamental; with
+ * the float above it, harmonic 1 is cut and the frame plays otherwise.
+ */
+static void
+test_low_cut_knee(void) {
+    const float hz = 137.5f;
+    const float at = mbe_low_cut_gain(hz, hz), above = mbe_low_cut_gain(hz, nextafterf(hz, 0.0f));
+    const float under = mbe_low_cut_gain(hz, nextafterf(hz, INFINITY)), deep = mbe_low_cut_gain(hz, 200.0f);
+    const float high = mbe_low_cut_gain(250.0f, 200.0f);
+    assert(is_value(at, 1.0f) && is_value(above, 1.0f) && is_value(high, 1.0f));
+    assert(under < 1.0f && under > 0.9999f);
+    assert(is_value(deep, (float)((137.5 / 200.0) * (137.5 / 200.0))));
+
+    mbe_parms model;
+    blank_model(&model, 120.0, 30, 30, 12.0f);
+    const float knee = reference_knee_hz(model.w0, 1);
+    const float corners[4] = {knee, 50.0f, nextafterf(knee, 0.0f), nextafterf(knee, INFINITY)};
+    float out[4][160];
+    for (int c = 0; c < 4; ++c) {
+        mbe_parms last;
+        fresh_stream(&last);
+        last.w0 = model.w0;
+        last.L = model.L;
+        memcpy(last.Vl, model.Vl, sizeof(last.Vl));
+        copy_amplitudes(&last, &model);
+        force_low_cut(&last, corners[c], corners[c]);
+        low_frame(out[c], &last, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    }
+    assert(same_bits(out[0], out[1], 160));
+    assert(same_bits(out[2], out[1], 160));
+    assert(!same_bits(out[3], out[1], 160));
+}
+
+/*
+ * The cut's level: a steady fully voiced 100 Hz stream in each of D-STAR's,
+ * P25's and rate 33's renderings, its tracker forced before every frame to
+ * 150 Hz (and the stored corner with it), against the same stream forced to
+ * 50 Hz, under every harmonic. Harmonic 1, under the corner, plays at
+ * (f / 150)^2 of its uncut level (f as the renderer forms it), measured by the
+ * component at 100 Hz over eight frames, 1280 samples, 16 periods (a measure
+ * whose leakage from the other harmonics is nil, the window holding whole
+ * periods of each: within 1e-6 here), to 1e-4; every other harmonic, at
+ * 200 Hz or above, is untouched bit for bit: with harmonic 1's amplitude 0,
+ * the two streams play the same samples. The state keeps the decoded
+ * amplitudes: the cut belongs to the rendering.
+ */
+static void
+test_low_cut_level(enum mbe_voiced_synthesis rendering) {
+    static float out[2][2][10 * 160];
+    mbe_parms model;
+    blank_model(&model, 100.0, 37, 37, 12.0f);
+    for (int quiet = 0; quiet < 2; ++quiet) {
+        mbe_parms frame = model;
+        if (quiet) {
+            set_amplitude(&frame, 1, 0.0f);
+        }
+        for (int forced = 0; forced < 2; ++forced) {
+            const float corner = forced ? 150.0f : 50.0f;
+            mbe_parms last;
+            fresh_stream(&last);
+            for (int f = 0; f < 10; ++f) {
+                force_low_cut(&last, corner, corner);
+                next_frame_as(out[quiet][forced] + ((size_t)f * 160u), &last, &frame, 0, rendering);
+                /* The stored model keeps its amplitudes. */
+                assert(same_bits(last.Ml, frame.Ml, 57));
+            }
+        }
+    }
+    const double f = (double)reference_knee_hz(model.w0, 1);
+    const double want = (f / 150.0) * (f / 150.0);
+    const double cut = component_amplitude(out[0][1] + 320, 1280, 100.0);
+    const double uncut = component_amplitude(out[0][0] + 320, 1280, 100.0);
+    assert(uncut > 1.0 && fabs(cut / uncut - want) < 1.0e-4);
+    assert(same_bits(out[1][0], out[1][1], 10 * 160));
+    assert(!same_bits(out[0][0], out[0][1], 10 * 160));
+}
+
+/*
+ * The cut on the unvoiced bands through the rendering: a frame with no voiced
+ * band, its tracker forced to 190 Hz, plays exactly what the library's unvoiced
+ * synthesis (mbe_synthesizeUnvoicedSubframes(), whose bins the equations of
+ * test_unvoiced_subframes.c pin) plays for the frame's mid-frame and own models
+ * (mbe_subframe_mid_model(), mbe_subframe_own_model()) under DVSI's filter and
+ * a cut at 190 Hz in both subframes; ProVoice's rendering, the second-order
+ * filter and no cut.
+ */
+static void
+test_low_cut_unvoiced_frame(enum mbe_voiced_synthesis rendering) {
+    mbe_fft_plan* plan = mbe_fft_plan_alloc();
+    assert(plan != NULL);
+    mbe_parms last, model;
+    fresh_stream(&last);
+    set_model(&last, 133.0, 27, 0, 30.0f);
+    blank_model(&model, 117.0, 31, 0, 40.0f);
+    shape_model(&model, 3);
+    force_low_cut(&last, 190.0f, 170.0f);
+    last.noiseSeed = 1234.0f;
+    mbe_parms cur = with_model(&last, &model);
+    mbe_parms expected = cur, before = last;
+    float out[160] = {0.0f}, want[160] = {0.0f};
+    mbe_synthesize_subframes(out, &cur, &last, plan, 1.0f, 0, rendering);
+
+    struct mbe_subframe_model models[3];
+    mbe_subframe_mid_model(&before, &expected, 0, rendering, &models[1]);
+    mbe_subframe_own_model(&expected, &models[2]);
+    struct mbe_unvoiced_subframe sub[2];
+    memset(sub, 0, sizeof(sub));
+    for (int k = 0; k < 2; ++k) {
+        sub[k].w0 = models[k + 1].w0;
+        sub[k].L = models[k + 1].L;
+        sub[k].dvsi_low_band = reference_dvsi_band(rendering);
+        sub[k].cut_hz = sub[k].dvsi_low_band ? 190.0f : 0.0f;
+        for (int l = 1; l <= sub[k].L; ++l) {
+            if (models[k + 1].voiced[l] == 0) {
+                sub[k].amplitude[l] = MBE_UNVOICED_SUBFRAME_SCALE * models[k + 1].magnitude[l];
+            }
+        }
+    }
+    mbe_synthesizeUnvoicedSubframes(want, &expected, &before, plan, &sub[0], &sub[1]);
+    assert(same_bits(out, want, 160));
+    mbe_fft_plan_free(plan);
+}
+
+/*
+ * The low cut's slots as untrusted caller state, D-STAR's rendering: every
+ * float class and both neighbours of every bound the library reads, in the
+ * tracker's slot (read from 50 to 500 Hz, else a fresh stream's 110) and in the
+ * corner's (read from 50 to 200 Hz, else the corner this frame applies), play
+ * exactly as the state holding the value they read as, and store what that
+ * state stores; every value read, the bounds 50 and 500 (tracker), 50 and 200
+ * (corner) among them, plays otherwise than the value a rejected one falls back
+ * to (110, and 160 for the corner: the last frame's own model, at 45 Hz and its
+ * harmonics, lies across both corners, so a corner of 50 cuts harmonic 1
+ * alone and 160 three); a state without the subframe mark reads neither (as a
+ * fresh one); a state the TIA-102.BABA rendering wrote (its noise samples in
+ * those elements) reads as a fresh one; ProVoice's rendering reads neither
+ * slot and stores 0 in both, whatever they held. The frame's harmonics lie
+ * under every corner a value can choose, so that a corner read otherwise
+ * sounds.
+ */
+static void
+test_untrusted_low_cut(void) {
+    static const uint32_t values[] = {0x00000000u, 0x80000000u, 0x7FC00000u, 0xFFC00000u, 0x7F800001u, 0x7F800000u,
+                                      0xFF800000u, 0x00000001u, 0x007FFFFFu, 0x00800000u, 0x42480000u, 0x4247FFFFu,
+                                      0x42480001u, 0x43FA0000u, 0x43F9FFFFu, 0x43FA0001u, 0x43480000u, 0x4347FFFFu,
+                                      0x43480001u, 0x42DC0000u, 0x7F7FFFFFu, 0xC2DC0000u, 0x3F800000u, 0x474F8400u};
+    mbe_parms model, base;
+    int accepted = 0;
+    blank_model(&model, 70.0, 52, 52, 12.0f);
+    fresh_stream(&base);
+    set_model(&base, 45.0, 51, 51, 12.0f);
+    for (int slot = 0; slot < 2; ++slot) {
+        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+            const float value = float_of(values[i]);
+            const float low = 50.0f, high = slot ? 200.0f : 500.0f;
+            uint32_t low_bits, high_bits;
+            memcpy(&low_bits, &low, sizeof(low_bits));
+            memcpy(&high_bits, &high, sizeof(high_bits));
+            const int valid = values[i] >= low_bits && values[i] <= high_bits;
+            mbe_parms forged = base, canonical = base;
+            float a[160], b[160];
+            if (slot == 0) {
+                force_low_cut(&forged, value, 150.0f);
+                force_low_cut(&canonical, valid ? value : 110.0f, 150.0f);
+            } else {
+                force_low_cut(&forged, 160.0f, value);
+                force_low_cut(&canonical, 160.0f, valid ? value : 160.0f);
+            }
+            low_frame(a, &forged, &model, MBE_VOICED_SYNTHESIS_DVSI);
+            low_frame(b, &canonical, &model, MBE_VOICED_SYNTHESIS_DVSI);
+            assert(all_finite(a, 160));
+            assert(same_bits(a, b, 160));
+            assert(same_bits(forged.noiseOverlap, canonical.noiseOverlap, 96));
+            /* A value read is not the fallback: where the two differ, a frame
+             * whose harmonics lie between them plays otherwise (so that the
+             * library and this test cannot fall back together unnoticed). */
+            const float fallback = slot ? 160.0f : 110.0f;
+            if (valid && !is_value(value, fallback)) {
+                mbe_parms fell = base;
+                float c[160];
+                if (slot == 0) {
+                    force_low_cut(&fell, fallback, 150.0f);
+                } else {
+                    force_low_cut(&fell, 160.0f, fallback);
+                }
+                low_frame(c, &fell, &model, MBE_VOICED_SYNTHESIS_DVSI);
+                assert(!same_bits(a, c, 160));
+                accepted++;
+            }
+        }
+    }
+    /* 50, 500 (tracker) and 50, 200 (corner): the bounds themselves are read. */
+    assert(accepted >= 6);
+    /* Without the subframe mark: as a fresh state, whatever the slots hold. */
+    mbe_parms unmarked = base, fresh = base;
+    float a[160], b[160];
+    memset(unmarked.noiseOverlap, 0, sizeof(unmarked.noiseOverlap));
+    memset(fresh.noiseOverlap, 0, sizeof(fresh.noiseOverlap));
+    unmarked.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT] = 190.0f;
+    unmarked.noiseOverlap[MBE_LOW_CUT_CORNER_SLOT] = 180.0f;
+    low_frame(a, &unmarked, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    low_frame(b, &fresh, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    assert(same_bits(a, b, 160) && same_bits(unmarked.noiseOverlap, fresh.noiseOverlap, 96));
+    /* A state the TIA-102.BABA rendering wrote: its noise overlap is no tracker. */
+    mbe_parms spec_cur = base, spec_prev = base;
+    float scratch[160];
+    for (int f = 0; f < 3; ++f) {
+        mbe_synthesizeSpeechf(scratch, &spec_cur, &spec_prev);
+        spec_prev = spec_cur;
+    }
+    assert(!mbe_subframe_state_is_marked(&spec_cur));
+    /* Its noise samples in the slots (any of 0..53124: here not 0). */
+    assert(!is_value(stored_track(&spec_cur), 0.0f));
+    mbe_parms from_spec = spec_cur, from_zero = spec_cur;
+    memset(from_zero.noiseOverlap, 0, sizeof(from_zero.noiseOverlap));
+    low_frame(a, &from_spec, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    low_frame(b, &from_zero, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    assert(same_bits(a, b, 160) && same_bits(from_spec.noiseOverlap, from_zero.noiseOverlap, 96));
+    assert(track_is(stored_track(&from_spec), 110.0f, &model, MBE_VOICED_SYNTHESIS_DVSI));
+    /* ProVoice reads neither slot and stores 0 in both. */
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        mbe_parms forged = base, plain = base;
+        force_low_cut(&forged, float_of(values[i]), float_of(values[(i + 7) % (sizeof(values) / sizeof(values[0]))]));
+        force_low_cut(&plain, 0.0f, 0.0f);
+        low_frame(a, &forged, &model, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE);
+        low_frame(b, &plain, &model, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE);
+        assert(same_bits(a, b, 160) && same_bits(forged.noiseOverlap, plain.noiseOverlap, 96));
+        assert(is_value(stored_track(&forged), 0.0f) && is_value(stored_corner(&forged), 0.0f));
+    }
+}
+
+/*
+ * A state moved between renderings: P25's tracker, after fully voiced frames,
+ * goes on in rate 33's and D-STAR's renderings (each a subframe rendering that
+ * reads it by the same rule), ProVoice's leaves 0 in both slots, and the
+ * rendering after it starts from a fresh stream's 110 Hz.
+ */
+static void
+test_low_cut_between_renderings(void) {
+    float out[160];
+    mbe_parms last, model;
+    fresh_stream(&last);
+    blank_model(&model, 160.0, 23, 23, 12.0f);
+    for (int f = 0; f < 40; ++f) {
+        low_frame(out, &last, &model, MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    }
+    float track = stored_track(&last);
+    assert(track > 150.0f);
+    low_frame(out, &last, &model, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    assert(track_is(stored_track(&last), track, &model, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450));
+    track = stored_track(&last);
+    low_frame(out, &last, &model, MBE_VOICED_SYNTHESIS_DVSI);
+    assert(track_is(stored_track(&last), track, &model, MBE_VOICED_SYNTHESIS_DVSI));
+    low_frame(out, &last, &model, MBE_VOICED_SYNTHESIS_DVSI_PROVOICE);
+    assert(is_value(stored_track(&last), 0.0f) && is_value(stored_corner(&last), 0.0f));
+    low_frame(out, &last, &model, MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    assert(track_is(stored_track(&last), 110.0f, &model, MBE_VOICED_SYNTHESIS_DVSI_IMBE));
+    assert(is_value(stored_corner(&last), 110.0f));
+}
+
+/* Through a codec's data path. */
+enum low_path { LOW_DSTAR, LOW_P25, LOW_R33 };
+
+enum low_expect { LOW_HOLDS, LOW_MOVES };
+
+static enum mbe_voiced_synthesis
+low_path_rendering(enum low_path path) {
+    if (path == LOW_DSTAR) {
+        return MBE_VOICED_SYNTHESIS_DVSI;
+    }
+    return (path == LOW_P25) ? MBE_VOICED_SYNTHESIS_DVSI_IMBE : MBE_VOICED_SYNTHESIS_DVSI_AMBE2450;
+}
+
+/* The tracker a stream's last synthesized state carries as the next frame
+ * reads it: a fresh stream's 110 Hz before its first frame. */
+static float
+low_path_track(const mbe_parms* enhanced) {
+    return mbe_subframe_state_is_marked(enhanced) ? stored_track(enhanced) : 110.0f;
+}
+
+/*
+ * One frame of `bits` through a codec's data path (rate 33 with C0's error
+ * count `c0_errors`, or none for -1), and the tracker the stream's last
+ * synthesized state (prev_mp_enhanced, s[2]) carries after it: LOW_MOVES, the
+ * rule's step (track_is()) from the tracker before on `model`, or, where
+ * `model` is NULL, on s[2] as the frame leaves it (the model rendered or
+ * advanced), a model the rule says moves it; LOW_HOLDS, the tracker before,
+ * by its bits. The output is finite. Returns the result's flags.
+ */
+static unsigned
+low_path_frame(enum low_path path, const char* bits, mbe_parms s[3], enum low_expect expect, const mbe_parms* model,
+               int c0_errors) {
+    const float before = low_path_track(&s[2]);
+    float out[160];
+    mbe_process_result result;
+    mbe_initProcessResult(&result);
+    int status;
+    if (path == LOW_DSTAR) {
+        status = mbe_processAmbe2400Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+    } else if (path == LOW_P25) {
+        status = mbe_processImbe4400Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+    } else {
+        if (c0_errors >= 0) {
+            result.flags |= MBE_PROCESS_FLAG_C0_VALID;
+            result.c0_errors = c0_errors;
+        }
+        status = mbe_processAmbe2450Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+    }
+    assert(status >= 0);
+    (void)status;
+    assert(all_finite(out, 160));
+    const enum mbe_voiced_synthesis rendering = low_path_rendering(path);
+    const mbe_parms* rendered = (model != NULL) ? model : &s[2];
+    if (expect == LOW_MOVES) {
+        assert(reference_moves_tracker(rendered, rendering));
+        assert(track_is(stored_track(&s[2]), before, rendered, rendering));
+        assert(!is_value(stored_track(&s[2]), before));
+    } else {
+        assert(mbe_subframe_state_is_marked(&s[2]) && is_value(stored_track(&s[2]), before));
+    }
+    return result.flags;
+}
+
+/* Whether every band of a model is voiced (as adaptive smoothing can leave a
+ * frame decoded with none). */
+static int
+fully_voiced(const mbe_parms* mp) {
+    for (int l = 1; l <= mp->L; ++l) {
+        if (mp->Vl[l] != 1) {
+            return 0;
+        }
+    }
+    return mp->L >= 1;
+}
+
+/* Whether any band of a model is voiced. */
+static int
+low_any_voiced(const mbe_parms* mp) {
+    for (int l = 1; l <= mp->L; ++l) {
+        if (mp->Vl[l] == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A forged prediction history (prev_mp, s[1]) under which `bits` decode, by
+ * the codec's public parameter decoder, to a flatter spectrum: the history's
+ * log2Ml less the decoded shape over the prediction coefficient (D-STAR's 0.8,
+ * P25's 0.65), at the decoded harmonic count (twice for a flat one, the first
+ * decode reading the history at its own count). */
+static void
+low_flatten(enum low_path path, const char* bits, mbe_parms s[3]) {
+    const double rho = (path == LOW_DSTAR) ? 0.8 : 0.65;
+    mbe_parms cur = s[1], prev = s[1];
+    const int status =
+        (path == LOW_DSTAR) ? mbe_decodeAmbe2400Parms(bits, &cur, &prev) : mbe_decodeImbe4400Parms(bits, &cur, &prev);
+    assert(status >= 0);
+    (void)status;
+    double mean = 0.0;
+    for (int l = 1; l <= cur.L; ++l) {
+        mean += (double)cur.log2Ml[l];
+    }
+    mean /= (double)cur.L;
+    for (int l = 1; l <= cur.L; ++l) {
+        s[1].log2Ml[l] -= (float)(((double)cur.log2Ml[l] - mean) / rho);
+    }
+    s[1].L = cur.L;
+}
+
+/* The error rate the next frame starts from (prev_mp's) and the local energy
+ * adaptive smoothing starts from (prev_mp_enhanced's), at its floor: under an
+ * error rate above 0.0125 the smoothing voices every band whose amplitude
+ * passes 1.414 E^(3/8) (eq 112-113). */
+static void
+low_errors(mbe_parms s[3], float rate) {
+    s[1].errorRate = rate;
+    s[2].localEnergy = 10000.0f;
+}
+
+/* The silent copy of a model a mute's fade renders (ambe2450_fade_out_last()):
+ * the model's pitch and voicing, no amplitude, no mark. */
+static mbe_parms
+low_silent_copy(const mbe_parms* model) {
+    mbe_parms copy = *model;
+    memset(copy.Ml, 0, sizeof(copy.Ml));
+    mbe_set_frame_mark(&copy, MBE_FRAME_MARK_NONE);
+    return copy;
+}
+
+/*
+ * The tracker through D-STAR's data path, one row of the table of frame kinds
+ * each (docs/dvsi-parity.md, "DVSI's low band"): fully voiced frames (b1 15)
+ * move it and a frame with no voiced band (b1 0) leaves it; every lost frame
+ * (b0 125) renders the repeated model and moves it as that model does, through
+ * the repeat limit's mute (whose fade renders a silent copy of it, its voicing
+ * kept) and the muted repeats after it; the first frame after the mute starts
+ * from the resumed history in the last frame and moves it by its own model;
+ * a frame the error level mutes is synthesized first and moves it; a tone's
+ * first frame after an audible frame renders the repeat of that frame under it
+ * into the stream's state (it moves it), after an inaudible one (muted by the
+ * error level, or by the repeat limit) renders nothing (it holds), and the
+ * tone frames after it hold.
+ */
+static void
+test_low_cut_dstar_path(void) {
+    char voiced[49], voiced2[49], unvoiced[49], lost[49], tone[49];
+    mbe_parms s[3];
+    set_ambe2400(voiced, 40, 15);
+    set_ambe2400(voiced2, 20, 15);
+    set_ambe2400(unvoiced, 40, 0);
+    dstar_special_bits(lost, 125, 0);
+    dstar_special_bits(tone, 126, 130);
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 6; ++f) {
+        (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+    }
+    (void)low_path_frame(LOW_DSTAR, unvoiced, s, LOW_HOLDS, NULL, -1);
+    for (int f = 0; f < 6; ++f) {
+        (void)low_path_frame(LOW_DSTAR, voiced2, s, LOW_MOVES, NULL, -1);
+    }
+    int muted = 0;
+    for (int f = 0; f < 6; ++f) {
+        const unsigned flags = low_path_frame(LOW_DSTAR, lost, s, LOW_MOVES, NULL, -1);
+        assert((flags & MBE_PROCESS_FLAG_REPEAT) != 0u);
+        muted |= (flags & MBE_PROCESS_FLAG_MUTE) != 0u;
+    }
+    assert(muted);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+    }
+    /* A frame the error level mutes (hard decisions) is synthesized first. */
+    s[1].PSIl[0] = 1000.0f;
+    const unsigned level_flags = low_path_frame(LOW_DSTAR, voiced2, s, LOW_MOVES, NULL, -1);
+    assert((level_flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    s[0].PSIl[0] = s[1].PSIl[0] = s[2].PSIl[0] = 0.0f;
+    /* A tone after that inaudible frame: no repeat under it, nothing rendered. */
+    (void)low_path_frame(LOW_DSTAR, tone, s, LOW_HOLDS, NULL, -1);
+    (void)low_path_frame(LOW_DSTAR, tone, s, LOW_HOLDS, NULL, -1);
+    for (int f = 0; f < 2; ++f) {
+        (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+    }
+    /* A tone after an audible frame: the repeat under its first frame moves it. */
+    (void)low_path_frame(LOW_DSTAR, tone, s, LOW_MOVES, NULL, -1);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_DSTAR, tone, s, LOW_HOLDS, NULL, -1);
+    }
+    (void)low_path_frame(LOW_DSTAR, voiced2, s, LOW_MOVES, NULL, -1);
+    /* A tone after the repeat limit's mute: inaudible, it holds. */
+    for (int f = 0; f < 5; ++f) {
+        (void)low_path_frame(LOW_DSTAR, lost, s, LOW_MOVES, NULL, -1);
+    }
+    (void)low_path_frame(LOW_DSTAR, tone, s, LOW_HOLDS, NULL, -1);
+    /* Lost frames after a single tone (index 20) render the tone's tail over a
+     * silent copy of the last speech model (its voicing kept): each moves it;
+     * after a dual tone (index 130) they go on playing the tone, holding it,
+     * until the repeat limit's 4th frame fades the tone out over a muted repeat
+     * of the speech model, which moves it, as do the muted repeats after it. */
+    char single[49];
+    dstar_special_bits(single, 126, 20);
+    for (int dual = 0; dual < 2; ++dual) {
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+        }
+        (void)low_path_frame(LOW_DSTAR, dual ? tone : single, s, LOW_MOVES, NULL, -1);
+        (void)low_path_frame(LOW_DSTAR, dual ? tone : single, s, LOW_HOLDS, NULL, -1);
+        for (int f = 0; f < 5; ++f) {
+            (void)low_path_frame(LOW_DSTAR, lost, s, (dual && f < 3) ? LOW_HOLDS : LOW_MOVES, NULL, -1);
+        }
+    }
+}
+
+/*
+ * D-STAR's silence frame and reserved codes that adaptive smoothing voices
+ * throughout: under an error rate of 0.08, at the highest gain (b2 63) and a
+ * prediction history that flattens the frame's spectrum (low_flatten()), b0
+ * 124 (the silence model, 250 Hz and 14 harmonics, with no mark) comes out
+ * with every band voiced and leaves the tracker (the AMBE silence model,
+ * mbe_subframe.c); without the errors it plays with no voiced band and leaves
+ * it too; a frame of no voiced band at reserved code b0 76 so voiced moves it,
+ * by the rule on the model rendered. A caller's PREVIOUS_HELD mark on the
+ * prediction history, which a lost frame repeats, holds the tracker on a fully
+ * voiced repeat, where the same history without the mark moves it.
+ */
+static void
+test_low_cut_dstar_smoothed(void) {
+    static const int gain_bits[6] = {6, 7, 8, 9, 42, 43};
+    char voiced[49], silence[49], reserved[49], lost[49];
+    set_ambe2400(voiced, 40, 15);
+    set_ambe2400(silence, 124, 0);
+    set_ambe2400(reserved, 76, 0);
+    dstar_special_bits(lost, 125, 0);
+    for (int i = 0; i < 6; ++i) {
+        silence[gain_bits[i]] = 1;
+        reserved[gain_bits[i]] = 1;
+    }
+    for (int which = 0; which < 3; ++which) {
+        mbe_parms s[3];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+        }
+        const char* bits = (which == 1) ? reserved : silence;
+        if (which < 2) {
+            /* Twice: the first at the history's own harmonic count. */
+            low_flatten(LOW_DSTAR, bits, s);
+            low_flatten(LOW_DSTAR, bits, s);
+            low_errors(s, 0.08f);
+        }
+        (void)low_path_frame(LOW_DSTAR, bits, s, (which == 1) ? LOW_MOVES : LOW_HOLDS, NULL, -1);
+        assert(fully_voiced(&s[2]) == (which < 2));
+        assert(which == 1 || (s[2].L == 14 && reference_silence_model(&s[2], MBE_VOICED_SYNTHESIS_DVSI)));
+    }
+    for (int forged = 0; forged < 2; ++forged) {
+        mbe_parms s[3];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+        }
+        if (forged) {
+            mbe_set_frame_mark(&s[1], MBE_FRAME_MARK_PREVIOUS_HELD);
+        }
+        (void)low_path_frame(LOW_DSTAR, lost, s, forged ? LOW_HOLDS : LOW_MOVES, NULL, -1);
+        assert(fully_voiced(&s[2]));
+    }
+}
+
+/*
+ * The tracker through P25's data path: fully voiced frames (every band, b0 97)
+ * move it; a frame the error rate mutes is advanced and moves it as rendering
+ * would; lost frames (b0 220) repeat the last decoded model and move it, the
+ * 4th muted and advanced, and the repeat limit's reset model (no voiced band)
+ * leaves it; a frame with no voiced band leaves it. The reset model cannot be
+ * voiced by adaptive smoothing: every amplitude 1, where the smoothing's
+ * threshold is at least 1.414 E^(3/8) with E at least 10000, about 44.7 (eq
+ * 112-113), so at error rates on both sides of each threshold (0.005 and
+ * 0.0125 of the voicing threshold, 0.0875 of the mute), with the energy at its
+ * floor and a loud prediction history, it plays with no voiced band and
+ * leaves the tracker. A frame of no voiced band at reserved code b0 140 that
+ * smoothing voices throughout (a loud flat spectrum under an error rate of
+ * 0.05) moves it. A caller's PREVIOUS_HELD on the history a lost frame repeats
+ * changes nothing: P25's rendering gives a voiced model its own mark first.
+ */
+static void
+test_low_cut_p25_path(void) {
+    char bits[88];
+    mbe_parms s[3];
+    uint32_t rng = 0x10203u;
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 8; ++f) {
+        p25_voiced_bits(bits, &rng, &s[1]);
+        (void)low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+    }
+    p25_voiced_bits(bits, &rng, &s[1]);
+    s[1].errorRate = 1.0f;
+    const unsigned flags = low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+    assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    s[1].errorRate = 0.0f;
+    char lost[88] = {0};
+    set_imbe_b0(lost, 220);
+    for (int f = 0; f < 8; ++f) {
+        (void)low_path_frame(LOW_P25, lost, s, (f < 4) ? LOW_MOVES : LOW_HOLDS, NULL, -1);
+    }
+    p25_unvoiced_bits(bits, 140, &rng, &s[1]);
+    (void)low_path_frame(LOW_P25, bits, s, LOW_HOLDS, NULL, -1);
+    p25_voiced_bits(bits, &rng, &s[1]);
+    (void)low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+
+    /* The reset model under every error rate. */
+    static const float rates[] = {0.004f, 0.01f, 0.05f, 0.085f, 0.1f};
+    for (size_t r = 0; r < sizeof(rates) / sizeof(rates[0]); ++r) {
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            p25_voiced_bits(bits, &rng, &s[1]);
+            (void)low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+        }
+        for (int f = 0; f < 8; ++f) {
+            low_errors(s, rates[r]);
+            for (int l = 1; l <= 56; ++l) {
+                s[1].log2Ml[l] = 30.0f;
+            }
+            /* Four repeats of the voiced model, then the reset model. */
+            (void)low_path_frame(LOW_P25, lost, s, (f < 4) ? LOW_MOVES : LOW_HOLDS, NULL, -1);
+            assert((f < 4) == low_any_voiced(&s[2]));
+        }
+    }
+    /* A reserved code that smoothing voices throughout. */
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        p25_voiced_bits(bits, &rng, &s[1]);
+        (void)low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+    }
+    {
+        float logm[57];
+        const unsigned char bands[12] = {0};
+        for (int l = 0; l < 57; ++l) {
+            logm[l] = 12.0f;
+        }
+        mbe_imbe4400_quantize_amplitudes(140, bands, logm, &s[1], 0, bits);
+    }
+    low_flatten(LOW_P25, bits, s);
+    low_flatten(LOW_P25, bits, s);
+    low_errors(s, 0.05f);
+    (void)low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+    assert(fully_voiced(&s[2]) && mbe_imbe4400_pulsed_code(s[2].w0) == 12);
+    /* A forged PREVIOUS_HELD on the history a lost frame repeats (a voiced
+     * decoded frame): replaced by the rendering, it moves. */
+    p25_voiced_bits(bits, &rng, &s[1]);
+    (void)low_path_frame(LOW_P25, bits, s, LOW_MOVES, NULL, -1);
+    mbe_set_frame_mark(&s[1], MBE_FRAME_MARK_PREVIOUS_HELD);
+    (void)low_path_frame(LOW_P25, lost, s, LOW_MOVES, NULL, -1);
+    assert(mbe_frame_mark(&s[2]) == MBE_FRAME_MARK_ONSET_COLUMNS);
+}
+
+/*
+ * The tracker through rate 33's data path: fully voiced frames (V/UV row 0)
+ * move it; a silence frame (b0 124) leaves it; lost frames (C0 with four
+ * errors) repeat the last model and move it, and the repeat limit's mute fades
+ * that model out (a silent copy, its voicing kept: it moves it once more),
+ * after which muted frames render nothing; the frame after the mute starts
+ * from silence and moves it by its own model; a tone's first frame leaves it
+ * (the repeat of the last frame it crossfades with is rendered in a scratch
+ * state, ambe3600x2450.c, and the stream's last synthesized frame stays the
+ * last speech frame), as do the tone frames after it and a lost frame under the
+ * tone, and the frame after the tone starts from silence and moves it.
+ */
+static void
+test_low_cut_r33_path(void) {
+    char voiced[49], voiced2[49], silence[49], tone[49] = {0};
+    mbe_parms s[3];
+    set_ambe2450(voiced, 40, 0);
+    set_ambe2450(voiced2, 70, 0);
+    set_ambe2450(silence, 124, 0);
+    r33_tone_bits(tone, 132, 100);
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 6; ++f) {
+        (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+    }
+    (void)low_path_frame(LOW_R33, silence, s, LOW_HOLDS, NULL, 0);
+    (void)low_path_frame(LOW_R33, voiced2, s, LOW_MOVES, NULL, 0);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, voiced2, s, LOW_MOVES, NULL, 4);
+    }
+    const unsigned flags = low_path_frame(LOW_R33, voiced2, s, LOW_MOVES, NULL, 4);
+    assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    (void)low_path_frame(LOW_R33, voiced2, s, LOW_HOLDS, NULL, 4);
+    (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+    (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+    (void)low_path_frame(LOW_R33, tone, s, LOW_HOLDS, NULL, 0);
+    (void)low_path_frame(LOW_R33, tone, s, LOW_HOLDS, NULL, 0);
+    (void)low_path_frame(LOW_R33, voiced, s, LOW_HOLDS, NULL, 4);
+    (void)low_path_frame(LOW_R33, voiced2, s, LOW_MOVES, NULL, 0);
+}
+
+/*
+ * Rate 33's mutes and tone entries, transition by transition, each against the
+ * rule on the model the transition renders: one, two and three consecutive
+ * valid voice frames the error rate mutes (0.2, above 0.096) are each
+ * synthesized unheard and each moves it; an invalid frame muted after them
+ * renders nothing (no fade: nothing was heard) and leaves it; an invalid frame
+ * muted right after a heard frame fades that frame out, rendering its silent
+ * copy (its pitch and voicing), which moves it, and the next muted invalid
+ * frame leaves it; a usable tone (ID 132) straight after heard voice leaves it
+ * at an ordinary error rate (its first frame's repeat is a scratch state) and,
+ * at one that mutes (0.2), takes the mute's fade of the last frame, which moves
+ * it; its next frame holds it, and a lost frame after it holds it while the
+ * tone is held and, after the muted tone (no tone held), repeats the kept
+ * speech model and moves it.
+ */
+static void
+test_low_cut_r33_mutes(void) {
+    char voiced[49], voiced2[49], invalid[49], tone[49] = {0};
+    mbe_parms s[3];
+    set_ambe2450(voiced, 40, 0);
+    set_ambe2450(voiced2, 70, 0);
+    set_ambe2450(invalid, 40, 0);
+    r33_tone_bits(tone, 132, 100);
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, voiced2, s, LOW_MOVES, NULL, 0);
+    }
+    for (int f = 0; f < 3; ++f) {
+        s[1].errorRate = 0.2f;
+        const unsigned flags = low_path_frame(LOW_R33, voiced2, s, LOW_MOVES, NULL, 0);
+        assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u && (flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
+    }
+    s[1].errorRate = 0.2f;
+    (void)low_path_frame(LOW_R33, invalid, s, LOW_HOLDS, NULL, 4);
+    s[1].errorRate = 0.0f;
+    (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+    (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+    {
+        const mbe_parms copy = low_silent_copy(&s[2]);
+        s[1].errorRate = 0.2f;
+        const unsigned flags = low_path_frame(LOW_R33, invalid, s, LOW_MOVES, &copy, 4);
+        assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u);
+    }
+    s[1].errorRate = 0.2f;
+    (void)low_path_frame(LOW_R33, invalid, s, LOW_HOLDS, NULL, 4);
+    for (int muting = 0; muting < 2; ++muting) {
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+        }
+        const mbe_parms copy = low_silent_copy(&s[2]);
+        s[1].errorRate = muting ? 0.2f : 0.0f;
+        const unsigned flags = low_path_frame(LOW_R33, tone, s, muting ? LOW_MOVES : LOW_HOLDS, &copy, 0);
+        assert((flags & MBE_PROCESS_FLAG_TONE) != 0u && ((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == muting);
+        /* The tone's next frame renders nothing; a lost frame after it plays
+         * the held tone (it holds), unless the error rate muted the tone,
+         * which then left no held tone: the lost frame repeats the kept speech
+         * model from silence and moves it. */
+        s[1].errorRate = muting ? 0.2f : 0.0f;
+        (void)low_path_frame(LOW_R33, tone, s, LOW_HOLDS, NULL, 0);
+        s[1].errorRate = 0.0f;
+        (void)low_path_frame(LOW_R33, invalid, s, muting ? LOW_MOVES : LOW_HOLDS, NULL, 4);
+    }
+}
+
+/*
+ * Rate 33's silence frames and pulsed rows that adaptive smoothing voices
+ * throughout (the review's reproductions): after three voiced frames at b0
+ * 40, a prediction history of gain and log2 amplitudes 21, an error rate of
+ * 0.08 and the smoothing's energy at its floor, a silence frame (b0 124) comes
+ * out with all 15 bands voiced and leaves the tracker (its mark,
+ * MBE_FRAME_MARK_PREVIOUS_HELD, and the silence model); at 0.2, muted, it is
+ * synthesized unheard and leaves it too; a lost frame repeating it (the mark
+ * kept) leaves it, and so does an invalid frame muted right after it, whose
+ * fade renders its silent copy (the silence model with no mark). A voice frame
+ * of V/UV row 18 at b0 37 under a history of 17 so voiced is a fully voiced
+ * model and moves it, by the rule on the model rendered. A caller's
+ * PREVIOUS_HELD on a fully voiced last model holds it through the lost frame
+ * that repeats that model, where the same model without the mark moves it.
+ */
+static void
+test_low_cut_r33_smoothed(void) {
+    char voiced[49], silence[49], row18[49], invalid[49];
+    set_ambe2450(voiced, 40, 0);
+    set_ambe2450(silence, 124, 0);
+    set_ambe2450(row18, 37, 18);
+    set_ambe2450(invalid, 40, 0);
+    for (int kind = 0; kind < 5; ++kind) {
+        mbe_parms s[3];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+        }
+        const float level = (kind == 4) ? 17.0f : 21.0f;
+        s[1].gamma = level;
+        for (int l = 1; l <= 56; ++l) {
+            s[1].log2Ml[l] = level;
+        }
+        low_errors(s, (kind == 1) ? 0.2f : 0.08f);
+        const unsigned flags =
+            low_path_frame(LOW_R33, (kind == 4) ? row18 : silence, s, (kind == 4) ? LOW_MOVES : LOW_HOLDS, NULL, 0);
+        assert(fully_voiced(&s[2]));
+        assert(((flags & MBE_PROCESS_FLAG_SILENCE) != 0u) == (kind != 4));
+        assert(((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (kind == 1));
+        if (kind == 2) {
+            /* A lost frame repeats the voiced silence frame, its mark kept. */
+            (void)low_path_frame(LOW_R33, invalid, s, LOW_HOLDS, NULL, 4);
+            assert(fully_voiced(&s[2]) && mbe_frame_mark(&s[2]) == MBE_FRAME_MARK_PREVIOUS_HELD);
+        } else if (kind == 3) {
+            /* A mute right after it fades it out: the silent copy holds it. */
+            s[1].errorRate = 0.2f;
+            (void)low_path_frame(LOW_R33, invalid, s, LOW_HOLDS, NULL, 4);
+        } else if (kind == 4) {
+            assert(holds_a_word(&s[2].PHIl[0]));
+        }
+    }
+    for (int forged = 0; forged < 2; ++forged) {
+        mbe_parms s[3];
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_R33, voiced, s, LOW_MOVES, NULL, 0);
+        }
+        if (forged) {
+            mbe_set_frame_mark(&s[2], MBE_FRAME_MARK_PREVIOUS_HELD);
+        }
+        (void)low_path_frame(LOW_R33, invalid, s, forged ? LOW_HOLDS : LOW_MOVES, NULL, 4);
+        assert(fully_voiced(&s[2]));
+    }
+}
+
+/*
+ * The conditions of the table of frame kinds: a frame that repeats, copies or
+ * renders a model moves the tracker only where that model would, every band
+ * voiced, no mark that holds it and no silence model. Through the public data
+ * paths: D-STAR's tone entry after an audible frame with no voiced band (b1 0)
+ * renders the repeat of that model and holds it; lost frames after a single
+ * tone whose history has no voiced band render a silent copy of it and hold
+ * it, all five; a caller's PREVIOUS_HELD on a fully voiced history holds it
+ * through the three repeats, the repeat limit's fade and the muted repeat after
+ * it. Rate 33's valid voice frames of V/UV row 16 (no voiced band as decoded)
+ * that the error rate mutes, one after another, hold it; after a tone the error
+ * rate muted, a lost frame with the error rate still high is a muted invalid
+ * frame after a muted one and holds it (with it cleared it repeats the kept
+ * model and moves it, test_low_cut_r33_mutes()); a caller's PREVIOUS_HELD on
+ * a fully voiced last model does not hold the fade's silent copy, which drops
+ * the mark, and the first muted frame moves it; under a tone entered at an
+ * ordinary error rate, three lost frames play the held tone and the fourth,
+ * the repeat limit's, mutes with the tone's tail, all holding it, the speech
+ * before the tone fully voiced.
+ */
+static void
+test_low_cut_conditional_rows(void) {
+    char voiced[49], unvoiced[49], lost[49], tone[49], single[49];
+    mbe_parms s[3];
+    set_ambe2400(voiced, 40, 15);
+    set_ambe2400(unvoiced, 40, 0);
+    dstar_special_bits(lost, 125, 0);
+    dstar_special_bits(tone, 126, 130);
+    dstar_special_bits(single, 126, 20);
+    for (int which = 0; which < 2; ++which) {
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+        }
+        (void)low_path_frame(LOW_DSTAR, unvoiced, s, LOW_HOLDS, NULL, -1);
+        assert(!low_any_voiced(&s[2]));
+        (void)low_path_frame(LOW_DSTAR, which ? single : tone, s, LOW_HOLDS, NULL, -1);
+        (void)low_path_frame(LOW_DSTAR, which ? single : tone, s, LOW_HOLDS, NULL, -1);
+        for (int f = 0; f < 5 && which; ++f) {
+            (void)low_path_frame(LOW_DSTAR, lost, s, LOW_HOLDS, NULL, -1);
+        }
+    }
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+    }
+    mbe_set_frame_mark(&s[1], MBE_FRAME_MARK_PREVIOUS_HELD);
+    int muted = 0;
+    for (int f = 0; f < 5; ++f) {
+        const unsigned flags = low_path_frame(LOW_DSTAR, lost, s, LOW_HOLDS, NULL, -1);
+        muted += (flags & MBE_PROCESS_FLAG_MUTE) != 0u;
+    }
+    assert(muted == 2);
+
+    char r_voiced[49], r_row16[49], r_invalid[49], r_tone[49] = {0};
+    set_ambe2450(r_voiced, 40, 0);
+    set_ambe2450(r_row16, 40, 16);
+    set_ambe2450(r_invalid, 40, 0);
+    r33_tone_bits(r_tone, 132, 100);
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    for (int f = 0; f < 3; ++f) {
+        s[1].errorRate = 0.2f;
+        const unsigned flags = low_path_frame(LOW_R33, r_row16, s, LOW_HOLDS, NULL, 0);
+        assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u && !fully_voiced(&s[2]));
+    }
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    {
+        const mbe_parms copy = low_silent_copy(&s[2]);
+        s[1].errorRate = 0.2f;
+        (void)low_path_frame(LOW_R33, r_tone, s, LOW_MOVES, &copy, 0);
+    }
+    s[1].errorRate = 0.2f;
+    (void)low_path_frame(LOW_R33, r_tone, s, LOW_HOLDS, NULL, 0);
+    s[1].errorRate = 0.2f;
+    const unsigned high = low_path_frame(LOW_R33, r_invalid, s, LOW_HOLDS, NULL, 4);
+    assert((high & MBE_PROCESS_FLAG_MUTE) != 0u);
+    /* A caller's PREVIOUS_HELD on the last fully voiced model: the fade's
+     * silent copy drops the mark and moves it. */
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    mbe_set_frame_mark(&s[2], MBE_FRAME_MARK_PREVIOUS_HELD);
+    {
+        const mbe_parms copy = low_silent_copy(&s[2]);
+        s[1].errorRate = 0.2f;
+        (void)low_path_frame(LOW_R33, r_invalid, s, LOW_MOVES, &copy, 4);
+    }
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    (void)low_path_frame(LOW_R33, r_tone, s, LOW_HOLDS, NULL, 0);
+    for (int f = 0; f < 4; ++f) {
+        const unsigned flags = low_path_frame(LOW_R33, r_invalid, s, LOW_HOLDS, NULL, 4);
+        assert(((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (f == 3));
+    }
+}
+
+/*
+ * No caller state brings a frequency the low band cannot take, or a sample
+ * that is not finite: through each codec's data path, a voiced frame and then
+ * a lost frame (which renders the caller's last model as this frame's) after
+ * states whose models (in all three states at once) hold a pitch of FLT_MAX,
+ * 1e30, pi, 3.0, FLT_MIN, a subnormal, 0, a negative value, infinity or NaN,
+ * every band voiced, loud, at harmonic counts 1 and 56; the output stays
+ * finite, and the tracker the frame leaves is a fresh one's or lies within 50
+ * to 500 Hz, its corner within 50 to 200 Hz (a pitch above the codecs' moves
+ * it to 500 at most, a model at a pitch no positive normal float holds does
+ * not move it). The renderers form the filter's frequency only for a harmonic
+ * under Nyquist of a positive normal pitch (prepare_render_dvsi()), so the
+ * helpers see a positive normal value of about 4 kHz at most.
+ */
+static void
+test_low_cut_caller_pitches(void) {
+    static const uint32_t pitches[] = {0x7F7FFFFFu, 0x7149F2CAu, 0x40490FDBu, 0x40400000u, 0x00800000u,
+                                       0x00000001u, 0x00000000u, 0xBE000000u, 0x7F800000u, 0x7FC00000u};
+    static const int counts[] = {1, 56};
+    for (int path = 0; path < 3; ++path) {
+        char voiced[88] = {0}, lost[88] = {0};
+        uint32_t rng = 0x3141u;
+        if (path == LOW_DSTAR) {
+            set_ambe2400(voiced, 40, 15);
+            dstar_special_bits(lost, 125, 0);
+        } else if (path == LOW_P25) {
+            set_imbe_b0(lost, 220);
+        } else {
+            set_ambe2450(voiced, 40, 0);
+            set_ambe2450(lost, 40, 0);
+        }
+        for (size_t p = 0; p < sizeof(pitches) / sizeof(pitches[0]); ++p) {
+            for (size_t c = 0; c < 2; ++c) {
+                for (int frame = 0; frame < 2; ++frame) {
+                    mbe_parms s[3];
+                    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+                    if (path == LOW_P25) {
+                        p25_voiced_bits(voiced, &rng, &s[1]);
+                    }
+                    for (int i = 0; i < 3; ++i) {
+                        s[i].w0 = float_of(pitches[p]);
+                        s[i].L = counts[c];
+                        for (int l = 1; l <= 56; ++l) {
+                            s[i].Vl[l] = 1;
+                            s[i].Ml[l] = 3000.0f;
+                            s[i].log2Ml[l] = 11.5f;
+                        }
+                    }
+                    force_low_cut(&s[2], 180.0f, 150.0f);
+                    float out[160];
+                    mbe_process_result result;
+                    mbe_initProcessResult(&result);
+                    const char* bits = frame ? lost : voiced;
+                    if (path == LOW_DSTAR) {
+                        (void)mbe_processAmbe2400Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+                    } else if (path == LOW_P25) {
+                        (void)mbe_processImbe4400Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+                    } else {
+                        result.flags |= MBE_PROCESS_FLAG_C0_VALID;
+                        result.c0_errors = frame ? 4 : 0;
+                        (void)mbe_processAmbe2450Dataf(out, &result, bits, &s[0], &s[1], &s[2]);
+                    }
+                    assert(all_finite(out, 160));
+                    if (mbe_subframe_state_is_marked(&s[2])) {
+                        const float track = stored_track(&s[2]), corner = stored_corner(&s[2]);
+                        assert(track >= 50.0f && track <= 500.0f && corner >= 50.0f && corner <= 200.0f);
+                    }
+                }
+            }
+        }
+    }
 }
 
 int
@@ -8962,5 +10553,29 @@ main(void) {
     test_r33_forged_history_plays();
     test_r33_pulsed_magnitude_cap();
     test_r33_pulse_times_by_bits();
+    test_low_cut_tracker(MBE_VOICED_SYNTHESIS_DVSI);
+    test_low_cut_tracker(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    test_low_cut_tracker(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_low_cut_tracker(MBE_VOICED_SYNTHESIS_DVSI_PROVOICE);
+    test_low_cut_knee();
+    test_low_cut_level(MBE_VOICED_SYNTHESIS_DVSI);
+    test_low_cut_level(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    test_low_cut_level(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_low_cut_unvoiced_frame(MBE_VOICED_SYNTHESIS_DVSI);
+    test_low_cut_unvoiced_frame(MBE_VOICED_SYNTHESIS_DVSI_IMBE);
+    test_low_cut_unvoiced_frame(MBE_VOICED_SYNTHESIS_DVSI_AMBE2450);
+    test_low_cut_unvoiced_frame(MBE_VOICED_SYNTHESIS_DVSI_PROVOICE);
+    test_untrusted_low_cut();
+    test_low_cut_between_renderings();
+    test_low_cut_range();
+    test_low_cut_dstar_path();
+    test_low_cut_dstar_smoothed();
+    test_low_cut_p25_path();
+    test_low_cut_r33_path();
+    test_low_cut_r33_mutes();
+    test_low_cut_r33_smoothed();
+    test_low_cut_conditional_rows();
+    test_low_cut_caller_pitches();
+    test_low_cut_ties();
     return 0;
 }
