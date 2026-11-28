@@ -148,8 +148,11 @@ appear here.
   not out of sample for them either. The change set was measured and gated on the development,
   validation, tone and channel partitions (four times: the four rules, the change set with the
   review's fixes, after the second review's fixes and the merge of the branch below, against
-  `1e531f8`, and on the code as pushed, after the third review's fixes); the final partition is to be scored once for it, after the review, against
-  `p25-decoder-final`, its baseline `1e531f8` ([November 2026: four rules of DVSI's P25
+  `1e531f8`, and on the code as pushed, after the third review's fixes); the final partition was
+  scored once for it, on 2026-11-28, after the three reviews and their three fix rounds, against
+  `p25-decoder-final`, its baseline `1e531f8` (the build of `git archive 1e531f8` against the build
+  of `0a5548d`): passed, 12 of 12 checks, P25's correlation 0.991928 → 0.997955 ([November 2026:
+  four rules of DVSI's P25
   decoder](#november-2026-four-rules-of-dvsis-p25-decoder)).
 - **A level error no parameter explains.** Before fitting a law to a level error that none of the
   frame's or the harmonic's parameters explains (no correlation with the level, the frequency, the
@@ -8799,7 +8802,7 @@ reports, every one equal:
 | `p25-decoder-validation` | passes all 15 checks | the same on the validation vectors (+0.002939, the least +0.001747; -0.1532 dB), also read in the study |
 | `p25-decoder-tones` | passes all 13 checks | D-STAR's and rate 33's decodes and tone statistics unchanged, P25's tone measures within their limits on the windows the detector calls steady (`cp31`'s agreement 0.973 → 0.946, inside the 0.03 a vector may lose; a fraction per vector, so a longer file could lose several windows); not that the frames between and around the tones are right, nor their waveform correlation |
 | `p25-decoder-channel` | passes all 34 checks | the per-vector mute statistics unchanged in every mode (the flags say no frame's decision changed), D-STAR's and rate 33's channel decodes unchanged, P25's distance from DVSI's decode on the loud frames falling in the mean with hard decisions (by at least 0.015 dB) and rising on no hard-decision vector (ties allowed), and not rising in the mean with soft decisions |
-| `p25-decoder-final` | not scored | the prediction for `irstia` and `mark` |
+| `p25-decoder-final` | passes all 12 checks, scored once (below) | on `irstia` and `mark`, held out, a prediction: P25's correlation with DVSI's decode rising in the mean by at least 0.0010 with its interval above 0 and on neither vector falling, its distance from DVSI's decode falling by at least 0.03 dB with its interval below 0 and on neither vector rising, the envelope, the distance from the input and the level within their limits; D-STAR's and rate 33's decodes and every encoder's rows unchanged |
 
 The four sets hold 77 checks (15, 15, 13 and 34), not the 76 first reported: the channel set has the
 added per-vector check of the hard-decision distance (`all_no_increase`) beside the mean, as declared.
@@ -8891,6 +8894,51 @@ reports, every encoder row equal. All 315 permitted decodes (103 P25, 106 D-STAR
 build of `e3556d3` are byte for byte, PCM and parameter dumps by hash, those of `19379a0` (P25) and
 of `1e531f8` (D-STAR and rate 33).
 
+**The final partition**, scored once, on 2026-11-28 at 03:56 (CST), after the three reviews and
+their three fix rounds, by `build/score-final-p25dec.sh build/baseline-tools build/tools-final .
+build/score-final` (outside the repository): the build of `git archive 1e531f8`
+(`build/baseline-tools`) against the build of `0a5548d` (`build/tools-final`, the head then, a clean
+tree; the scoreboard's Release configuration), both aligning freely first and then scored at their
+joint lags, both runs' encodings decoded by the candidate's decoder, gate set `p25-decoder-final`:
+passed, 12 of 12 checks. The commits after `0a5548d` change documents and one test comment only.
+The gate lines, as printed:
+
+```
+PASS dstar/final speech.pcm_changed_vectors max: value=0
+PASS r33/final speech.pcm_changed_vectors max: value=0
+PASS dstar/final encoder.rows_changed_vectors max: value=0
+PASS p25/final encoder.rows_changed_vectors max: value=0
+PASS r33/final encoder.rows_changed_vectors max: value=0
+PASS p25/final vs_dvsi.waveform_corr_unshifted increase: mean delta=+0.006027 ci95=(0.0028332119818644808, 0.009220125881481023) worst=('irstia', 0.009220125881481023)
+PASS p25/final vs_dvsi.waveform_corr_unshifted all_no_decrease: mean delta=+0.006027 ci95=(0.0028332119818644808, 0.009220125881481023) worst=('irstia', 0.009220125881481023) min=+0.002833
+PASS p25/final vs_dvsi.lsd_db decrease: mean delta=-0.1861 ci95=(-0.25126142381879946, -0.12102211703929433) worst=('irstia', -0.25126142381879946)
+PASS p25/final vs_dvsi.lsd_db all_no_increase: mean delta=-0.1861 ci95=(-0.25126142381879946, -0.12102211703929433) worst=('irstia', -0.25126142381879946) max=-0.121
+PASS p25/final vs_dvsi.env_corr no_decrease: mean delta=+0.0001656 ci95=(7.640862962821071e-05, 0.0002547257662889324) worst=('mark', 0.0002547257662889324)
+PASS p25/final ours.lsd_db no_increase: mean delta=-0.00152 ci95=(-0.005318669839271983, 0.002278644676533048) worst=('mark', -0.005318669839271983)
+PASS p25/final vs_dvsi.level_offset_db abs_delta_max: mean delta=+0.0006384 ci95=(-0.002178542667211028, 0.0034553778542649183) worst=('mark', 0.0034553778542649183)
+gate set p25-decoder-final: PASS
+```
+
+Per vector (the scoreboard's measures, baseline → candidate):
+
+| Codec, vector | Waveform corr. vs DVSI | LSD vs DVSI (dB) | Envelope corr. vs DVSI | LSD vs input (dB) | Level vs DVSI (dB) |
+|---|---|---|---|---|---|
+| P25 `irstia` | 0.988889 → 0.998109 (+0.009220) | 0.929909 → 0.678648 (-0.251261) | 0.995492 → 0.995568 (+0.000076) | 5.325894 → 5.328173 (+0.002279) | +0.019067 → +0.016889 (-0.002179) |
+| P25 `mark` | 0.994967 → 0.997800 (+0.002833) | 1.006725 → 0.885702 (-0.121022) | 0.996545 → 0.996800 (+0.000255) | 5.446603 → 5.441285 (-0.005319) | +0.038266 → +0.041722 (+0.003455) |
+| D-STAR, rate 33 | every measurement equal in both runs | | | | |
+
+The partition's means, P25: correlation 0.991928 → 0.997955 (+0.006027), distance from DVSI's
+decode 0.968317 → 0.782175 dB (-0.186142), from the input 5.386249 → 5.384729 dB (-0.001520: no cost
+established there, `irstia` rising by 0.002279 and `mark` falling by 0.005319), envelope
+correlation +0.000166, level 0.028667 → 0.029305 dB (+0.000638). D-STAR's and rate 33's correlation
+0.995211 and 0.993019 in both runs, every measurement of theirs equal, their four speech PCM hashes
+(`ours.pcm_fnv1a`) equal; P25's two differ, as they must. All six entries carry a PCM hash and an
+encoder-row hash (`encoder.rows_sha256`) in both reports, and all six row hashes are equal. The
+gain is of the in-sample partitions' size and above validation's: development +0.005618,
+validation +0.002937 (the fourth scoring), final +0.006027. The set was declared in `f1be05d`
+naming `f725a66` as the baseline; the run's baseline is `1e531f8`, for the reason the notes below
+give.
+
 **Notes on the declarations** (the sets stay as declared; these correct the account of them): the
 descriptions predate rule 2's pulse train and the mid-frame quadratic's excess, and state rule 2 as
 the interpolating parabola alone. The speech sets' `encoder.vs_dvsi_bits.lsd_db` is the distance of
@@ -8902,9 +8950,9 @@ it (`cp1`, `cpvbad`, `dtmfvbad` unmeasured in both runs). The channel set's rule
 fall of at least 0.015 dB with hard decisions and no rise on any vector (ties allowed), and no rise
 in the mean with soft decisions; its coverage's denominator is the loud frames DVSI leaves unmuted,
 and its selection also leaves out frames a run did not measure and frames next to a mute. Every
-hard-decision vector did fall in all three scorings (the rule asks only that none rise); no whole
+hard-decision vector did fall in all four scorings (the rule asks only that none rise); no whole
 check passed on missing measurements alone. The final set's description names `f725a66`, the branch
-below of its declaration, as the baseline; its one scoring is to use `1e531f8`, the branch below as
+below of its declaration, as the baseline; its one scoring used `1e531f8`, the branch below as
 merged (`build/score-final-p25dec.sh`, outside the repository), which decodes every P25 vector as
 `f725a66` and whose D-STAR and rate-33 decodes and encoder rows the candidate shares, so that the
 set's identity checks on D-STAR's and rate 33's decodes and every encoder row compare like with like

@@ -1039,7 +1039,9 @@ test_tone_levels_decided_once(void) {
             /* FLT_MIN times 31^rung (to about 1.5e29), then 1e30 */
             const double level = (rung < 46) ? (double)FLT_MIN * pow(31.0, (double)rung) : 1.0e30;
             for (int step = 0; step < 3; ++step) {
-                /* FLT_MIN itself, and the two floats above it at each rung */
+                /* the rung's level and two above it, 1 + 1e-6 and 1 + 2e-6 times it,
+                 * each rounded to float: 1e-6 is 8 to 17 float steps (a float's
+                 * relative step is 2^-24 to 2^-23), so not the next floats */
                 const float at = (float)(level * (1.0 + (double)step * 1.0e-6));
                 struct stream t = row;
                 history_at_level(&t, l1, l2, at);
