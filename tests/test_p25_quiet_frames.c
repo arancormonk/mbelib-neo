@@ -52,8 +52,10 @@
 #include <float.h>
 #include <math.h>
 #include <stdint.h>
-#include <stdio.h>
+#include <stdio.h> /* also defines __GLIBC__ with glibc (QUIET_EXP2_BY_BITS) */
 #include <string.h>
+/* IWYU pragma: no_include <features.h> (glibc's own header; __GLIBC__ comes with <stdio.h>, and other C libraries
+ * have no such header) */
 
 #include "imbe4400_internal.h"
 #include "mbe_adaptive.h"
