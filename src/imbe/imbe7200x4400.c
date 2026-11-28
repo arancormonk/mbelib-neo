@@ -1439,6 +1439,31 @@ mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
     return 1;
 }
 
+/*
+ * The frame's synthesis, as DVSI's P25 decoder without eq 116's scaling, with
+ * P25's quiet-frame gain where quiet_allowed (not on a tone model, whose level
+ * is its own rule, nor in ProVoice): read from the decoded log2 magnitudes of
+ * the model the frame plays (neither the enhancement nor the tone model writes
+ * log2Ml) and applied once, inside the synthesis, to the magnitudes adaptive
+ * smoothing leaves. It is never stored where a model is decoded or repeated
+ * from: prev_mp, the prediction history and the repeat source, is committed
+ * as decoded before the enhancement, so a lost frame's repeat, which loads
+ * it, plays the repeated frame's magnitudes at that frame's gain, applied once
+ * (the repeat limit's reset model has log2Ml 0: no gain).
+ */
+static void
+imbe4400_render(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, float pre_enh_rm0,
+                enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis rendering, int quiet_allowed) {
+    double quiet_gain = 1.0;
+    if (quiet_allowed && mbe_imbe4400_quiet_gain(cur_mp, &quiet_gain)) {
+        mbe_synthesizeSpeechScaledf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, quiet_gain, mute_noise, rendering,
+                                    MBE_AMPLITUDE_LIMIT_NONE);
+    } else {
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
+                                           MBE_AMPLITUDE_LIMIT_NONE);
+    }
+}
+
 static void
 imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_mute_noise mute_noise,
                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
@@ -1468,17 +1493,6 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
     /* The prediction history (prev_mp) keeps the decoded frame; a tone frame's
      * synthesis model is the tone model, from its decoded magnitudes. */
     const int plays_tone = !imbe4400_is_provoice(result) && imbe4400_take_tone(cur_mp, &tone);
-    /* P25's quiet-frame gain, from the decoded log2 magnitudes of the model
-     * the frame plays; none on a tone model (a tone's level is its own rule)
-     * or in ProVoice. It is applied once, inside the synthesis, to the
-     * magnitudes adaptive smoothing leaves, and never stored where a model is
-     * decoded or repeated from: prev_mp, the prediction history and the
-     * repeat source, was committed above as decoded, and the gain is read from
-     * log2Ml, which no rendering step writes. A lost frame's repeat loads that
-     * history, so it plays the repeated frame's magnitudes at that frame's
-     * gain, applied once (the reset model's log2Ml are 0: no gain). */
-    double quiet_gain = 1.0;
-    const int quiet = !plays_tone && !imbe4400_is_provoice(result) && mbe_imbe4400_quiet_gain(cur_mp, &quiet_gain);
     float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0(cur_mp, MBE_HIGH_BAND_GAIN_IMBE);
     if (plays_tone) {
         imbe4400_play_tone(cur_mp, &tone);
@@ -1488,13 +1502,8 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
      * state (no DVSI ProVoice material shows one). */
     const enum mbe_voiced_synthesis rendering =
         imbe4400_is_provoice(result) ? MBE_VOICED_SYNTHESIS_DVSI_PROVOICE : MBE_VOICED_SYNTHESIS_DVSI_IMBE;
-    if (quiet) {
-        mbe_synthesizeSpeechScaledf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, quiet_gain, mute_noise, rendering,
-                                    MBE_AMPLITUDE_LIMIT_NONE);
-    } else {
-        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
-                                           MBE_AMPLITUDE_LIMIT_NONE);
-    }
+    imbe4400_render(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
+                    !plays_tone && !imbe4400_is_provoice(result));
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
