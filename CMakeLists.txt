@@ -1313,14 +1313,15 @@ if(MBELIB_BUILD_TESTS)
             PRIVATE $<$<CONFIG:Debug>:MBELIB_TEST_FENV_OVERFLOW=1>
         )
     endif()
-    # The AMBE+2 and IMBE encoder tests and the AMBE vector search test drive
-    # private quantizer steps and the Hamming encoder, which the shared library
-    # does not export.
+    # The AMBE+2 and IMBE encoder tests, the AMBE vector search test and the AMBE
+    # block-length test drive private quantizer steps and the Hamming encoder,
+    # which the shared library does not export.
     foreach(
         _enc_test
         test_ambe2450_encoder
         test_imbe7200_encoder
         test_ambe_vector_search
+        test_ambe_block_lengths
     )
         add_executable(${_enc_test} tests/${_enc_test}.c)
         target_link_libraries(${_enc_test} PRIVATE mbe-static)
@@ -1344,6 +1345,24 @@ if(MBELIB_BUILD_TESTS)
         endif()
         add_test(NAME ${_enc_test} COMMAND ${_enc_test})
     endforeach()
+    # test_ambe_block_lengths compares the AMBE decoders with an exact result it
+    # forms itself, bit for bit where the library and the test both evaluate
+    # float arithmetic as written (an IEEE library, contraction off: Debug).
+    if(MBELIB_ENABLE_FAST_MATH)
+        target_compile_definitions(
+            test_ambe_block_lengths
+            PRIVATE MBELIB_TEST_LIBRARY_FAST_MATH=1
+        )
+    endif()
+    if(
+        CMAKE_C_COMPILER_ID MATCHES "Clang|GNU"
+        AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+    )
+        target_compile_definitions(
+            test_ambe_block_lengths
+            PRIVATE $<$<CONFIG:Debug>:MBELIB_TEST_FP_CONTRACT_OFF=1>
+        )
+    endif()
     # Exercise every partial plan allocation and retry with GNU link wrapping,
     # for each encoder (they share the analysis front end).
     # LTO can resolve allocator calls before the linker can wrap them.
@@ -2122,6 +2141,7 @@ if(MBELIB_BUILD_TESTS)
         test_ambe2450_encoder
         test_imbe7200_encoder
         test_ambe_vector_search
+        test_ambe_block_lengths
         test_speech_analysis
         test_simd_numerics
         test_noise_determinism
