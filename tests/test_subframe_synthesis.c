@@ -902,11 +902,36 @@ reference_response(const struct mbe_subframe_model* model, const struct referenc
     return reference_window(t, 2.0 * M_PI / (double)model->w0) * sum;
 }
 
-/* The pulses of one subframe from sample `start`, between models a and b. */
+/* Whether a pitch lies on P25's grid, n steps of 2^-19 cycle per sample, by
+ * its bits: the float of 2 pi n / 2^19, formed here, for the n nearest it. */
+static int
+reference_grid_steps(float w0, long* n) {
+    const double position = (double)w0 * 524288.0 / (2.0 * M_PI);
+    if (!(position >= 0.5 && position <= 262144.0)) {
+        return 0;
+    }
+    *n = (long)floor(position + 0.5);
+    const float grid = (float)(2.0 * M_PI * (double)*n / 524288.0);
+    return same_bits(&grid, &w0, 1);
+}
+
+/* The pulses of one subframe from sample `start`, between models a and b, in
+ * `rendering`: the rate moves linearly from a's fundamental to b's (after an
+ * octave step where the period ratio asks for it); in P25's rendering, between
+ * two voiced models on the 2^-19 grid with no octave step, from n_a steps to
+ * 2 floor((n_a + n_b) / 2) - n_a, so that the subframe advances the train by
+ * 80 floor((n_a + n_b) / 2) steps. */
 static void
 reference_advance(struct reference_train* train, double start, const struct mbe_subframe_model* a,
-                  const struct mbe_subframe_model* b) {
+                  const struct mbe_subframe_model* b, enum mbe_voiced_synthesis rendering) {
     double from = (double)a->w0 / (2.0 * M_PI), to = (double)b->w0 / (2.0 * M_PI);
+    long na = 0, nb = 0;
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE && a->any_voiced && b->any_voiced
+        && reference_grid_steps(a->w0, &na) && reference_grid_steps(b->w0, &nb) && !(from / to > 1.6 && from / to < 2.4)
+        && !(from / to > 0.4 && from / to < 0.6)) {
+        from = (double)na / 524288.0;
+        to = (double)(((na + nb) / 2) * 2 - na) / 524288.0;
+    }
     if (!a->any_voiced && !b->any_voiced) {
         /* A new train starts after this subframe: nothing of the old one sounds on. */
         train->phase = 0.0;
@@ -1465,9 +1490,10 @@ reference_r33_mid_pitch(double a, double b) {
  * per sample), from its statement: with fa fb = y s the product of the two
  * fundamentals in cycles per sample, y in [1, 2) and s a power of two (found
  * here by halving and doubling, not frexp()), the parabola q through sqrt at
- * 1, 1.5 and 2 stands for sqrt(y), so sqrt(fa fb) becomes q(y) sqrt(s); that
- * in steps of 2^-19 cycle, floored, as radians per sample. In double. A
- * product of fundamentals past 2^64 gives no pitch (0). */
+ * 1, 1.5 and 2, raised by the fitted excess (1 + 2 (y - 1)) 2^-15, stands for
+ * sqrt(y), so sqrt(fa fb) becomes q(y) sqrt(s); that in steps of 2^-19 cycle,
+ * floored, as radians per sample. In double. A product of fundamentals past
+ * 2^64 gives no pitch (0). */
 static double
 reference_p25_mid_pitch(double a, double b) {
     double y = (a / (2.0 * M_PI)) * (b / (2.0 * M_PI));
@@ -1484,7 +1510,8 @@ reference_p25_mid_pitch(double a, double b) {
         scale *= 0.5;
     }
     const double d = y - 1.5;
-    const double q = sqrt(1.5) + ((sqrt(2.0) - 1.0) * d) + (2.0 * (sqrt(2.0) + 1.0 - (2.0 * sqrt(1.5))) * d * d);
+    const double q = sqrt(1.5) + ((sqrt(2.0) - 1.0) * d) + (2.0 * (sqrt(2.0) + 1.0 - (2.0 * sqrt(1.5))) * d * d)
+                     + ((1.0 + (2.0 * (y - 1.0))) / 32768.0);
     return 2.0 * M_PI * floor(524288.0 * q * sqrt(scale)) / 524288.0;
 }
 
@@ -1938,6 +1965,10 @@ shape_model(mbe_parms* mp, size_t f) {
  * 0.1% above the one listed, so that no position the columns' rule rounds (a
  * band's lowest harmonic, a column edge) falls on a whole number, where this
  * test's arithmetic and the library's could round apart. */
+/* A wave_frame's `reserved` at or below this: the decoded pitch of code
+ * WAVE_CODE_PITCH - reserved (edge_pitch()). */
+#define WAVE_CODE_PITCH (-100)
+
 struct wave_frame {
     double hz;
     int L, voiced;
@@ -1960,6 +1991,11 @@ static float
 edge_pitch(enum mbe_voiced_synthesis rendering, int which) {
     const uint32_t bits = (which == -1) ? UINT32_C(0x3E490FDA) : UINT32_C(0x3E3D3C19);
     float w0;
+    if (which <= WAVE_CODE_PITCH) {
+        /* A pitch code's decoded pitch, as the rendering's codec decodes it
+         * (P25's for the IMBE family, on the 2^-19 grid; D-STAR's otherwise). */
+        return decoded_pitch(!reference_imbe(rendering), WAVE_CODE_PITCH - which);
+    }
     if (which == -3) {
         return decoded_pitch(!reference_imbe(rendering), reference_imbe(rendering) ? 25 : 34);
     }
@@ -2044,6 +2080,22 @@ test_waveform_through_changes(enum mbe_voiced_synthesis rendering, int inexact) 
         {95.0, 38, 38, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},
         {95.0, 38, 38, 6.0f, MBE_FRAME_MARK_NONE, 0, 0},
         {95.0, 38, 20, 6.0f, MBE_FRAME_MARK_NONE, 0, 0}, /* not fully voiced: the tracker holds */
+        /* Decoded pitches of codes (in P25's rendering on the 2^-19 grid, where
+         * each subframe advances the train by its two ends' mean fundamental
+         * floored to the grid): a run at one code, steps of one code (an odd
+         * and an even sum with the mid-frame value), and a step of 27 codes, at
+         * the level of the frames before them (the tolerance is absolute: at
+         * amplitude 16 a fully voiced frame of 27 harmonics differs by up to
+         * 0.055 of a sample's 100 or more, with or without the floors, which
+         * float pulse times and phases explain). */
+        {0.0, 27, 27, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 80},
+        {0.0, 27, 27, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 80},
+        {0.0, 27, 27, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 81},
+        {0.0, 27, 27, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 81},
+        {0.0, 27, 20, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 80},
+        {0.0, 21, 21, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 53},
+        {0.0, 21, 21, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 54},
+        {0.0, 21, 12, 6.0f, MBE_FRAME_MARK_NONE, 0, WAVE_CODE_PITCH - 53},
     };
     long counts[3];
     memcpy(counts, g_low_cut_counts, sizeof(counts));
@@ -2552,9 +2604,9 @@ run_waveform(enum mbe_voiced_synthesis rendering, int inexact, const struct wave
         struct reference_band band[3];
         reference_tracker_frame(&tracker, &cur, rendering, band);
         count_low_cut(models, band);
-        reference_advance(&train, start, &models[0], &models[1]);
+        reference_advance(&train, start, &models[0], &models[1], rendering);
         reference_render(want, start, &train, &models[0], &band[0], phases[0], &models[1], &band[1], phases[1]);
-        reference_advance(&train, start + 80.0, &models[1], &models[2]);
+        reference_advance(&train, start + 80.0, &models[1], &models[2], rendering);
         reference_render(want + 80, start + 80.0, &train, &models[1], &band[1], phases[1], &models[2], &band[2],
                          phases[2]);
         double pulses[160] = {0.0};
@@ -5605,12 +5657,12 @@ mid_pitch_gives(const mbe_parms* prev, const mbe_parms* cur, double want) {
 
 /*
  * P25's mid-frame pitch between two voiced models, against the floored
- * parabola formed here from its statement (reference_p25_mid_pitch(): the
+ * parabola with the fitted excess formed here from its statement (reference_p25_mid_pitch(): the
  * mantissa found by halving and doubling, sqrt(fa fb) as q(y) times the root
  * of the power of two), bit for bit in every build, over every ordered pair of
  * the 208 codes, each code against itself included: the unfloored value lies
- * at least 6.26e-6 of a grid step from a whole number at every pair (b0 8 and
- * 100) and no product of two codes' fundamentals is an exact power of two, so
+ * at least 4.93e-5 of a grid step from a whole number at every pair (b0 17 and
+ * 192) and no product of two codes' fundamentals is an exact power of two, so
  * no build's double arithmetic floors it otherwise. At equal pitches the
  * parabola's deviation is there (it moves most codes off their own pitch).
  * D-STAR's, ProVoice's and rate 33's renderings keep their own rules on the
@@ -5733,6 +5785,191 @@ test_p25_mid_pitch_pairs(int tolerant, int inexact) {
         const double want = lows[i].accepted ? reference_p25_mid_pitch((double)prev.w0, (double)cur.w0) : 0.0;
         assert(!lows[i].accepted || want > 0.0);
         assert(mid_pitch_gives(&prev, &cur, want) == lows[i].accepted);
+    }
+}
+
+/* The grid steps of P25 code b0's pitch, floor(2^21 / (2 b0 + 79)), and of
+ * the mid-frame pitch between two models of codes a and b (the reference's
+ * floored parabola with the excess). */
+static long
+code_steps(int b0) {
+    return 2097152L / (long)((2 * b0) + 79);
+}
+
+static long
+mid_steps(int a, int b) {
+    const double turn = 2.0 * M_PI;
+    const double w =
+        reference_p25_mid_pitch(turn * (double)code_steps(a) / 524288.0, turn * (double)code_steps(b) / 524288.0);
+    return lround(w * 524288.0 / turn);
+}
+
+/* The train's advance over the frame from a model of code a to one of code b
+ * in P25's rendering, in steps: each subframe its two ends' mean, floored. */
+static long
+frame_advance(int a, int b) {
+    const long na = code_steps(a), nb = code_steps(b), m = mid_steps(a, b);
+    return 80L * (((na + m) / 2) + ((m + nb) / 2));
+}
+
+/* Renders (or, `advance`, advances unrendered) a frame of model `model` after
+ * `last` in `rendering`. */
+static void
+train_frame(mbe_parms* last, const mbe_parms* model, enum mbe_voiced_synthesis rendering, int advance) {
+    float out[160];
+    if (!advance) {
+        next_frame_as(out, last, model, 0, rendering);
+        return;
+    }
+    mbe_parms cur = *last;
+    cur.w0 = model->w0;
+    cur.L = model->L;
+    memcpy(cur.Vl, model->Vl, sizeof(cur.Vl));
+    copy_amplitudes(&cur, model);
+    mbe_set_frame_mark(&cur, mbe_frame_mark(model));
+    mbe_advance_subframes(&cur, last, 0, rendering);
+    *last = cur;
+}
+
+/* A stream at P25 code `first`, one frame played, its stored pulse phase then
+ * set to exactly 0, so that every later advance is a whole number of steps. */
+static void
+train_at_zero(mbe_parms* last, const mbe_parms* model, enum mbe_voiced_synthesis rendering) {
+    float out[160];
+    fresh_stream(last);
+    next_frame_as(out, last, model, 1, rendering);
+    last->noiseOverlap[PHASE_SLOT] = 0.0f;
+}
+
+/* The stored pulse phase in steps of 2^-19 cycle, which must be a whole
+ * number: returns it, or -1 where it is not. */
+static long
+phase_steps(const mbe_parms* mp) {
+    const double steps = pulse_phase(mp) * 524288.0;
+    return (steps == floor(steps)) ? (long)steps : -1;
+}
+
+/*
+ * P25's pulse train advances each subframe by its two ends' mean fundamental
+ * floored to the 2^-19 grid, 80 floor((n_a + n_b) / 2) steps, with the
+ * mid-frame value the floored parabola plus the fitted excess. On the 37
+ * codes that DVSI's pulse-train vectors hold long enough to read (the
+ * addendum's table, re-derived on the library): from a stored phase of
+ * exactly 0, the phase after 12 frames at the code is exactly 12 x 160
+ * floor((n + M) / 2) steps modulo a cycle (an integer count, in every
+ * build), and floor((n + M) / 2) - n is the value DVSI's decodes give (in
+ * units of 160 steps a frame): the codes where the excess raises M by a step
+ * (b0 51, 53, 75, 80, 94, 95, 164) and those where the floor of an odd sum
+ * matters fail without them. Steps between codes, odd and even sums: code 80
+ * and 81 alternating, 53 and 54, 21 and 22, by the same count, rendered and
+ * advanced unrendered alike. Not on the grid (the pitch one ulp off code 21's,
+ * whose own M - n is odd) and across an octave (codes 21 and 81, a period
+ * ratio near 2), the interval keeps the linear sweep from the two ends' rates
+ * as before (the reference's reference_advance(), within 1e-9 cycle), and
+ * there the floored count is not what it gives. D-STAR's, rate 33's and
+ * ProVoice's renderings at the same pitches keep the linear sweep, with their
+ * own mid-frame pitch.
+ */
+static void
+test_p25_train_by_steps(void) {
+    static const int table[][2] = {
+        {7, 6},    {21, -10}, {30, 5},   {40, -7},  {42, -8}, {46, -7}, {49, -4}, {50, -2}, {51, 0},  {53, 3},
+        {54, 3},   {59, 3},   {61, 2},   {62, 2},   {63, 1},  {64, 0},  {69, -3}, {71, -4}, {74, -5}, {75, -5},
+        {79, -6},  {80, -5},  {88, -1},  {89, 0},   {90, 1},  {94, 3},  {95, 3},  {100, 2}, {106, 0}, {107, 0},
+        {114, -2}, {124, -4}, {130, -4}, {131, -4}, {158, 1}, {164, 1}, {165, 0},
+    };
+    const enum mbe_voiced_synthesis p25 = MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
+        const int b0 = table[i][0];
+        const long n = code_steps(b0), m = mid_steps(b0, b0);
+        assert(((n + m) / 2) - n == table[i][1]);
+        mbe_parms model, last;
+        p25_voiced_code(&model, b0);
+        assert(lround((double)model.w0 * 524288.0 / (2.0 * M_PI)) == n);
+        struct mbe_subframe_model mid;
+        mbe_subframe_mid_model(&model, &model, 0, p25, &mid);
+        assert(lround((double)mid.w0 * 524288.0 / (2.0 * M_PI)) == m);
+        for (int advance = 0; advance < 2; ++advance) {
+            train_at_zero(&last, &model, p25);
+            for (int f = 0; f < 12; ++f) {
+                train_frame(&last, &model, p25, advance);
+            }
+            assert(phase_steps(&last) == (12L * frame_advance(b0, b0)) % 524288L);
+        }
+    }
+
+    /* Steps between neighbouring codes: odd and even sums. */
+    static const int pairs[][2] = {{80, 81}, {53, 54}, {21, 22}};
+    int odd = 0, even = 0;
+    for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i) {
+        mbe_parms models[2], last;
+        p25_voiced_code(&models[0], pairs[i][0]);
+        p25_voiced_code(&models[1], pairs[i][1]);
+        for (int advance = 0; advance < 2; ++advance) {
+            train_at_zero(&last, &models[1], p25);
+            long want = 0;
+            for (int f = 0; f < 12; ++f) {
+                const int from = (f == 0) ? 1 : ((f - 1) % 2), to = f % 2;
+                train_frame(&last, &models[to], p25, advance);
+                want += frame_advance(pairs[i][from], pairs[i][to]);
+                const long na = code_steps(pairs[i][from]), m = mid_steps(pairs[i][from], pairs[i][to]);
+                odd += ((na + m) % 2) != 0;
+                even += ((na + m) % 2) == 0;
+            }
+            assert(phase_steps(&last) == want % 524288L);
+        }
+    }
+    assert(odd > 0 && even > 0);
+
+    /* Off the grid and across an octave: the linear sweep, as the reference
+     * has it, and not the floored count. */
+    mbe_parms on21, off21, oct;
+    p25_voiced_code(&on21, 21);
+    off21 = on21;
+    off21.w0 = nextafterf(on21.w0, INFINITY);
+    p25_voiced_code(&oct, 81);
+    const double ratio = (double)on21.w0 / (double)oct.w0;
+    assert(ratio > 1.6 && ratio < 2.4);
+    const mbe_parms* sequences[][2] = {{&off21, &off21}, {&on21, &oct}};
+    for (size_t i = 0; i < 2; ++i) {
+        mbe_parms last;
+        train_at_zero(&last, sequences[i][0], p25);
+        struct mbe_subframe_model models[3];
+        mbe_subframe_own_model(&last, &models[0]);
+        mbe_subframe_mid_model(&last, sequences[i][1], 0, p25, &models[1]);
+        mbe_subframe_own_model(sequences[i][1], &models[2]);
+        struct reference_train train;
+        memset(&train, 0, sizeof(train));
+        reference_advance(&train, 0.0, &models[0], &models[1], p25);
+        reference_advance(&train, 80.0, &models[1], &models[2], p25);
+        train_frame(&last, sequences[i][1], p25, 0);
+        assert(fabs(cycles_apart(pulse_phase(&last), train.phase)) < 1.0e-9);
+        if (i == 0) {
+            /* code 21's own frame advance would be the floored count */
+            assert(fabs(cycles_apart(pulse_phase(&last), (double)(frame_advance(21, 21) % 524288L) / 524288.0))
+                   > 1.0e-5);
+        }
+    }
+
+    /* The other renderings at P25's grid pitches: the linear sweep with their
+     * own mid-frame pitch. */
+    static const enum mbe_voiced_synthesis others[] = {MBE_VOICED_SYNTHESIS_DVSI, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450,
+                                                       MBE_VOICED_SYNTHESIS_DVSI_PROVOICE};
+
+    for (size_t r = 0; r < sizeof(others) / sizeof(others[0]); ++r) {
+        mbe_parms models[2], last;
+        p25_voiced_code(&models[0], 80);
+        p25_voiced_code(&models[1], 81);
+        train_at_zero(&last, &models[0], others[r]);
+        struct mbe_subframe_model ends[3];
+        mbe_subframe_own_model(&last, &ends[0]);
+        mbe_subframe_mid_model(&last, &models[1], 0, others[r], &ends[1]);
+        mbe_subframe_own_model(&models[1], &ends[2]);
+        const double fa = (double)ends[0].w0 / (2.0 * M_PI), fm = (double)ends[1].w0 / (2.0 * M_PI),
+                     fb = (double)ends[2].w0 / (2.0 * M_PI);
+        const double want = (40.0 * (fa + fm)) + (40.0 * (fm + fb));
+        train_frame(&last, &models[1], others[r], 0);
+        assert(fabs(cycles_apart(pulse_phase(&last), want - floor(want))) < 1.0e-6);
     }
 }
 
@@ -10848,6 +11085,7 @@ main(void) {
     test_p25_mid_columns_across_steps();
     test_p25_forged_tone_in_state();
     test_p25_tone_model_forgeries();
+    test_p25_train_by_steps();
     test_row17_mark_in_codec_states();
     test_dstar_exact_column_edge();
     test_rate33_hold_past_l();

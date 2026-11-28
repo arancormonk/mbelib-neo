@@ -23,7 +23,11 @@
  *    MBE_PULSE_PEAK samples and the responses of a steady train add up to
  *    the harmonics; the pulse rate moves linearly from one model's pitch to
  *    the next's across an interval, after taking the train an octave down or
- *    up first where the new period is within 20% of twice or of half the old;
+ *    up first where the new period is within 20% of twice or of half the old
+ *    (in P25's rendering, between two voiced models on the 2^-19 grid with no
+ *    octave step, the interval advances the train by exactly its two ends'
+ *    mean fundamental floored to the grid, 80 floor((n_a + n_b) / 2) steps,
+ *    the rate's end lowered by a step where the sum is odd);
  *  - the unvoiced part is mbe_synthesizeUnvoicedSubframes().
  */
 
@@ -234,11 +238,12 @@ void mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthe
  * and by the half-octave wave (MBE_AMBE2450_MID_PITCH_WAVE_C0), in double,
  * rounded to float once. In P25's rendering the mid-frame pitch of two
  * models that both have a voiced band, of the same pitch or not, is the
- * floored parabola (docs/dvsi-parity.md, "P25 pitch"): with fa fb = y 2^e the
- * product of the two fundamentals in cycles per sample, y in [1, 2), and q(y)
- * the parabola through sqrt(y) at 1, 1.5 and 2, floor(2^19 sqrt(fa fb) q(y) /
- * sqrt(y)) / 2^19 cycle per sample, formed in double and rounded to float
- * once; a product past 2^64 gives no pitch. No other case changes.
+ * floored quadratic (docs/dvsi-parity.md, "P25 pitch"): with fa fb = y 2^e
+ * the product of the two fundamentals in cycles per sample, y in [1, 2), q(y)
+ * the parabola through sqrt(y) at 1, 1.5 and 2 and e(y) = (1 + 2 (y - 1))
+ * 2^-15 a fitted excess, floor(2^19 sqrt(fa fb) (q(y) + e(y)) / sqrt(y)) /
+ * 2^19 cycle per sample, formed in double and rounded to float once; a
+ * product past 2^64 gives no pitch. No other case changes.
  * In D-STAR's and P25's renderings (MBE_VOICED_SYNTHESIS_DVSI,
  * MBE_VOICED_SYNTHESIS_DVSI_IMBE) a band's voicing comes from 500 Hz columns
  * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"): a

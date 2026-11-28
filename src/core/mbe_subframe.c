@@ -358,36 +358,46 @@ ambe2450_mid_pitch(float a, float b) {
 /*
  * P25's mid-frame pitch between two models that both have a voiced band, a
  * and b (each positive and normal; docs/dvsi-parity.md, "P25 pitch"): not
- * their geometric mean but a parabola for its square root, floored to the
+ * their geometric mean but a quadratic for its square root, floored to the
  * grid of 2^-19 cycle per sample its frames' own pitches lie on. With
  * fa fb = y 2^e the product of the two fundamentals in cycles per sample, y
- * in [1, 2), and q(y) the parabola through sqrt(y) at y = 1, 1.5 and 2,
+ * in [1, 2), q(y) the parabola through sqrt(y) at y = 1, 1.5 and 2,
  *   q(y) = sqrt(1.5) + (sqrt(2) - 1) (y - 1.5)
  *          + 2 (sqrt(2) + 1 - 2 sqrt(1.5)) (y - 1.5)^2,
- * the mid-frame fundamental is floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19:
- * the geometric mean times q(y) / sqrt(y), which is 1 at the octave's ends
- * and at y = 1.5 (between them q(y) / sqrt(y) - 1 reaches -1.2035e-3 at
- * y = 1.1869 and +7.7104e-4 at y = 1.7701), then floored. Found on DVSI's decodes of its own P25 encodings, from the
- * change over a frame of the lag between DVSI's decode and ours read at the
- * frame's two boundaries, which the mid-frame pitch alone sets: one curve in
- * the fractional part of log2 of the two periods' product, the same at an
- * unchanged pitch code as at a step, which the parabola leaves at the
- * measurement's noise; the floor was told from rounding and from none once
- * the phase kernel read unvoiced bands as DVSI's decoder does
- * (phase_log2_amplitudes()). No constant is fitted: the nodes are the
- * interpolant's and the grid the frames' own. What the decoder computes is
- * not known beyond that output.
+ * and e(y) = (1 + 2 (y - 1)) 2^-15 the excess (MID_PITCH_EXCESS_0 and _1),
+ * the mid-frame fundamental is
+ *   floor(2^19 sqrt(fa fb) (q(y) + e(y)) / sqrt(y)) / 2^19:
+ * the geometric mean times (q(y) + e(y)) / sqrt(y), which lies within 1 -
+ * 1.17e-3 .. 1 + 8.30e-4 (q(y) / sqrt(y) alone is 1 at the octave's ends and
+ * at y = 1.5 and reaches -1.2035e-3 at y = 1.1869 and +7.7104e-4 at
+ * y = 1.7701 between them), then floored. The interpolant was found on
+ * DVSI's decodes of its own P25 encodings, from the change over a frame of
+ * the lag between DVSI's decode and ours read at the frame's two boundaries,
+ * which the mid-frame pitch alone sets (one curve in the fractional part of
+ * log2 of the two periods' product, the same at an unchanged pitch code as at
+ * a step); the floor was told from rounding and from none once the phase
+ * kernel read unvoiced bands as DVSI's decoder does. The excess is a fit: on
+ * DVSI's pulse-train vectors, with each subframe's advance floored
+ * (p25_advance_interval()), 30 of the 37 codes held long enough to read come
+ * out exact with q alone and 7 need the mid-frame value a step higher, which
+ * this excess (two constants, one and two units of 2^-15) gives while every
+ * bound the other codes set holds; other forms are exact there too (a
+ * relative excess of (30 + 35 (y - 1)) 1e-6), and the decoder's fixed-point
+ * form was not found. What the decoder computes is not known beyond that
+ * output.
  * Formed in double from the stored floats: their product is exact in double,
  * divided by (2 pi)^2 for the fundamentals' product, its mantissa by frexp(),
  * the square roots from libm in double, the floor in double, and the pitch, 2
  * pi times the whole number of steps over 2^19, rounded to float once. Over
  * every ordered pair of the 208 P25 codes (equal codes included) the
- * unfloored number of steps lies at least 6.26e-6 of a step from a whole
- * number (b0 8 and 100), 4.87e-10 of itself, so no build's double
- * arithmetic (x87's extended one, fast-math's reordering) floors it otherwise;
- * no product of two codes' fundamentals is an exact power of two (q's ends
- * meet there: 1 at y = 1 and at y = 2); and 2 pi times any whole number of
- * steps from 3,000 to 27,000 lies at least 7.57e-13 of itself from a float's
+ * unfloored number of steps lies at least 4.93e-5 of a step from a whole
+ * number (b0 17 and 192, 9157.99995), 5.39e-9 of itself, and exact
+ * arithmetic (decimal, 60 digits) floors every pair as the library's double
+ * arithmetic does, so no build's double arithmetic (x87's extended one,
+ * fast-math's reordering) floors it otherwise; no product of two codes'
+ * fundamentals is an exact power of two (where q's ends meet and the excess
+ * jumps, from 3 2^-15 to 2^-15); and 2 pi times any whole number of steps
+ * from 3,000 to 27,000 lies at least 7.57e-13 of itself from a float's
  * rounding edge. A caller's pitches can put the value anywhere within the
  * range below: each build then floors as its arithmetic gives, the pitch
  * staying within a step.
@@ -401,15 +411,21 @@ ambe2450_mid_pitch(float a, float b) {
  * is exact in double (two 24-bit mantissas), at least 2^-252 and at most
  * 2^64 (2 pi)^2, so P is a normal double, from about 2^-258 to 2^64; frexp()
  * splits it exactly into y in [1, 2) and an exponent from about -257 to 65;
- * the square roots are of normal positive doubles; q(y) / sqrt(y) lies within
- * 1 - 1.21e-3 .. 1 + 7.72e-4, so the step count before the floor is below
- * 2^32 2^19 (1 + 7.72e-4) < 2^52, where a double holds every half step and
+ * the square roots are of normal positive doubles; (q(y) + e(y)) / sqrt(y)
+ * lies within 1 - 1.17e-3 .. 1 + 8.30e-4, so the step count before the floor
+ * is below 2^32 2^19 (1 + 8.30e-4) < 2^52, where a double holds every half step and
  * floor() returns a whole number exactly; a count under 1 (P below about
  * 2^-38, a mean under 2^-19 cycle) floors to 0, no pitch; and the pitch, 2 pi
  * times fewer than 2^52 steps over 2^19, is below 5.5e10 and, when not 0, at
  * least 2 pi 2^-19: a normal float either way.
  */
 #define MID_PITCH_PRODUCT_MAX 18446744073709551616.0 /* 2^64 */
+/* The excess of DVSI's mid-frame quadratic over the interpolating one,
+ * (1 + 2 (y - 1)) 2^-15 added to q(y): a fit with two constants to the pulse
+ * trains held on one code (docs/dvsi-parity.md, "P25 pitch"), not a known
+ * coefficient of DVSI's decoder. */
+#define MID_PITCH_EXCESS_0    3.0517578125e-05 /* 2^-15 */
+#define MID_PITCH_EXCESS_1    6.103515625e-05  /* 2 2^-15 */
 
 static float
 imbe_mid_pitch(float a, float b) {
@@ -424,7 +440,8 @@ imbe_mid_pitch(float a, float b) {
     const double root2 = sqrt(2.0);
     const double root15 = sqrt(1.5);
     const double q = root15 + ((root2 - 1.0) * d) + (2.0 * (root2 + 1.0 - (2.0 * root15)) * d * d);
-    const double steps = floor(sqrt(product) * (q / sqrt(y)) * 524288.0);
+    const double excess = MID_PITCH_EXCESS_0 + (MID_PITCH_EXCESS_1 * (y - 1.0));
+    const double steps = floor(sqrt(product) * ((q + excess) / sqrt(y)) * 524288.0);
     return (float)((turn * steps) / 524288.0);
 }
 
@@ -1602,6 +1619,82 @@ advance_interval(struct pulse_train* train, float start, const struct mbe_subfra
     }
 }
 
+/* Whether a pitch (positive and normal) lies on P25's grid of 2^-19 cycle per
+ * sample, up to Nyquist: the float 2 pi n / 2^19 formed in double and rounded
+ * to float once, as the decoder forms a code's pitch (imbe_grid_fundamental())
+ * and the mid-frame pitch is formed (imbe_mid_pitch()), equal by its bits for
+ * the whole number n nearest w0 2^19 / (2 pi); sets *steps to n. */
+static int
+p25_grid_steps(float w0, long* steps) {
+    const double position = ((double)w0 * 524288.0) / (2.0 * M_PI);
+    if (!(position >= 0.5 && position <= 262144.0)) {
+        return 0;
+    }
+    const long n = (long)floor(position + 0.5);
+    const float grid = mbe_round_to_float((float)(2.0 * M_PI * (double)n / 524288.0));
+    uint32_t want, have;
+    memcpy(&want, &grid, sizeof(want));
+    memcpy(&have, &w0, sizeof(have));
+    *steps = n;
+    return want == have;
+}
+
+/* Whether a step between two voiced models takes the train an octave
+ * (octave_step()'s condition, in its arithmetic). */
+static int
+octave_applies(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
+    const double ratio = ((double)a->w0 / (2.0 * M_PI)) / ((double)b->w0 / (2.0 * M_PI));
+    return (ratio > OCTAVE_DOWN_LOW && ratio < OCTAVE_DOWN_HIGH) || (ratio > OCTAVE_UP_LOW && ratio < OCTAVE_UP_HIGH);
+}
+
+/*
+ * One interval of the train in P25's rendering (docs/dvsi-parity.md, "P25
+ * pitch"): between two voiced models whose fundamentals both lie on the 2^-19
+ * grid, n_a and n_b steps, with no octave step between them, the train
+ * advances by exactly 80 floor((n_a + n_b) / 2) steps over the interval, the
+ * two ends' mean fundamental floored to the grid, as DVSI's P25 decoder
+ * advances it (where the sum is odd half a step a sample is lost). Of the two
+ * forms the measurement cannot tell apart within an interval, the library
+ * keeps the linear sweep of the pulse rate and lowers its end by one step
+ * where the sum is odd (a constant rate at the floored mean gives the same
+ * total; this is a choice). The rates are the whole numbers of steps over
+ * 2^19, exact in double; the advance is a whole number of steps, formed as an
+ * integer, and added to the train's phase in one double addition, so that
+ * every build gives one total. Every other interval (an onset, an offset, no
+ * voiced model, an octave step, which halves or doubles the starting rate off
+ * the grid, or a pitch off the grid, a caller's) is advance_interval()'s, as
+ * before: the measurement says nothing of them.
+ */
+static void
+p25_advance_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
+                     const struct mbe_subframe_model* b) {
+    long na = 0, nb = 0;
+    if (!a->any_voiced || !b->any_voiced || !p25_grid_steps(a->w0, &na) || !p25_grid_steps(b->w0, &nb)
+        || octave_applies(a, b)) {
+        advance_interval(train, start, a, b);
+        return;
+    }
+    const long mean = (na + nb) / 2;  /* both positive: the floor */
+    const long end = (2 * mean) - na; /* n_b, or n_b - 1 where the sum is odd */
+    const double phase = train->phase;
+    interval_pulses(train, start, (double)na / 524288.0, (double)end / 524288.0);
+    const long advance = ((long)SUBFRAME * mean) % 524288L;
+    const double reached = phase + ((double)advance / 524288.0);
+    train->phase = reached - floor(reached);
+}
+
+/* An interval of the train in `rendering`: P25's own form (p25_advance_interval()),
+ * the others' as before. */
+static void
+train_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
+               const struct mbe_subframe_model* b, enum mbe_voiced_synthesis rendering) {
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        p25_advance_interval(train, start, a, b);
+    } else {
+        advance_interval(train, start, a, b);
+    }
+}
+
 /* ---- DVSI's low band ---- */
 
 /*
@@ -2372,7 +2465,7 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
     }
     for (int k = 0; k < 2; k++) {
         const float start = (float)(k * SUBFRAME);
-        advance_interval(&train, start, &models[k], &models[k + 1]);
+        train_interval(&train, start, &models[k], &models[k + 1], rendering);
         render_interval(&aout_buf[(size_t)k * SUBFRAME], start, &train, &renders[k], &renders[k + 1]);
         if (reading.emits[k]) {
             render_emitted_pulse(&aout_buf[(size_t)k * SUBFRAME], &pulsed[k], &pulsed[k + 1]);
@@ -2407,8 +2500,8 @@ mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_sile
         return;
     }
     prepare_low_band(cur_mp, prev_mp, rendering, &low);
-    advance_interval(&train, 0.0f, &models[0], &models[1]);
-    advance_interval(&train, (float)SUBFRAME, &models[1], &models[2]);
+    train_interval(&train, 0.0f, &models[0], &models[1], rendering);
+    train_interval(&train, (float)SUBFRAME, &models[1], &models[2], rendering);
     mbe_dvsi_noise_skip_frame(cur_mp);
     /* Where rendering the frame leaves it, the pulsed state too (the emission,
      * the code read, P25's validity counter) and the low cut's tracker. */
