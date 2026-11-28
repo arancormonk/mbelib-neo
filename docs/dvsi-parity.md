@@ -7694,7 +7694,9 @@ rate-33 case only with the error rate cleared (the table above).
 
 ### November 2026: the AMBE block lengths at 20 harmonics
 
-DVSI's low band's head (`f725a66`) against the block lengths at 20 harmonics ([AMBE block lengths at
+DVSI's low band's head as this branch was cut from it (`f725a66`; the branch below, `fix/dvsi-low-band`,
+PR #204, was then reviewed, its final head `e345239` merged in here, and the stages scored again
+against it, below) against the block lengths at 20 harmonics ([AMBE block lengths at
 20 harmonics](#ambe-block-lengths-at-20-harmonics)): row 20 of the D-STAR and rate-33 block-length
 tables 4, 5, 5, 6 where Annex C prints 4, 4, 6, 6, in both decoders and both encoders. The study that
 found the row read the development and validation vectors, never `irstia` or `mark`; its scratch
@@ -7860,6 +7862,26 @@ in both reports, P25's every one equal:
 | `block-lengths-tones` | passes all 21 checks | the encoders' tone statistics unchanged, and the decoders' tone measures within their limits (frequency and wrong-tone fraction on each vector, level and balance on the mean paired change, detector agreement on each vector); not that the voice frames around the tones are right |
 | `block-lengths-channel` | passes all 33 checks | no mute rate, false or missed mute rate or mute agreement moving in any mode (the identity of the mute decisions themselves rests on the frame-flag comparison above), the hard-decision distance from DVSI's decode on the loud frames falling by 0.02 dB in the mean or more with no hard-decision vector rising by more than 0.01 dB (the channel vectors are one recording, so no interval; each fell), the soft-decision one not rising in the mean, P25's unchanged; P25's encoder rows unchanged (a count over the run's speech vectors) |
 | `block-lengths-final` | not scored | the prediction for `irstia` and `mark` |
+
+**Scored again after the merge.** The branch below's final head, `e345239` (PR #204, its held-out
+partition scored and passed), brings one change of behaviour after `f725a66`, the low cut's tracker
+holding on silence frames (`cebeafd`), with its tests and documents. It was merged into this branch
+(`b88c102`, a merge, not a rebase) and the four non-final stages were scored again in one combined
+run, the baseline a clean build of `git archive e345239`, the candidate a build of the merged head
+(library: `59dddb3`'s row on `e345239`'s code), the gate sets as declared. The sets' descriptions name
+`f725a66` as the baseline; `e345239` decodes every permitted bit file exactly as `f725a66` does (106
+D-STAR, 103 P25 and 106 rate-33 files, `irstia` and `mark` left out, soft-decision ones as soft: the
+SHA-256 of every 16-bit decode and of every parameter dump equal between the two builds) and encodes
+every permitted input alike (95 inputs, three encoders, every row file equal), so the baseline's
+measurements are the same: both runs pass, 104 of 104 checks, every gate line identical to the first
+run's; every scoreboard measurement and every PCM, decode and encoder-row hash of all 255 entries is
+equal between the two runs, baseline to baseline and candidate to candidate, at the same lags. All 75
+speech entries carry an encoder-row hash and a PCM hash in both reports; P25's every one equal, 23
+D-STAR and 23 rate-33 row hashes changed, as in the first run. The differential harness, built against
+a clean `e345239` and the merged head, gives its 653 protected lines identically in the ten
+configurations, and each changed stream first differs at its first frame of 20 harmonics (408, 420,
+329, 319 and 101), as against `f725a66`. Every figure of this section and the one above was measured
+against `f725a66`; by the identity of the decodes it holds against `e345239` too.
 
 **Notes on the declarations.** `dvsi_gates.json` stays as declared; where its descriptions say more
 than a check establishes:
@@ -8174,10 +8196,11 @@ both held-out vectors in all three codecs (means D-STAR 0.989296 → 0.990517, P
 rate 33 0.989556 → 0.990422) and every encoder row unchanged ([November 2026: DVSI's low
 band](#november-2026-dvsis-low-band)).
 
-The block lengths at 20 harmonics were scored once, `f725a66` against the branch's library code at
-`59dddb3`, on the development, validation, tone and channel partitions in one combined run with the four
-gate sets declared in `956671f`, the branch's first commit, before any build of the branch was scored; all
-four pass, 104 of 104 checks ([November 2026: the AMBE block lengths at 20
+The block lengths at 20 harmonics were scored twice, on the development, validation, tone and channel
+partitions in one combined run each with the four gate sets declared in `956671f`, the branch's first
+commit, before any build of the branch was scored: first `f725a66` against the branch's library code at
+`59dddb3`, then, after the merge of the branch below's final head, `e345239` against the merged head
+(`b88c102`); both pass, 104 of 104 checks, every line the same ([November 2026: the AMBE block lengths at 20
 harmonics](#november-2026-the-ambe-block-lengths-at-20-harmonics)). Before that declaration the study's
 scratch build had been measured on the development, validation, tone and channel vectors, with the
 scoreboard's own measures too, and the baseline alone was scored on the four partitions (a build of `git

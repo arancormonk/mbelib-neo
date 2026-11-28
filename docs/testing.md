@@ -1263,7 +1263,7 @@ to 8.8 during the run, another agent's builds running):
 | AMBE+2 encode | 31.55 us (30.67 to 31.92) | 31.42 us (30.48 to 31.79) | -0.4% |
 | IMBE encode | 15.18 us (14.77 to 15.25) | 15.16 us (14.75 to 15.19) | -0.1% |
 
-The ranges overlap in every row: no resolvable cost under that load, not a bound (the D-STAR encoder's -0.53% is the largest change); the D-STAR and AMBE+2 checksums differ (the `dam` streams hold frames of
+Timed before the merge of the branch below's final head (`e345239`, whose decodes equal `f725a66`'s on every permitted vector). The ranges overlap in every row: no resolvable cost under that load, not a bound (the D-STAR encoder's -0.53% is the largest change); the D-STAR and AMBE+2 checksums differ (the `dam` streams hold frames of
 20 harmonics), the IMBE ones are equal. An earlier run under heavier load (10 to 20) scattered by -6.7% to
 +1.9%, the unchanged IMBE decode by -5.3%.
 
