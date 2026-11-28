@@ -95,7 +95,10 @@
  * the P25 sequences' hashes moved again: the loud one's float hashes are now
  * 0724a02's (the rules move every P25 frame; the gain none of these), its
  * int16 hash the rounding of those; the quiet one's both; the ProVoice one's
- * stayed (neither change reaches ProVoice). No other hash moved.
+ * stayed (neither change reaches ProVoice). No other hash moved. In the 32-bit
+ * Debug build (x87) the loud sequence's int16 hash is its own (0xA705BBCB):
+ * the merged rendering moves 16-bit samples there; the quiet and ProVoice
+ * sequences' are the 64-bit builds'.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -138,6 +141,12 @@ golden_ambe_expected(int isa) {
         e.provoice_quiet_f32 = 0xF356E69Cu;
     }
     e.imbe_loud_s16 = 0xA081D020u;
+#if defined(MBE_ARCH_X86_32)
+    /* x87 (the 32-bit Debug build): the four rules of DVSI's P25 decoder round some of the loud sequence's
+     * intermediates otherwise in extended precision, which moves 16-bit samples; the quiet and ProVoice
+     * sequences' int16 hashes are the 64-bit builds'. */
+    e.imbe_loud_s16 = 0xA705BBCBu;
+#endif
     e.imbe_quiet_s16 = 0x6D04AF5Du;
     e.provoice_quiet_s16 = 0xDBC888BCu;
     return e;
