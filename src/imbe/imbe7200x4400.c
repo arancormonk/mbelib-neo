@@ -1335,6 +1335,50 @@ imbe_tone_row_exists(int b0, int l1, int l2) {
     return 0;
 }
 
+/* sinc^2(pi l / 256), sinc(x) = sin(x) / x: the droop of DVSI's synthesis
+ * table (US 8,200,497's K = 256 table read with linear interpolation) at
+ * harmonic l. */
+static double
+imbe_tone_droop(int l) {
+    const double x = M_PI * (double)l / 256.0;
+    const double sinc = sin(x) / x;
+    return sinc * sinc;
+}
+
+/* The largest relative departure of a tone model's two levels from the ratio
+ * imbe4400_play_tone() writes, droop(l2) / droop(l1): 2^-20. A played model
+ * departs by at most about 1.2e-7 (two float roundings); the droops are
+ * computed in double in both places, and any difference between the two
+ * computations in a build (x87, fast-math) lies near 1e-16, far inside it. */
+#define IMBE_TONE_RATIO_TOLERANCE 9.5367431640625e-07 /* 2^-20 */
+
+/* Whether every log2Ml[1..L] is finite, by its bit pattern (a decode never
+ * leaves another value there). */
+static int
+imbe_log2_finite(const mbe_parms* mp) {
+    for (int l = 1; l <= mp->L; l++) {
+        uint32_t bits;
+        memcpy(&bits, &mp->log2Ml[l], sizeof(bits));
+        if ((bits & UINT32_C(0x7FFFFFFF)) >= UINT32_C(0x7F800000)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Whether the two levels of a dual tone model stand in the ratio
+ * imbe4400_play_tone() writes (IMBE_TONE_RATIO_TOLERANCE); a single tone has
+ * one level. Both positive and normal here. */
+static int
+imbe_tone_levels(const mbe_parms* mp, int l1, int l2) {
+    if (l1 == l2) {
+        return 1;
+    }
+    const double m1 = (double)mp->Ml[l1], m2 = (double)mp->Ml[l2];
+    const double d1 = imbe_tone_droop(l1), d2 = imbe_tone_droop(l2);
+    return fabs((m2 * d1) - (m1 * d2)) <= IMBE_TONE_RATIO_TOLERANCE * m1 * d2;
+}
+
 /*
  * Whether a model is a tone model as imbe4400_play_tone() leaves it
  * (mbe_p25_tone_model.h), for P25's rendering, which spares a tone model the
@@ -1345,16 +1389,17 @@ imbe_tone_row_exists(int b0, int l1, int l2) {
  * word imbe4400_take_tone() found (its flag, a code with rows, the harmonics
  * of one of its rows), the model at that code's pitch, L and K
  * (imbe_model_at_code(): imbe_code_pitch(), the decode's own body, the pitch
- * by its bits), and the voicing and magnitudes imbe4400_play_tone() writes
- * (the tone harmonics voiced at a positive level, every other harmonic
- * unvoiced at 0). So a state passes only as the complete model a stream
- * leaves after playing a tone frame of that code and row: what the test
- * leaves free, the two levels and log2Ml, the readers that spare a tone model
- * do not read otherwise for it (they read a level only as positive, and the
- * phase source reads log2Ml as decoded either way). A model the adaptive
- * smoothing of channel errors has changed after the tone was played is no
- * longer one, as before this check. Not inlined, so that the readers in the
- * synthesizer and any later caller run one body.
+ * by its bits), the voicing and magnitudes imbe4400_play_tone() writes (the
+ * tone harmonics voiced at positive normal levels, two of them in the ratio
+ * of their droops within IMBE_TONE_RATIO_TOLERANCE, every other harmonic
+ * 1..L unvoiced at 0 by its bits), and log2Ml[1..L] finite. What stays free:
+ * the common level of the two harmonics (any positive normal value plays as a
+ * tone at that level), the finite values of log2Ml (the decoded frame's,
+ * which the phase source reads as for any model), Vl above L and every field
+ * the player does not write. A model the adaptive smoothing of channel errors
+ * has changed after the tone was played is no longer one, as before this
+ * check. Not inlined, so that the readers in the synthesizer and any later
+ * caller run one body.
  */
 MBE_NOINLINE int
 mbe_imbe4400_tone_model(const mbe_parms* mp) {
@@ -1382,17 +1427,7 @@ mbe_imbe4400_tone_model(const mbe_parms* mp) {
             return 0;
         }
     }
-    return 1;
-}
-
-/* sinc^2(pi l / 256), sinc(x) = sin(x) / x: the droop of DVSI's synthesis
- * table (US 8,200,497's K = 256 table read with linear interpolation) at
- * harmonic l. */
-static double
-imbe_tone_droop(int l) {
-    const double x = M_PI * (double)l / 256.0;
-    const double sinc = sin(x) / x;
-    return sinc * sinc;
+    return imbe_tone_levels(mp, l1, l2) && imbe_log2_finite(mp);
 }
 
 /*

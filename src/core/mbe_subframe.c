@@ -1619,18 +1619,27 @@ advance_interval(struct pulse_train* train, float start, const struct mbe_subfra
     }
 }
 
+/* The steps of 2^-19 cycle per sample from 0 to Nyquist, P25's grid. */
+#define P25_GRID_STEPS   524288L
+#define P25_GRID_NYQUIST 262144L
+
 /* Whether a pitch (positive and normal) lies on P25's grid of 2^-19 cycle per
  * sample, up to Nyquist: the float 2 pi n / 2^19 formed in double and rounded
  * to float once, as the decoder forms a code's pitch (imbe_grid_fundamental())
  * and the mid-frame pitch is formed (imbe_mid_pitch()), equal by its bits for
- * the whole number n nearest w0 2^19 / (2 pi); sets *steps to n. */
+ * the whole number n nearest w0 2^19 / (2 pi), n from 1 to 2^18 (Nyquist
+ * included: the float nearest pi lies above it, so n is bounded, not the
+ * position); sets *steps to n. */
 static int
 p25_grid_steps(float w0, long* steps) {
     const double position = ((double)w0 * 524288.0) / (2.0 * M_PI);
-    if (!(position >= 0.5 && position <= 262144.0)) {
+    if (!(position >= 0.5 && position < (double)P25_GRID_NYQUIST + 0.5)) {
         return 0;
     }
     const long n = (long)floor(position + 0.5);
+    if (n < 1 || n > P25_GRID_NYQUIST) {
+        return 0;
+    }
     const float grid = mbe_round_to_float((float)(2.0 * M_PI * (double)n / 524288.0));
     uint32_t want, have;
     memcpy(&want, &grid, sizeof(want));
@@ -1639,48 +1648,108 @@ p25_grid_steps(float w0, long* steps) {
     return want == have;
 }
 
-/* Whether a step between two voiced models takes the train an octave
- * (octave_step()'s condition, in its arithmetic). */
+/* Whether a step between two ends on the grid, n_a then n_b steps, takes the
+ * train an octave (octave_step()'s brackets, decided on the whole numbers): R =
+ * n_a / n_b, the new period over the old, strictly inside (1.6, 2.4) (down) or
+ * (0.4, 0.6) (up). An exact 8/5 (8736 then 5460) is no octave step in any
+ * build. A pair inside a bracket by whole numbers is inside it by at least
+ * 1 / (5 n_b), at least 7.6e-7 for n_b up to 2^18, while octave_step()'s float
+ * quotient of the stored pitches (each a float rounded once, a relative 6e-8)
+ * lies within about 3e-7 of R: advance_interval(), which then takes the step,
+ * sees it inside too. */
 static int
-octave_applies(const struct mbe_subframe_model* a, const struct mbe_subframe_model* b) {
-    const double ratio = ((double)a->w0 / (2.0 * M_PI)) / ((double)b->w0 / (2.0 * M_PI));
-    return (ratio > OCTAVE_DOWN_LOW && ratio < OCTAVE_DOWN_HIGH) || (ratio > OCTAVE_UP_LOW && ratio < OCTAVE_UP_HIGH);
+p25_octave_steps(long na, long nb) {
+    return (8 * nb < 5 * na && 5 * na < 12 * nb) || (2 * nb < 5 * na && 5 * na < 3 * nb);
+}
+
+/* The pulses of a floored interval from `start`: cycles `first` to `last` of
+ * the train (the whole numbers its exact phase crosses, decided by the caller
+ * in integers), each at the time the linear sweep from `from` to `to` cycles
+ * per sample gives, in the expressions interval_pulses() uses (so that every
+ * pulse that is not at the interval's end keeps its time bit for bit), a
+ * negative radicand read as 0 and the time kept within [0, SUBFRAME]; at most
+ * INTERVAL_PULSES of them, as there. A loop of P25's own: the shared function
+ * keeps its callers as they were. */
+static void
+p25_floored_pulses(struct pulse_train* train, float start, double from, double to, long first, long last) {
+    const double slope = (to - from) / (double)SUBFRAME;
+    long cycle = first;
+    for (int pulses = 0; pulses < INTERVAL_PULSES && cycle <= last; pulses++, cycle++) {
+        const double target = (double)cycle - train->phase;
+        double t;
+        if (fabs(slope) * (double)SUBFRAME < 1.0e-9 * from) {
+            t = target / from;
+        } else {
+            double radicand = (from * from) + (2.0 * slope * target);
+            if (!(radicand > 0.0)) {
+                radicand = 0.0;
+            }
+            t = (sqrt(radicand) - from) / slope;
+        }
+        if (!(t > 0.0)) {
+            t = 0.0;
+        } else if (t > (double)SUBFRAME) {
+            t = (double)SUBFRAME;
+        }
+        if (train->count < TRAIN_PULSES) {
+            train->time[train->count++] = start + (float)t;
+        }
+    }
 }
 
 /*
  * One interval of the train in P25's rendering (docs/dvsi-parity.md, "P25
  * pitch"): between two voiced models whose fundamentals both lie on the 2^-19
- * grid, n_a and n_b steps, with no octave step between them, the train
- * advances by exactly 80 floor((n_a + n_b) / 2) steps over the interval, the
- * two ends' mean fundamental floored to the grid, as DVSI's P25 decoder
- * advances it (where the sum is odd half a step a sample is lost). Of the two
- * forms the measurement cannot tell apart within an interval, the library
- * keeps the linear sweep of the pulse rate and lowers its end by one step
- * where the sum is odd (a constant rate at the floored mean gives the same
- * total; this is a choice). The rates are the whole numbers of steps over
- * 2^19, exact in double; the advance is a whole number of steps, formed as an
- * integer, and added to the train's phase in one double addition, so that
- * every build gives one total. Every other interval (an onset, an offset, no
- * voiced model, an octave step, which halves or doubles the starting rate off
- * the grid, or a pitch off the grid, a caller's) is advance_interval()'s, as
- * before: the measurement says nothing of them.
+ * grid, n_a and n_b steps, with no octave step between them (decided on the
+ * whole numbers, p25_octave_steps()), the train advances by exactly 80
+ * floor((n_a + n_b) / 2) steps over the interval, the two ends' mean
+ * fundamental floored to the grid, as DVSI's P25 decoder advances it (where
+ * the sum is odd half a step a sample is lost). Of the two forms the
+ * measurement cannot tell apart within an interval, the library keeps the
+ * linear sweep of the pulse rate and lowers its end by one step where the sum
+ * is odd (a constant rate at the floored mean gives the same total; a
+ * choice).
+ * Which pulses the interval launches is decided from the exact count, in
+ * integers, before any time is solved for: with S the incoming phase in steps
+ * (exact: a power of two), the interval owns the whole numbers c from 1 (from 0
+ * when the phase is 0) with c 2^19 < S + 80 floor((n_a + n_b) / 2) strictly, so
+ * that a pulse falling exactly at the interval's end is the next interval's
+ * first (it starts at phase 0 and launches cycle 0); each owned pulse's time is
+ * then solved for (p25_floored_pulses()). The phase left is the remainder of
+ * the whole steps reached plus the incoming fraction of a step, over 2^19: the
+ * advance is a whole number of steps in every build; the phase it is added to
+ * is a double within a frame and a float between frames, so the result is
+ * exact wherever the incoming phase holds no bit below 2^-53 of a cycle (a
+ * train that started on the grid never does) and is rounded once, by less than
+ * 2^-53 of a cycle, where it does (a phase left by an interval off the grid,
+ * an onset or a caller's; under x87 that one rounding can differ in its last
+ * place between builds); a sum rounded up to a whole cycle leaves 0, the
+ * crossing it stands for lying after the end, not counted here, and launched
+ * by the next interval. Every other interval (an onset, an offset, no voiced
+ * model, an octave step, a pitch off the grid, a caller's) is
+ * advance_interval()'s, as before, where the rates are the stored floats over 2
+ * pi: the measurement says nothing of them.
  */
 static void
 p25_advance_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
                      const struct mbe_subframe_model* b) {
     long na = 0, nb = 0;
     if (!a->any_voiced || !b->any_voiced || !p25_grid_steps(a->w0, &na) || !p25_grid_steps(b->w0, &nb)
-        || octave_applies(a, b)) {
+        || p25_octave_steps(na, nb)) {
         advance_interval(train, start, a, b);
         return;
     }
     const long mean = (na + nb) / 2;  /* both positive: the floor */
     const long end = (2 * mean) - na; /* n_b, or n_b - 1 where the sum is odd */
-    const double phase = train->phase;
-    interval_pulses(train, start, (double)na / 524288.0, (double)end / 524288.0);
-    const long advance = ((long)SUBFRAME * mean) % 524288L;
-    const double reached = phase + ((double)advance / 524288.0);
-    train->phase = reached - floor(reached);
+    const long total = (long)SUBFRAME * mean;
+    const double steps = train->phase * 524288.0; /* exact: a power of two */
+    const double whole = floor(steps);
+    const long reach = (long)whole + total;
+    const long first = (train->phase > 0.0) ? 1 : 0;
+    const long last = (steps > whole) ? reach / P25_GRID_STEPS : (reach - 1) / P25_GRID_STEPS;
+    p25_floored_pulses(train, start, (double)na / 524288.0, (double)end / 524288.0, first, last);
+    const double left = ((double)(reach % P25_GRID_STEPS) + (steps - whole)) / 524288.0;
+    train->phase = (left < 1.0) ? left : 0.0;
 }
 
 /* An interval of the train in `rendering`: P25's own form (p25_advance_interval()),
