@@ -540,8 +540,14 @@ ulp_distance(float a, float b) {
 /* Magnitudes 1..L equal by their bits (exact), or at most two ulps apart, two steps of the bit pattern of the
  * same sign (a non-finite one only as the same pattern, which a caller's NaN carried through both renderings is). */
 static void
-check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* what) {
+check_magnitudes_from(const mbe_parms* a, const mbe_parms* b, int exact, const mbe_parms* source, const char* what) {
     assert(a->L == b->L);
+    /* A source model (the history a forged state repeats) holding a non-finite magnitude in 1..L: the enhancement
+     * spreads it, and the two renderings must then hold the same bit patterns where either is not finite. */
+    int source_nonfinite = 0;
+    for (int l = 1; source != NULL && l <= source->L && l <= 56; ++l) {
+        source_nonfinite |= !finite_float(source->Ml[l]);
+    }
     for (int l = 1; l <= a->L; ++l) {
         if (exact) {
             if (!same_float(a->Ml[l], b->Ml[l])) {
@@ -550,12 +556,21 @@ check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* 
             assert(same_float(a->Ml[l], b->Ml[l]));
         } else {
             /* Both finite first (ulp_distance() takes two identical non-finite patterns as 0), then at most two
-             * float steps apart with the same sign. */
+             * float steps apart with the same sign; non-finite only from a non-finite source, then identical. */
+            if (source_nonfinite && (!finite_float(a->Ml[l]) || !finite_float(b->Ml[l]))) {
+                assert(same_float(a->Ml[l], b->Ml[l]));
+                continue;
+            }
             assert(finite_float(a->Ml[l]) && finite_float(b->Ml[l]));
             const int64_t d = ulp_distance(a->Ml[l], b->Ml[l]);
             assert(d >= 0 && d <= 2);
         }
     }
+}
+
+static void
+check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* what) {
+    check_magnitudes_from(a, b, exact, NULL, what);
 }
 
 /* The decoded model in the history: what the public parameter decoder gives for the frame's bits from the
@@ -930,7 +945,7 @@ test_tone_forgeries(void) {
             mbe_parms rendered, enh;
             replica(want, &s.prev, &before.enh, g, 0, 0, &rendered, &enh);
             check_samples(out, want, QUIET_EXACT || is_one(g), names[c]);
-            check_magnitudes(&s.enh, &rendered, QUIET_EXACT || is_one(g), names[c]);
+            check_magnitudes_from(&s.enh, &rendered, QUIET_EXACT || is_one(g), &s.prev, names[c]);
             ++speech;
         }
         /* The real word plays the tone; a word or mark that is not the decode's plays speech at the gain. */
