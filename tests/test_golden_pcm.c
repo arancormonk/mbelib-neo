@@ -81,6 +81,24 @@
  * unvoiced frame of both sequences renders through the new filter. The scalar
  * int16 hashes equal the SIMD ones again in both. The public hashes did not
  * move: mbe_synthesizeSpeechf() keeps the second-order filter and no cut.
+ * P25's quiet frames (every magnitude a frame of a low decoded mean log2
+ * magnitude renders times 2^clamp(1.84 (x + 1.73), -2, 0), and P25's 16-bit
+ * output rounded to nearest) came with three P25 sequences through the IMBE
+ * 4400 data path (golden_sequences.h): a loud one, whose float hashes are those
+ * of the build before the change (no frame under the knee) and whose int16
+ * hash moved with the rounding; a quiet one, whose float and int16 hashes moved
+ * (every frame takes the gain); and the quiet one tagged as ProVoice, whose
+ * hashes are the build before's (ProVoice takes no gain and keeps truncating).
+ * Their int16 hashes are the same for every kernel ISA and are checked in the
+ * 32-bit Debug build too; their float hashes are SSE2's and AVX2's alike.
+ * Merged onto the four rules of DVSI's P25 decoder (fix/p25-decoder, 0724a02),
+ * the P25 sequences' hashes moved again: the loud one's float hashes are now
+ * 0724a02's (the rules move every P25 frame; the gain none of these), its
+ * int16 hash the rounding of those; the quiet one's both; the ProVoice one's
+ * stayed (neither change reaches ProVoice). No other hash moved. In the 32-bit
+ * Debug build (x87) the loud sequence's int16 hash is its own (0xA705BBCB):
+ * the merged rendering moves 16-bit samples there; the quiet and ProVoice
+ * sequences' are the 64-bit builds'.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -88,25 +106,49 @@
 #define GOLDEN_AMBE_STRICT 0
 #endif
 
+/* The P25 sequences' int16 hashes are checked wherever the int16 hashes are strict on x86, the 32-bit x87 Debug
+ * build included (its float hashes are not: x87 evaluates otherwise). */
+#if (defined(MBE_ARCH_X86_64) || defined(MBE_ARCH_X86_32)) && defined(MBELIB_TEST_STRICT_INT16)
+#define GOLDEN_IMBE_STRICT_INT16 1
+#else
+#define GOLDEN_IMBE_STRICT_INT16 0
+#endif
+
 struct golden_ambe_expect {
     uint32_t ambe2450_f32, ambe2450_s16, ambe2400_f32, ambe2400_s16;
+    uint32_t imbe_loud_f32, imbe_loud_s16, imbe_quiet_f32, imbe_quiet_s16, provoice_quiet_f32, provoice_quiet_s16;
 };
 
 static struct golden_ambe_expect
 golden_ambe_expected(int isa) {
-    struct golden_ambe_expect e = {0u, 0u, 0u, 0u};
+    struct golden_ambe_expect e = {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
     /* The codec paths use no kernel that differs between SSE2 and AVX2. */
     if (isa == MBE_CPU_ISA_AVX2 || isa == MBE_CPU_ISA_SSE2) {
         e.ambe2450_f32 = 0xAE5328B0u;
         e.ambe2450_s16 = 0xD2EB6902u;
         e.ambe2400_f32 = 0xECAEA43Bu;
         e.ambe2400_s16 = 0x57511F5Au;
+        e.imbe_loud_f32 = 0x0AEBE54Fu;
+        e.imbe_quiet_f32 = 0x0EB8EE64u;
+        e.provoice_quiet_f32 = 0xE8B7AA45u;
     } else {
         e.ambe2450_f32 = 0x77F99B90u;
         e.ambe2450_s16 = 0xD2EB6902u;
         e.ambe2400_f32 = 0x5BE6D192u;
         e.ambe2400_s16 = 0x57511F5Au;
+        e.imbe_loud_f32 = 0x5CCDC192u;
+        e.imbe_quiet_f32 = 0x28546228u;
+        e.provoice_quiet_f32 = 0xF356E69Cu;
     }
+    e.imbe_loud_s16 = 0xA081D020u;
+#if defined(MBE_ARCH_X86_32)
+    /* x87 (the 32-bit Debug build): the four rules of DVSI's P25 decoder round some of the loud sequence's
+     * intermediates otherwise in extended precision, which moves 16-bit samples; the quiet and ProVoice
+     * sequences' int16 hashes are the 64-bit builds'. */
+    e.imbe_loud_s16 = 0xA705BBCBu;
+#endif
+    e.imbe_quiet_s16 = 0x6D04AF5Du;
+    e.provoice_quiet_s16 = 0xDBC888BCu;
     return e;
 }
 
@@ -144,6 +186,38 @@ check_ambe_sequence(const char* name, const struct golden_ambe_codec* codec, uin
         return 1;
     }
     if (GOLDEN_AMBE_STRICT && (first.f32 != exp_f32 || first.s16 != exp_s16)) {
+        fprintf(stderr, "%s: hash mismatch: f32 got=0x%08X exp=0x%08X, s16 got=0x%08X exp=0x%08X\n", name,
+                (unsigned)first.f32, (unsigned)exp_f32, (unsigned)first.s16, (unsigned)exp_s16);
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * @brief Check one P25 voice sequence (golden_hash_imbe_voice_sequence()): determinism, energy, and (strict builds)
+ *        exact hashes.
+ * @return 0 on success, 1 on failure.
+ */
+static int
+check_imbe_sequence(const char* name, uint32_t seed, int quiet, int provoice, uint32_t exp_f32, uint32_t exp_s16) {
+    struct golden_hashes first;
+    struct golden_hashes second;
+
+    if (golden_hash_imbe_voice_sequence(seed, quiet, provoice, &first) != 0
+        || golden_hash_imbe_voice_sequence(seed, quiet, provoice, &second) != 0) {
+        fprintf(stderr, "%s: sequence decode failed\n", name);
+        return 1;
+    }
+    if (first.f32 != second.f32 || first.s16 != second.s16) {
+        fprintf(stderr, "%s: determinism failure across runs\n", name);
+        return 1;
+    }
+    double mean_sq = first.sumsq / (double)(GOLDEN_IMBE_FRAMES * 160);
+    if (!(mean_sq > 1e-9 && mean_sq < 1e8)) {
+        fprintf(stderr, "%s: sanity: mean square out of range: %g\n", name, mean_sq);
+        return 1;
+    }
+    if ((GOLDEN_AMBE_STRICT && first.f32 != exp_f32) || (GOLDEN_IMBE_STRICT_INT16 && first.s16 != exp_s16)) {
         fprintf(stderr, "%s: hash mismatch: f32 got=0x%08X exp=0x%08X, s16 got=0x%08X exp=0x%08X\n", name,
                 (unsigned)first.f32, (unsigned)exp_f32, (unsigned)first.s16, (unsigned)exp_s16);
         return 1;
@@ -197,7 +271,11 @@ main(int argc, char** argv) {
     if (check_ambe_sequence("ambe2450", &golden_ambe2450_codec, GOLDEN_AMBE2450_SEED, ambe.ambe2450_f32,
                             ambe.ambe2450_s16)
         || check_ambe_sequence("ambe2400", &golden_ambe2400_codec, GOLDEN_AMBE2400_SEED, ambe.ambe2400_f32,
-                               ambe.ambe2400_s16)) {
+                               ambe.ambe2400_s16)
+        || check_imbe_sequence("imbe-loud", GOLDEN_IMBE_LOUD_SEED, 0, 0, ambe.imbe_loud_f32, ambe.imbe_loud_s16)
+        || check_imbe_sequence("imbe-quiet", GOLDEN_IMBE_QUIET_SEED, 1, 0, ambe.imbe_quiet_f32, ambe.imbe_quiet_s16)
+        || check_imbe_sequence("provoice-quiet", GOLDEN_IMBE_QUIET_SEED, 1, 1, ambe.provoice_quiet_f32,
+                               ambe.provoice_quiet_s16)) {
         return 1;
     }
 

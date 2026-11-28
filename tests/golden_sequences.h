@@ -20,11 +20,14 @@
 
 #include "mbelib-neo/mbelib.h"
 
-#define GOLDEN_AMBE_FRAMES    24
-#define GOLDEN_AMBE2450_SEED  0x2450A5A5u
-#define GOLDEN_AMBE2400_SEED  0x2400C3C3u
-#define GOLDEN_FNV1A_OFFSET   2166136261u
-#define GOLDEN_SYNTH_RNG_SEED 0xC0FFEEu
+#define GOLDEN_AMBE_FRAMES     24
+#define GOLDEN_AMBE2450_SEED   0x2450A5A5u
+#define GOLDEN_AMBE2400_SEED   0x2400C3C3u
+#define GOLDEN_IMBE_FRAMES     24
+#define GOLDEN_IMBE_LOUD_SEED  0x4400A5A5u
+#define GOLDEN_IMBE_QUIET_SEED 0x44005A5Au
+#define GOLDEN_FNV1A_OFFSET    2166136261u
+#define GOLDEN_SYNTH_RNG_SEED  0xC0FFEEu
 
 typedef int (*golden_ambe_process_fn)(float* aout_buf, mbe_process_result* result, const char ambe_d[49],
                                       mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -138,6 +141,94 @@ golden_hash_ambe_voice_sequence(const struct golden_ambe_codec* codec, uint32_t 
             golden_fill_ambe_voice_frame(ambe_d, &state);
             int rc = (pass == 0) ? codec->process_float(pcm_f, NULL, ambe_d, &cur, &prev, &prev_enh)
                                  : codec->process_short(pcm_s, NULL, ambe_d, &cur, &prev, &prev_enh);
+            if (rc < 0) {
+                return rc;
+            }
+            if (pass == 0) {
+                for (int i = 0; i < 160; ++i) {
+                    out->sumsq += (double)pcm_f[i] * (double)pcm_f[i];
+                }
+                out->f32 = golden_fnv1a32_update(out->f32, pcm_f, sizeof(pcm_f));
+            } else {
+                out->s16 = golden_fnv1a32_update(out->s16, pcm_s, sizeof(pcm_s));
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * P25 (IMBE 4400) voice frames of random bits at a pitch code under 208 (b0's
+ * bits 0..5, 85 and 86), drawn again until the frame's decoded mean log2
+ * magnitude (the public parameter decoder on the sequence's own history) lies
+ * on the wanted side: quiet under -1.85, where P25's quiet-frame gain plays it
+ * lower, loud over -1.5, where it does not. The bits are a function of the
+ * seed alone: the history is the decoder's, which no synthesis touches.
+ */
+static inline int
+golden_fill_imbe_voice_frame(char imbe_d[88], uint32_t* state, int quiet, mbe_parms* history) {
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        for (int i = 0; i < 88; ++i) {
+            imbe_d[i] = (char)(golden_xorshift32(state) & 1u);
+        }
+        /* b0 = bits 0..5, 85, 86, MSB first: clear bit 0 and bit 1 so b0 < 64, a voice pitch. */
+        imbe_d[0] = 0;
+        imbe_d[1] = 0;
+        mbe_parms cur = *history, prev = *history;
+        if (mbe_decodeImbe4400Parms(imbe_d, &cur, &prev) != 0 || cur.L < 1 || cur.L > 56) {
+            continue;
+        }
+        double sum = 0.0;
+        for (int l = 1; l <= cur.L; ++l) {
+            sum += (double)cur.log2Ml[l];
+        }
+        const double x = sum / (double)cur.L;
+        if (quiet ? (x < -1.85) : (x > -1.5)) {
+            *history = cur;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @brief Decode an error-free P25 voice sequence, quiet or loud, through the
+ *        IMBE 4400 data path and hash its PCM (float and int16 entry points).
+ *
+ * With provoice nonzero the frames go through the same entry points tagged
+ * MBE_PROCESS_FLAG_PROVOICE, as ProVoice's frame paths hand them on.
+ * @return 0 on success, -1 if no frame could be drawn, or the negative status
+ *         an entry point returned.
+ */
+static inline int
+golden_hash_imbe_voice_sequence(uint32_t seed, int quiet, int provoice, struct golden_hashes* out) {
+    mbe_parms cur;
+    mbe_parms prev;
+    mbe_parms prev_enh;
+    float pcm_f[160];
+    short pcm_s[160];
+    char imbe_d[88];
+
+    out->f32 = GOLDEN_FNV1A_OFFSET;
+    out->s16 = GOLDEN_FNV1A_OFFSET;
+    out->sumsq = 0.0;
+    for (int pass = 0; pass < 2; ++pass) {
+        uint32_t state = seed;
+        mbe_parms history, scratch;
+        mbe_initMbeParms(&scratch, &history, &prev_enh);
+        mbe_setThreadRngSeed(GOLDEN_SYNTH_RNG_SEED);
+        mbe_initMbeParms(&cur, &prev, &prev_enh);
+        for (int f = 0; f < GOLDEN_IMBE_FRAMES; ++f) {
+            if (golden_fill_imbe_voice_frame(imbe_d, &state, quiet, &history) != 0) {
+                return -1;
+            }
+            mbe_process_result result;
+            mbe_initProcessResult(&result);
+            if (provoice) {
+                result.flags |= MBE_PROCESS_FLAG_PROVOICE;
+            }
+            int rc = (pass == 0) ? mbe_processImbe4400Dataf(pcm_f, &result, imbe_d, &cur, &prev, &prev_enh)
+                                 : mbe_processImbe4400Data(pcm_s, &result, imbe_d, &cur, &prev, &prev_enh);
             if (rc < 0) {
                 return rc;
             }

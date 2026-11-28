@@ -53,6 +53,21 @@ codec_process(float* out, mbe_process_result* result, const char* bits, mbe_parm
 
 /* Repeated, this voice frame takes the decoder's log2Ml to 34.8, about the
  * highest a search over repeated frames found. */
+/* The loss P25's decoder is predicted to apply to a frame, in dB, by the test's
+ * own arithmetic: 20 log10 2 times -clamp(1.84 (x + 1.73), -2, 0), x the mean
+ * of the frame's decoded log2 magnitudes (the documented law of P25's quiet
+ * frames; docs/dvsi-parity.md, "P25: quiet frames"). */
+static double
+codec_predicted_loss_db(const mbe_parms* decoded) {
+    double sum = 0.0;
+    for (int l = 1; l <= decoded->L; l++) {
+        sum += (double)decoded->log2Ml[l];
+    }
+    double exponent = 1.84 * ((sum / (double)decoded->L) + 1.73);
+    exponent = (exponent > 0.0) ? 0.0 : ((exponent < -2.0) ? -2.0 : exponent);
+    return -20.0 * log10(2.0) * exponent;
+}
+
 static const struct enc_codec imbe_codec = {
     "IMBE",
     88,
@@ -66,6 +81,7 @@ static const struct enc_codec imbe_codec = {
     codec_process,
     "0100101111111111111111111100111111111110010000111101001001111111111111110101100001001011",
     NULL,
+    codec_predicted_loss_db,
 };
 
 /* Every data word encodes to a codeword the decoder accepts unchanged, and

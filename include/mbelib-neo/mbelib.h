@@ -22,13 +22,17 @@
  *
  * @note 16-bit output: every `short` entry point scales by 7 and limits to
  *       +-(32767 * 0.95) as mbe_floattoshort() does (NaN becomes 0). Those of
- *       the D-STAR (AMBE 3600x2400) and AMBE 3600x2450 paths then round to
- *       the nearest integer, halves away from zero, as DVSI's D-STAR and
- *       AMBE 3600x2450 decoders round; the IMBE paths (P25, ProVoice),
+ *       the D-STAR (AMBE 3600x2400), AMBE 3600x2450 and P25 (IMBE 7200x4400)
+ *       paths then round to the nearest integer, halves away from zero, as
+ *       DVSI's D-STAR and AMBE 3600x2450 decoders round (P25's at every
+ *       level, a choice resting on DVSI's quiet P25 frames, where rounding is
+ *       identified, and on louder ones, where it is favoured; see
+ *       docs/dvsi-parity.md "16-bit output"); ProVoice (IMBE
+ *       7100x4400, and the IMBE 4400 data path with MBE_PROCESS_FLAG_PROVOICE),
  *       mbe_synthesizeSpeech(), mbe_synthesizeComfortNoise() and
  *       mbe_floattoshort() itself truncate toward zero. So the `short` output
- *       of the two AMBE paths is not mbe_floattoshort() of their float twins'
- *       output: a caller of their float entry points who wants the same 16-bit
+ *       of the AMBE and P25 paths is not mbe_floattoshort() of their float
+ *       twins' output: a caller of their float entry points who wants the same 16-bit
  *       samples rounds `7 * x` to nearest (halves away from zero, e.g. with
  *       `roundf()`) after the same limit. DVSI's output separates rounding to
  *       nearest from truncation, not one tie rule from another; halves away
@@ -973,7 +977,12 @@ MBE_API int mbe_decodeImbe7200x4400SoftFrame(const mbe_soft_bit imbe_fr[8][23], 
  */
 MBE_API int mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                      mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
-/** @brief Process IMBE 4400 parameters into 16-bit PCM. */
+/**
+ * @brief Process IMBE 4400 parameters into 16-bit PCM.
+ *
+ * The samples of a P25 frame round to nearest (see the 16-bit output note at the top of this header); those of a
+ * frame whose result carries MBE_PROCESS_FLAG_PROVOICE truncate toward zero.
+ */
 MBE_API int mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char imbe_d[88],
                                     mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
 /**
@@ -988,7 +997,11 @@ MBE_API int mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result,
 MBE_API int mbe_processImbe7200x4400Framef(float* aout_buf, mbe_process_result* result, const char imbe_fr[8][23],
                                            char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                            mbe_parms* prev_mp_enhanced);
-/** @brief Process IMBE 7200x4400 frame into 16-bit PCM. */
+/**
+ * @brief Process IMBE 7200x4400 frame into 16-bit PCM.
+ *
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
+ */
 MBE_API int mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* result, const char imbe_fr[8][23],
                                           char imbe_d[88], mbe_parms* cur_mp, mbe_parms* prev_mp,
                                           mbe_parms* prev_mp_enhanced);
@@ -1000,7 +1013,11 @@ MBE_API int mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* r
 MBE_API int mbe_processImbe7200x4400SoftFramef(float* aout_buf, mbe_process_result* result,
                                                const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
                                                mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
-/** @brief Process a soft IMBE 7200x4400 frame into int16 PCM; see float variant for result semantics. */
+/**
+ * @brief Process a soft IMBE 7200x4400 frame into int16 PCM; see float variant for result semantics.
+ *
+ * The samples round to nearest (see the 16-bit output note at the top of this header).
+ */
 MBE_API int mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result,
                                               const mbe_soft_bit imbe_fr[8][23], char imbe_d[88], mbe_parms* cur_mp,
                                               mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced);
@@ -1280,9 +1297,9 @@ MBE_API void mbe_synthesizeSpeech(short* aout_buf, mbe_parms* cur_mp, mbe_parms*
  * `7.0` and soft clipping at 95% of int16 full-scale, then truncates toward
  * zero. Non-finite input samples are handled before conversion: NaN becomes
  * zero and infinities clip to the corresponding bound. The output equals that
- * of the IMBE (P25, ProVoice) `short` entry points and mbe_synthesizeSpeech()
- * with the same input state. The `short` entry points of the D-STAR and
- * AMBE 3600x2450 paths round to nearest instead (halves away from zero), so
+ * of the ProVoice `short` entry points and mbe_synthesizeSpeech() with the
+ * same input state. The `short` entry points of the D-STAR, AMBE 3600x2450
+ * and P25 paths round to nearest instead (halves away from zero), so
  * their output differs from this conversion of their float twins' output by
  * one step wherever the fraction of `7 * x` is at least a half; see the
  * 16-bit output note at the top of this header.

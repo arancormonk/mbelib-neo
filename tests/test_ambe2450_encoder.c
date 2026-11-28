@@ -80,6 +80,7 @@ static const struct enc_codec ambe2450_codec = {
     codec_process,
     "1100100011111110000110100000010101001100010110110",
     codec_tone_id,
+    NULL,
 };
 
 static void

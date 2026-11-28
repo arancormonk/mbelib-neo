@@ -34,6 +34,10 @@ struct enc_codec {
                    mbe_parms* enhanced);
     const char* peak_frame;           /* parameter bits ('0'/'1') whose repetition takes the decoder's log2Ml highest */
     int (*tone_id)(const char* bits); /* the tone index a tone frame carries, else -1; NULL without tone frames */
+    /* The level, in dB, by which the codec's decoder plays a frame lower than its decoded magnitudes, computed by the
+     * test itself from the frame's decoded model (P25's quiet frames: the documented law of the mean log2
+     * magnitude), or NULL for a decoder that plays every frame at its decoded level. */
+    double (*predicted_loss_db)(const mbe_parms* decoded);
 };
 
 static uint32_t enc_rng = 0x2450u;
@@ -636,19 +640,27 @@ enc_test_pitch_cases(const struct enc_codec* c, void* enc) {
     return 0;
 }
 
-/* Decoded level (process path, first 20 frames skipped) of a steady 140 Hz
- * voice amplitude * sum sin(h x) / h over the given number of harmonics, in dB
- * re an RMS of 32768 on the int16 scale (float output is int16 / 7). */
-static inline double
-enc_decoded_level_db(const struct enc_codec* c, void* enc, double amplitude, int harmonics) {
+/* The levels of a steady 140 Hz voice amplitude * sum sin(h x) / h over the given number of harmonics, over frames
+ * 20 to 79, in dB re an RMS of 32768 on the int16 scale (float output is int16 / 7): what the process path decodes,
+ * end to end (decoded); the level of the models the encoder sent, read from the decoded parameters of its frames
+ * (the encoder's cur_mp, the decoder's model of its bits) with no synthesis, as 10 log10 of the mean over the frames
+ * of the sum of Ml^2 (model; a level on the codec's own scale, which enc_test_quiet_tone_level() calibrates); and the
+ * loss the codec's decoder is predicted to apply, the mean over the frames of c->predicted_loss_db() (0 without it). */
+struct enc_levels {
+    double decoded, model, loss;
+};
+
+static inline struct enc_levels
+enc_tone_levels(const struct enc_codec* c, void* enc, double amplitude, int harmonics) {
     mbe_parms ec, ep, eh, dc, dp, dh;
-    double phase = 0.0, sum = 0.0;
-    int n = 0;
+    double phase = 0.0, sum = 0.0, model = 0.0, loss = 0.0;
+    int n = 0, frames = 0;
+    struct enc_levels out = {1e9, 1e9, 0.0};
     c->reset(enc);
     mbe_initMbeParms(&ec, &ep, &eh);
     mbe_initMbeParms(&dc, &dp, &dh);
     for (int frame = 0; frame < 80; frame++) {
-        float pcm[160], out[160];
+        float pcm[160], audio[160];
         char bits[88];
         for (int i = 0; i < 160; i++) {
             double v = 0.0;
@@ -658,17 +670,33 @@ enc_decoded_level_db(const struct enc_codec* c, void* enc, double amplitude, int
             }
             pcm[i] = (float)(amplitude * v);
         }
-        if (c->encode(enc, pcm, bits, &ec, &ep) != 0 || c->process(out, NULL, bits, &dc, &dp, &dh) < 0) {
-            return 1e9;
+        if (c->encode(enc, pcm, bits, &ec, &ep) != 0 || c->process(audio, NULL, bits, &dc, &dp, &dh) < 0) {
+            return out;
+        }
+        if (frame >= 20) {
+            for (int l = 1; l <= ec.L; l++) {
+                model += (double)ec.Ml[l] * (double)ec.Ml[l];
+            }
+            loss += (c->predicted_loss_db != NULL) ? c->predicted_loss_db(&ec) : 0.0;
+            ++frames;
+            for (int i = 0; i < 160; i++) {
+                double x = 7.0 * (double)audio[i];
+                sum += x * x;
+                n++;
+            }
         }
         mbe_moveMbeParms(&ec, &ep);
-        for (int i = 0; frame >= 20 && i < 160; i++) {
-            double x = 7.0 * (double)out[i];
-            sum += x * x;
-            n++;
-        }
     }
-    return 10.0 * log10((sum / n) + 1e-30) - (20.0 * log10(32768.0));
+    out.decoded = 10.0 * log10((sum / n) + 1e-30) - (20.0 * log10(32768.0));
+    out.model = 10.0 * log10((model / frames) + 1e-30);
+    out.loss = loss / frames;
+    return out;
+}
+
+/* Decoded level (process path, first 20 frames skipped), as enc_tone_levels(). */
+static inline double
+enc_decoded_level_db(const struct enc_codec* c, void* enc, double amplitude, int harmonics) {
+    return enc_tone_levels(c, enc, amplitude, harmonics).decoded;
 }
 
 /* The decoded level follows the input down 20 and 40 dB, and a -21 dBFS voice
@@ -684,18 +712,33 @@ enc_test_level(const struct enc_codec* c, void* enc) {
     return fabs(loud - input_db) > 2.0 || fabs((quiet - loud) + 20.0) > 1.0 || fabs((faint - loud) + 40.0) > 2.0;
 }
 
-/* A quiet pure tone has a far lower mean log magnitude than the lowest gain
- * the codec can send; it still decodes at the input level instead of putting
- * the excess in its peak. */
+/* A quiet pure tone has a far lower mean log magnitude than its peak; two
+ * checks, each with a finite result required. (i) The encoder sends it at the
+ * input level: the level of the models it sent, read from their decoded
+ * parameters with no synthesis, calibrated on the codec's own scale by the
+ * same reading of a loud 20-harmonic voice (0.1, which no decoder plays lower)
+ * against that voice's decoded level, lies within 3 dB of the input. (ii) The
+ * decoder plays it at that level less the loss its rule predicts for those
+ * frames, computed by the test from their decoded means (P25's quiet frames;
+ * none for the AMBE codecs): the decoded level lies within 2 dB of the input
+ * less the predicted loss. */
 static inline int
 enc_test_quiet_tone_level(const struct enc_codec* c, void* enc) {
     int fails = 0;
+    const struct enc_levels voice = enc_tone_levels(c, enc, 0.1, 20);
+    const double calibration = voice.decoded + voice.loss - voice.model;
     const double amplitudes[] = {0.03, 0.003, 0.0003};
     for (size_t k = 0; k < sizeof(amplitudes) / sizeof(amplitudes[0]); k++) {
-        double input_db = 20.0 * log10(amplitudes[k] / sqrt(2.0));
-        double decoded = enc_decoded_level_db(c, enc, amplitudes[k], 1);
-        printf("%s quiet tone: %.1f dBFS decodes at %.1f\n", c->name, input_db, decoded);
-        fails += fabs(decoded - input_db) > 3.0;
+        const double input_db = 20.0 * log10(amplitudes[k] / sqrt(2.0));
+        const struct enc_levels tone = enc_tone_levels(c, enc, amplitudes[k], 1);
+        const double sent = tone.model + calibration;
+        const double want = input_db - tone.loss;
+        printf("%s quiet tone: %.3f dBFS sent at %.3f (its models' level), decodes at %.3f: %.3f dB under the input "
+               "(the rule predicts %.3f)\n",
+               c->name, input_db, sent, tone.decoded, input_db - tone.decoded, tone.loss);
+        /* A NaN fails both comparisons. */
+        fails += !(fabs(sent - input_db) <= 3.0);
+        fails += !(fabs(tone.decoded - want) <= 2.0);
     }
     return fails != 0;
 }

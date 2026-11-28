@@ -82,5 +82,22 @@ main(int argc, char** argv) {
     printf("GOLDEN_AMBE2450_S16_FNV1A=0x%08X\n", (unsigned)ambe2450.s16);
     printf("GOLDEN_AMBE2400_F32_FNV1A=0x%08X\n", (unsigned)ambe2400.f32);
     printf("GOLDEN_AMBE2400_S16_FNV1A=0x%08X\n", (unsigned)ambe2400.s16);
+
+    // P25 voice sequences, loud and quiet, and the quiet one tagged as ProVoice
+    struct golden_hashes imbe_loud;
+    struct golden_hashes imbe_quiet;
+    struct golden_hashes provoice_quiet;
+    if (golden_hash_imbe_voice_sequence(GOLDEN_IMBE_LOUD_SEED, 0, 0, &imbe_loud) != 0
+        || golden_hash_imbe_voice_sequence(GOLDEN_IMBE_QUIET_SEED, 1, 0, &imbe_quiet) != 0
+        || golden_hash_imbe_voice_sequence(GOLDEN_IMBE_QUIET_SEED, 1, 1, &provoice_quiet) != 0) {
+        fprintf(stderr, "IMBE golden sequence decode failed\n");
+        return 1;
+    }
+    printf("GOLDEN_IMBE_LOUD_F32_FNV1A=0x%08X\n", (unsigned)imbe_loud.f32);
+    printf("GOLDEN_IMBE_LOUD_S16_FNV1A=0x%08X\n", (unsigned)imbe_loud.s16);
+    printf("GOLDEN_IMBE_QUIET_F32_FNV1A=0x%08X\n", (unsigned)imbe_quiet.f32);
+    printf("GOLDEN_IMBE_QUIET_S16_FNV1A=0x%08X\n", (unsigned)imbe_quiet.s16);
+    printf("GOLDEN_PROVOICE_QUIET_F32_FNV1A=0x%08X\n", (unsigned)provoice_quiet.f32);
+    printf("GOLDEN_PROVOICE_QUIET_S16_FNV1A=0x%08X\n", (unsigned)provoice_quiet.s16);
     return 0;
 }

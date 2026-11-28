@@ -645,7 +645,7 @@ decode_float(FILE* f, const char* codec, uint32_t seed, DecodeStats* stats, FILE
 
 /*
  * The decoded 16-bit PCM is what the codec's own int16 entry point returns
- * (the AMBE paths round to nearest, the IMBE paths truncate), from a second,
+ * (the AMBE and P25 paths round to nearest, ProVoice truncates), from a second,
  * separately initialized and seeded stream fed the same rows. It must see
  * every frame as the float pass did (status, flags, error counts, parameter
  * bits), or the evaluation stops.

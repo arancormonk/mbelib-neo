@@ -347,16 +347,16 @@ round_pcm_sample(float sample) {
 }
 
 /* The 16-bit samples a codec's short entry points return for its float output:
- * the D-STAR and AMBE 3600x2450 paths round to nearest, the IMBE paths
- * truncate as mbe_floattoshort() does. Returns how many samples differ from
- * truncation. */
+ * the D-STAR, AMBE 3600x2450 and P25 (IMBE 7200x4400) paths round to nearest,
+ * the ProVoice (IMBE 7100x4400) paths truncate as mbe_floattoshort() does.
+ * Returns how many samples differ from truncation. */
 static int
 short_from_float(enum fixture_mode mode, const float* pcm, short* out) {
     short truncated[160];
     int differ = 0;
     mbe_floattoshort(pcm, truncated);
     for (int i = 0; i < 160; ++i) {
-        out[i] = (mode == IMBE7200 || mode == IMBE7100) ? truncated[i] : round_pcm_sample(pcm[i]);
+        out[i] = (mode == IMBE7100) ? truncated[i] : round_pcm_sample(pcm[i]);
         differ += out[i] != truncated[i];
     }
     return differ;
@@ -642,8 +642,8 @@ assert_override_flags(enum fixture_mode mode, int n, const mbe_process_result* r
                 }                                                                                                      \
             }                                                                                                          \
         }                                                                                                              \
-        /* The fixture tells rounding from truncation on the AMBE paths. */                                            \
-        assert(((MODE) == IMBE7200 || (MODE) == IMBE7100) ? rounded == 0 : rounded > 0);                               \
+        /* The fixture tells rounding from truncation on the rounding paths. */                                        \
+        assert(((MODE) == IMBE7100) ? rounded == 0 : rounded > 0);                                                     \
     }
 
 DEFINE_FRAME_EQUIVALENCE(test_imbe7200_equivalence, IMBE7200, 23, mbe_processImbe7200x4400, mbe_processImbe4400)
@@ -1318,6 +1318,97 @@ test_muted_short_noise(const struct muted_short_path* path) {
     assert(plus > 0.13 && plus < 0.20);
 }
 
+/*
+ * P25's 16-bit entry points on frames that repeat and frames that mute: a
+ * stream of four voice frames, then four lost frames (b0 255: repeats 1 to 3,
+ * the 4th muted, the TIA-102.BABA 7.8 noise), through the
+ * data path, the hard frame path and the soft frame path, each with and
+ * without a result pointer. The 16-bit twin runs on its own states with the
+ * thread's generator seeded alike before each call; every sample must be the
+ * rounding to nearest of the float twin's, and the repeats and the muted
+ * frames must each hold samples that rounding and truncation tell apart.
+ */
+static void
+test_imbe7200_short_on_repeats_and_mutes(void) {
+    char data[8][88], frames[8][184];
+    for (int n = 0; n < 8; ++n) {
+        if (n < 4) {
+            tagged_data(data[n], 88, 0x51u + (unsigned)n);
+            memset(data[n], 0, 6);
+        } else {
+            memset(data[n], 0, 88);
+            memset(data[n], 1, 6);
+            data[n][85] = 1;
+            data[n][86] = 1;
+        }
+        assert_status(mbe_quality_frame_from_data("imbe7200", data[n], 88, frames[n], sizeof(frames[n])), 184);
+    }
+    int cases = 0;
+    for (int path = 0; path < 3; ++path) {
+        for (int with_result = 0; with_result < 2; ++with_result) {
+            mbe_parms fc, fp, fe, sc, sp, se;
+            mbe_initMbeParms(&fc, &fp, &fe);
+            mbe_initMbeParms(&sc, &sp, &se);
+            int repeat_tells = 0, mute_tells = 0, repeats = 0, mutes = 0;
+            for (int n = 0; n < 8; ++n) {
+                float pcm[160];
+                short pcm_s[160], want[160];
+                char decoded[88];
+                mbe_soft_bit soft[184];
+                mbe_process_result rf, rs;
+                mbe_process_result* const res_f = with_result ? &rf : NULL;
+                mbe_process_result* const res_s = with_result ? &rs : NULL;
+                mbe_initProcessResult(&rf);
+                mbe_initProcessResult(&rs);
+                soft_from_bits(frames[n], soft, 184);
+                int ret_f, ret_s;
+                mbe_setThreadRngSeed(0x7100u + (uint32_t)n);
+                if (path == 0) {
+                    ret_f = mbe_processImbe4400Dataf(pcm, res_f, data[n], &fc, &fp, &fe);
+                } else if (path == 1) {
+                    ret_f = mbe_processImbe7200x4400Framef(pcm, res_f, (const char (*)[23])frames[n], decoded, &fc, &fp,
+                                                           &fe);
+                } else {
+                    ret_f = mbe_processImbe7200x4400SoftFramef(pcm, res_f, (const mbe_soft_bit(*)[23])soft, decoded,
+                                                               &fc, &fp, &fe);
+                }
+                mbe_setThreadRngSeed(0x7100u + (uint32_t)n);
+                if (path == 0) {
+                    ret_s = mbe_processImbe4400Data(pcm_s, res_s, data[n], &sc, &sp, &se);
+                } else if (path == 1) {
+                    ret_s = mbe_processImbe7200x4400Frame(pcm_s, res_s, (const char (*)[23])frames[n], decoded, &sc,
+                                                          &sp, &se);
+                } else {
+                    ret_s = mbe_processImbe7200x4400SoftFrame(pcm_s, res_s, (const mbe_soft_bit(*)[23])soft, decoded,
+                                                              &sc, &sp, &se);
+                }
+                assert(ret_f >= 0 && ret_f == ret_s);
+                /* The events by the stream's own accounting: the float twin's flags where it has a result. */
+                const int repeat = n >= 4 && n < 7, mute = n == 7;
+                if (with_result) {
+                    assert(rf.flags == rs.flags);
+                    assert(((rf.flags & MBE_PROCESS_FLAG_REPEAT) != 0u) == (n >= 4));
+                    assert(((rf.flags & MBE_PROCESS_FLAG_MUTE) != 0u) == mute);
+                }
+                const int tells = short_from_float(IMBE7200, pcm, want);
+                for (int i = 0; i < 160; ++i) {
+                    assert(pcm_s[i] == want[i]);
+                }
+                repeats += repeat;
+                mutes += mute;
+                repeat_tells += repeat ? tells : 0;
+                mute_tells += mute ? tells : 0;
+            }
+            assert(repeats == 3 && mutes == 1 && repeat_tells > 0 && mute_tells > 0);
+            ++cases;
+        }
+    }
+    printf(
+        "P25 16-bit entry points on repeats and mutes: %d cases (data, hard and soft frame paths, with and without a "
+        "result), every sample the rounding of the float twin's, rounding told from truncation in both\n",
+        cases);
+}
+
 int
 main(void) {
     test_ambe2450_ecc_alias();
@@ -1335,6 +1426,7 @@ main(void) {
     test_ambe2400_equivalence();
     test_imbe_fundamental_roundtrip();
     test_imbe_repeat_keeps_its_pitch();
+    test_imbe7200_short_on_repeats_and_mutes();
     test_ambe2400_accepted_tones();
     static const struct muted_short_path dstar = {
         "ambe2400", AMBE2400, mbe_processAmbe2400Dataf, mbe_processAmbe2400Data, 7, 0.75f,

@@ -25,6 +25,7 @@
 #include "mbe_compiler.h"
 #include "mbe_math.h"
 #include "mbe_p25_tone_model.h"
+#include "mbe_pcm_convert.h"
 #include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
@@ -1503,6 +1504,123 @@ imbe_has_voiced_band(const mbe_parms* mp) {
     return 0;
 }
 
+/*
+ * P25's quiet frames (docs/dvsi-parity.md, "P25: quiet frames"). On DVSI's
+ * decodes of its own test vectors (the steady frames compared there, chiefly
+ * those of two near-silent recordings), DVSI's P25 decoder plays a frame whose
+ * decoded magnitudes are low lower still, by a gain that follows the mean x of
+ * the frame's decoded log2 magnitudes. On those quiet frames DVSI's samples are
+ * round(g v), not trunc(g v), v this library's sample before the conversion:
+ * pooled per 0.05 bin of the decoded mean, the steps of |d| lie at 0.5/g,
+ * 1.5/g, 2.5/g with one g per bin. Read through that rounding, the gain is 1/4
+ * at the lowest means and rises to about 1 at the knee. The library plays g = 2^clamp(K (x - X0), FLOOR, 0):
+ * K and X0 a fit by level (per 0.05 bin of x, the one gain that brings
+ * round(g v) nearest DVSI's samples over all the bin's steady frames with no
+ * voiced band, normalised by the same gain above the knee), FLOOR -2, a gain of
+ * 1/4, taken so because the data are flat there at 0.244 to 0.250, not
+ * because a document says so. What DVSI's decoder computes is not known.
+ */
+#define IMBE_QUIET_SLOPE     1.84    /* K: log2 g per unit of the mean log2 magnitude under the knee */
+#define IMBE_QUIET_KNEE      (-1.73) /* X0: the mean log2 magnitude under which the gain falls */
+#define IMBE_QUIET_FLOOR     (-2.00) /* FLOOR: log2 of the lowest gain, 1/4 */
+/* The largest |log2Ml| the gain reads, 2^20 as a float bit pattern without its sign. */
+#define IMBE_QUIET_LOG_BOUND UINT32_C(0x49800000)
+
+/*
+ * The quiet-frame gain of a model, read from its decoded log2 magnitudes
+ * (log2Ml[1..L], which no rendering step writes): x their mean and g
+ * 2^clamp(K (x - X0), FLOOR, 0). Returns 1 and stores g where x < X0 (then
+ * g < 1); returns 0 and stores 1 where the model takes no gain: x at or above
+ * the knee X0, a harmonic count outside 1..56, or a log2 magnitude in 1..L
+ * whose magnitude exceeds 2^20 (IMBE_QUIET_LOG_BOUND: a NaN or an infinity
+ * among them; read on its bit pattern, so that fast-math cannot fold the test).
+ * The bound is the one the encoders put on the same field (a decode stays
+ * within a few tens); it removes the inputs on which builds differ materially:
+ * with every term within 2^20, each stored step's error is under 2^-26 in
+ * every build, where a caller's history such as {2^58, 32 + 2^-12, -2^58, -23,
+ * 0, ...} summed to 41 in binary64 and to -23 under x87. The slots past L are
+ * not read.
+ *
+ * Each step is one binary64 operation whose result is stored (a volatile
+ * double), so that no compiler reorders it (fast-math: Clang's LTO builds
+ * otherwise multiplied the sum by K before dividing by L) and no extended
+ * register carries it (x87: 32-bit Release otherwise kept the running sum in
+ * an 80-bit register): the sum accumulated in order, harmonic 1 to L; the
+ * mean, one division; the knee decided on the mean itself; the exponent
+ * K (mean - X0), clamped before exp2(), so that no input reaches an underflow
+ * or a NaN there. What is guaranteed: on SSE and the other IEEE targets this
+ * is binary64 arithmetic exactly, so the IEEE builds give the same gain and
+ * the same products given the same libm. Under x87 each operation is computed
+ * in extended precision and rounded again to binary64 on its store, which can
+ * leave a stored double one place off (double rounding: the extended result
+ * rounded to a midpoint and the store rounding it away from the binary64
+ * result), on decoded input too (DVSI's `dtmf`, frame 3185: gains
+ * 0x1.32d283f8e55f5p-2 and ...f6p-2); a rendered magnitude then moves by one
+ * float step only where its product lies at a float's rounding edge. The gain
+ * itself is the platform's exp2(): the floor's 1/4 is exact in every libm;
+ * between the knees the golden hashes pin glibc's (2.39 and 2.44 agree on the
+ * hashed sequences).
+ */
+int
+mbe_imbe4400_quiet_gain(const mbe_parms* mp, double* gain) {
+    *gain = 1.0;
+    if (mp == NULL || !mbe_harmonic_count_is_valid(mp->L)) {
+        return 0;
+    }
+    volatile double sum = 0.0;
+    for (int l = 1; l <= mp->L; l++) {
+        uint32_t bits;
+        memcpy(&bits, &mp->log2Ml[l], sizeof(bits));
+        if ((bits & UINT32_C(0x7FFFFFFF)) > IMBE_QUIET_LOG_BOUND) {
+            return 0;
+        }
+        sum = sum + (double)mp->log2Ml[l];
+    }
+    volatile double mean = sum / (double)mp->L;
+    if (!(mean < IMBE_QUIET_KNEE)) {
+        return 0;
+    }
+    volatile double below = mean - IMBE_QUIET_KNEE;
+    volatile double exponent = IMBE_QUIET_SLOPE * below;
+    const double clamped = (exponent < IMBE_QUIET_FLOOR) ? IMBE_QUIET_FLOOR : exponent;
+    volatile double g = exp2(clamped);
+    *gain = g;
+    return 1;
+}
+
+/*
+ * The frame's synthesis, as DVSI's P25 decoder without eq 116's scaling, with
+ * P25's quiet-frame gain where quiet_allowed (not on a tone model, whose level
+ * is its own rule, nor in ProVoice): read from the decoded log2 magnitudes of
+ * the model the frame plays (neither the enhancement nor the tone model writes
+ * log2Ml) and applied once, inside the synthesis, to the magnitudes adaptive
+ * smoothing leaves. It is never stored where a model is decoded or repeated
+ * from: prev_mp, the prediction history and the repeat source, is committed
+ * as decoded before the enhancement, so a lost frame's repeat, which loads
+ * it, plays the repeated frame's magnitudes at that frame's gain, applied once
+ * (the repeat limit's reset model has log2Ml 0: no gain).
+ * A tone model is what imbe4400_take_tone() takes (quiet_allowed is false
+ * exactly then): a tone it refuses, its levels not positive normal floats,
+ * plays as speech and takes the gain as speech. The gain multiplies the
+ * model's magnitudes before P25's rendering reads its own models by the 500
+ * Hz columns (mbe_subframe.c, p25_column_voicing()), so a band whose voicing
+ * the columns turn moves its scaled magnitude across the unvoiced factor;
+ * the phases come from log2Ml (p25_phase_log2_inputs()), which the gain does
+ * not touch.
+ */
+static void
+imbe4400_render(float* aout_buf, mbe_parms* cur_mp, mbe_parms* prev_mp_enhanced, float pre_enh_rm0,
+                enum mbe_mute_noise mute_noise, enum mbe_voiced_synthesis rendering, int quiet_allowed) {
+    double quiet_gain = 1.0;
+    if (quiet_allowed && mbe_imbe4400_quiet_gain(cur_mp, &quiet_gain)) {
+        mbe_synthesizeSpeechScaledf(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, quiet_gain, mute_noise, rendering,
+                                    MBE_AMPLITUDE_LIMIT_NONE);
+    } else {
+        mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
+                                           MBE_AMPLITUDE_LIMIT_NONE);
+    }
+}
+
 static void
 imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_mute_noise mute_noise,
                           mbe_parms* cur_mp, mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
@@ -1544,8 +1662,8 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
      * DVSI ProVoice material shows any of them). */
     const enum mbe_voiced_synthesis rendering =
         imbe4400_is_provoice(result) ? MBE_VOICED_SYNTHESIS_DVSI_PROVOICE : MBE_VOICED_SYNTHESIS_DVSI_IMBE;
-    mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
-                                       MBE_AMPLITUDE_LIMIT_NONE);
+    imbe4400_render(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,
+                    !plays_tone && !imbe4400_is_provoice(result));
 
     if (frame_muted) {
         mbe_result_set_flag(result, MBE_PROCESS_FLAG_MUTE);
@@ -1609,6 +1727,20 @@ mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char
     return mbe_processImbe4400Dataf_internal(aout_buf, result, imbe_d, cur_mp, prev_mp, prev_mp_enhanced);
 }
 
+/* P25's 16-bit samples round to nearest (halves away from zero, as D-STAR's
+ * and rate 33's) at every level: rounding is identified on DVSI's quiet P25
+ * frames and favoured above them, not established above an rms of about 50
+ * (docs/dvsi-parity.md, "16-bit output"). ProVoice, with no DVSI material, keeps truncating, as do its own
+ * frame entry points (imbe7100x4400.c) and the public mbe_floattoshort(). */
+static void
+imbe4400_to_short(const mbe_process_result* result, const float float_buf[160], short aout_buf[160]) {
+    if (imbe4400_is_provoice(result)) {
+        mbe_floattoshort(float_buf, aout_buf);
+    } else {
+        mbe_floattoshort_nearest(float_buf, aout_buf);
+    }
+}
+
 int
 mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char imbe_d[88], mbe_parms* cur_mp,
                         mbe_parms* prev_mp, mbe_parms* prev_mp_enhanced) {
@@ -1621,7 +1753,7 @@ mbe_processImbe4400Data(short* aout_buf, mbe_process_result* result, const char 
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    imbe4400_to_short(result, float_buf, aout_buf);
     return ret;
 }
 
@@ -1676,7 +1808,7 @@ mbe_processImbe7200x4400SoftFrame(short* aout_buf, mbe_process_result* result, c
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }
 
@@ -1697,6 +1829,6 @@ mbe_processImbe7200x4400Frame(short* aout_buf, mbe_process_result* result, const
     if (ret < 0) {
         return ret;
     }
-    mbe_floattoshort(float_buf, aout_buf);
+    mbe_floattoshort_nearest(float_buf, aout_buf);
     return ret;
 }
