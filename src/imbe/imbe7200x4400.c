@@ -1401,9 +1401,9 @@ imbe_has_voiced_band(const mbe_parms* mp) {
  * known. The floor lies near the lower limit of TIA-102.BABA's enhancement
  * weights (0.5), which is a guess, not a derivation.
  */
-#define IMBE_QUIET_SLOPE 1.41  /* K: log2 g per unit of the mean log2 magnitude under the knee */
-#define IMBE_QUIET_KNEE  -1.80 /* X0: the mean log2 magnitude under which the gain falls */
-#define IMBE_QUIET_FLOOR -1.01 /* FLOOR: log2 of the lowest gain */
+#define IMBE_QUIET_SLOPE 1.41    /* K: log2 g per unit of the mean log2 magnitude under the knee */
+#define IMBE_QUIET_KNEE  (-1.80) /* X0: the mean log2 magnitude under which the gain falls */
+#define IMBE_QUIET_FLOOR (-1.01) /* FLOOR: log2 of the lowest gain */
 
 /*
  * The quiet-frame gain of a model, read from its decoded log2 magnitudes
