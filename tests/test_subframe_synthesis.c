@@ -5866,10 +5866,16 @@ phase_steps(const mbe_parms* mp) {
  * advanced unrendered alike. Not on the grid (the pitch one ulp off code 21's,
  * whose own M - n is odd) and across an octave (codes 21 and 81, a period
  * ratio near 2), the interval keeps the linear sweep from the two ends' rates
- * as before (the reference's reference_advance(), within 1e-9 cycle), and
- * there the floored count is not what it gives. D-STAR's, rate 33's and
- * ProVoice's renderings at the same pitches keep the linear sweep, with their
- * own mid-frame pitch.
+ * as before (the reference's reference_advance(), within 1e-7 cycle, the
+ * stored phase being a float), and
+ * there the floored count is not what it gives (an octave lies across an
+ * interval of two voiced P25 models only where a tone model stands at
+ * mid-frame: the second frame here is marked so). D-STAR's, rate 33's and
+ * ProVoice's renderings at the same pitches (80 then 81, and 80 then 81
+ * marked as a tone model, so that every end lies on the grid and the first
+ * interval's sum is odd) keep the linear sweep from the stored pitches, with
+ * their own mid-frame pitch, within 1e-7 cycle (the stored phase is a float;
+ * a floor would move it by 7.6e-5).
  */
 static void
 test_p25_train_by_steps(void) {
@@ -5936,6 +5942,10 @@ test_p25_train_by_steps(void) {
     p25_voiced_code(&oct, 81);
     const double ratio = (double)on21.w0 / (double)oct.w0;
     assert(ratio > 1.6 && ratio < 2.4);
+    /* Between two voiced P25 models the mid-frame pitch lies between them, so
+     * an octave lies across one interval only where a mark puts a frame's own
+     * model at mid-frame: a tone model's (MBE_FRAME_MARK_TONE). */
+    mbe_set_frame_mark(&oct, MBE_FRAME_MARK_TONE);
     const mbe_parms* sequences[][2] = {{&off21, &off21}, {&on21, &oct}};
     for (size_t i = 0; i < 2; ++i) {
         mbe_parms last;
@@ -5949,7 +5959,8 @@ test_p25_train_by_steps(void) {
         reference_advance(&train, 0.0, &models[0], &models[1], p25);
         reference_advance(&train, 80.0, &models[1], &models[2], p25);
         train_frame(&last, sequences[i][1], p25, 0);
-        assert(fabs(cycles_apart(pulse_phase(&last), train.phase)) < 1.0e-9);
+        /* the stored phase is a float: within an ulp of it */
+        assert(fabs(cycles_apart(pulse_phase(&last), train.phase)) < 1.0e-7);
         if (i == 0) {
             /* code 21's own frame advance would be the floored count */
             assert(fabs(cycles_apart(pulse_phase(&last), (double)(frame_advance(21, 21) % 524288L) / 524288.0))
@@ -5963,19 +5974,31 @@ test_p25_train_by_steps(void) {
                                                        MBE_VOICED_SYNTHESIS_DVSI_PROVOICE};
 
     for (size_t r = 0; r < sizeof(others) / sizeof(others[0]); ++r) {
-        mbe_parms models[2], last;
-        p25_voiced_code(&models[0], 80);
-        p25_voiced_code(&models[1], 81);
-        train_at_zero(&last, &models[0], others[r]);
-        struct mbe_subframe_model ends[3];
-        mbe_subframe_own_model(&last, &ends[0]);
-        mbe_subframe_mid_model(&last, &models[1], 0, others[r], &ends[1]);
-        mbe_subframe_own_model(&models[1], &ends[2]);
-        const double fa = (double)ends[0].w0 / (2.0 * M_PI), fm = (double)ends[1].w0 / (2.0 * M_PI),
-                     fb = (double)ends[2].w0 / (2.0 * M_PI);
-        const double want = (40.0 * (fa + fm)) + (40.0 * (fm + fb));
-        train_frame(&last, &models[1], others[r], 0);
-        assert(fabs(cycles_apart(pulse_phase(&last), want - floor(want))) < 1.0e-6);
+        for (int step = 0; step < 2; ++step) {
+            /* 80 then 81, and 80 then 81 marked as a tone model, whose own
+             * model stands at mid-frame: every end on the grid, the first
+             * interval's sum odd (8774 + 8701 steps), where a floor would
+             * move the phase by 40 steps (7.6e-5 cycle). */
+            mbe_parms models[2], last;
+            p25_voiced_code(&models[0], 80);
+            p25_voiced_code(&models[1], 81);
+            if (step) {
+                mbe_set_frame_mark(&models[1], MBE_FRAME_MARK_TONE);
+            }
+            train_at_zero(&last, &models[0], others[r]);
+            struct mbe_subframe_model ends[3];
+            mbe_subframe_own_model(&last, &ends[0]);
+            mbe_subframe_mid_model(&last, &models[1], 0, others[r], &ends[1]);
+            mbe_subframe_own_model(&models[1], &ends[2]);
+            const double fa = (double)ends[0].w0 / (2.0 * M_PI), fm = (double)ends[1].w0 / (2.0 * M_PI),
+                         fb = (double)ends[2].w0 / (2.0 * M_PI);
+            /* The rates from the stored pitches over 2 pi: within 1e-7 cycle
+             * (the stored phase is a float). */
+            assert(!step || same_bits(&ends[1].w0, &ends[2].w0, 1));
+            const double want = (40.0 * (fa + fm)) + (40.0 * (fm + fb));
+            train_frame(&last, &models[1], others[r], 0);
+            assert(fabs(cycles_apart(pulse_phase(&last), want - floor(want))) < 1.0e-7);
+        }
     }
 }
 
@@ -6853,6 +6876,8 @@ enum tone_forgery {
     TONE_OTHER_SOUNDS,  /* one other magnitude not zero (harmonic 10 at 1e-3) */
     TONE_NEGATIVE_ZERO, /* one other magnitude -0, not 0 by its bits */
     TONE_HALF_VOICED,   /* tone harmonic 7 unvoiced */
+    TONE_SILENT_TONE,   /* tone harmonic 7 voiced at 0 */
+    TONE_NAN_TONE,      /* tone harmonic 7 voiced at a NaN */
     TONE_MARK_ALONE,    /* the mark, Vl[0] 0 */
     TONE_WORD_ALONE,    /* the word, no mark */
     TONE_FORGERIES
@@ -6915,6 +6940,12 @@ forge_tone(mbe_parms* mp, enum tone_forgery kind) {
         case TONE_OTHER_SOUNDS: mp->Ml[10] = 1.0e-3f; break;
         case TONE_NEGATIVE_ZERO: mp->Ml[10] = -0.0f; break;
         case TONE_HALF_VOICED: mp->Vl[7] = 0; break;
+        case TONE_SILENT_TONE: mp->Ml[7] = 0.0f; break;
+        case TONE_NAN_TONE: {
+            const uint32_t nan_bits = 0x7FC00000u;
+            memcpy(&mp->Ml[7], &nan_bits, sizeof(nan_bits));
+            break;
+        }
         case TONE_MARK_ALONE: mp->Vl[0] = 0; break;
         case TONE_WORD_ALONE: mbe_set_frame_mark(mp, MBE_FRAME_MARK_NONE); break;
         default: break;
