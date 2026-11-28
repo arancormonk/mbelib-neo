@@ -24,6 +24,7 @@
 #include "mbe_bitpack.h"
 #include "mbe_compiler.h"
 #include "mbe_math.h"
+#include "mbe_p25_tone_model.h"
 #include "mbe_pulsed.h"
 #include "mbe_repeat.h"
 #include "mbe_result.h"
@@ -111,11 +112,14 @@ imbe_nominal_fundamental(int b0) {
  * w0 in radians per sample. The grid was found first on its decodes of tones
  * its encoder sends as voice frames (P25 tones sent as voice frames) and then
  * on speech, once the mid-frame pitch (mbe_subframe.c) had been told from a
- * frame's own: the per-code drift of the pulse train over runs at one code,
- * which the half-octave law this replaces was fitted to, is that of the
- * mid-frame pitch. The floor of an integer quotient, then 2 pi times it over
+ * frame's own. The half-octave law this replaces was fitted to the drift of
+ * the pulse train over runs at one code, which follows the mean of the pitch
+ * played over a frame's two subframes, its own and the mid-frame one: the
+ * rendering then took the geometric mean at mid-frame, so at one code both
+ * were the law's, while DVSI's decoder plays the grid pitch at the frame's
+ * end and the floored parabola at mid-frame. The floor of an integer quotient, then 2 pi times it over
  * 2^19 formed in double and rounded to float once: over the 208 codes that
- * product (with M_PI's double value) lies at least 4.9e-11 of itself from a
+ * product (with M_PI's double value) lies at least 4.97e-11 of itself from a
  * point halfway between two floats, so double arithmetic, x87's extended one
  * and fast-math's reordering (2 pi / 2^19 is exact) all round it to the same
  * float.
@@ -188,7 +192,7 @@ imbe_code_pitch(int b0, enum imbe_pitch pitch, float* w0, int* L, int* K) {
  * function the decode stores it with, compared by bit pattern. The one code
  * that can match is the one nearest 4 pi / w0 - 39.5: the played pitch lies
  * up to a relative 2.26e-4 below eq 46's (imbe_grid_fundamental()), so that
- * quotient lies from 0 to 0.046 above the code over b0 128..183 (0.054 at most
+ * quotient lies from 0 to 0.0458 above the code over b0 128..183 (0.0543 at most
  * over all 208 codes, b0 201). w0 is
  * positive and normal, so the quotient is finite; it is bounded before it is
  * converted.
@@ -216,7 +220,7 @@ mbe_imbe4400_pulsed_code(float w0) {
  * pitch imbe_code_pitch() gives that code for P25, by bit pattern, or -1. As
  * for mbe_imbe4400_pulsed_code(), the one code that can match is the one
  * nearest 4 pi / w0 - 39.5: over the 208 codes the decoded pitch's quotient
- * lies from 0 to 0.054 above its own code (b0 201). w0 is positive and normal, so the quotient
+ * lies from 0 to 0.0543 above its own code (b0 201). w0 is positive and normal, so the quotient
  * is finite; it is bounded before it is converted.
  */
 int
@@ -851,7 +855,7 @@ mbe_imbe4400_tone_first_row(int b0) {
 /* The word a tone frame's decode leaves in the otherwise unused Vl[0] (Vl is
  * indexed from 1, and P25 keeps nothing there): the flag, b0 in bits 16-23,
  * l2 in bits 8-15 and l1 in bits 0-7. */
-#define IMBE_TONE_FLAG         MBE_P25_TONE_WORD_FLAG
+#define IMBE_TONE_FLAG         (1 << 24)
 
 /* The frame's voicing word as transmitted, band 1 the most significant bit:
  * band j holds harmonics 3j - 2 .. 3j, the last band the rest
@@ -1010,8 +1014,9 @@ imbe4400_decode_parms(const char* imbe_d, enum imbe_pitch pitch, mbe_parms* cur_
 /**
  * @brief Decode IMBE 4400 parameters from demodulated bitstream.
  *
- * The pitch stored is a fit to the one DVSI's P25 decoder plays for b0
- * (imbe_decode_fundamental()): this decoder has no frame context, so a P25
+ * The pitch stored is the one DVSI's P25 decoder plays for b0, eq 46's
+ * fundamental cut to a grid of 2^-19 cycle per sample
+ * (imbe_grid_fundamental()): this decoder has no frame context, so a P25
  * one. The ProVoice frame paths keep the nominal pitch. A frame that is a P25
  * tone sent as voice frames leaves its tone in the otherwise unused Vl[0]
  * (imbe_tone_word()); every other frame it decodes, special and invalid frames
@@ -1315,6 +1320,68 @@ imbe4400_take_tone(const mbe_parms* mp, struct imbe_tone* tone) {
     const double p1 = (double)mp->Ml[tone->l1] * (double)mp->Ml[tone->l1];
     const double p2 = (double)mp->Ml[tone->l2] * (double)mp->Ml[tone->l2];
     tone->amplitude = IMBE_TONE_LEVEL * sqrt((tone->l1 == tone->l2) ? p1 : 0.5 * (p1 + p2));
+    return 1;
+}
+
+/* Whether pitch code b0 (0..IMBE_TONE_LAST_CODE) has a row of harmonics l1
+ * and l2. */
+static int
+imbe_tone_row_exists(int b0, int l1, int l2) {
+    for (unsigned i = imbe_tone_first_row[b0]; i < imbe_tone_first_row[b0 + 1]; i++) {
+        if (imbe_tone_rows[i].l1 == l1 && imbe_tone_rows[i].l2 == l2) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Whether a model is a tone model as imbe4400_play_tone() leaves it
+ * (mbe_p25_tone_model.h), for P25's rendering, which spares a tone model the
+ * phase step and the column reading (mbe_subframe.c) and reads the previous
+ * model from caller state. Each condition is one that function's frame meets
+ * and that the decoder's own functions decide: the mark (only
+ * imbe4400_play_tone() sets it, and the data path clears it elsewhere), the
+ * word imbe4400_take_tone() found (its flag, a code with rows, the harmonics
+ * of one of its rows), the model at that code's pitch, L and K
+ * (imbe_model_at_code(): imbe_code_pitch(), the decode's own body, the pitch
+ * by its bits), and the voicing and magnitudes imbe4400_play_tone() writes
+ * (the tone harmonics voiced at a positive level, every other harmonic
+ * unvoiced at 0). So a state passes only as the complete model a stream
+ * leaves after playing a tone frame of that code and row: what the test
+ * leaves free, the two levels and log2Ml, the readers that spare a tone model
+ * do not read otherwise for it (they read a level only as positive, and the
+ * phase source reads log2Ml as decoded either way). A model the adaptive
+ * smoothing of channel errors has changed after the tone was played is no
+ * longer one, as before this check. Not inlined, so that the readers in the
+ * synthesizer and any later caller run one body.
+ */
+MBE_NOINLINE int
+mbe_imbe4400_tone_model(const mbe_parms* mp) {
+    if (mbe_frame_mark(mp) != MBE_FRAME_MARK_TONE) {
+        return 0;
+    }
+    const int word = mp->Vl[0];
+    if ((word & ~0x00FFFFFF) != IMBE_TONE_FLAG) {
+        return 0;
+    }
+    const int b0 = (word >> 16) & 0xFF, l2 = (word >> 8) & 0xFF, l1 = word & 0xFF;
+    if (b0 > IMBE_TONE_LAST_CODE || !imbe_tone_row_exists(b0, l1, l2) || !imbe_model_at_code(mp, b0)) {
+        return 0;
+    }
+    /* imbe_model_at_code() has put L in 9..56; a row's harmonics lie within
+     * its code's L, and are checked here again where Vl and Ml are indexed. */
+    if (l1 < 1 || l1 > l2 || l2 > mp->L) {
+        return 0;
+    }
+    for (int l = 1; l <= mp->L; l++) {
+        const int tone = (l == l1) || (l == l2);
+        uint32_t bits;
+        memcpy(&bits, &mp->Ml[l], sizeof(bits));
+        if (mp->Vl[l] != (tone ? 1 : 0) || (tone ? !imbe_positive_normal(&mp->Ml[l]) : (bits != 0u))) {
+            return 0;
+        }
+    }
     return 1;
 }
 

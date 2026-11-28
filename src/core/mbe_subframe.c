@@ -15,6 +15,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_low_band.h"
 #include "mbe_math.h"
+#include "mbe_p25_tone_model.h"
 #include "mbe_pulsed.h"
 #include "mbe_validation.h"
 #include "mbe_voiced.h"
@@ -153,50 +154,50 @@ unvoiced_log2_factor(float w0) {
 }
 
 /*
- * Whether a model is a P25 tone model as imbe4400_play_tone() leaves it: marked
- * MBE_FRAME_MARK_TONE, its Vl[0] holding a tone word (MBE_P25_TONE_WORD_FLAG,
- * tone harmonics l1 <= l2 within 1..L), exactly those harmonics voiced and
- * every other band unvoiced with no magnitude (0 by its bit pattern). The
- * mark alone does not make one: it is read on the previous model too, which
- * is caller state, and a mark only that function earns is checked where it is
- * read (a caller's model built as a tone model is one, and plays as one).
+ * Whether a model is a P25 tone model as imbe4400_play_tone() leaves it, by
+ * the decoder's own test (mbe_imbe4400_tone_model(), mbe_p25_tone_model.h):
+ * the mark, a tone word naming a row of its code, the model at that code's
+ * pitch (by bit pattern), L and K, exactly the row's harmonics voiced at a
+ * positive normal magnitude and every other magnitude 0. The mark alone does
+ * not make one: it is read on the previous model too, which is caller state,
+ * and a mark only that function earns is checked where it is read. One body
+ * serves every reader in P25's rendering that spares a tone model (the phase
+ * source, p25_phase_log2_inputs(), and the column reading,
+ * p25_reads_by_columns()).
  */
 static int
 p25_tone_model(const mbe_parms* mp) {
-    const int word = mp->Vl[0];
-    if (mbe_frame_mark(mp) != MBE_FRAME_MARK_TONE || (word & ~0x00FFFFFF) != MBE_P25_TONE_WORD_FLAG) {
-        return 0;
-    }
-    const int l1 = word & 0xFF, l2 = (word >> 8) & 0xFF;
-    if (l1 < 1 || l1 > l2 || l2 > mp->L) {
-        return 0;
-    }
-    for (int l = 1; l <= mp->L; l++) {
-        const int tone = (l == l1) || (l == l2);
-        uint32_t bits;
-        memcpy(&bits, &mp->Ml[l], sizeof(bits));
-        if (mp->Vl[l] != (tone ? 1 : 0) || (!tone && bits != 0u)) {
-            return 0;
-        }
-    }
-    return 1;
+    return mbe_imbe4400_tone_model(mp);
+}
+
+/* Whether a float is finite, by its bit pattern (fast-math folds isfinite()). */
+static int
+finite_bits(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & UINT32_C(0x7FFFFFFF)) < UINT32_C(0x7F800000);
 }
 
 /*
  * The phase kernel's input in P25's rendering (docs/dvsi-parity.md, "Phase
- * regeneration"): a frame's decoded log2 amplitudes (phase_log2_amplitudes()),
- * those of each band the model holds as unvoiced (Vl 0, as the synthesis
- * renders it: after adaptive smoothing, which can voice a band, and then
- * reads it as voiced) with the unvoiced factor taken out, minus
- * unvoiced_log2_factor() at the frame's own pitch, about 2.289 + 0.5 log2(w0)
- * more: the domain of TIA-102.BABA-1's log magnitudes, in which an AMBE
- * decoder's unvoiced bands already are (its encoder adds that before coding)
- * and in which DVSI's P25 decoder evidently reads P25's bands too. A voiced
- * band, a band with no state (neither 0 nor 1) and a tone model's bands
- * (p25_tone_model()) are read as decoded. The kernel's floor
- * (MBE_PHASE_LOG2_FLOOR) and its extrapolation past L
- * (mbe_regenerate_phases_log2()) then take the shifted values: band L's, where
- * it is unvoiced, is the tail's start. The pitch is positive and normal here.
+ * regeneration"): a frame's decoded log2 amplitudes, those of each band the
+ * model holds as unvoiced (Vl 0, as the synthesis renders it: after adaptive
+ * smoothing, which can voice a band, and then reads it as voiced) with the
+ * unvoiced factor taken out, minus unvoiced_log2_factor() at the frame's own
+ * pitch, about 2.289 + 0.5 log2(w0) more: the domain of TIA-102.BABA-1's log
+ * magnitudes, in which an AMBE decoder's unvoiced bands already are (its
+ * encoder adds that before coding) and in which DVSI's P25 decoder evidently
+ * reads P25's bands too. A voiced band, a band with no state (neither 0 nor
+ * 1) and a tone model's bands (p25_tone_model()) are read as decoded. The
+ * order: each log2Ml is read as phase_log2_amplitude() reads it (a finite
+ * value kept within +-PHASE_LOG2_MAX), the step is added to a finite unvoiced
+ * one, and then the kernel floors every value at MBE_PHASE_LOG2_FLOOR
+ * (mbe_regenerate_phases_log2()); so a finite value below the floor is
+ * shifted first and floored after (one the step lifts across the floor
+ * enters above it), while a log2Ml that is not finite enters at the floor
+ * exactly, the step not added to the floor that stands in for it. The tail
+ * past L (the kernel's extrapolation) starts from band L's input, shifted
+ * where band L is unvoiced. The pitch is positive and normal here.
  */
 static void
 p25_phase_log2_inputs(const mbe_parms* mp, double out[57]) {
@@ -206,7 +207,7 @@ p25_phase_log2_inputs(const mbe_parms* mp, double out[57]) {
     }
     const double step = -unvoiced_log2_factor(mp->w0);
     for (int l = 1; l <= mp->L; l++) {
-        if (mp->Vl[l] == 0) {
+        if (mp->Vl[l] == 0 && finite_bits(&mp->log2Ml[l])) {
             out[l] += step;
         }
     }
@@ -365,8 +366,8 @@ ambe2450_mid_pitch(float a, float b) {
  *          + 2 (sqrt(2) + 1 - 2 sqrt(1.5)) (y - 1.5)^2,
  * the mid-frame fundamental is floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19:
  * the geometric mean times q(y) / sqrt(y), which is 1 at the octave's ends
- * and at y = 1.5 and lies between about -1.2e-3 and +7.7e-4 between them,
- * then floored. Found on DVSI's decodes of its own P25 encodings, from the
+ * and at y = 1.5 (between them q(y) / sqrt(y) - 1 reaches -1.2035e-3 at
+ * y = 1.1869 and +7.7104e-4 at y = 1.7701), then floored. Found on DVSI's decodes of its own P25 encodings, from the
  * change over a frame of the lag between DVSI's decode and ours read at the
  * frame's two boundaries, which the mid-frame pitch alone sets: one curve in
  * the fractional part of log2 of the two periods' product, the same at an
@@ -381,25 +382,42 @@ ambe2450_mid_pitch(float a, float b) {
  * the square roots from libm in double, the floor in double, and the pitch, 2
  * pi times the whole number of steps over 2^19, rounded to float once. Over
  * every ordered pair of the 208 P25 codes (equal codes included) the
- * unfloored number of steps lies at least 6.3e-6 of a step from a whole
- * number (b0 8 and 100), about 4.9e-10 of itself, so no build's double
+ * unfloored number of steps lies at least 6.26e-6 of a step from a whole
+ * number (b0 8 and 100), 4.87e-10 of itself, so no build's double
  * arithmetic (x87's extended one, fast-math's reordering) floors it otherwise;
  * no product of two codes' fundamentals is an exact power of two (q's ends
  * meet there: 1 at y = 1 and at y = 2); and 2 pi times any whole number of
- * steps from 3,000 to 27,000 lies at least 7.6e-13 of itself from a float's
- * rounding edge. A caller's pitches can put the value anywhere: each build
- * then floors as its arithmetic gives, the pitch staying within a step.
- * Its range: the product of two positive normal floats is positive, finite
- * and normal in double, and so are the fundamentals' product and its square
- * root; q(y) / sqrt(y) lies within 1 -1.2e-3 .. 1 + 7.7e-4. A pitch whose
- * steps floor to 0 (a mean under 2^-19 cycle, both pitches near FLT_MIN) is
- * 0, and one past FLT_MAX (both near it) is 0 too: no pitch, which the caller
- * rejects (positive_normal()); any other is at least 2 pi 2^-19, normal.
+ * steps from 3,000 to 27,000 lies at least 7.57e-13 of itself from a float's
+ * rounding edge. A caller's pitches can put the value anywhere within the
+ * range below: each build then floors as its arithmetic gives, the pitch
+ * staying within a step.
+ * Its range. The two pitches are positive normal floats (the caller checks,
+ * mbe_subframe_mid_model()); the product of the two fundamentals, P = a b /
+ * (2 pi)^2 in cycles per sample squared (the codecs' lie below 1/4), is
+ * accepted up to MID_PITCH_PRODUCT_MAX = 2^64, and a larger one gives no
+ * pitch (0, which the caller rejects as every pitch that is not positive and
+ * normal): two models at w0 = 2^70 (P about 3.5e40) play no mid-frame pitch
+ * and no voiced band. Within it every intermediate is the one described: a b
+ * is exact in double (two 24-bit mantissas), at least 2^-252 and at most
+ * 2^64 (2 pi)^2, so P is a normal double, from about 2^-258 to 2^64; frexp()
+ * splits it exactly into y in [1, 2) and an exponent from about -257 to 65;
+ * the square roots are of normal positive doubles; q(y) / sqrt(y) lies within
+ * 1 - 1.21e-3 .. 1 + 7.72e-4, so the step count before the floor is below
+ * 2^32 2^19 (1 + 7.72e-4) < 2^52, where a double holds every half step and
+ * floor() returns a whole number exactly; a count under 1 (P below about
+ * 2^-38, a mean under 2^-19 cycle) floors to 0, no pitch; and the pitch, 2 pi
+ * times fewer than 2^52 steps over 2^19, is below 5.5e10 and, when not 0, at
+ * least 2 pi 2^-19: a normal float either way.
  */
+#define MID_PITCH_PRODUCT_MAX 18446744073709551616.0 /* 2^64 */
+
 static float
 imbe_mid_pitch(float a, float b) {
     const double turn = 2.0 * M_PI;
     const double product = ((double)a * (double)b) / (turn * turn);
+    if (!(product <= MID_PITCH_PRODUCT_MAX)) {
+        return 0.0f;
+    }
     int exponent;
     const double y = 2.0 * frexp(product, &exponent);
     const double d = y - 1.5;
@@ -407,8 +425,7 @@ imbe_mid_pitch(float a, float b) {
     const double root15 = sqrt(1.5);
     const double q = root15 + ((root2 - 1.0) * d) + (2.0 * (root2 + 1.0 - (2.0 * root15)) * d * d);
     const double steps = floor(sqrt(product) * (q / sqrt(y)) * 524288.0);
-    const double pitch = (turn * steps) / 524288.0;
-    return (pitch <= (double)FLT_MAX) ? (float)pitch : 0.0f;
+    return (float)((turn * steps) / 524288.0);
 }
 
 /* ---- the pulsed state of D-STAR and P25 ---- */
@@ -835,12 +852,16 @@ voiced_from(const mbe_parms* mp, double position, int last) {
  * than P25_FULL_BANDS_L harmonics, voiced while harmonic P25_LAST_BAND - 1 is
  * not, reads as unvoiced (a fit to the labels of DVSI's decodes, which mostly
  * do not sound such a band at mid-frame where a column it covers would:
- * docs/dvsi-parity.md); the frame's own model still voices it. The edges'
- * positions among the frame's harmonics are quotients formed in
- * double from its stored pitch, positive and normal: for every P25 pitch code
- * (and ProVoice's nominal pitch) each lies at least 1.5e-4 of a harmonic from a
- * whole number (test_p25_onset_edges in test_subframe_synthesis.c), far past
- * any difference the arithmetic of a build (x87 excess precision, fast-math's
+ * docs/dvsi-parity.md). In P25's rendering the frame's own model is voiced
+ * by these samples too (p25_column_voicing()), so it plays that band unvoiced
+ * as well, and a model voiced there alone plays with no voiced band; the
+ * decoded voicing, and ProVoice's own model, keep it. The edges' positions
+ * among the frame's harmonics are quotients formed in double from its stored
+ * pitch, positive and normal: for every P25 pitch code each lies at least
+ * 5.97e-5 of a harmonic from a whole number (b0 152 at 2005 Hz, 23.99994
+ * harmonics), and at ProVoice's nominal pitch at least 1.58e-4 (b0 160 at
+ * 2005 Hz; test_p25_onset_edges in test_subframe_synthesis.c), far past any
+ * difference the arithmetic of a build (x87 excess precision, fast-math's
  * reordering) can make. */
 static void
 p25_samples(const mbe_parms* mp, struct column_samples* samples) {
@@ -1097,11 +1118,16 @@ columns_voice(const struct column_rule* rule, float w0, int l) {
  * position l w0 / mp->w0 formed in double from the stored pitches, a half
  * added and its whole part taken, so that a position exactly halfway between
  * two harmonics (a tie) takes the upper one. In double because the float
- * quotient harmonic_at() forms rounds a position just under a half (33.4999986
- * of a P25 frame's harmonics at b0 134, its mid-frame harmonic 36 after a
- * frame at b0 161) to the half itself, and so to the wrong neighbour: a band
- * voiced in both frames was taken for one that changes. The index is made on
- * the bit pattern, positive doubles ordering as their patterns do. */
+ * quotient harmonic_at() forms rounds a position just under a half to the
+ * half itself, and so to the wrong neighbour: a band voiced in both frames was
+ * taken for one that changes (found at 33.4999986 of a P25 frame's harmonics
+ * at the pitch the decoder then played for b0 134, its mid-frame harmonic 36
+ * after a frame at b0 161; at the grid pitches and the floored parabola, b0
+ * 109 then 163, harmonic 3 at 3.49999997 of the second frame's harmonics, and
+ * over the ordered pairs of different codes 54 harmonic and frame
+ * observations on 38 pairs where the two quotients take different
+ * neighbours). The index is made on the bit pattern, positive doubles ordering
+ * as their patterns do. */
 static int
 nearest_harmonic(const mbe_parms* mp, float w0, int l) {
     const double position = (((double)w0 * (double)l) / (double)mp->w0) + 0.5;

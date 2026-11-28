@@ -1470,6 +1470,7 @@ if(MBELIB_BUILD_TESTS)
             test_ambe2450_frame_types
             test_pcm_rounding
             test_p25_tones
+            test_p25_rendering_copies
     )
         add_executable(${_mbelib_private_test} tests/${_mbelib_private_test}.c)
         target_link_libraries(${_mbelib_private_test} PRIVATE mbe-static)
@@ -2137,6 +2138,7 @@ if(MBELIB_BUILD_TESTS)
         test_ambe2450_frame_types
         test_ambe2400_frame_types
         test_p25_tones
+        test_p25_rendering_copies
         test_tones
         test_golden_pcm
         test_simd_arch_detection_x64

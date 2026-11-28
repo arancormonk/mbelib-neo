@@ -203,9 +203,9 @@ void mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthe
  * the 2,638 such frames of the validation vectors.
  * The law P25's decoder played before its pitch was found to lie on a 2^-19
  * grid was a wave in the same variable with the same period, fitted to the
- * pulse train's drift over runs at one pitch code, which cannot tell a
- * frame's own pitch from its mid-frame pitch (docs/dvsi-parity.md, "P25
- * pitch"). What in DVSI's decoder makes this one is not known. */
+ * pulse train's drift over runs at one pitch code, which follows the mean of
+ * a frame's own pitch and its mid-frame pitch and so cannot tell the two
+ * apart (docs/dvsi-parity.md, "P25 pitch"). What in DVSI's decoder makes this one is not known. */
 #define MBE_AMBE2450_MID_PITCH_WAVE_C0 4.244e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_C1 9.374e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_S1 8.388e-4
@@ -214,9 +214,11 @@ void mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthe
  * @brief The mid-frame model between two frames.
  *
  * Its pitch is the geometric mean of the two frames' when both have a voiced
- * band, the voiced frame's when one has (the geometric mean again when the
- * unvoiced frame before a voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES),
- * and the geometric mean when neither has, but in D-STAR's and P25's
+ * band (but in P25's rendering, MBE_VOICED_SYNTHESIS_DVSI_IMBE, the floored
+ * parabola for that mean, below), the voiced frame's when one has (the
+ * geometric mean again, in every rendering, when the unvoiced frame before a
+ * voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES), and the geometric mean
+ * when neither has, but in D-STAR's and P25's
  * renderings where one of two frames with no voiced band has a reserved pitch
  * code of the pulsed state (mbe_pulsed.h) that the rendering reads (in P25's
  * this frame's code only while the validity counter that @p prev_mp's state
@@ -230,7 +232,13 @@ void mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthe
  * (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) the geometric mean of two voiced
  * frames whose pitches differ is multiplied by MBE_AMBE2450_MID_PITCH_FACTOR
  * and by the half-octave wave (MBE_AMBE2450_MID_PITCH_WAVE_C0), in double,
- * rounded to float once; no other case changes.
+ * rounded to float once. In P25's rendering the mid-frame pitch of two
+ * models that both have a voiced band, of the same pitch or not, is the
+ * floored parabola (docs/dvsi-parity.md, "P25 pitch"): with fa fb = y 2^e the
+ * product of the two fundamentals in cycles per sample, y in [1, 2), and q(y)
+ * the parabola through sqrt(y) at 1, 1.5 and 2, floor(2^19 sqrt(fa fb) q(y) /
+ * sqrt(y)) / 2^19 cycle per sample, formed in double and rounded to float
+ * once; a product past 2^64 gives no pitch. No other case changes.
  * In D-STAR's and P25's renderings (MBE_VOICED_SYNTHESIS_DVSI,
  * MBE_VOICED_SYNTHESIS_DVSI_IMBE) a band's voicing comes from 500 Hz columns
  * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"): a

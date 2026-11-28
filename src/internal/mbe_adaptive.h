@@ -170,10 +170,16 @@ enum mbe_voiced_synthesis {
      * allows (mbe_pulsed.h; docs/dvsi-parity.md, "D-STAR and P25: the pulsed
      * state"). The P25 data path. */
     MBE_VOICED_SYNTHESIS_DVSI_IMBE,
-    /** MBE_VOICED_SYNTHESIS_DVSI_IMBE without the pulsed state: the ProVoice
-     * (IMBE 7100x4400) frames of the shared IMBE 4400 data path, which has no
-     * DVSI reference for them (MBE_PROCESS_FLAG_PROVOICE). Everything else is
-     * P25's rendering, so ProVoice plays as it did before the pulsed state. */
+    /** The ProVoice (IMBE 7100x4400) frames of the shared IMBE 4400 data
+     * path, which has no DVSI reference for them (MBE_PROCESS_FLAG_PROVOICE):
+     * P25's rendering as it stood before the pulsed state and before the four
+     * rules of DVSI's P25 decoder (docs/dvsi-parity.md), so that ProVoice
+     * plays as it did. It shares P25's mid-frame voicing by the columns (P25's
+     * samples, of the decoded voicing), the marking of the model it renders
+     * and the marks it honours; it has no pulsed state and no DVSI low band
+     * (the second-order filter at 100 Hz, mbe_low_band.h), its mid-frame pitch
+     * between two voiced models is the geometric mean, its phase kernel reads
+     * every band as decoded and its own models keep their decoded voicing. */
     MBE_VOICED_SYNTHESIS_DVSI_PROVOICE,
 };
 
@@ -234,13 +240,7 @@ int mbe_voicing_onset_delay(const mbe_parms* mp);
  * hold every rendering applied before the columns: the voicing of the frame
  * before a frame so marked held through that frame's first half when a voiced
  * harmonic lies at or next above this frequency. */
-#define MBE_VOICING_REACH_HZ   505.0f
-
-/* The flag of the word a P25 tone frame's decode leaves in the otherwise
- * unused Vl[0] (imbe7200x4400.c): the flag, b0 in bits 16-23, the tone's
- * harmonic l2 in bits 8-15 and l1 in bits 0-7. P25's rendering reads it to
- * tell a tone model (MBE_FRAME_MARK_TONE) by its structure (mbe_subframe.c). */
-#define MBE_P25_TONE_WORD_FLAG (1 << 24)
+#define MBE_VOICING_REACH_HZ 505.0f
 
 /**
  * What a codec's decoder tells the synthesizer about a frame beyond its model

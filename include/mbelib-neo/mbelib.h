@@ -197,8 +197,9 @@ typedef struct mbe_soft_bit {
  * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
  * data API, as for the C0/C4 context, and it decodes them as the ProVoice
  * frame APIs do: a decoded frame keeps TIA-102.BABA eq 46's nominal pitch
- * (P25's is a fit to the pitch DVSI's P25 decoder plays on speech,
- * mbe_decodeImbe4400Parms()) and plays no P25 tone model, and a muted frame
+ * (P25's is the pitch DVSI's P25 decoder plays, eq 46's fundamental cut to a
+ * grid of 2^-19 cycle per sample, mbe_decodeImbe4400Parms()) and plays no P25
+ * tone model, and a muted frame
  * gets library comfort noise instead of the TIA-102.BABA 7.8 level.
  */
 #define MBE_PROCESS_FLAG_PROVOICE         0x0200u
