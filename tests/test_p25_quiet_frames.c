@@ -473,7 +473,7 @@ check_samples(const float* a, const float* b, int exact, const char* what) {
     }
 }
 
-/* Magnitudes 1..L equal by their bits (exact), or within two float ulps. */
+/* Magnitudes 1..L equal by their bits (exact), or within two float ulps (a non-finite one by its bits). */
 static void
 check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* what) {
     assert(a->L == b->L);
@@ -484,7 +484,12 @@ check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* 
             }
             assert(same_float(a->Ml[l], b->Ml[l]));
         } else {
-            assert(finite_float(a->Ml[l]) && finite_float(b->Ml[l]));
+            /* A magnitude that is not finite (a caller's NaN carried through) must be the same pattern in both;
+             * the tolerance takes finite values only (inf <= inf would pass it). */
+            if (!finite_float(a->Ml[l]) || !finite_float(b->Ml[l])) {
+                assert(same_float(a->Ml[l], b->Ml[l]));
+                continue;
+            }
             assert(fabs((double)a->Ml[l] - (double)b->Ml[l]) <= 2.4e-7 * fabs((double)b->Ml[l]) + 1e-38);
         }
     }
