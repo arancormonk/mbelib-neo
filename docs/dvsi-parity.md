@@ -128,8 +128,10 @@ appear here.
   the development, validation, tone and channel vectors, with the scoreboard's own measures too, before
   the gate sets were declared, in the branch's first commit, `956671f`, before any build of the branch was
   scored, so none of those partitions is out of sample for it. The change was measured and gated on the
-  development, validation, tone and channel partitions; the final partition is to be scored once for it,
-  after the review, against `block-lengths-final` ([November 2026: the AMBE block lengths at 20
+  development, validation, tone and channel partitions; the final partition was scored once for it, on
+  2026-11-27, after the review, its fix round and the merge of the branch below's final head, against
+  `block-lengths-final` (the build of `git archive e345239` against the build of `574bda7`): passed, 22
+  of 22 checks ([November 2026: the AMBE block lengths at 20
   harmonics](#november-2026-the-ambe-block-lengths-at-20-harmonics)).
 - **A level error no parameter explains.** Before fitting a law to a level error that none of the
   frame's or the harmonic's parameters explains (no correlation with the level, the frequency, the
@@ -4833,8 +4835,10 @@ measured, and which row other encoders use is not known.
 
 **What is not known**: what DVSI's code holds; why the annex differs (not asked); whether every DVSI
 product of the two codecs uses the row (the vectors are an AMBE-3000's); how a DVSI decoder reads this
-library's new encodings (not tested); the held-out vectors' share of frames of 20 harmonics (not
-counted). The scales of the encoders' magnitudes were re-derived by their procedure ([Joint choice of
+library's new encodings (not tested). The held-out vectors' frames of 20 harmonics were counted after their
+one scoring, from DVSI's bits alone (`irstia` 4.75% and 3.65% of its voice frames in D-STAR and rate 33,
+`mark` 0.22% and 0.43%; [November 2026: the AMBE block lengths at 20
+harmonics](#november-2026-the-ambe-block-lengths-at-20-harmonics)). The scales of the encoders' magnitudes were re-derived by their procedure ([Joint choice of
 the AMBE spectral vectors](#joint-choice-of-the-ambe-spectral-vectors), Level) and are unchanged: the
 development median of our decoded encoding's level against DVSI's (both decoded by one decoder) is
 
@@ -7861,7 +7865,70 @@ in both reports, P25's every one equal:
 | `block-lengths-validation` | passes all 24 checks | on the validation vectors (`t03` and `t04` hold 1 and 0 D-STAR frames of 20 harmonics, 8 and 6 rate-33 ones), also read in the study: the means of the correlation, of both distances, of the envelope correlation, of the level and of the encoder measures not moving the wrong way, and no vector's correlation, distance from DVSI's decode or distance from the input moving the wrong way by more than the stated little (the envelope and the encoder measures are bounded on their means only) |
 | `block-lengths-tones` | passes all 21 checks | the encoders' tone statistics unchanged, and the decoders' tone measures within their limits (frequency and wrong-tone fraction on each vector, level and balance on the mean paired change, detector agreement on each vector); not that the voice frames around the tones are right |
 | `block-lengths-channel` | passes all 33 checks | no mute rate, false or missed mute rate or mute agreement moving in any mode (the identity of the mute decisions themselves rests on the frame-flag comparison above), the hard-decision distance from DVSI's decode on the loud frames falling by 0.02 dB in the mean or more with no hard-decision vector rising by more than 0.01 dB (the channel vectors are one recording, so no interval; each fell), the soft-decision one not rising in the mean, P25's unchanged; P25's encoder rows unchanged (a count over the run's speech vectors) |
-| `block-lengths-final` | not scored | the prediction for `irstia` and `mark` |
+| `block-lengths-final` | passes all 22 checks, scored once (below) | on `irstia` and `mark`, held out, a prediction asking no gain: P25's decodes and encoder rows unchanged; in both codecs the correlation with DVSI's decode not falling in the mean and on neither vector by more than 0.00002, the distance from DVSI's decode not rising in the mean and on neither vector by more than 0.006 dB, the envelope correlation not falling by more than 0.0002 in the mean, the distance from the input rising by no more than 0.002 dB in the mean and 0.005 dB on either vector, the level within 0.05 dB in the mean and 0.1 dB on either vector, the encodings' distances from DVSI's decoded encoding and from the input rising by no more than 0.005 dB in the mean |
+
+**The final partition**, scored once, on 2026-11-27 at 20:35 (CST), after the review, its fix round and
+the merge of the branch below's final head (`e345239`, PR #204): the build of `git archive e345239`
+(`build/baseline-tools`) against the build of `574bda7` (`build/tools-final`, the head then, a clean
+tree; the scoreboard's Release configuration), both aligning freely first and then scored at their
+joint lags, both runs' encodings decoded by the candidate's decoder, gate set `block-lengths-final`:
+passed, 22 of 22 checks. The commits after `574bda7` change documents only. The gate lines, as
+printed:
+
+```
+PASS p25/final speech.pcm_changed_vectors max: value=0
+PASS p25/final encoder.rows_changed_vectors max: value=0
+PASS dstar/final vs_dvsi.waveform_corr_unshifted no_decrease: mean delta=+0.004693 ci95=(-2.6450229947405646e-06, 0.009389515683961625) worst=('irstia', 0.009389515683961625)
+PASS r33/final vs_dvsi.waveform_corr_unshifted no_decrease: mean delta=+0.002598 ci95=(3.5522973012014347e-06, 0.005191608856010332) worst=('irstia', 0.005191608856010332)
+PASS dstar/final vs_dvsi.waveform_corr_unshifted all_no_decrease: mean delta=+0.004693 ci95=(-2.6450229947405646e-06, 0.009389515683961625) worst=('irstia', 0.009389515683961625) min=-2.645e-06
+PASS r33/final vs_dvsi.waveform_corr_unshifted all_no_decrease: mean delta=+0.002598 ci95=(3.5522973012014347e-06, 0.005191608856010332) worst=('irstia', 0.005191608856010332) min=+3.552e-06
+PASS dstar/final vs_dvsi.lsd_db no_increase: mean delta=-0.06142 ci95=(-0.1200618449737515, -0.002786417529328733) worst=('irstia', -0.1200618449737515)
+PASS r33/final vs_dvsi.lsd_db no_increase: mean delta=-0.03793 ci95=(-0.07213532965775316, -0.003719705948663332) worst=('irstia', -0.07213532965775316)
+PASS dstar/final vs_dvsi.lsd_db all_no_increase: mean delta=-0.06142 ci95=(-0.1200618449737515, -0.002786417529328733) worst=('irstia', -0.1200618449737515) max=-0.002786
+PASS r33/final vs_dvsi.lsd_db all_no_increase: mean delta=-0.03793 ci95=(-0.07213532965775316, -0.003719705948663332) worst=('irstia', -0.07213532965775316) max=-0.00372
+PASS dstar/final vs_dvsi.env_corr no_decrease: mean delta=+4.327e-05 ci95=(-6.345891995218622e-07, 8.716709650435917e-05) worst=('irstia', 8.716709650435917e-05)
+PASS r33/final vs_dvsi.env_corr no_decrease: mean delta=+1.241e-05 ci95=(-8.623821520337138e-06, 3.3445100280693474e-05) worst=('irstia', 3.3445100280693474e-05)
+PASS dstar/final ours.lsd_db no_increase: mean delta=-0.01243 ci95=(-0.025021641252252813, 0.00015962514674772166) worst=('irstia', -0.025021641252252813)
+PASS r33/final ours.lsd_db no_increase: mean delta=-0.007206 ci95=(-0.014046524819661066, -0.00036491581821707086) worst=('irstia', -0.014046524819661066)
+PASS dstar/final ours.lsd_db all_no_increase: mean delta=-0.01243 ci95=(-0.025021641252252813, 0.00015962514674772166) worst=('irstia', -0.025021641252252813) max=+0.0001596
+PASS r33/final ours.lsd_db all_no_increase: mean delta=-0.007206 ci95=(-0.014046524819661066, -0.00036491581821707086) worst=('irstia', -0.014046524819661066) max=-0.0003649
+PASS dstar/final vs_dvsi.level_offset_db abs_delta_max: mean delta=-0.007222 ci95=(-0.01317788142806671, -0.0012664347566854195) worst=('irstia', -0.01317788142806671)
+PASS r33/final vs_dvsi.level_offset_db abs_delta_max: mean delta=-0.003251 ci95=(-0.00393773856491926, -0.0025634598130280283) worst=('irstia', -0.00393773856491926)
+PASS dstar/final encoder.vs_dvsi_bits.lsd_db no_increase: mean delta=-0.02133 ci95=(-0.0388651199641572, -0.0038030255597627516) worst=('irstia', -0.0388651199641572)
+PASS r33/final encoder.vs_dvsi_bits.lsd_db no_increase: mean delta=-0.01121 ci95=(-0.019135328250938777, -0.0032844124594095803) worst=('irstia', -0.019135328250938777)
+PASS dstar/final encoder.lsd_db no_increase: mean delta=-0.01296 ci95=(-0.021702493040256954, -0.004219116910896936) worst=('irstia', -0.021702493040256954)
+PASS r33/final encoder.lsd_db no_increase: mean delta=-0.008667 ci95=(-0.01561493384435586, -0.0017199902676230394) worst=('irstia', -0.01561493384435586)
+gate set block-lengths-final: PASS
+```
+
+Per vector (the scoreboard's measures, baseline → candidate):
+
+| Codec, vector | Waveform corr. vs DVSI | LSD vs DVSI (dB) | Envelope corr. vs DVSI | LSD vs input (dB) | Level vs DVSI (dB) | Encoding: LSD vs DVSI's encoding / vs input (dB) |
+|---|---|---|---|---|---|---|
+| D-STAR `irstia` | 0.985112 → 0.994501 (+0.009390) | 1.044922 → 0.924860 (-0.120062) | 0.994951 → 0.995038 | 5.529865 → 5.504844 (-0.025022) | +0.096304 → +0.083126 (-0.013178) | -0.038865 / -0.021702 |
+| D-STAR `mark` | 0.995923 → 0.995921 (-0.000003) | 0.894540 → 0.891753 (-0.002786) | 0.997211 → 0.997210 | 5.536541 → 5.536701 (+0.000160) | +0.165199 → +0.163932 (-0.001266) | -0.003803 / -0.004219 |
+| Rate 33 `irstia` | 0.986031 → 0.991222 (+0.005192) | 1.233503 → 1.161368 (-0.072135) | 0.994282 → 0.994316 | 5.572996 → 5.558950 (-0.014047) | -0.034693 → -0.038631 (-0.003938) | -0.019135 / -0.015615 |
+| Rate 33 `mark` | 0.994812 → 0.994816 (+0.000004) | 1.136964 → 1.133244 (-0.003720) | 0.996610 → 0.996601 | 5.506377 → 5.506012 (-0.000365) | +0.009517 → +0.006953 (-0.002563) | -0.003284 / -0.001720 |
+| P25 `irstia`, `mark` | 0.988889, 0.994967, unchanged | unchanged | unchanged | unchanged | unchanged | unchanged |
+
+The partition's mean correlation goes D-STAR 0.990517 → 0.995211 (+0.004693), rate 33 0.990422 →
+0.993019 (+0.002598), P25 0.991928 unchanged. All six entries carry an encoder-row hash and a PCM hash
+in both reports (12 row hashes, 12 PCM hashes): P25's two row hashes and two PCM hashes are equal,
+D-STAR's and rate 33's differ (the encoders' rows change by design), the lags of the two runs equal.
+**What it shows**: the whole gain is on `irstia`, in both codecs, where the correlation rises by more
+than on any development vector (D-STAR +0.009390 against development's most, +0.009212) and the
+distance from the input falls with the distance from DVSI's decode; `mark` does not move (D-STAR's
+correlation -0.000003, inside the 0.00002 the set allows a vector to fall, rate 33's +0.000004; its
+decode's distances from DVSI's decode and from the input move by less than 0.004 dB, the distance from
+the input on D-STAR by +0.00016, inside the 0.005 dB the set allows a vector), and P25 is untouched. The two recordings differ in their frames of
+20 harmonics: counted after the scoring, from DVSI's bits alone (a scratch tool that reads each frame
+through the public frame decoder's error correction to its 49 parameter bits and counts the codes of
+20 harmonics, D-STAR b0 54 to 57 and rate 33 b0 51 to 53, among the voice frames; no model and no
+audio formed; the reframed bit streams deleted after counting), `irstia` holds 146 of its 3,072 voice
+frames in D-STAR (4.75%) and 112 in rate 33 (3.65%), `mark` 2 of 922 (0.22%) and 4 (0.43%). **What it
+does not show**: anything on `mark` beyond no harm, the frames of 20 harmonics being too few there; a
+gain with an interval (two recordings; the set asked none); how a DVSI decoder reads this library's
+new encodings.
 
 **Scored again after the merge.** The branch below's final head, `e345239` (PR #204, its held-out
 partition scored and passed), brings one change of behaviour after `f725a66`, the low cut's tracker
@@ -8209,4 +8276,10 @@ scoreboard's `compare()` and `check_gates()` to read each measure's coverage. Tw
 first drafted could not have been evaluated and were corrected before the declaration: a metric named
 `encoder.speech.lsd_db`, which the scoreboard reports as `encoder.lsd_db`, and a `decrease` rule on the
 channel partition, whose eight vectors are one recording and so give no bootstrap interval (replaced
-by a mean fall of at least 0.02 dB and a bound on each vector). The final partition is not yet scored.
+by a mean fall of at least 0.02 dB and a bound on each vector). The final partition was scored once, on
+2026-11-27, after the review, its fix round and the merge, the build of `git archive e345239` against the
+build of `574bda7`: `block-lengths-final` passed, 22 of 22 checks, the correlation rising on `irstia` in
+both codecs (D-STAR 0.985112 → 0.994501, rate 33 0.986031 → 0.991222) and `mark` unchanged within the
+set's tolerance (means D-STAR 0.990517 → 0.995211, rate 33 0.990422 → 0.993019), P25's decodes and
+encoder rows unchanged, all six entries carrying both hashes ([November 2026: the AMBE block lengths at
+20 harmonics](#november-2026-the-ambe-block-lengths-at-20-harmonics)).
