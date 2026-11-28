@@ -9039,5 +9039,395 @@
         "every_vector": true
       }
     ]
+  },
+  "p25-quiet-frames-development": {
+    "description": "P25's quiet frames: this change set is to play a P25 (IMBE 7200x4400) voice frame whose decoded magnitudes are low lower still, as DVSI's P25 decoder plays the quiet frames of its own vectors. In P25's data path only, every magnitude of the model the synthesis renders for a decoded voice frame (voiced, unvoiced and pulsed bands alike) is to be multiplied by g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded log2 magnitudes (log2Ml[1..L] as the decode stores them for the prediction, before the spectral enhancement): 1 down to a threshold X0, then falling by a factor of 2^K per unit of x, down to a floor of 2^FLOOR, where it stays. The three constants are to be fitted on the library's own decodes, by level, on the development and validation vectors together (per steady frame, the gain for which the library's samples, scaled and truncated toward zero as P25's 16-bit output is, come nearest DVSI's), not by waveform correlation, which rewards attenuating whatever two decodes share only in part. The gain is a property of the rendering, like the high-band shelf and the output gain: the log2 magnitudes and the prediction history keep the decoded values, and the decoded model the public parameter decoder returns, the IMBE encoder's bits and returned models, the voicing, the frame marks, the pitch, the tone word, the mute noise and the low band's tracker do not change; a tone model plays without the gain; a lost frame's repeat plays the model the frame it repeats played, with the gain applied once; a caller's state whose mean is not finite, or whose harmonic count lies outside 1..56, gets no gain. ProVoice (which runs P25's data path, has no DVSI material and is excluded by its flag), D-STAR, rate 33, TETRA, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository, other pending P25 changes in its base): after one run of frames out of line in another recording, the two near-silent recordings of the development partition (dam80 and dam40) are where the library's P25 decode differs most from DVSI's; read sample by sample before the 16-bit conversion, DVSI's samples there are those of the library's waveform at a gain of at most 1, truncated toward zero, and the gain of a steady frame follows the mean of its decoded log2 magnitudes, alike at every place in a run of quiet frames and for frames with and without voiced bands, while D-STAR's and rate 33's decodes of the same recordings show nothing of the kind. The rule is a fit to output levels; what DVSI's decoder computes is not known. That scratch build was measured on the development, validation, tone and channel vectors, with the scoreboard's own measures too, before this set was declared, so none of those partitions is out of sample for the rule, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (e345239). The baseline against the change, development vectors (in sample: the rule was found on them, and its constants are to be fitted on them and the validation vectors). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. The scoreboard's other encoder measures compare the two runs' encodings decoded by the candidate's decoder and are not checked here. It says nothing of other inputs. The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of DVSI's bits of the run's speech vectors changes (the hash of each decode; a vector without a hash in either run counts as changed): those decoders must not change at all; it is a count over the speech vectors of the run, whichever partition the set judges. P25, decoding DVSI's bits: the gain is asked for on the mean, since it comes from the two near-silent recordings, a third recording moving a little and the others at most a hair. A no_decrease or no_increase check with a negative limit asks for a change of at least that size in the stated direction on the mean, without an interval. The waveform correlation with DVSI's decode, sample against sample at lag 0 (vs_dvsi.waveform_corr_unshifted), is to rise by at least 0.0010 in the mean, and no vector's may fall by more than 0.00002 (all_no_decrease); the log-spectral distance from DVSI's decode (vs_dvsi.lsd_db) is to fall by at least 0.10 dB in the mean and may rise by no more than 0.002 dB on any vector; the envelope correlation with DVSI's decode is to rise by at least 0.0010 in the mean; the log-spectral distance from the input speech (ours.lsd_db) may not rise in the mean and may rise by no more than 0.002 dB on any vector: the change is not to cost anything against the input, and in the scratch build's run its quiet frames, played lower, came nearer the input too; the level against DVSI's decode (vs_dvsi.level_offset_db) may move by no more than 0.08 dB in the mean and 0.75 dB on any vector (the worst vector's change bounds every vector), which is what the two quiet recordings need. Every paired check requires a measurement on every vector of the partition (every_vector), which makes a check need the figure everywhere and does not turn a limit on the mean into one on each vector. The measures are the scoreboard's, on the frames it measures and over whole files; they do not say which frames moved, nor that the gain is right on any one frame, nor anything of ProVoice, which no DVSI vector holds. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive e345239 scoring itself, aligned freely) before this set was declared: every paired metric checked here is measured in P25 on all 20 vectors of the partition, all 20 vectors carry an encoder-row hash in each mode, and every speech vector of the run carries a PCM hash in D-STAR and rate 33.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": -0.001,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 2e-05,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": -0.1,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": -0.001,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.08,
+        "worst": 0.75,
+        "every_vector": true
+      }
+    ]
+  },
+  "p25-quiet-frames-validation": {
+    "description": "P25's quiet frames: this change set is to play a P25 (IMBE 7200x4400) voice frame whose decoded magnitudes are low lower still, as DVSI's P25 decoder plays the quiet frames of its own vectors. In P25's data path only, every magnitude of the model the synthesis renders for a decoded voice frame (voiced, unvoiced and pulsed bands alike) is to be multiplied by g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded log2 magnitudes (log2Ml[1..L] as the decode stores them for the prediction, before the spectral enhancement): 1 down to a threshold X0, then falling by a factor of 2^K per unit of x, down to a floor of 2^FLOOR, where it stays. The three constants are to be fitted on the library's own decodes, by level, on the development and validation vectors together (per steady frame, the gain for which the library's samples, scaled and truncated toward zero as P25's 16-bit output is, come nearest DVSI's), not by waveform correlation, which rewards attenuating whatever two decodes share only in part. The gain is a property of the rendering, like the high-band shelf and the output gain: the log2 magnitudes and the prediction history keep the decoded values, and the decoded model the public parameter decoder returns, the IMBE encoder's bits and returned models, the voicing, the frame marks, the pitch, the tone word, the mute noise and the low band's tracker do not change; a tone model plays without the gain; a lost frame's repeat plays the model the frame it repeats played, with the gain applied once; a caller's state whose mean is not finite, or whose harmonic count lies outside 1..56, gets no gain. ProVoice (which runs P25's data path, has no DVSI material and is excluded by its flag), D-STAR, rate 33, TETRA, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository, other pending P25 changes in its base): after one run of frames out of line in another recording, the two near-silent recordings of the development partition (dam80 and dam40) are where the library's P25 decode differs most from DVSI's; read sample by sample before the 16-bit conversion, DVSI's samples there are those of the library's waveform at a gain of at most 1, truncated toward zero, and the gain of a steady frame follows the mean of its decoded log2 magnitudes, alike at every place in a run of quiet frames and for frames with and without voiced bands, while D-STAR's and rate 33's decodes of the same recordings show nothing of the kind. The rule is a fit to output levels; what DVSI's decoder computes is not known. That scratch build was measured on the development, validation, tone and channel vectors, with the scoreboard's own measures too, before this set was declared, so none of those partitions is out of sample for the rule, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (e345239). The baseline against the change, validation vectors (in sample: read in the study, and to be used with the development vectors to fit the constants). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. The scoreboard's other encoder measures compare the two runs' encodings decoded by the candidate's decoder and are not checked here. It says nothing of other inputs. The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of DVSI's bits of the run's speech vectors changes (the hash of each decode; a vector without a hash in either run counts as changed): those decoders must not change at all; it is a count over the speech vectors of the run, whichever partition the set judges. P25, decoding DVSI's bits: the validation partition holds no near-silent recording, so no gain is asked and nothing may get worse: the mean waveform correlation with DVSI's decode at lag 0 may fall by no more than 0.00002 and no vector's by more than 0.00005; the log-spectral distance from DVSI's decode may not rise in the mean and may rise by no more than 0.002 dB on any vector; the envelope correlation may fall by no more than 0.0002 in the mean; the log-spectral distance from the input speech may rise by no more than 0.002 dB in the mean; the level against DVSI's decode may move by no more than 0.01 dB in the mean and 0.02 dB on any vector. Every paired check requires a measurement on every vector of the partition (every_vector), which makes a check need the figure everywhere and does not turn a limit on the mean into one on each vector. The measures are the scoreboard's, on the frames it measures and over whole files; they do not say which frames moved, nor that the gain is right on any one frame, nor anything of ProVoice, which no DVSI vector holds. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive e345239 scoring itself, aligned freely) before this set was declared: every paired metric checked here is measured in P25 on all 5 vectors of the partition, all 5 vectors carry an encoder-row hash in each mode, and every speech vector of the run carries a PCM hash in D-STAR and rate 33.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "no_decrease",
+        "value": 2e-05,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 5e-05,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.01,
+        "worst": 0.02,
+        "every_vector": true
+      }
+    ]
+  },
+  "p25-quiet-frames-tones": {
+    "description": "P25's quiet frames: this change set is to play a P25 (IMBE 7200x4400) voice frame whose decoded magnitudes are low lower still, as DVSI's P25 decoder plays the quiet frames of its own vectors. In P25's data path only, every magnitude of the model the synthesis renders for a decoded voice frame (voiced, unvoiced and pulsed bands alike) is to be multiplied by g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded log2 magnitudes (log2Ml[1..L] as the decode stores them for the prediction, before the spectral enhancement): 1 down to a threshold X0, then falling by a factor of 2^K per unit of x, down to a floor of 2^FLOOR, where it stays. The three constants are to be fitted on the library's own decodes, by level, on the development and validation vectors together (per steady frame, the gain for which the library's samples, scaled and truncated toward zero as P25's 16-bit output is, come nearest DVSI's), not by waveform correlation, which rewards attenuating whatever two decodes share only in part. The gain is a property of the rendering, like the high-band shelf and the output gain: the log2 magnitudes and the prediction history keep the decoded values, and the decoded model the public parameter decoder returns, the IMBE encoder's bits and returned models, the voicing, the frame marks, the pitch, the tone word, the mute noise and the low band's tracker do not change; a tone model plays without the gain; a lost frame's repeat plays the model the frame it repeats played, with the gain applied once; a caller's state whose mean is not finite, or whose harmonic count lies outside 1..56, gets no gain. ProVoice (which runs P25's data path, has no DVSI material and is excluded by its flag), D-STAR, rate 33, TETRA, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository, other pending P25 changes in its base): after one run of frames out of line in another recording, the two near-silent recordings of the development partition (dam80 and dam40) are where the library's P25 decode differs most from DVSI's; read sample by sample before the 16-bit conversion, DVSI's samples there are those of the library's waveform at a gain of at most 1, truncated toward zero, and the gain of a steady frame follows the mean of its decoded log2 magnitudes, alike at every place in a run of quiet frames and for frames with and without voiced bands, while D-STAR's and rate 33's decodes of the same recordings show nothing of the kind. The rule is a fit to output levels; what DVSI's decoder computes is not known. That scratch build was measured on the development, validation, tone and channel vectors, with the scoreboard's own measures too, before this set was declared, so none of those partitions is out of sample for the rule, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (e345239). The baseline against the change, tone partition. The max 0 check on tone.pcm_changed_vectors says that no D-STAR or rate-33 decode of the 52 tone vectors changes (the hash of each decode; a vector without a hash in either run counts as changed). P25's tones are sent as voice frames and the frames between and around them are quiet: P25's tone decodes are to change in those frames, while a frame played as a tone model takes no gain (no measurement decides what DVSI's decoder does there: a tone's level is its own rule). No P25 tone measure may get worse: the relative frequency error may rise on no vector by more than 0.00002, the tone level error and the dual tones' balance error by no more than 0.005 dB on any vector, the share of windows playing a wrong tone on no vector at all, and the detector's agreement may fall on no vector, a measurement on every vector required. The frequency, level, balance and wrong-tone measures see only the windows where both decodes hold a tone the scoreboard's detector recognises, and the agreement every window whose classification in DVSI's decode equals its two neighbours', with or without a tone, so it also sees some of the frames around the tones: the checks constrain the detector's results on those windows, not that the quiet frames between the tones, which the gain changes, are right; a check that does not require every vector passes on a vector that neither run measures and fails on one that only one run measures (unpaired); no check here bounds the distance from the input. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive e345239 scoring itself, aligned freely) before this set was declared: the detector's agreement is measured in P25 on all 52 tone vectors, the frequency, level and wrong-tone measures on 49 (none for cp1, cpvbad and dtmfvbad) and the balance on 48 (none for alert, a single tone, either); every tone vector carries a decode hash in D-STAR and rate 33.",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 2e-05
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.level_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "all_no_increase",
+        "value": 0.005
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.0,
+        "every_vector": true
+      }
+    ]
+  },
+  "p25-quiet-frames-channel": {
+    "description": "P25's quiet frames: this change set is to play a P25 (IMBE 7200x4400) voice frame whose decoded magnitudes are low lower still, as DVSI's P25 decoder plays the quiet frames of its own vectors. In P25's data path only, every magnitude of the model the synthesis renders for a decoded voice frame (voiced, unvoiced and pulsed bands alike) is to be multiplied by g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded log2 magnitudes (log2Ml[1..L] as the decode stores them for the prediction, before the spectral enhancement): 1 down to a threshold X0, then falling by a factor of 2^K per unit of x, down to a floor of 2^FLOOR, where it stays. The three constants are to be fitted on the library's own decodes, by level, on the development and validation vectors together (per steady frame, the gain for which the library's samples, scaled and truncated toward zero as P25's 16-bit output is, come nearest DVSI's), not by waveform correlation, which rewards attenuating whatever two decodes share only in part. The gain is a property of the rendering, like the high-band shelf and the output gain: the log2 magnitudes and the prediction history keep the decoded values, and the decoded model the public parameter decoder returns, the IMBE encoder's bits and returned models, the voicing, the frame marks, the pitch, the tone word, the mute noise and the low band's tracker do not change; a tone model plays without the gain; a lost frame's repeat plays the model the frame it repeats played, with the gain applied once; a caller's state whose mean is not finite, or whose harmonic count lies outside 1..56, gets no gain. ProVoice (which runs P25's data path, has no DVSI material and is excluded by its flag), D-STAR, rate 33, TETRA, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository, other pending P25 changes in its base): after one run of frames out of line in another recording, the two near-silent recordings of the development partition (dam80 and dam40) are where the library's P25 decode differs most from DVSI's; read sample by sample before the 16-bit conversion, DVSI's samples there are those of the library's waveform at a gain of at most 1, truncated toward zero, and the gain of a steady frame follows the mean of its decoded log2 magnitudes, alike at every place in a run of quiet frames and for frames with and without voiced bands, while D-STAR's and rate 33's decodes of the same recordings show nothing of the kind. The rule is a fit to output levels; what DVSI's decoder computes is not known. That scratch build was measured on the development, validation, tone and channel vectors, with the scoreboard's own measures too, before this set was declared, so none of those partitions is out of sample for the rule, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (e345239). The baseline against the change, channel partition (dam's bits with channel errors, hard and 4-bit soft decisions). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. The scoreboard's other encoder measures compare the two runs' encodings decoded by the candidate's decoder and are not checked here. It says nothing of other inputs. The max 0 check on channel.pcm_changed_vectors says that no D-STAR or rate-33 decode of the 8 channel-error vectors changes (the hash of each decode; a vector without a hash in either run counts as changed). The eight mute statistics (mute agreement, mute rate, false and missed mute rates, hard and soft decisions) must not move in any mode: per-vector statistics, they do not by themselves say that no frame's mute decision changed. In P25 the log-spectral distance from DVSI's decode on the loud frames that neither run nor DVSI mutes (channel.hd.lsd_common_db and channel.sd.lsd_common_db) may rise by no more than 0.002 dB in the mean, on at least a tenth of the frames counted (min_coverage): the loud frames are not those the gain is to act on, so these checks say that the change costs nothing there, not that P25's quiet frames under channel errors (repeated, muted or smoothed) come nearer DVSI's; no check here bounds the distance from the input. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive e345239 scoring itself, aligned freely) before this set was declared: the hard-decision measures are measured on the 4 hard-decision vectors and the soft-decision ones on the 4 soft-decision vectors in each mode, and every channel-error vector carries a decode hash in D-STAR and rate 33; encoder.rows_changed_vectors counts the speech vectors of the run (the development and validation vectors of the combined run), since the channel vectors are not encoded.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.002,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.002,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "p25-quiet-frames-final": {
+    "description": "P25's quiet frames: this change set is to play a P25 (IMBE 7200x4400) voice frame whose decoded magnitudes are low lower still, as DVSI's P25 decoder plays the quiet frames of its own vectors. In P25's data path only, every magnitude of the model the synthesis renders for a decoded voice frame (voiced, unvoiced and pulsed bands alike) is to be multiplied by g = 2^clamp(K (x - X0), FLOOR, 0), x the mean of the frame's decoded log2 magnitudes (log2Ml[1..L] as the decode stores them for the prediction, before the spectral enhancement): 1 down to a threshold X0, then falling by a factor of 2^K per unit of x, down to a floor of 2^FLOOR, where it stays. The three constants are to be fitted on the library's own decodes, by level, on the development and validation vectors together (per steady frame, the gain for which the library's samples, scaled and truncated toward zero as P25's 16-bit output is, come nearest DVSI's), not by waveform correlation, which rewards attenuating whatever two decodes share only in part. The gain is a property of the rendering, like the high-band shelf and the output gain: the log2 magnitudes and the prediction history keep the decoded values, and the decoded model the public parameter decoder returns, the IMBE encoder's bits and returned models, the voicing, the frame marks, the pitch, the tone word, the mute noise and the low band's tracker do not change; a tone model plays without the gain; a lost frame's repeat plays the model the frame it repeats played, with the gain applied once; a caller's state whose mean is not finite, or whose harmonic count lies outside 1..56, gets no gain. ProVoice (which runs P25's data path, has no DVSI material and is excluded by its flag), D-STAR, rate 33, TETRA, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository, other pending P25 changes in its base): after one run of frames out of line in another recording, the two near-silent recordings of the development partition (dam80 and dam40) are where the library's P25 decode differs most from DVSI's; read sample by sample before the 16-bit conversion, DVSI's samples there are those of the library's waveform at a gain of at most 1, truncated toward zero, and the gain of a steady frame follows the mean of its decoded log2 magnitudes, alike at every place in a run of quiet frames and for frames with and without voiced bands, while D-STAR's and rate 33's decodes of the same recordings show nothing of the kind. The rule is a fit to output levels; what DVSI's decoder computes is not known. That scratch build was measured on the development, validation, tone and channel vectors, with the scoreboard's own measures too, before this set was declared, so none of those partitions is out of sample for the rule, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (e345239). The baseline against the change on irstia and mark, held out: a prediction for two recordings of ordinary level that no build of this change has seen, to be scored once, after the review. The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. The scoreboard's other encoder measures compare the two runs' encodings decoded by the candidate's decoder and are not checked here. It says nothing of other inputs. The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of DVSI's bits of the run's speech vectors changes (the hash of each decode; a vector without a hash in either run counts as changed): those decoders must not change at all; it is a count over the speech vectors of the run, whichever partition the set judges. P25, decoding DVSI's bits: the prediction is that nothing gets worse. No vector's waveform correlation with DVSI's decode at lag 0 may fall by more than 0.00005 and no vector's log-spectral distance from DVSI's decode rise by more than 0.005 dB; the envelope correlation may fall by no more than 0.0005 and the log-spectral distance from the input speech rise by no more than 0.005 dB in the mean; the level against DVSI's decode may move by no more than 0.02 dB in the mean. The gain was found on near-silent recordings and acts on quiet frames: this set cannot show the gain, only that the change does no harm on two recordings of ordinary level. Every paired check requires a measurement on both vectors (every_vector). The coverage of these metrics on the held-out vectors was not read for this declaration (no build reads them before the scoring); the same metrics were measured in every mode on both vectors in the held-out scoring of the branch below.",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 5e-05,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.005,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.02,
+        "every_vector": true
+      }
+    ]
   }
 }
