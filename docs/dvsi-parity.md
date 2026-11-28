@@ -1546,9 +1546,10 @@ magnitude then moves by one float step only where its product lies at a float's 
 the golden hashes pin glibc's (2.39 and 2.44 agree on the hashed sequences). `test_p25_quiet_frames`
 checks the knee and the doubles beside it, both cancelling histories (no gain, at the helper and
 through a public repeat), the bound's two sides, the product (a binary64 product exactly halfway
-between two floats) and a mean of -2^20 by their bits in every build, and `dtmf` frame 3185 by its
-bits where `FLT_EVAL_METHOD` is 0 (the eight 64-bit configurations) and within one place on x87 (the
-two 32-bit builds).
+between two floats) and a mean of -2^20 by their bits in every build, and, by their bits where
+`FLT_EVAL_METHOD` is 0 (the eight 64-bit configurations) and within one place on x87 (the two 32-bit
+builds), `dtmf` frame 3185 and a history within the bound whose binary64 sum loses a term an extended
+register keeps (2^20, -2^-40, -2^20, -3.2 x 7).
 
 **Before.** The library rendered a P25 frame at the magnitudes it decodes (after the enhancement),
 whatever their level. On the library's build of the branch point (`e345239`) the vectors where its
