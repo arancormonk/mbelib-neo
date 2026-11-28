@@ -289,6 +289,40 @@ test_gain_function(void) {
         const int none = mbe_imbe4400_quiet_gain(NULL, &g);
         assert(none == 0 && is_one(g));
     }
+    /* Every class of float in every harmonic 1..56 of a quiet model of 56 harmonics (the others -2.6, a gain at
+     * the floor): NaNs of either sign and both infinities give no gain, exactly 1, with any other content;
+     * zeros of either sign, subnormals, FLT_MIN, +-FLT_MAX and 1e30 the test's gain from the mean (a finite value
+     * however large: -FLT_MAX in one band takes the mean far under the knee, the floor; +FLT_MAX far over it, 1). */
+    {
+        static const uint32_t none_classes[] = {0x7FC00000u, 0xFFC00000u, 0x7F800001u,
+                                                0xFFFFFFFFu, 0x7F800000u, 0xFF800000u};
+        static const uint32_t finite_classes[] = {0x00000000u, 0x80000000u, 0x00000001u, 0x807FFFFFu, 0x00800000u,
+                                                  0x7F7FFFFFu, 0xFF7FFFFFu, 0x7149F2CAu, 0xF149F2CAu};
+        int none = 0, finite = 0;
+        for (int at = 1; at <= 56; ++at) {
+            for (size_t i = 0; i < sizeof(none_classes) / sizeof(none_classes[0]); ++i) {
+                mbe_parms mp = flat_model(56, -2.6f);
+                memcpy(&mp.log2Ml[at], &none_classes[i], sizeof(float));
+                double g = -1.0;
+                const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
+                assert(quiet == 0 && is_one(g));
+                ++none;
+            }
+            for (size_t i = 0; i < sizeof(finite_classes) / sizeof(finite_classes[0]); ++i) {
+                mbe_parms mp = flat_model(56, -2.6f);
+                memcpy(&mp.log2Ml[at], &finite_classes[i], sizeof(float));
+                check_gain(&mp, "a class of float in one harmonic");
+                ++finite;
+            }
+        }
+        printf("quiet-frame gain: %d states with a NaN or infinity in one harmonic give 1 exactly, %d with another "
+               "class of float the gain of their mean\n",
+               none, finite);
+    }
+    {
+        const double g = gain_at(20, -0.0f);
+        assert(is_one(g));
+    }
     /* Monotone and continuous across both knees, float neighbour by float neighbour. */
     const float centres[] = {(float)QUIET_X0, knee};
     for (size_t c = 0; c < 2; ++c) {
@@ -433,6 +467,8 @@ check_samples(const float* a, const float* b, int exact, const char* what) {
     }
     const double bound = 1e-5 * fmax(peak(a, 160), peak(b, 160)) + 1e-30;
     for (int i = 0; i < 160; ++i) {
+        /* A non-finite sample fails here whatever the other (inf <= inf would pass the bound). */
+        assert(finite_float(a[i]) && finite_float(b[i]));
         assert(fabs((double)a[i] - (double)b[i]) <= bound);
     }
 }
@@ -448,6 +484,7 @@ check_magnitudes(const mbe_parms* a, const mbe_parms* b, int exact, const char* 
             }
             assert(same_float(a->Ml[l], b->Ml[l]));
         } else {
+            assert(finite_float(a->Ml[l]) && finite_float(b->Ml[l]));
             assert(fabs((double)a->Ml[l] - (double)b->Ml[l]) <= 2.4e-7 * fabs((double)b->Ml[l]) + 1e-38);
         }
     }
@@ -710,6 +747,309 @@ test_tone(void) {
            mean_log2(&s.prev), own_gain(&s.prev));
 }
 
+/* The DTMF 1 tone stream of test_tone(), ten frames: the stream after it. */
+static void
+tone_stream(struct stream* s) {
+    char imbe_d[88];
+    float out[160];
+    unsigned flags;
+    int K;
+    const int L = harmonics_of(53, &K);
+    stream_init(s);
+    for (int f = 0; f < 10; ++f) {
+        unsigned char bands[12] = {0};
+        float logm[57] = {0.0f};
+        for (int band = 1; band <= K; ++band) {
+            bands[band - 1] = (unsigned char)((0x70u >> (K - band)) & 1u);
+        }
+        for (int l = 1; l <= L; ++l) {
+            logm[l] = (l == 4 || l == 7) ? 1.0f : -3.4f;
+        }
+        mbe_imbe4400_quantize_amplitudes(53, bands, logm, &s->prev, 0, imbe_d);
+        PLAY(s, imbe_d, 0, out, &flags);
+    }
+}
+
+/*
+ * What decides "a tone model, no gain" against forged states: the quiet DTMF
+ * stream's history (the repeat source) altered, then a lost frame, through the
+ * public data path. Whatever the state, the frame takes no gain exactly when it
+ * plays a tone model (the TONE mark in the model it rendered), and otherwise
+ * the test's gain of the history it repeats, against the replica: the real
+ * word (a tone model, at the tone's own level); the word removed, another
+ * tone code's word, the word with its flag alone, the TONE mark alone (each
+ * speech, at the gain of its mean); the tone harmonics' magnitudes at
+ * impossible levels (1 and 100) and NaN, infinity, subnormal and negative-zero
+ * magnitudes and log2 magnitudes, in one harmonic or in all.
+ */
+static void
+test_tone_forgeries(void) {
+    enum { CASES = 14 };
+
+    static const char* const names[CASES] = {
+        "the real word",    "no word",       "another code's word", "the flag alone",     "the TONE mark alone",
+        "levels 1 and 100", "NaN log2Ml[1]", "NaN log2Ml in all",   "-inf log2Ml[2]",     "subnormal log2Ml",
+        "-0 log2Ml",        "NaN Ml[4]",     "subnormal Ml[7]",     "-0 Ml in the others"};
+    int tones = 0, speech = 0;
+    for (int c = 0; c < CASES; ++c) {
+        struct stream s;
+        tone_stream(&s);
+        assert(bits_of(s.enh.PHIl[0]) == TONE_MARK_BITS);
+        mbe_parms* h = &s.prev;
+        const int word = h->Vl[0];
+        switch (c) {
+            case 1: h->Vl[0] = 0; break;
+            case 2: h->Vl[0] = (word & ~0x00FF0000) | (20 << 16); break;
+            case 3: h->Vl[0] = word & ~0x00FFFFFF; break;
+            case 4:
+                h->Vl[0] = 0;
+                h->PHIl[0] = 4.0f;
+                break;
+            case 5:
+                h->Ml[4] = 1.0f;
+                h->Ml[7] = 100.0f;
+                break;
+            case 6: h->log2Ml[1] = NAN; break;
+            case 7:
+                for (int l = 1; l <= h->L; ++l) {
+                    h->log2Ml[l] = NAN;
+                }
+                break;
+            case 8: h->log2Ml[2] = -INFINITY; break;
+            case 9:
+                for (int l = 1; l <= h->L; ++l) {
+                    h->log2Ml[l] = 1e-45f;
+                }
+                break;
+            case 10:
+                for (int l = 1; l <= h->L; ++l) {
+                    h->log2Ml[l] = -0.0f;
+                }
+                break;
+            case 11: h->Ml[4] = NAN; break;
+            case 12: h->Ml[7] = 1e-45f; break;
+            case 13:
+                for (int l = 1; l <= h->L; ++l) {
+                    if (l != 4 && l != 7) {
+                        h->Ml[l] = -0.0f;
+                    }
+                }
+                break;
+            default: break;
+        }
+        const struct stream before = s;
+        char imbe_d[88];
+        float out[160], want[160];
+        unsigned flags;
+        lost_frame(imbe_d);
+        PLAY(&s, imbe_d, 0, out, &flags);
+        for (int i = 0; i < 160; ++i) {
+            assert(finite_float(out[i]));
+        }
+        const int tone = bits_of(s.enh.PHIl[0]) == TONE_MARK_BITS;
+        if (tone) {
+            /* The tone model at the tone's own level, from the magnitudes it repeats: no gain. */
+            const double p4 = (double)s.prev.Ml[4] * (double)s.prev.Ml[4],
+                         p7 = (double)s.prev.Ml[7] * (double)s.prev.Ml[7];
+            for (int l = 4; l <= 7; l += 3) {
+                const double want_l = 0.988 * sqrt(0.5 * (p4 + p7)) * droop(l);
+                assert(fabs((double)s.enh.Ml[l] - want_l) <= 1e-6 * want_l);
+            }
+            ++tones;
+        } else {
+            const double g = own_gain(&s.prev);
+            mbe_parms rendered, enh;
+            replica(want, &s.prev, &before.enh, g, 0, 0, &rendered, &enh);
+            check_samples(out, want, QUIET_EXACT || is_one(g), names[c]);
+            check_magnitudes(&s.enh, &rendered, QUIET_EXACT || is_one(g), names[c]);
+            ++speech;
+        }
+        /* The real word plays the tone; a word or mark that is not the decode's plays speech at the gain. */
+        if (c == 0) {
+            assert(tone);
+        }
+        if (c >= 1 && c <= 4) {
+            assert(!tone && own_gain(&s.prev) < 1.0);
+        }
+        printf("  forged tone state, %s: %s\n", names[c],
+               tone ? "a tone model, no gain" : "speech, the gain of its mean");
+    }
+    printf("forged tone states: %d play a tone model with no gain, %d speech at the gain of their mean\n", tones,
+           speech);
+}
+
+/* ---- ProVoice frames (IMBE 7100x4400), packed from parameter bits ---- */
+
+/* A Golay (23,12) word whose data bits 11..22 are set in `word`: the parity bits 0..10 for which the decoder
+ * corrects nothing and gives the data back (as in test_subframe_synthesis.c). */
+static void
+golay_parity(char word[23]) {
+    for (int parity = 0; parity < 2048; ++parity) {
+        char out[23];
+        for (int j = 0; j < 11; ++j) {
+            word[j] = (char)((parity >> j) & 1);
+        }
+        if (mbe_golay2312(word, out) == 0) {
+            int same = 1;
+            for (int j = 11; j < 23; ++j) {
+                same &= out[j] == word[j];
+            }
+            if (same) {
+                return;
+            }
+        }
+    }
+    assert(0);
+}
+
+/* A ProVoice (15,11) Hamming word with data bits 4..14 set: its parity bits. */
+static void
+hamming7100_parity(char word[15]) {
+    for (int parity = 0; parity < 16; ++parity) {
+        char out[15];
+        for (int j = 0; j < 4; ++j) {
+            word[j] = (char)((parity >> j) & 1);
+        }
+        if (mbe_7100x4400hamming1511(word, out) == 0) {
+            return;
+        }
+    }
+    assert(0);
+}
+
+/* The ProVoice layout of parameter bits given in the 7200 layout (mbe_convertImbe7100to7200() run backwards). */
+static void
+imbe7100_layout(const char t[88], char d[88]) {
+    const int b0 =
+        (t[0] << 7) | (t[1] << 6) | (t[2] << 5) | (t[3] << 4) | (t[4] << 3) | (t[5] << 2) | (t[85] << 1) | t[86];
+    const float w0 = (float)(4 * M_PI) / (float)((float)b0 + 39.5);
+    const int L = (int)(0.9254 * (int)((M_PI / w0) + 0.25));
+    const int K = (L < 37) ? (int)((float)(L + 2) / (float)3) : 12;
+    memset(d, 0, 88);
+    d[0] = t[87];
+    d[42] = t[48 + K];
+    d[43] = t[49 + K];
+    for (int i = 0; i < K; ++i) {
+        d[44 + i] = t[48 + i];
+    }
+    int j = 0, k = 1;
+    while (j < 87) {
+        d[k] = t[j];
+        if (++j == 48) {
+            j += K + 2;
+        }
+        if (++k == 42) {
+            k += K + 2;
+        }
+    }
+}
+
+/* A ProVoice frame (7 x 24 bits, as received) that decodes with no error to parameter bits `t` (7200 layout). */
+static void
+pack_imbe7100(const char t[88], char fr[7][24]) {
+    char d[88], word[23], hword[15];
+    imbe7100_layout(t, d);
+    memset(fr, 0, sizeof(char[7][24]));
+    memset(word, 0, sizeof(word));
+    for (int j = 18; j > 11; --j) {
+        word[j - 1] = d[18 - j];
+    }
+    golay_parity(word);
+    for (int j = 0; j < 18; ++j) {
+        fr[0][j + 1] = word[j];
+    }
+    int n = 7;
+    for (int i = 1; i < 4; ++i) {
+        memset(word, 0, sizeof(word));
+        for (int j = 22; j > 10; --j) {
+            word[j] = d[n++];
+        }
+        golay_parity(word);
+        for (int j = 0; j < 23; ++j) {
+            fr[i][(i == 1) ? j + 1 : j] = word[j];
+        }
+    }
+    for (int i = 4; i < 6; ++i) {
+        memset(hword, 0, sizeof(hword));
+        for (int j = 14; j >= 4; --j) {
+            hword[j] = d[n++];
+        }
+        hamming7100_parity(hword);
+        for (int j = 0; j < 15; ++j) {
+            fr[i][j] = hword[j];
+        }
+    }
+    for (int j = 22; j >= 0; --j) {
+        fr[6][j] = d[n++];
+    }
+    assert(n == 88);
+    const int rc = mbe_demodulateImbe7100x4400Data(fr);
+    assert(rc == 0);
+    (void)rc;
+}
+
+/*
+ * ProVoice through its own frame entry points (mbe_processImbe7100x4400Framef()
+ * and its 16-bit twin) on quiet frames, lost frames up to the reset model and
+ * a frame the error rate mutes: every frame's float samples and states those
+ * of the replica without a gain, by their bits in every build (the same code
+ * path), and the 16-bit samples the float ones truncated; at least half of
+ * the frames are ones P25 would play lower.
+ */
+static void
+test_provoice_frames(void) {
+    struct stream s;
+    stream_init(&s);
+    int lower = 0, frames = 0;
+    for (int f = 0; f < 18; ++f) {
+        char imbe_d[88], fr[7][24], scratch[88];
+        float out[160], want[160];
+        short pcm[160];
+        if (f >= 8 && f < 14) {
+            lost_frame(imbe_d);
+        } else {
+            build_frame(imbe_d, 60, (f % 2) ? 0x7E0u : 0x000u, -2.6f + 0.1f * (float)(f % 5), 0.6f, &s.prev);
+        }
+        if (f == 16) {
+            s.prev.errorRate = 0.5f;
+        }
+        pack_imbe7100(imbe_d, fr);
+        const struct stream before = s;
+        struct stream twin = s;
+        mbe_process_result r;
+        mbe_initProcessResult(&r);
+        const int rc =
+            mbe_processImbe7100x4400Framef(out, &r, (const char (*)[24])fr, scratch, &s.cur, &s.prev, &s.enh);
+        assert(rc >= 0 && (r.flags & MBE_PROCESS_FLAG_PROVOICE) != 0u);
+        mbe_process_result r2;
+        mbe_initProcessResult(&r2);
+        mbe_setThreadRngSeed(0x7100u + (unsigned)f);
+        const int rc2 =
+            mbe_processImbe7100x4400Frame(pcm, &r2, (const char (*)[24])fr, scratch, &twin.cur, &twin.prev, &twin.enh);
+        assert(rc2 >= 0);
+        mbe_parms rendered, enh;
+        replica(want, &s.prev, &before.enh, 1.0, 1, 0, &rendered, &enh);
+        assert(same_parms(&twin.enh, &s.enh, 1));
+        if ((r.flags & MBE_PROCESS_FLAG_MUTE) == 0) {
+            check_samples(out, want, 1, "provoice frames");
+            assert(same_parms(&s.enh, &enh, 1));
+            short trunc[160];
+            mbe_floattoshort(out, trunc);
+            for (int i = 0; i < 160; ++i) {
+                assert(trunc[i] == pcm[i]);
+            }
+        } else {
+            check_magnitudes(&s.enh, &rendered, 1, "provoice frames, muted");
+        }
+        lower += own_gain(&s.prev) < 1.0;
+        ++frames;
+    }
+    assert(2 * lower >= frames);
+    printf("ProVoice through its own frame entry points, %d frames (%d P25 would play lower; repeats, the reset "
+           "model and a mute among them): as without the gain\n",
+           frames, lower);
+}
+
 /* ProVoice through the P25 data path with its flag, on the same quiet frames, lost frames and an error-rate mute:
  * every frame's samples and states those of the replica without a gain, by their bits in every build. */
 static void
@@ -852,6 +1192,8 @@ main(void) {
     test_errors();
     test_tone();
     test_provoice();
+    test_provoice_frames();
+    test_tone_forgeries();
     test_caller_states();
     test_public_synthesizer();
     printf("P25 quiet frames: ok\n");
