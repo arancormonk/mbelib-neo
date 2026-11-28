@@ -91,6 +91,11 @@
  * hashes are the build before's (ProVoice takes no gain and keeps truncating).
  * Their int16 hashes are the same for every kernel ISA and are checked in the
  * 32-bit Debug build too; their float hashes are SSE2's and AVX2's alike.
+ * Merged onto the four rules of DVSI's P25 decoder (fix/p25-decoder, 0724a02),
+ * the P25 sequences' hashes moved again: the loud one's float hashes are now
+ * 0724a02's (the rules move every P25 frame; the gain none of these), its
+ * int16 hash the rounding of those; the quiet one's both; the ProVoice one's
+ * stayed (neither change reaches ProVoice). No other hash moved.
  */
 #if defined(MBE_ARCH_X86_64) && defined(GOLDEN_FLOAT_EXACT) && defined(MBELIB_TEST_STRICT_INT16)
 #define GOLDEN_AMBE_STRICT 1
@@ -120,20 +125,20 @@ golden_ambe_expected(int isa) {
         e.ambe2450_s16 = 0xD2EB6902u;
         e.ambe2400_f32 = 0xECAEA43Bu;
         e.ambe2400_s16 = 0x57511F5Au;
-        e.imbe_loud_f32 = 0xF62DC2FAu;
-        e.imbe_quiet_f32 = 0x047311ACu;
+        e.imbe_loud_f32 = 0x0AEBE54Fu;
+        e.imbe_quiet_f32 = 0x0EB8EE64u;
         e.provoice_quiet_f32 = 0xE8B7AA45u;
     } else {
         e.ambe2450_f32 = 0x77F99B90u;
         e.ambe2450_s16 = 0xD2EB6902u;
         e.ambe2400_f32 = 0x5BE6D192u;
         e.ambe2400_s16 = 0x57511F5Au;
-        e.imbe_loud_f32 = 0x33CAE1E4u;
-        e.imbe_quiet_f32 = 0x8AD90364u;
+        e.imbe_loud_f32 = 0x5CCDC192u;
+        e.imbe_quiet_f32 = 0x28546228u;
         e.provoice_quiet_f32 = 0xF356E69Cu;
     }
-    e.imbe_loud_s16 = 0xFE7E4351u;
-    e.imbe_quiet_s16 = 0x7264E1CEu;
+    e.imbe_loud_s16 = 0xA081D020u;
+    e.imbe_quiet_s16 = 0x6D04AF5Du;
     e.provoice_quiet_s16 = 0xDBC888BCu;
     return e;
 }

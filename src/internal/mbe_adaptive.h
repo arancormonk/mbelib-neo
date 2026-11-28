@@ -170,10 +170,16 @@ enum mbe_voiced_synthesis {
      * allows (mbe_pulsed.h; docs/dvsi-parity.md, "D-STAR and P25: the pulsed
      * state"). The P25 data path. */
     MBE_VOICED_SYNTHESIS_DVSI_IMBE,
-    /** MBE_VOICED_SYNTHESIS_DVSI_IMBE without the pulsed state: the ProVoice
-     * (IMBE 7100x4400) frames of the shared IMBE 4400 data path, which has no
-     * DVSI reference for them (MBE_PROCESS_FLAG_PROVOICE). Everything else is
-     * P25's rendering, so ProVoice plays as it did before the pulsed state. */
+    /** The ProVoice (IMBE 7100x4400) frames of the shared IMBE 4400 data
+     * path, which has no DVSI reference for them (MBE_PROCESS_FLAG_PROVOICE):
+     * P25's rendering as it stood before the pulsed state and before the four
+     * rules of DVSI's P25 decoder (docs/dvsi-parity.md), so that ProVoice
+     * plays as it did. It shares P25's mid-frame voicing by the columns (P25's
+     * samples, of the decoded voicing), the marking of the model it renders
+     * and the marks it honours; it has no pulsed state and no DVSI low band
+     * (the second-order filter at 100 Hz, mbe_low_band.h), its mid-frame pitch
+     * between two voiced models is the geometric mean, its phase kernel reads
+     * every band as decoded and its own models keep their decoded voicing. */
     MBE_VOICED_SYNTHESIS_DVSI_PROVOICE,
 };
 

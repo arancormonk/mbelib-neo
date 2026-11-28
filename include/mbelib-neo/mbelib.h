@@ -201,8 +201,9 @@ typedef struct mbe_soft_bit {
  * 7100x4400 (ProVoice) frame decode. Pass that result on to the IMBE 4400
  * data API, as for the C0/C4 context, and it decodes them as the ProVoice
  * frame APIs do: a decoded frame keeps TIA-102.BABA eq 46's nominal pitch
- * (P25's is a fit to the pitch DVSI's P25 decoder plays on speech,
- * mbe_decodeImbe4400Parms()) and plays no P25 tone model, and a muted frame
+ * (P25's is the pitch DVSI's P25 decoder plays, eq 46's fundamental cut to a
+ * grid of 2^-19 cycle per sample, mbe_decodeImbe4400Parms()) and plays no P25
+ * tone model, and a muted frame
  * gets library comfort noise instead of the TIA-102.BABA 7.8 level.
  */
 #define MBE_PROCESS_FLAG_PROVOICE         0x0200u
@@ -900,12 +901,12 @@ MBE_API int mbe_eccImbe7200x4400Data(char imbe_fr[8][23], char* imbe_d);
 /**
  * @brief Decode IMBE 4400 parameters.
  *
- * `cur_mp->w0` is a fit to the pitch DVSI's P25 decoder plays on speech for
- * the pitch code b0 (0.0064% rms on the rows it was fitted on, 0.018% on the
- * validation vectors' codes): TIA-102.BABA eq 46's 4 pi / (b0 + 39.5),
- * computed in float as this decoder always has (and L and K, TIA-102.BABA's,
- * from it), times 1 + g, g between -7.06e-4 and +3.38e-4 by b0, the product
- * formed in double and rounded to float once. The ProVoice (7100x4400)
+ * `cur_mp->w0` is the pitch DVSI's P25 decoder plays for the pitch code b0:
+ * TIA-102.BABA eq 46's fundamental, f0 = 4 / (2 b0 + 79) cycles per sample,
+ * cut to a grid of 2^-19 cycle, 2 pi floor(2^21 / (2 b0 + 79)) / 2^19,
+ * formed in double and rounded to float once (0 to 2.26e-4 below eq 46's);
+ * L and K, TIA-102.BABA's, follow eq 46's 4 pi / (b0 + 39.5) computed in
+ * float as this decoder always has. The ProVoice (7100x4400)
  * process paths, and the IMBE 4400 data API given `MBE_PROCESS_FLAG_PROVOICE`,
  * keep the nominal pitch.
  *

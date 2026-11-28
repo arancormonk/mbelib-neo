@@ -23,7 +23,11 @@
  *    MBE_PULSE_PEAK samples and the responses of a steady train add up to
  *    the harmonics; the pulse rate moves linearly from one model's pitch to
  *    the next's across an interval, after taking the train an octave down or
- *    up first where the new period is within 20% of twice or of half the old;
+ *    up first where the new period is within 20% of twice or of half the old
+ *    (in P25's rendering, between two voiced models on the 2^-19 grid with no
+ *    octave step, decided on their whole numbers of steps, the interval advances the train by exactly its two ends'
+ *    mean fundamental floored to the grid, 80 floor((n_a + n_b) / 2) steps,
+ *    the rate's end lowered by a step where the sum is odd);
  *  - the unvoiced part is mbe_synthesizeUnvoicedSubframes().
  */
 
@@ -155,6 +159,23 @@ struct mbe_subframe_model {
  */
 void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model);
 
+/**
+ * @brief The model a frame's parameters give at its end in @p rendering.
+ *
+ * mbe_subframe_own_model() but in P25's rendering
+ * (MBE_VOICED_SYNTHESIS_DVSI_IMBE), whose phase kernel reads each band the
+ * frame holds as unvoiced with the unvoiced factor taken out: its log2Ml minus
+ * log2(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0)), the domain of
+ * TIA-102.BABA-1's log magnitudes in which the AMBE codecs' decoded unvoiced
+ * bands already are (docs/dvsi-parity.md, "Phase regeneration"); a tone model
+ * (MBE_FRAME_MARK_TONE) and a band with no state are read as decoded.
+ * @param mp        Frame parameters.
+ * @param rendering The rendering.
+ * @param model     Receives the model, as mbe_subframe_own_model() says.
+ */
+void mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering,
+                                     struct mbe_subframe_model* model);
+
 /* The rate-33 rendering plays the mid-frame pitch between two voiced frames of
  * different pitch at the geometric mean of their pitches times this, times the
  * half-octave wave below (docs/dvsi-parity.md, "Rate 33: mid-frame pitch").
@@ -184,11 +205,11 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * (the selection is in docs/dvsi-parity.md); it takes the median absolute
  * change from 0.0493 to 0.0226 samples there, and from 0.0506 to 0.0266 on
  * the 2,638 such frames of the validation vectors.
- * The P25 pitch law (imbe_dvsi_pitch_offset(), imbe7200x4400.c) is a wave in
- * the same variable with the same period (its first harmonic: amplitude
- * 5.00e-4, phase 75.4 degrees; it has a second), but there it is in the
- * pitch each code plays; here it is in the mid-frame pitch alone. What in
- * DVSI's decoder makes it is not known. */
+ * The law P25's decoder played before its pitch was found to lie on a 2^-19
+ * grid was a wave in the same variable with the same period, fitted to the
+ * pulse train's drift over runs at one pitch code, which follows the mean of
+ * a frame's own pitch and its mid-frame pitch and so cannot tell the two
+ * apart (docs/dvsi-parity.md, "P25 pitch"). What in DVSI's decoder makes this one is not known. */
 #define MBE_AMBE2450_MID_PITCH_WAVE_C0 4.244e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_C1 9.374e-5
 #define MBE_AMBE2450_MID_PITCH_WAVE_S1 8.388e-4
@@ -197,9 +218,11 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * @brief The mid-frame model between two frames.
  *
  * Its pitch is the geometric mean of the two frames' when both have a voiced
- * band, the voiced frame's when one has (the geometric mean again when the
- * unvoiced frame before a voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES),
- * and the geometric mean when neither has, but in D-STAR's and P25's
+ * band (but in P25's rendering, MBE_VOICED_SYNTHESIS_DVSI_IMBE, the floored
+ * parabola for that mean, below), the voiced frame's when one has (the
+ * geometric mean again, in every rendering, when the unvoiced frame before a
+ * voiced one is marked MBE_FRAME_MARK_PITCH_CARRIES), and the geometric mean
+ * when neither has, but in D-STAR's and P25's
  * renderings where one of two frames with no voiced band has a reserved pitch
  * code of the pulsed state (mbe_pulsed.h) that the rendering reads (in P25's
  * this frame's code only while the validity counter that @p prev_mp's state
@@ -213,7 +236,14 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * (MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) the geometric mean of two voiced
  * frames whose pitches differ is multiplied by MBE_AMBE2450_MID_PITCH_FACTOR
  * and by the half-octave wave (MBE_AMBE2450_MID_PITCH_WAVE_C0), in double,
- * rounded to float once; no other case changes.
+ * rounded to float once. In P25's rendering the mid-frame pitch of two
+ * models that both have a voiced band, of the same pitch or not, is the
+ * floored quadratic (docs/dvsi-parity.md, "P25 pitch"): with fa fb = y 2^e
+ * the product of the two fundamentals in cycles per sample, y in [1, 2), q(y)
+ * the parabola through sqrt(y) at 1, 1.5 and 2 and e(y) = (1 + 2 (y - 1))
+ * 2^-15 a fitted excess, floor(2^19 sqrt(fa fb) (q(y) + e(y)) / sqrt(y)) /
+ * 2^19 cycle per sample, formed in double and rounded to float once; a
+ * product past 2^64 gives no pitch. No other case changes.
  * In D-STAR's and P25's renderings (MBE_VOICED_SYNTHESIS_DVSI,
  * MBE_VOICED_SYNTHESIS_DVSI_IMBE) a band's voicing comes from 500 Hz columns
  * (docs/dvsi-parity.md, "D-STAR and P25: mid-frame voicing by columns"): a
@@ -254,14 +284,17 @@ void mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* mode
  * into its log2Ml, which carries no such factor (an AMBE decoder builds an
  * ordinary voice frame's unvoiced band as Ml = MBE_UNVOICED_MAGNITUDE_FACTOR
  * / sqrt(w0) times 2^log2Ml; Ml then also carries what log2Ml does not, such
- * as rate 33's further silence scale and spectral enhancement). A current
+ * as rate 33's further silence scale and spectral enhancement); in P25's
+ * rendering, whose decoded log2Ml of an unvoiced band is the IMBE magnitude
+ * itself, each frame's unvoiced bands are read with the unvoiced factor taken
+ * out (mbe_subframe_rendered_own_model()). A current
  * frame marked MBE_FRAME_MARK_PREVIOUS_HELD
  * (a rate-33 silence frame) instead gets the previous frame's own model
- * (mbe_subframe_own_model()), whatever the two frames' voicing: DVSI's
+ * (mbe_subframe_rendered_own_model()), whatever the two frames' voicing: DVSI's
  * decoder plays it through the silence frame's first 10 ms and crossfades to
  * the silence model over the second. A current frame marked
  * MBE_FRAME_MARK_TONE (a P25 tone sent as voice frames, played as its tone
- * model) gets its own model (mbe_subframe_own_model()): DVSI's decoder brings
+ * model) gets its own model (mbe_subframe_rendered_own_model()): DVSI's decoder brings
  * the tone's amplitude from the last frame's to its own over the first 10 ms
  * and holds it over the second. Harmonic counts outside 1..56 give a model
  * with no band.

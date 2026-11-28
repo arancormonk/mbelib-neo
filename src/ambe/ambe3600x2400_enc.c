@@ -81,6 +81,12 @@
  * -0.0004 dB on the decoder before it to +0.0292 dB on the decoder with it.
  * The scale was left as it is (changing it changes the encoder's bits); no
  * measurement here says which scale is now best.
+ * Measured again with DVSI's block lengths at 20 harmonics
+ * (docs/dvsi-parity.md, "AMBE block lengths at 20 harmonics"), both encodings
+ * decoded by that change's decoder: the development median +0.0316 dB (+0.0346
+ * for the branch point's encodings under the same decoder, +0.0292 under the
+ * branch point's own); the change moved it by -0.0029 dB, under the scale's
+ * precision, and the scale stays.
  */
 #define AMBE2400_ENC_MAG_SCALE 1.075f
 
