@@ -1035,7 +1035,9 @@ test_tone_levels_decided_once(void) {
             play(out, &row, imbe_d, 0);
         }
         assert(row.prev.Vl[0] == tone_word(b0, l1, l2));
-        for (double level = (double)FLT_MIN; level <= 1.0e30; level *= 31.0) {
+        for (int rung = 0; rung < 47; ++rung) {
+            /* FLT_MIN times 31^rung (to about 1.5e29), then 1e30 */
+            const double level = (rung < 46) ? (double)FLT_MIN * pow(31.0, (double)rung) : 1.0e30;
             for (int step = 0; step < 3; ++step) {
                 /* FLT_MIN itself, and the two floats above it at each rung */
                 const float at = (float)(level * (1.0 + (double)step * 1.0e-6));
