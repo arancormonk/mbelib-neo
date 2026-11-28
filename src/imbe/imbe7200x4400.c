@@ -1401,6 +1401,22 @@ imbe_tone_levels(const mbe_parms* mp, int l1, int l2) {
  * check. Not inlined, so that the readers in the synthesizer and any later
  * caller run one body.
  */
+/* Whether harmonics 1..L of a model are exactly a tone's structure: l1 and
+ * l2 voiced at positive normal magnitudes, every other harmonic unvoiced at 0
+ * by its bits (mbe_imbe4400_tone_model()). */
+static int
+imbe_tone_structure(const mbe_parms* mp, int l1, int l2) {
+    for (int l = 1; l <= mp->L; l++) {
+        const int tone = (l == l1) || (l == l2);
+        uint32_t bits;
+        memcpy(&bits, &mp->Ml[l], sizeof(bits));
+        if (mp->Vl[l] != (tone ? 1 : 0) || (tone ? !imbe_positive_normal(&mp->Ml[l]) : (bits != 0u))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 MBE_NOINLINE int
 mbe_imbe4400_tone_model(const mbe_parms* mp) {
     if (mbe_frame_mark(mp) != MBE_FRAME_MARK_TONE) {
@@ -1419,15 +1435,7 @@ mbe_imbe4400_tone_model(const mbe_parms* mp) {
     if (l1 < 1 || l1 > l2 || l2 > mp->L) {
         return 0;
     }
-    for (int l = 1; l <= mp->L; l++) {
-        const int tone = (l == l1) || (l == l2);
-        uint32_t bits;
-        memcpy(&bits, &mp->Ml[l], sizeof(bits));
-        if (mp->Vl[l] != (tone ? 1 : 0) || (tone ? !imbe_positive_normal(&mp->Ml[l]) : (bits != 0u))) {
-            return 0;
-        }
-    }
-    return imbe_tone_levels(mp, l1, l2) && imbe_log2_finite(mp);
+    return imbe_tone_structure(mp, l1, l2) && imbe_tone_levels(mp, l1, l2) && imbe_log2_finite(mp);
 }
 
 /*

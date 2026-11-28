@@ -46,6 +46,7 @@
 #include <string.h>
 
 #include "mbe_adaptive.h"
+#include "mbe_math.h"
 #include "mbe_subframe.h"
 #include "mbelib-neo/mbelib.h"
 
