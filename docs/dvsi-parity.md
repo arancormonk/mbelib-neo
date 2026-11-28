@@ -1855,9 +1855,15 @@ mark, a tone word naming a row of its code, the model at that code's pitch by bi
 exactly the row's harmonics voiced at a positive normal level, a dual tone's two levels in the ratio
 of their droops `sinc^2(pi l / 256)` that the player writes (within 2^-20 of it), every other
 magnitude 1..L 0 by its bits, and `log2Ml[1..L]` finite: each a condition the played frame meets.
-What stays free: the two harmonics' common level (any positive normal value plays as a tone at that
-level), the finite values of `log2Ml` (the decoded frame's, read by the phase source as for any
-model), `Vl` above L and every field the player does not write. Not by its mark
+What the test does not constrain: the two harmonics' common level (any positive normal value plays
+as a tone at that level; one past the renderer's magnitude limit is capped there, as any magnitude
+is), the finite values of `log2Ml` (the decoded frame's, read by the phase source as for any model),
+`Vl` and `Ml` above L, `gamma`, the pulse train and the rest of the synthesis state: state like any
+other, whose change changes the next frame as after a played tone. The two levels the player writes
+are formed where the tone is taken (`imbe4400_take_tone()`), and the tone is taken only if both are
+positive normal floats, so that every model the player marks passes the test (on a caller's history
+at `FLT_MIN` the levels would be subnormal: the frame plays as the speech it is, unmarked;
+`test_p25_tones`, all 116 rows over levels from `FLT_MIN` to 1e30). Not by its mark
 or its structure alone, since the previous model is caller state (the first form tested the mark,
 the word's flag and the structure: a word of code 255 on a b0 140 model voiced at harmonics 4 and 7,
 `0x01ff0704`, changed 133 of the next frame's 160 samples). The order: each `log2Ml` is read as
@@ -2195,7 +2201,21 @@ In P25's rendering only (`p25_advance_interval()`, `src/core/mbe_subframe.c`), b
 models whose fundamentals both lie on the grid (the float `2 pi n / 2^19`, rounded once, by its bits)
 and with no octave step between them, an interval advances the train by `80 floor((n_a + n_b) / 2)`
 steps: an integer count, added to the train's phase in one double addition, so that every build
-gives one total. Of the two forms the measurement cannot tell apart within an interval, the library
+gives one total. Which pulses the interval launches is decided on the whole numbers for the phase
+presented to it, at most 16 an interval (`INTERVAL_PULSES`; only a caller's pitch reaches it: the
+codes' highest pitch advances 4.05 cycles an interval, 131072 steps 20, the grid's Nyquist point
+40); the phase is carried as a double within a frame and as a float between frames, so over a chain
+a fraction of a step finer than those hold is rounded, and a crossing that lies within that
+rounding of an interval's end is launched at the next interval's start instead (a caller's phase of
+2^-30 on b0 176 for 64 frames stores 94 launches and ends at phase 0, the 95th pending; 16384 steps
+from 2^-100 launch 2 + 2 with the fifth pending): no crossing is launched twice or dropped by it,
+and a count taken at a fixed sample can differ by the pulse on that sample. Each pulse gets the
+time the form before gave it for the same entering phase; across a chain the phase an interval
+leaves can differ in its last place from that form's where the entering phase is finer than the
+grid (8192 steps from `0x1.bffffafffffffp-1`: a third pulse at -24 before, -23.99998 now), and on
+DVSI's vectors nothing differs (105,033 frames). The phase left is tested as the double it is
+stored as (`mbe_round_to_double()`), so that the 32-bit build, whose 80-bit value just under 1
+passed the test and then stored 1.0, stores 0 as the others do. Of the two forms the measurement cannot tell apart within an interval, the library
 keeps the linear sweep of the pulse rate and lowers its end by one step where the sum is odd (a
 constant rate at the floored mean gives the same total): a choice. An interval whose ends are not
 both on the grid (after an octave step, which halves or doubles the starting rate, or a caller's
@@ -2238,12 +2258,16 @@ of +0.150 step in the first build and 4,007 at -0.089 in the second, those with 
 at +0.070 and 3,414 at +0.356, and the equal-code frames with an even sum 1,346 at +0.085 and 1,373
 at -0.048 (an earlier table of the second build binned its frames without the excess: 3,733 at
 +0.157; corrected). The parity bins move by a few tenths of a step either way, the code-distance
-bins and the medians do not, and no rule for the bins was fitted. The claim, then: exact where the
-vectors hold a pitch or step between neighbours, no measurable change on speech, a fit for the
-excess.
+bins and the medians do not, and no rule for the bins was fitted. The claim, then: at the 37 codes
+the vectors hold long enough the drift rounds to 0 steps a frame (within 0.038 at the 15 held 20
+frames or more, 0.137 at the 22 shorter runs); along the four vectors that jitter between
+neighbouring codes the cumulative advance stays with DVSI's (in which opposite errors of single
+transitions could cancel, so no single transition is shown exact); no measurable change on speech;
+a fit for the excess.
 
 **The method** (worth keeping): a pulse train held on one code turns a rounding rule into an integer
-drift per frame, read to a hundredth of a step (the delay of DVSI's train against ours at each
+drift per frame, its per-code mean scattering by a few hundredths of a step on long runs and by up
+to 0.14 on runs of 14 to 19 frames, so that the whole step it rounds to is what is read (the delay of DVSI's train against ours at each
 frame's end, from the phases of the coherent voiced harmonics, its slope over a run of 12 frames or
 more), and a file that jitters between neighbouring codes tests a rule for unequal pairs by its
 cumulative advance along the whole file. A measure that did not work: the delay read across a change
@@ -5522,6 +5546,12 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   measured (DVSI's advance there stays 0.2 to 0.3 step above the library's in the mean on speech).
   The two large losses the four rules first had (`ptrain7` 0.947 → 0.224, `ptrain12` 0.847 → 0.190)
   were the train's advance and are gone (0.999, 0.988).
+- The pulse train's shared interval (`interval_pulses()`, every rendering's train off P25's floored
+  intervals): its phase left is `reached - floor(reached)` on a value that optimized x87 code can
+  keep in an 80-bit register, the shape P25's floored interval had before it tested the double it
+  stores (there an 80-bit value just under 1 passed `< 1` and stored 1.0, which an octave step after
+  it turned into a lost pulse). The shared function is the branch point's, left untouched for the
+  other renderings' inlining; whether its form can reach a stored 1.0 was not examined.
 - P25 soft-decision channel errors: on `dam_e10_sd` the whole-file correlation with DVSI's decode
   falls with the four rules, 0.056314 → 0.032881 (0.032918 with the floored means; the other three
   soft-decision files and all four hard-decision ones rise), while the scoreboard's distance on the

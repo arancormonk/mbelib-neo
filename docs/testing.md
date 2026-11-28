@@ -418,8 +418,7 @@ The CTest suite includes:
   the review's word `0x01ff0704`, the mark without the word, other harmonics, another flag and
   another band sounding read as speech. The tone model's test through the public paths
   (`test_p25_tone_model_forgeries`): a stream plays a real DTMF 1 frame, quantized by the IMBE
-  encoder's quantizer, and then a voiced b0 80 frame (the tone harmonics at the player's levels,
-  100 times their droops); each of 23 forgeries of its last frame (the review's, a code with no rows,
+  encoder's quantizer (the played levels about 201.638 and 201.304), and then a voiced b0 80 frame; each of 23 forgeries of its last frame (the review's, a code with no rows,
   a row of another code, harmonics no row has, the pitch an ulp off, another code's L, another code's
   K, L one less with K kept (21 -> 20), another magnitude at 1e-3, another at -0, a tone harmonic
   unvoiced, voiced at 0 and at a NaN, both tone harmonics at 0 and at -0 (in the droops' ratio, so
@@ -456,9 +455,11 @@ The CTest suite includes:
   pulses (`test_p25_train_ownership`): the review's stream (codes 172, 65 and 203, every band voiced,
   through `mbe_processImbe4400Dataf()` from a fresh state: the third frame's stored times hold no
   duplicate) and its second reproduction (code 7, the stored phase `0x1.afp-5f`, then code 52);
-  chains of floored frames over neighbouring codes from nine kinds of incoming phase (0, on the grid,
-  half a step off it, 2^-19 + 2^-30, 2^-100, the smallest subnormal, 1 - 2^-24, a float a frame
-  stores), each frame's stored pulses equal to the test's own count of the whole numbers crossed
+  chains of floored frames over neighbouring codes from nine stored phases (0; 0.25 and 2^-18, on the
+  grid; 2^-19 + 2^-30, 2^-11 of a step past a grid point; the smallest subnormal; 2^-100; 1 - 2^-24,
+  31/32 of a step past one; two floats 0.516 and 0.047 of a step past one), the test's reference
+  restarting each frame from the phase the library stored, so that it checks each interval's
+  ownership for the phase presented to it, not a chain's exact count, each frame's stored pulses equal to the test's own count of the whole numbers crossed
   (`count_crossings()`, one by one in integers), no two stored times nearer than half the shortest
   period, and rendering and `mbe_advance_subframes()` ending alike (count, times and phase by bits);
   the grid's last point (262143 then 262144 steps from phase 0 leaves 524208 steps); the octave
@@ -520,13 +521,19 @@ The CTest suite includes:
   `mbe_synthesizeSpeechf()` and `mbe_synthesizeSpeech()`, the three encoders through their float,
   short and frame entry points over forged histories, and TETRA (`mbe_tetraDecodeFrame()` over 6,000
   frames with bad-frame patterns and a reset); every byte of all three returned states hashed after
-  every frame, no slot zeroed. It prints its own coverage: `COVERAGE forged states 12048 (every frame
-  of every stream), pitches 1004, pairs reached: vm 288/288 vl 144/144 vs 108/108 ml 288/288 ms
-  216/216 ls 108/108 mmc 168/168; pitch x voicing 12048/12048; 1504 states take a tone structure over
-  their voicing class` (v voicing, m mark, l log class, s slot case, mc magnitude class: every pair of
-  those factors met; the 1,504 states whose mark case is a tone word with the tone structure have
-  that structure in place of their voicing class's bands, so those pairs are reached through other
-  states). ProVoice entered from the states the D-STAR and rate-33 streams leave, with the low cut's
+  every frame, no slot zeroed. It prints its own coverage, by factor assignment: `COVERAGE forged
+  states 12048 (every frame of every stream), pitches 1004, pairs reached: vm 288/288 vl 144/144 vs
+  108/108 ml 288/288 ms 216/216 ls 108/108 mmc 168/168; pitch x voicing 12048/12048; 1504 states take
+  a tone structure over their voicing class` (v voicing, m mark, l log class, s slot case, mc
+  magnitude class); and as the forged states hold them, after mark cases 19 to 21 write the tone
+  structure (class 10's bands, harmonics 4 and 7 at 120) over the voicing class: `COVERAGE as held
+  (after the tone structure's overwrite): avm 255/288 avl 144/144 avs 108/108; distinct (pitch
+  index, Vl[1..56]) 10176 of 12048 states; the 23 decoder streams forge every index on every frame;
+  the TIA rendering (mbe_synthesizeSpeechf()) forges every second index, the encoders' histories
+  every seventh of their 2,000 frames, the public helpers one index a frame`. So 33 mark-by-voicing
+  pairs are not reached (the three tone-structure marks with the other 11 voicing classes), and
+  10,176 distinct pairs of pitch and voicing are, not 12,048 (classes coincide at some harmonic
+  counts). ProVoice entered from the states the D-STAR and rate-33 streams leave, with the low cut's
   slots changed in all three, plays the same samples for 200 frames, and every byte of the returned
   states is compared after every frame: `prev_mp.noiseOverlap[38]` and `[39]` differ after the first
   frame (they keep the values they entered with), and from the second frame on the states are
