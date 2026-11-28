@@ -28,7 +28,9 @@
  * mid-frame state with neither frame's own model read by the columns, the
  * mid-frame bands with no unvoiced band carrying a finite log2Ml (no step)
  * and no column rule (or one with neither frame's own model read by it), and
- * the own model with no step, the columns applied to the shared one. What it
+ * the own model with no step, the columns applied to the shared one. It also
+ * runs the floored train's grid test on every point of the grid, 1 to 2^18
+ * steps, and on both floats beside each (check_grid_points()). What it
  * does not cover: it compiles mbe_subframe.c into its own translation unit,
  * with the test's flags, so in a library built with fast-math it compares the
  * two bodies as the test's flags compile them, not the library's object (the
@@ -259,8 +261,48 @@ check_own(const mbe_parms* mp) {
     assert(alike);
 }
 
+/* The grid test of P25's floored pulse train (p25_grid_steps()): every whole
+ * number of steps n from 1 to 2^18 (the grid's Nyquist point, pi, included)
+ * passes with its own canonical float, 2 pi n / 2^19 rounded to float once,
+ * and gives n; both floats beside it fail; so do 0, a negative pitch and the
+ * float past the last point. Returns the count of points checked. */
+static long
+check_grid_points(void) {
+    long checked = 0;
+    for (long n = 1; n <= P25_GRID_NYQUIST; ++n) {
+        const float w0 = mbe_round_to_float((float)(2.0 * M_PI * (double)n / 524288.0));
+        long steps = 0;
+        const int on = p25_grid_steps(w0, &steps);
+        assert(on && steps == n);
+        uint32_t bits;
+        memcpy(&bits, &w0, sizeof(bits));
+        for (int side = 0; side < 2; ++side) {
+            const uint32_t beside_bits = side ? bits + 1u : bits - 1u;
+            float beside;
+            memcpy(&beside, &beside_bits, sizeof(beside));
+            long ignored = 0;
+            const int beside_on = p25_grid_steps(beside, &ignored);
+            assert(!beside_on);
+        }
+        ++checked;
+    }
+    const float last = mbe_round_to_float((float)M_PI);
+    uint32_t past_bits;
+    memcpy(&past_bits, &last, sizeof(past_bits));
+    ++past_bits;
+    float past, zero = 0.0f, negative = -mbe_round_to_float((float)(2.0 * M_PI / 524288.0));
+    memcpy(&past, &past_bits, sizeof(past));
+    long ignored = 0;
+    const int past_on = p25_grid_steps(past, &ignored), zero_on = p25_grid_steps(zero, &ignored),
+              negative_on = p25_grid_steps(negative, &ignored);
+    assert(!past_on && !zero_on && !negative_on);
+    return checked;
+}
+
 int
 main(void) {
+    const long grid_points = check_grid_points();
+    assert(grid_points == P25_GRID_NYQUIST);
     static mbe_parms models[8][208];
     for (int kind = 0; kind < 8; ++kind) {
         for (int b0 = 0; b0 < 208; ++b0) {
@@ -296,7 +338,7 @@ main(void) {
     }
     assert(pairs == 208L * 208L && bands > 0 && ruled > 0);
     printf("p25 rendering copies: %ld code pairs, %ld mid-frame bands by the columns, %ld fills under the rule, "
-           "alike (%s; the largest float difference %.3g of its value)\n",
-           pairs, bands, ruled, COPIES_INEXACT ? "within 1e-5" : "bit for bit", worst_apart);
+           "alike (%s; the largest float difference %.3g of its value); %ld grid points and their neighbours\n",
+           pairs, bands, ruled, COPIES_INEXACT ? "within 1e-5" : "bit for bit", worst_apart, grid_points);
     return 0;
 }
