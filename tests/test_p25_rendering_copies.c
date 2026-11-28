@@ -30,7 +30,9 @@
  * and no column rule (or one with neither frame's own model read by it), and
  * the own model with no step, the columns applied to the shared one. It also
  * runs the floored train's grid test on every point of the grid, 1 to 2^18
- * steps, and on both floats beside each (check_grid_points()). What it
+ * steps, and on both floats beside each (check_grid_points()), and the
+ * phase a floored interval stores at a whole cycle, then an octave step
+ * (check_whole_cycle_then_octave()). What it
  * does not cover: it compiles mbe_subframe.c into its own translation unit,
  * with the test's flags, so in a library built with fast-math it compares the
  * two bodies as the test's flags compile them, not the library's object (the
@@ -78,18 +80,39 @@ finite_float(const float* x) {
 }
 
 /* How far two floats lie apart, relative to the larger magnitude (or to 1):
- * 0 for the same bits, +infinity where either is not finite (so that no
- * tolerance accepts it). */
+ * +infinity where either is not finite, identical bits included (so that
+ * neither mode accepts an infinity or a NaN); 0 for the same bits; otherwise
+ * at least DBL_MIN, so that two different bit patterns at no distance (+0
+ * and -0) fail the exact mode and pass only a tolerance. */
 static double
 float_apart(const float* a, const float* b) {
-    if (same_float(a, b)) {
-        return 0.0;
-    }
     if (!finite_float(a) || !finite_float(b)) {
         return INFINITY;
     }
+    if (same_float(a, b)) {
+        return 0.0;
+    }
     const double d = fabs((double)*a - (double)*b);
-    return d / fmax(1.0, fmax(fabs((double)*a), fabs((double)*b)));
+    return fmax(DBL_MIN, d / fmax(1.0, fmax(fabs((double)*a), fabs((double)*b))));
+}
+
+/* The comparator's own cases: an infinity or a NaN against its own bits fails
+ * both modes, +0 against -0 fails the exact mode, the same finite bits pass. */
+static void
+check_comparator(void) {
+    static const uint32_t cases[][2] = {
+        {0x7F800000u, 0x7F800000u}, {0xFF800000u, 0xFF800000u}, {0x7FC01234u, 0x7FC01234u}, {0x00000000u, 0x80000000u}};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        float a, b;
+        memcpy(&a, &cases[i][0], sizeof(a));
+        memcpy(&b, &cases[i][1], sizeof(b));
+        const double apart = float_apart(&a, &b);
+        assert(apart > 0.0);
+        assert((i < 3) ? !(apart <= 1.0e-5) : (apart <= 1.0e-5));
+    }
+    const float one = 1.0f;
+    const double same = float_apart(&one, &one);
+    assert(!(same > 0.0));
 }
 
 /* How far two subframe models lie apart: -1 where the pitch, the counts or a
@@ -300,8 +323,47 @@ check_grid_points(void) {
     return checked;
 }
 
+/* A voiced subframe model on the grid at n steps (harmonic 1 voiced). */
+static void
+grid_end(struct mbe_subframe_model* model, long n) {
+    memset(model, 0, sizeof(*model));
+    model->w0 = mbe_round_to_float((float)(2.0 * M_PI * (double)n / 524288.0));
+    model->L = 1;
+    model->voiced[1] = 1;
+    model->any_voiced = 1;
+}
+
+/* The phase a floored interval leaves is the double it stores, tested as
+ * stored: a constant interval at 6553 steps entered at 48 2^-19 - 2^-56
+ * reaches 1 - 2^-56 cycle, which rounds to 1.0 as a double, so the phase left
+ * is exactly 0 in every build (an x87 build that tested the 80-bit value kept
+ * 1.0); the octave step after it (6553 to 3276, 5 n_a between 8 n_b and 12 n_b)
+ * then halves 0 and launches its pulse at the interval's start, sample 80. */
+static void
+check_whole_cycle_then_octave(void) {
+    struct mbe_subframe_model a, b;
+    grid_end(&a, 6553);
+    grid_end(&b, 3276);
+    assert(!p25_octave_steps(6553, 6553) && p25_octave_steps(6553, 3276));
+    struct pulse_train train;
+    memset(&train, 0, sizeof(train));
+    train.phase = (48.0 / 524288.0) - ldexp(1.0, -56);
+    p25_advance_interval(&train, 0.0f, &a, &a);
+    const double zero = 0.0;
+    uint64_t have, want;
+    memcpy(&have, &train.phase, sizeof(have));
+    memcpy(&want, &zero, sizeof(want));
+    assert(have == want);
+    const int before = train.count;
+    p25_advance_interval(&train, 80.0f, &a, &b);
+    const float sample80 = 80.0f;
+    assert(train.count == before + 1 && same_float(&train.time[before], &sample80));
+}
+
 int
 main(void) {
+    check_comparator();
+    check_whole_cycle_then_octave();
     const long grid_points = check_grid_points();
     assert(grid_points == P25_GRID_NYQUIST);
     static mbe_parms models[8][208];

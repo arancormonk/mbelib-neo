@@ -1501,7 +1501,10 @@ train_runs_on(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, e
  * negative or not-a-number one included) loads nothing, and a count inside the
  * range is truncated to a whole number (a caller's 1.5 plays as 1); a phase
  * outside [0, 1) by its bit pattern reads as 0; a pulse time that is not
- * finite, is positive, or lies more than a frame back is skipped. */
+ * finite, is positive, or lies more than a frame back is skipped. A state no
+ * frame was seen to leave can still play: a caller's pulse at time 0 with a
+ * phase of 0 plays that pulse twice, once kept and once launched at the next
+ * frame's start. */
 static void
 load_pulse_train(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, enum mbe_voiced_synthesis rendering,
                  struct pulse_train* train) {
@@ -1671,10 +1674,15 @@ p25_octave_steps(long na, long nb) {
 /* The pulses of a floored interval from `start`: cycles `first` to `last` of
  * the train (the whole numbers its exact phase crosses, decided by the caller
  * in integers), each at the time the linear sweep from `from` to `to` cycles
- * per sample gives, in the expressions interval_pulses() uses (so that every
- * pulse that is not at the interval's end keeps its time bit for bit), a
+ * per sample gives, in the expressions interval_pulses() uses (so that, for
+ * the same entering phase, every pulse that is not at the interval's end gets
+ * the time the form before gave it, bit for bit; across a chain the phase an
+ * interval leaves can differ in its last place from that form's where the
+ * entering phase is finer than the grid, and a later time with it), a
  * negative radicand read as 0 and the time kept within [0, SUBFRAME]; at most
- * INTERVAL_PULSES of them, as there. A loop of P25's own: the shared function
+ * INTERVAL_PULSES (16) of them, as there (only a caller's pitch reaches the
+ * cap: the codes' highest pitch, b0 0, advances 4.05 cycles an interval, so 5
+ * pulses at most; 131072 steps crosses 20, the grid's Nyquist point 40). A loop of P25's own: the shared function
  * keeps its callers as they were. */
 static void
 p25_floored_pulses(struct pulse_train* train, float start, double from, double to, long first, long last) {
@@ -1709,14 +1717,21 @@ p25_floored_pulses(struct pulse_train* train, float start, double from, double t
  * grid, n_a and n_b steps, with no octave step between them (decided on the
  * whole numbers, p25_octave_steps()), the train advances by exactly 80
  * floor((n_a + n_b) / 2) steps over the interval, the two ends' mean
- * fundamental floored to the grid, as DVSI's P25 decoder advances it (where
- * the sum is odd half a step a sample is lost). Of the two forms the
+ * fundamental floored to the grid (where the sum is odd half a step a sample
+ * is lost): a rule read from DVSI's decodes of its pulse-train vectors, where
+ * the 37 codes held long enough drift against DVSI's train by a mean that
+ * rounds to 0 steps a frame (within 0.038 at the 15 held 20 frames or more,
+ * 0.137 at the 22 shorter runs) and the four vectors that jitter between
+ * neighbouring codes keep the cumulative advance along each file (in which
+ * opposite errors of single transitions could cancel); not a known part of
+ * DVSI's decoder. Of the two forms the
  * measurement cannot tell apart within an interval, the library keeps the
  * linear sweep of the pulse rate and lowers its end by one step where the sum
  * is odd (a constant rate at the floored mean gives the same total; a
  * choice).
  * Which pulses the interval launches is decided from the exact count, in
- * integers, before any time is solved for: with S the incoming phase in steps
+ * integers, before any time is solved for, for the phase presented to the
+ * interval: with S the incoming phase in steps
  * (exact: a power of two), the interval owns the whole numbers c from 1 (from 0
  * when the phase is 0) with c 2^19 < S + 80 floor((n_a + n_b) / 2) strictly, so
  * that a pulse falling exactly at the interval's end is the next interval's
@@ -1731,7 +1746,13 @@ p25_floored_pulses(struct pulse_train* train, float start, double from, double t
  * an onset or a caller's; under x87 that one rounding can differ in its last
  * place between builds); a sum rounded up to a whole cycle leaves 0, the
  * crossing it stands for lying after the end, not counted here, and launched
- * by the next interval. Every other interval (an onset, an offset, no voiced
+ * by the next interval. So over a chain a fraction of a step finer than the
+ * carried phase holds (a double within a frame, a float between frames) is
+ * rounded away, and a crossing that lies within that rounding of an
+ * interval's end is launched at the next interval's start instead (a caller's
+ * phase of 2^-30 on b0 176 for 64 frames stores 94 launches and ends at phase
+ * 0, the 95th pending): no crossing is launched twice or dropped by it, and a
+ * count taken at a fixed sample can differ by the one pulse on that sample. Every other interval (an onset, an offset, no voiced
  * model, an octave step, a pitch off the grid, a caller's) is
  * advance_interval()'s, as before, where the rates are the stored floats over 2
  * pi: the measurement says nothing of them.
@@ -1754,7 +1775,13 @@ p25_advance_interval(struct pulse_train* train, float start, const struct mbe_su
     const long first = (train->phase > 0.0) ? 1 : 0;
     const long last = (steps > whole) ? reach / P25_GRID_STEPS : (reach - 1) / P25_GRID_STEPS;
     p25_floored_pulses(train, start, (double)na / 524288.0, (double)end / 524288.0, first, last);
-    const double left = ((double)(reach % P25_GRID_STEPS) + (steps - whole)) / 524288.0;
+    /* Rounded to the double it is stored as before it is tested: under x87 a
+     * value just under 1 held in an 80-bit register passes the test and then
+     * stores as 1.0, which an octave step after it halves into a lost pulse
+     * (IEEE builds store 0 and launch it). interval_pulses() keeps the same
+     * shape (reached - floor(reached)), the branch below's, unexamined here
+     * and left alone for the other renderings' inlining. */
+    const double left = mbe_round_to_double(((double)(reach % P25_GRID_STEPS) + (steps - whole)) / 524288.0);
     train->phase = (left < 1.0) ? left : 0.0;
 }
 
