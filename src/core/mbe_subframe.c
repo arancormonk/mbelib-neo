@@ -1170,20 +1170,12 @@ p25_columns_voice(const struct column_rule* rule, float w0, int l) {
     return column_voiced(rule, p25_column(hz)) || column_voiced(rule, p25_column(hz + COLUMN_REACH_HZ));
 }
 
-/* Which of the two frames' own models P25's rendering reads by the columns
- * (p25_reads_by_columns()): constant over a frame, so found once per
- * mid-frame model (p25_fill_mid_bands()). */
-struct p25_column_readers {
-    int prev;
-    int cur;
-};
-
 /* column_band_state() in P25's rendering (p25_fill_mid_bands()): each frame's
  * state is the one its own model plays, by the columns (p25_column_voicing()),
- * for a frame whose own model is read so (`readers`). */
+ * for a frame whose own model is read so (p25_reads_by_columns()). */
 static int
 p25_column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struct column_rule* rule,
-                      const struct p25_column_readers* readers, const struct mbe_subframe_model* model, int l) {
+                      const struct mbe_subframe_model* model, int l) {
     const int at_prev = nearest_harmonic(prev_mp, model->w0, l);
     const int at_cur = nearest_harmonic(cur_mp, model->w0, l);
     int before = band_state(prev_mp, at_prev);
@@ -1192,10 +1184,10 @@ p25_column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const s
         return BAND_NONE;
     }
     /* Each frame's state as its own model plays it (p25_column_voicing()). */
-    if (readers->prev) {
+    if (p25_reads_by_columns(prev_mp)) {
         before = p25_column_reads(&rule->prev, prev_mp->w0, at_prev) ? BAND_VOICED : BAND_UNVOICED;
     }
-    if (readers->cur) {
+    if (p25_reads_by_columns(cur_mp)) {
         now = p25_column_reads(&rule->cur, cur_mp->w0, at_cur) ? BAND_VOICED : BAND_UNVOICED;
     }
     if (before == now) {
@@ -1336,18 +1328,13 @@ p25_fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_
         || !mbe_harmonic_count_is_valid(model->L)) {
         return;
     }
-    struct p25_column_readers readers = {0, 0};
-    if (columns != NULL) {
-        readers.prev = p25_reads_by_columns(prev_mp);
-        readers.cur = p25_reads_by_columns(cur_mp);
-    }
     common_log2_magnitudes(prev_mp, prev_log2);
     common_log2_magnitudes(cur_mp, cur_log2);
     p25_phase_log2_inputs(prev_mp, prev_phase_log2);
     p25_phase_log2_inputs(cur_mp, cur_phase_log2);
     for (int l = 1; l <= model->L; l++) {
         const float w = model->w0 * (float)l;
-        int state = (columns != NULL) ? p25_column_band_state(prev_mp, cur_mp, columns, &readers, model, l)
+        int state = (columns != NULL) ? p25_column_band_state(prev_mp, cur_mp, columns, model, l)
                                       : band_state(voicing, harmonic_at(voicing, w));
         if (late_onset && state == BAND_VOICED) {
             state = BAND_UNVOICED;
