@@ -462,7 +462,13 @@ reference_silence_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering
  * read; and no AMBE silence model. */
 static int
 reference_moves_tracker(const mbe_parms* mp, enum mbe_voiced_synthesis rendering) {
-    if (!(mp->w0 > 0.0f) || mbe_frame_mark(mp) == MBE_FRAME_MARK_TONE || mp->L < 1) {
+    /* A pitch is one when it is positive, finite and normal, by its bit
+     * pattern: a subnormal is zero under flush-to-zero, and infinity and NaN
+     * are no pitch (the library's class of a pitch). */
+    uint32_t pitch_bits;
+    memcpy(&pitch_bits, &mp->w0, sizeof(pitch_bits));
+    if (pitch_bits - UINT32_C(0x00800000) >= UINT32_C(0x7F000000) || mbe_frame_mark(mp) == MBE_FRAME_MARK_TONE
+        || mp->L < 1) {
         return 0;
     }
     for (int l = 1; l <= mp->L; ++l) {
@@ -504,23 +510,47 @@ float_spacing(float x) {
     return (above < below) ? above : below;
 }
 
+/* How near a rounding tie, in units of the float spacing, the exact step may lie
+ * for the tolerance below to accept the float on its other side. */
+#define TRACK_TIE_BAND 1.0e-7
+
+/* The comparisons of a tracker step whose exact value lies within
+ * TRACK_TIE_BAND of a tie (counted on every build; test_low_cut_ties() states
+ * how many the test's inputs give). */
+static long g_track_near_ties;
+static long g_track_steps;
+
 /* Whether a frame stored the tracker the rule gives from `track` on `model`:
  * the same bits where the build lets this test form the step as the library
  * does (MID_PITCH_INEXACT 0: IEEE double, no contraction, no excess
- * precision); elsewhere the stored value must be the exact step rounded to
- * nearest, within half its spacing and a millionth of it, which a value an
- * ulp off fails. A frame that does not move it must store `track` itself. */
+ * precision); elsewhere (fast-math, fused multiply-adds, excess precision,
+ * where the library's double may differ from this test's by a few units in
+ * its last place, about 1e-9 of a float spacing here) the stored value must
+ * be the exact step rounded to nearest: within half its spacing and
+ * TRACK_TIE_BAND of it. The one exception, as docs/testing.md states it: where
+ * the exact step lies within TRACK_TIE_BAND of the spacing from a tie between
+ * two floats, either float passes, the wrong one an ulp off included. Every
+ * step compared is checked for that (g_track_near_ties). A frame that does not
+ * move the tracker must store `track` itself. */
 static int
 track_is(float stored, float track, const mbe_parms* model, enum mbe_voiced_synthesis rendering) {
     const float want = rule_track(track, model, rendering);
+    const int moves = reference_moves_tracker(model, rendering);
+    if (moves) {
+        const double exact = reference_track_exact(track, model);
+        const double spacing = float_spacing(want);
+        const double tie = (double)want + ((exact > (double)want) ? 0.5 : -0.5) * spacing;
+        g_track_steps++;
+        g_track_near_ties += fabs(exact - tie) <= TRACK_TIE_BAND * spacing;
+    }
     if (same_bits(&stored, &want, 1)) {
         return 1;
     }
-    if (!MID_PITCH_INEXACT || !reference_moves_tracker(model, rendering)) {
+    if (!MID_PITCH_INEXACT || !moves) {
         return 0;
     }
     const double exact = reference_track_exact(track, model);
-    return stored > 0.0f && fabs((double)stored - exact) <= 0.5 * float_spacing(stored) * (1.0 + 1.0e-6);
+    return stored > 0.0f && fabs((double)stored - exact) <= (0.5 + TRACK_TIE_BAND) * float_spacing(stored);
 }
 
 /* The three models' bands of a frame in `rendering` (the last frame's own, the
@@ -9220,7 +9250,7 @@ low_frame(float out[160], mbe_parms* last, const mbe_parms* model, enum mbe_voic
     next_frame_as(out, last, model, 0, rendering);
 }
 
-/* A model of every kind the tracker's rule tells apart (kind 0..12), at 180
+/* A model of every kind the tracker's rule tells apart (kind 0..14), at 180
  * Hz but for the silence models (250 Hz) and the reserved code: see
  * test_low_cut_tracker(). */
 static void
@@ -9254,7 +9284,9 @@ low_cut_kind(mbe_parms* model, int kind, enum mbe_voiced_synthesis rendering) {
                                       (rendering == MBE_VOICED_SYNTHESIS_DVSI) ? 76 : 140);
             model->L = (int)floor(0.9254 * M_PI / (double)model->w0);
             break;
-        default: break; /* 0, 12: fully voiced */
+        case 13: model->w0 = float_of(0x00000001u); break; /* a subnormal pitch, every band voiced */
+        case 14: model->w0 = float_of(0x7F800000u); break; /* an infinite pitch, every band voiced */
+        default: break;                                    /* 0, 12: fully voiced */
     }
 }
 
@@ -9300,7 +9332,7 @@ test_low_cut_tracker(enum mbe_voiced_synthesis rendering) {
     assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_TRACK_SLOT], &fresh, 1));
     assert(same_bits(&last.noiseOverlap[MBE_LOW_CUT_CORNER_SLOT], &fresh, 1));
 
-    for (int kind = 0; kind <= 12; ++kind) {
+    for (int kind = 0; kind <= 14; ++kind) {
         low_cut_kind(&model, kind, rendering);
         const float before = stored_track(&last);
         /* Advanced from the same state, it stores what rendering stores. */
@@ -9372,38 +9404,66 @@ test_low_cut_tracker(enum mbe_voiced_synthesis rendering) {
 }
 
 /*
+ * The tolerance's near-tie exception, bounded: the review's case (T 110 Hz,
+ * pitch bits 0x3d8504c0, whose exact step lies 3.9e-8 of a spacing from the tie
+ * between 108.825989 and 108.825996) is within TRACK_TIE_BAND, the only place
+ * where track_is() accepts the float on the wrong side; a step 2e-7 of a
+ * spacing from a tie is not. On this file's inputs, every tracker step that
+ * moves the tracker and is compared up to here (the direct tests, the data
+ * paths and the waveform streams: 740) lies outside the band, so on them no
+ * value an ulp off can pass by the exception.
+ */
+static void
+test_low_cut_ties(void) {
+    assert(g_track_steps == 740 && g_track_near_ties == 0);
+    mbe_parms model;
+    blank_model(&model, 108.0, 20, 20, 10.0f);
+    model.w0 = float_of(0x3d8504c0u);
+    const long before = g_track_near_ties;
+    const float right = 108.82599639892578f, wrong = 108.82598876953125f;
+    assert(track_is(right, 110.0f, &model, MBE_VOICED_SYNTHESIS_DVSI));
+    assert(g_track_near_ties == before + 1);
+    assert(MID_PITCH_INEXACT == track_is(wrong, 110.0f, &model, MBE_VOICED_SYNTHESIS_DVSI));
+    g_track_near_ties = before;
+}
+
+/*
  * The tracker's range and the silence models: every pitch code of the three
  * codecs decodes to a fundamental from 50 to 500 Hz (mbe_low_band.h, the
  * range a stored tracker is read in: D-STAR b0 0..124, P25 b0 0..207, rate 33
  * b0 0..119 on every V/UV row (the pulsed rows' band grid, rows 18 to 31,
- * included) and its silence frame, b0 124), so that a tracker moved only by the
- * decoders' models stays inside it; and the AMBE silence model, 2 pi / 32 with
- * 14 harmonics (D-STAR, b0 124) or 15 (rate 33's silence frame), is what those
- * frames decode to and what no voice code of either codec decodes to.
+ * included) and its silence frames, b0 124 and 125 on the rows whose bits do
+ * not make a tone frame of them), so that a tracker moved only by the decoders'
+ * models stays inside it; and the AMBE silence pitch, 2 pi / 32: D-STAR's b0 124
+ * decodes to it with 14 harmonics, rate 33's b0 124 and 125 with 15 (and the
+ * silence mark), and no voice code of either codec decodes to that pitch at
+ * any harmonic count (the pitch alone, by bit pattern).
  */
 static void
 test_low_cut_range(void) {
     const float silence = (float)(2.0 * M_PI / 32.0);
     for (int b0 = 0; b0 <= 124; ++b0) {
-        char ambe_d[49];
-        mbe_parms cur, prev, enhanced;
-        mbe_initMbeParms(&cur, &prev, &enhanced);
-        set_ambe2400(ambe_d, b0, 15);
-        const int status = mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev);
-        assert(status == 0);
-        (void)status;
-        const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
-        assert(f0 >= 50.0 && f0 <= 500.0);
-        assert((b0 == 124) == (same_bits(&cur.w0, &silence, 1) && cur.L == 14));
-        assert(b0 == 124 || !reference_silence_model(&cur, MBE_VOICED_SYNTHESIS_DVSI_AMBE2450));
+        for (int b1 = 0; b1 < 16; ++b1) {
+            char ambe_d[49];
+            mbe_parms cur, prev, enhanced;
+            mbe_initMbeParms(&cur, &prev, &enhanced);
+            set_ambe2400(ambe_d, b0, b1);
+            const int status = mbe_decodeAmbe2400Parms(ambe_d, &cur, &prev);
+            assert(status == 0);
+            (void)status;
+            const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
+            assert(f0 >= 50.0 && f0 <= 500.0);
+            assert((b0 == 124) == same_bits(&cur.w0, &silence, 1));
+            assert(b0 != 124 || cur.L == 14);
+        }
     }
     for (int b0 = 0; b0 <= 207; ++b0) {
         const double f0 = (double)decoded_pitch(0, b0) * 8000.0 / (2.0 * M_PI);
         assert(f0 >= 50.0 && f0 <= 500.0);
     }
     for (int row = 0; row < 32; ++row) {
-        /* b0 124 with rows 24 to 31 sets the first six bits of u0: a tone frame. */
-        for (int b0 = 0; b0 <= ((row < 24) ? 124 : 119); b0 += ((b0 == 119) ? 5 : 1)) {
+        /* b0 124 and 125 with rows 24 to 31 set the first six bits of u0: tone frames. */
+        for (int b0 = 0; b0 <= ((row < 24) ? 125 : 119); b0 += ((b0 == 119) ? 5 : 1)) {
             char ambe_d[49];
             mbe_parms cur, prev, enhanced;
             mbe_initMbeParms(&cur, &prev, &enhanced);
@@ -9413,10 +9473,9 @@ test_low_cut_range(void) {
             (void)status;
             const double f0 = (double)cur.w0 * 8000.0 / (2.0 * M_PI);
             assert(f0 >= 50.0 && f0 <= 500.0);
-            const int is_silence = same_bits(&cur.w0, &silence, 1) && cur.L == 15;
-            assert(is_silence == (b0 == 124));
-            assert(b0 == 124 || !reference_silence_model(&cur, MBE_VOICED_SYNTHESIS_DVSI));
-            assert(b0 != 124 || mbe_frame_mark(&cur) == MBE_FRAME_MARK_PREVIOUS_HELD);
+            const int is_silence = b0 >= 124;
+            assert(is_silence == same_bits(&cur.w0, &silence, 1));
+            assert(!is_silence || (cur.L == 15 && mbe_frame_mark(&cur) == MBE_FRAME_MARK_PREVIOUS_HELD));
         }
     }
 }
@@ -10213,6 +10272,97 @@ test_low_cut_r33_smoothed(void) {
 }
 
 /*
+ * The conditions of the table of frame kinds: a frame that repeats, copies or
+ * renders a model moves the tracker only where that model would, every band
+ * voiced, no mark that holds it and no silence model. Through the public data
+ * paths: D-STAR's tone entry after an audible frame with no voiced band (b1 0)
+ * renders the repeat of that model and holds it; lost frames after a single
+ * tone whose history has no voiced band render a silent copy of it and hold
+ * it, all five; a caller's PREVIOUS_HELD on a fully voiced history holds it
+ * through the three repeats, the repeat limit's fade and the muted repeat after
+ * it. Rate 33's valid voice frames of V/UV row 16 (no voiced band as decoded)
+ * that the error rate mutes, one after another, hold it; after a tone the error
+ * rate muted, a lost frame with the error rate still high is a muted invalid
+ * frame after a muted one and holds it (with it cleared it repeats the kept
+ * model and moves it, test_low_cut_r33_mutes()); under a tone entered at an
+ * ordinary error rate, three lost frames play the held tone and the fourth,
+ * the repeat limit's, mutes with the tone's tail, all holding it, the speech
+ * before the tone fully voiced.
+ */
+static void
+test_low_cut_conditional_rows(void) {
+    char voiced[49], unvoiced[49], lost[49], tone[49], single[49];
+    mbe_parms s[3];
+    set_ambe2400(voiced, 40, 15);
+    set_ambe2400(unvoiced, 40, 0);
+    dstar_special_bits(lost, 125, 0);
+    dstar_special_bits(tone, 126, 130);
+    dstar_special_bits(single, 126, 20);
+    for (int which = 0; which < 2; ++which) {
+        mbe_initMbeParms(&s[0], &s[1], &s[2]);
+        for (int f = 0; f < 3; ++f) {
+            (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+        }
+        (void)low_path_frame(LOW_DSTAR, unvoiced, s, LOW_HOLDS, NULL, -1);
+        assert(!low_any_voiced(&s[2]));
+        (void)low_path_frame(LOW_DSTAR, which ? single : tone, s, LOW_HOLDS, NULL, -1);
+        (void)low_path_frame(LOW_DSTAR, which ? single : tone, s, LOW_HOLDS, NULL, -1);
+        for (int f = 0; f < 5 && which; ++f) {
+            (void)low_path_frame(LOW_DSTAR, lost, s, LOW_HOLDS, NULL, -1);
+        }
+    }
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_DSTAR, voiced, s, LOW_MOVES, NULL, -1);
+    }
+    mbe_set_frame_mark(&s[1], MBE_FRAME_MARK_PREVIOUS_HELD);
+    int muted = 0;
+    for (int f = 0; f < 5; ++f) {
+        const unsigned flags = low_path_frame(LOW_DSTAR, lost, s, LOW_HOLDS, NULL, -1);
+        muted += (flags & MBE_PROCESS_FLAG_MUTE) != 0u;
+    }
+    assert(muted == 2);
+
+    char r_voiced[49], r_row16[49], r_invalid[49], r_tone[49] = {0};
+    set_ambe2450(r_voiced, 40, 0);
+    set_ambe2450(r_row16, 40, 16);
+    set_ambe2450(r_invalid, 40, 0);
+    r33_tone_bits(r_tone, 132, 100);
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    for (int f = 0; f < 3; ++f) {
+        s[1].errorRate = 0.2f;
+        const unsigned flags = low_path_frame(LOW_R33, r_row16, s, LOW_HOLDS, NULL, 0);
+        assert((flags & MBE_PROCESS_FLAG_MUTE) != 0u && !fully_voiced(&s[2]));
+    }
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    {
+        const mbe_parms copy = low_silent_copy(&s[2]);
+        s[1].errorRate = 0.2f;
+        (void)low_path_frame(LOW_R33, r_tone, s, LOW_MOVES, &copy, 0);
+    }
+    s[1].errorRate = 0.2f;
+    (void)low_path_frame(LOW_R33, r_tone, s, LOW_HOLDS, NULL, 0);
+    s[1].errorRate = 0.2f;
+    const unsigned high = low_path_frame(LOW_R33, r_invalid, s, LOW_HOLDS, NULL, 4);
+    assert((high & MBE_PROCESS_FLAG_MUTE) != 0u);
+    mbe_initMbeParms(&s[0], &s[1], &s[2]);
+    for (int f = 0; f < 3; ++f) {
+        (void)low_path_frame(LOW_R33, r_voiced, s, LOW_MOVES, NULL, 0);
+    }
+    (void)low_path_frame(LOW_R33, r_tone, s, LOW_HOLDS, NULL, 0);
+    for (int f = 0; f < 4; ++f) {
+        const unsigned flags = low_path_frame(LOW_R33, r_invalid, s, LOW_HOLDS, NULL, 4);
+        assert(((flags & MBE_PROCESS_FLAG_MUTE) != 0u) == (f == 3));
+    }
+}
+
+/*
  * No caller state brings a frequency the low band cannot take, or a sample
  * that is not finite: through each codec's data path, a voiced frame and then
  * a lost frame (which renders the caller's last model as this frame's) after
@@ -10410,6 +10560,8 @@ main(void) {
     test_low_cut_r33_path();
     test_low_cut_r33_mutes();
     test_low_cut_r33_smoothed();
+    test_low_cut_conditional_rows();
     test_low_cut_caller_pitches();
+    test_low_cut_ties();
     return 0;
 }
