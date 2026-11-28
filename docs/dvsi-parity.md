@@ -7820,6 +7820,13 @@ first candidate's.
 | `p25-quiet-frames-channel` | passes all 31 checks | the mute statistics unchanged in every mode, P25's distance on the loud frames within 0.002 dB (it falls a little), D-STAR's and rate 33's decodes and every encoder row unchanged; not that P25's quiet frames under errors are right |
 | `p25-quiet-frames-final` | not scored | on `irstia` and `mark`, held out: that nothing gets worse; it cannot show the gain |
 
+**Notes on the commit messages**, which stand as made. `7f04d22` (the constants `IMBE_QUIET_KNEE` and
+`IMBE_QUIET_FLOOR` in parentheses, for clang-tidy) says the object code of `imbe7200x4400.c` is the
+same byte for byte in GCC's fast-math LTO build: that object file differs (GCC's LTO bytecode carries
+source positions); the library linked from it, built from `8a6d1ce` and from `7f04d22`, has the same
+code instruction for instruction, and the object code is the same instruction for instruction in the
+Debug, SIMD Debug, x86-64-v3 Debug and 32-bit Release builds and byte for byte in both Clang LTO builds.
+
 ### Scoring history
 
 The final partition was scored twice, with the library unchanged in between. The first scoring fixed
