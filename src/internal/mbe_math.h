@@ -71,6 +71,24 @@ mbe_round_to_float(float x) {
 }
 
 /**
+ * @brief x rounded to double.
+ *
+ * As mbe_round_to_float() for a double: under x87 excess precision a double
+ * result can stay in an 80-bit register, so a comparison can see a value the
+ * store then rounds otherwise (just under 1 tested, 1.0 stored). Storing
+ * through a volatile rounds it first; elsewhere this is the value itself.
+ */
+static inline double
+mbe_round_to_double(double x) {
+#if MBE_FLOAT_EXCESS_PRECISION
+    volatile double rounded = x;
+    return rounded;
+#else
+    return x;
+#endif
+}
+
+/**
  * @brief Position (prev_L / L) * l at which spectral-amplitude prediction
  * interpolates the previous frame's log2 amplitudes.
  *

@@ -16,6 +16,7 @@
 #include "mbe_adaptive.h"
 #include "mbe_low_band.h"
 #include "mbe_math.h"
+#include "mbe_p25_tone_model.h"
 #include "mbe_pulsed.h"
 #include "mbe_validation.h"
 #include "mbe_voiced.h"
@@ -142,9 +143,80 @@ phase_log2_amplitudes(const mbe_parms* mp, double out[57]) {
     }
 }
 
+/* log2 of the unvoiced factor MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) at a
+ * pitch w0 (positive and normal), in double: an unvoiced band's magnitude is
+ * the voiced one's times the factor, so its log2 is the voiced one's plus
+ * this (about -2.289 - 0.5 log2(w0)). Its one definition: the magnitudes'
+ * move between the two domains and the phase kernel's input in P25's
+ * rendering (p25_phase_log2_inputs()) take it here. */
+static double
+unvoiced_log2_factor(float w0) {
+    return log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)w0));
+}
+
+/*
+ * Whether a model is a P25 tone model as imbe4400_play_tone() leaves it, by
+ * the decoder's own test (mbe_imbe4400_tone_model(), mbe_p25_tone_model.h):
+ * the mark, a tone word naming a row of its code, the model at that code's
+ * pitch (by bit pattern), L and K, exactly the row's harmonics voiced at a
+ * positive normal magnitude and every other magnitude 0. The mark alone does
+ * not make one: it is read on the previous model too, which is caller state,
+ * and a mark only that function earns is checked where it is read. One body
+ * serves every reader in P25's rendering that spares a tone model (the phase
+ * source, p25_phase_log2_inputs(), and the column reading,
+ * p25_reads_by_columns()).
+ */
+static int
+p25_tone_model(const mbe_parms* mp) {
+    return mbe_imbe4400_tone_model(mp);
+}
+
+/* Whether a float is finite, by its bit pattern (fast-math folds isfinite()). */
+static int
+finite_bits(const float* x) {
+    uint32_t bits;
+    memcpy(&bits, x, sizeof(bits));
+    return (bits & UINT32_C(0x7FFFFFFF)) < UINT32_C(0x7F800000);
+}
+
+/*
+ * The phase kernel's input in P25's rendering (docs/dvsi-parity.md, "Phase
+ * regeneration"): a frame's decoded log2 amplitudes, those of each band the
+ * model holds as unvoiced (Vl 0, as the synthesis renders it: after adaptive
+ * smoothing, which can voice a band, and then reads it as voiced) with the
+ * unvoiced factor taken out, minus unvoiced_log2_factor() at the frame's own
+ * pitch, about 2.289 + 0.5 log2(w0) more: the domain of TIA-102.BABA-1's log
+ * magnitudes, in which an AMBE decoder's unvoiced bands already are (its
+ * encoder adds that before coding) and in which DVSI's P25 decoder evidently
+ * reads P25's bands too. A voiced band, a band with no state (neither 0 nor
+ * 1) and a tone model's bands (p25_tone_model()) are read as decoded. The
+ * order: each log2Ml is read as phase_log2_amplitude() reads it (a finite
+ * value kept within +-PHASE_LOG2_MAX), the step is added to a finite unvoiced
+ * one, and then the kernel floors every value at MBE_PHASE_LOG2_FLOOR
+ * (mbe_regenerate_phases_log2()); so a finite value below the floor is
+ * shifted first and floored after (one the step lifts across the floor
+ * enters above it), while a log2Ml that is not finite enters at the floor
+ * exactly, the step not added to the floor that stands in for it. The tail
+ * past L (the kernel's extrapolation) starts from band L's input, shifted
+ * where band L is unvoiced. The pitch is positive and normal here.
+ */
+static void
+p25_phase_log2_inputs(const mbe_parms* mp, double out[57]) {
+    phase_log2_amplitudes(mp, out);
+    if (p25_tone_model(mp)) {
+        return;
+    }
+    const double step = -unvoiced_log2_factor(mp->w0);
+    for (int l = 1; l <= mp->L; l++) {
+        if (mp->Vl[l] == 0 && finite_bits(&mp->log2Ml[l])) {
+            out[l] += step;
+        }
+    }
+}
+
 void
 mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
-    double log2_amplitudes[57];
+    double log2_amplitudes[57] = {0};
     float envelope[57] = {0};
 
     memset(model, 0, sizeof(*model));
@@ -174,7 +246,7 @@ mbe_subframe_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
 /* log2 of each band's magnitude with the unvoiced factor taken out. */
 static void
 common_log2_magnitudes(const mbe_parms* mp, double out[57]) {
-    const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)mp->w0));
+    const double unvoiced = unvoiced_log2_factor(mp->w0);
     for (int l = 1; l <= mp->L; l++) {
         if (!positive_normal(&mp->Ml[l])) {
             out[l] = LOG2_SILENT;
@@ -247,8 +319,8 @@ same_pitch(const float* a, const float* b) {
 /* The half-octave wave h(P) of rate 33's mid-frame pitch at a frame's pitch
  * w0 (positive and normal), P = 2 pi / w0 its period in samples
  * (MBE_AMBE2450_MID_PITCH_WAVE_C0, mbe_subframe.h). In double with the
- * double-precision functions, as the P25 pitch law is (imbe7200x4400.c), so
- * that the pitch does not move with a libm's single-precision ones. */
+ * double-precision functions, so that the pitch does not move with a libm's
+ * single-precision ones. */
 static double
 ambe2450_mid_pitch_wave(float w0) {
     const double t = 4.0 * M_PI * log2((2.0 * M_PI) / (double)w0);
@@ -282,6 +354,101 @@ ambe2450_mid_pitch(float a, float b) {
     const double wave = 0.5 * (ambe2450_mid_pitch_wave(a) + ambe2450_mid_pitch_wave(b));
     const double pitch = mean * (double)factor * (1.0 + wave);
     return (pitch <= (double)FLT_MAX) ? (float)pitch : 0.0f;
+}
+
+/*
+ * P25's mid-frame pitch between two models that both have a voiced band, a
+ * and b (each positive and normal; docs/dvsi-parity.md, "P25 pitch"): not
+ * their geometric mean but a quadratic for its square root, floored to the
+ * grid of 2^-19 cycle per sample its frames' own pitches lie on. With
+ * fa fb = y 2^e the product of the two fundamentals in cycles per sample, y
+ * in [1, 2), q(y) the parabola through sqrt(y) at y = 1, 1.5 and 2,
+ *   q(y) = sqrt(1.5) + (sqrt(2) - 1) (y - 1.5)
+ *          + 2 (sqrt(2) + 1 - 2 sqrt(1.5)) (y - 1.5)^2,
+ * and e(y) = (1 + 2 (y - 1)) 2^-15 the excess (MID_PITCH_EXCESS_0 and _1),
+ * the mid-frame fundamental is
+ *   floor(2^19 sqrt(fa fb) (q(y) + e(y)) / sqrt(y)) / 2^19:
+ * the geometric mean times (q(y) + e(y)) / sqrt(y), which lies within 1 -
+ * 1.17e-3 .. 1 + 8.30e-4 (q(y) / sqrt(y) - 1 alone is 0 at the octave's ends
+ * and at y = 1.5 and reaches -1.2035e-3 at y = 1.1869 and +7.7104e-4 at
+ * y = 1.7701 between them; the ratio itself stays near 1), then floored. The interpolant was found on
+ * DVSI's decodes of its own P25 encodings, from the change over a frame of
+ * the lag between DVSI's decode and ours read at the frame's two boundaries,
+ * which the mid-frame pitch alone sets (one curve in the fractional part of
+ * log2 of the two periods' product, the same at an unchanged pitch code as at
+ * a step); the floor was told from rounding and from none once the phase
+ * kernel read unvoiced bands as DVSI's decoder does. The excess is a fit: on
+ * DVSI's pulse-train vectors, with each subframe's advance floored
+ * (p25_advance_interval()), 30 of the 37 codes held long enough to read come
+ * out exact with q alone and 7 need the mid-frame value a step higher, which
+ * this excess (two constants, one and two units of 2^-15) gives while every
+ * bound the other codes set holds; other forms are exact there too (a
+ * relative excess of (30 + 35 (y - 1)) 1e-6), and the decoder's fixed-point
+ * form was not found. What the decoder computes is not known beyond that
+ * output.
+ * Formed in double from the stored floats: their product is exact in double,
+ * divided by (2 pi)^2 for the fundamentals' product, its mantissa by frexp(),
+ * the square roots from libm in double, the floor in double, and the pitch, 2
+ * pi times the whole number of steps over 2^19, rounded to float once. Over
+ * every ordered pair of the 208 P25 codes (equal codes included) the
+ * unfloored number of steps lies at least 4.93e-5 of a step from a whole
+ * number (b0 17 and 192, 9157.99995), 5.39e-9 of itself, and exact
+ * arithmetic (decimal, 60 digits) floors every pair as the library's double
+ * arithmetic does, so no build's double arithmetic (x87's extended one,
+ * fast-math's reordering) floors it otherwise; no product of two codes'
+ * fundamentals is an exact power of two (where q's ends meet and the excess
+ * jumps, from 3 2^-15 to 2^-15); and 2 pi times any whole number of steps
+ * from 3,000 to 27,000 lies at least 7.57e-13 of itself from a float's
+ * rounding edge. A caller's pitches can put the unfloored count anywhere
+ * within the range below, within a double's rounding of a whole number too:
+ * each build then floors as its arithmetic gives, the counts at most a step
+ * apart. The pitch is that count times 2 pi 2^-19 rounded to float, which
+ * keeps the count exactly (the float nearer it than any other count's) while
+ * the count is below 2^23, a fundamental under 16 cycles per sample, far
+ * above any codec's; past that the rounding moves the result by up to 2^-24
+ * of itself (both pitches 0x1.921fb4p+34: about 8.7 million steps).
+ * Its range. The two pitches are positive normal floats (the caller checks,
+ * mbe_subframe_mid_model()); the product of the two fundamentals, P = a b /
+ * (2 pi)^2 in cycles per sample squared (the codecs' lie below 1/4), is
+ * accepted up to MID_PITCH_PRODUCT_MAX = 2^64, and a larger one gives no
+ * pitch (0, which the caller rejects as every pitch that is not positive and
+ * normal): two models at w0 = 2^70 (P about 3.5e40) play no mid-frame pitch
+ * and no voiced band. Within it every intermediate is the one described: a b
+ * is exact in double (two 24-bit mantissas), at least 2^-252 and at most
+ * 2^64 (2 pi)^2, so P is a normal double, from about 2^-258 to 2^64; frexp()
+ * splits it exactly into y in [1, 2) and an exponent from about -257 to 65;
+ * the square roots are of normal positive doubles; (q(y) + e(y)) / sqrt(y)
+ * lies within 1 - 1.17e-3 .. 1 + 8.30e-4, so the step count before the floor
+ * is below 2^32 2^19 (1 + 8.30e-4) < 2^52, where a double holds every half step and
+ * floor() returns a whole number exactly; a count under 1 (P below about
+ * 2^-38, a mean under 2^-19 cycle) floors to 0 and returns 0, no pitch; and
+ * any other pitch, 2 pi times 1 to fewer than 2^52 steps over 2^19, is at
+ * least 2 pi 2^-19 and below 5.5e10, a normal float.
+ */
+#define MID_PITCH_PRODUCT_MAX 18446744073709551616.0 /* 2^64 */
+/* The excess of DVSI's mid-frame quadratic over the interpolating one,
+ * (1 + 2 (y - 1)) 2^-15 added to q(y): a fit with two constants to the pulse
+ * trains held on one code (docs/dvsi-parity.md, "P25 pitch"), not a known
+ * coefficient of DVSI's decoder. */
+#define MID_PITCH_EXCESS_0    3.0517578125e-05 /* 2^-15 */
+#define MID_PITCH_EXCESS_1    6.103515625e-05  /* 2 2^-15 */
+
+static float
+imbe_mid_pitch(float a, float b) {
+    const double turn = 2.0 * M_PI;
+    const double product = ((double)a * (double)b) / (turn * turn);
+    if (!(product <= MID_PITCH_PRODUCT_MAX)) {
+        return 0.0f;
+    }
+    int exponent;
+    const double y = 2.0 * frexp(product, &exponent);
+    const double d = y - 1.5;
+    const double root2 = sqrt(2.0);
+    const double root15 = sqrt(1.5);
+    const double q = root15 + ((root2 - 1.0) * d) + (2.0 * (root2 + 1.0 - (2.0 * root15)) * d * d);
+    const double excess = MID_PITCH_EXCESS_0 + (MID_PITCH_EXCESS_1 * (y - 1.0));
+    const double steps = floor(sqrt(product) * ((q + excess) / sqrt(y)) * 524288.0);
+    return (float)((turn * steps) / 524288.0);
 }
 
 /* ---- the pulsed state of D-STAR and P25 ---- */
@@ -505,6 +672,24 @@ pulsed_channel(double hz) {
     return (bits >= top_bits) ? 7 : (int)position;
 }
 
+/* The unvoiced factor MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) of a model's
+ * pitch (positive and normal) as a float, also under x87 excess precision. */
+static float
+unvoiced_factor(float w0) {
+    return mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(w0));
+}
+
+/* A band's magnitude moved across the unvoiced factor (unvoiced_factor()):
+ * divided by it to the voiced domain (`to_voiced`), multiplied by it to the
+ * unvoiced one, in double, limited before it narrows (a caller's pitch can
+ * make the factor tiny). The pulsed state's bands and the column reading of
+ * P25's own models move a magnitude so. */
+static float
+magnitude_across(float magnitude, float factor, int to_voiced) {
+    const double moved = to_voiced ? (double)magnitude / (double)factor : (double)magnitude * (double)factor;
+    return (moved < (double)MAGNITUDE_LIMIT) ? (float)moved : MAGNITUDE_LIMIT;
+}
+
 /*
  * A model's pulsed bands under a mask of eight channels (a code's pattern,
  * code_mask(), or a rate-33 row's, row_mask(); NULL for none): in a model with
@@ -528,18 +713,15 @@ pulse_bands(struct mbe_subframe_model* model, const char* channels) {
     if (!mask_pulses(channels) || model->any_voiced || !positive_normal(&model->w0)) {
         return;
     }
-    /* As a float, also under x87 excess precision. */
-    const float factor = mbe_round_to_float(MBE_UNVOICED_MAGNITUDE_FACTOR / sqrtf(model->w0));
+    const float factor = unvoiced_factor(model->w0);
     for (int l = 1; l <= model->L; l++) {
         const double hz = (double)l * (double)model->w0 * (4000.0 / M_PI);
         if (model->voiced[l] != BAND_UNVOICED
             || (channels[pulsed_channel(hz)] != 'P' && channels[pulsed_channel(hz + PULSED_REACH_HZ)] != 'P')) {
             continue;
         }
-        /* Limited before it narrows: a caller's mid-frame pitch can make the factor tiny. */
-        const double magnitude = (double)model->magnitude[l] / (double)factor;
         model->voiced[l] = BAND_PULSED;
-        model->magnitude[l] = (magnitude < (double)MAGNITUDE_LIMIT) ? (float)magnitude : MAGNITUDE_LIMIT;
+        model->magnitude[l] = magnitude_across(model->magnitude[l], factor, 1);
         model->any_pulsed = 1;
     }
 }
@@ -592,8 +774,12 @@ pulsed_mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voi
  * same (the level of everything that is not the mid-frame pitch), and a wave
  * in the two frames' periods with a period of half an octave fits that
  * change. How the decoder comes to it is not known. The same measurement's
- * grouped medians show no such jump at a step in D-STAR or P25. Both pitches
- * are positive and normal here (mbe_subframe_mid_model()). */
+ * grouped medians show no such jump at a step in D-STAR. Between two models
+ * with a voiced band P25's rendering plays the floored parabola of
+ * imbe_mid_pitch(), at an unchanged pitch as at a step (rate 33's wave has the
+ * same shape and period; its decoder shows no deviation at an unchanged code);
+ * ProVoice's and D-STAR's keep the geometric mean. Both pitches are positive
+ * and normal here (mbe_subframe_mid_model()). */
 static float
 mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_synthesis rendering) {
     const int prev_voiced = model_has_voiced_band(prev_mp);
@@ -608,9 +794,13 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
     if (!prev_voiced && !cur_voiced && pulsed_mid_pitch(prev_mp, cur_mp, rendering, &pulsed)) {
         return pulsed;
     }
-    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && prev_voiced && cur_voiced
-        && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
-        return ambe2450_mid_pitch(prev_mp->w0, cur_mp->w0);
+    if (prev_voiced && cur_voiced) {
+        if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+            return imbe_mid_pitch(prev_mp->w0, cur_mp->w0);
+        }
+        if (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450 && !same_pitch(&prev_mp->w0, &cur_mp->w0)) {
+            return ambe2450_mid_pitch(prev_mp->w0, cur_mp->w0);
+        }
     }
     return sqrtf(prev_mp->w0 * cur_mp->w0);
 }
@@ -626,7 +816,11 @@ mid_pitch(const mbe_parms* prev_mp, const mbe_parms* cur_mp, enum mbe_voiced_syn
  * curves of #157 come closer with it; it is not taken from a document, and what
  * DVSI's decoders compute is not known. A band in the same state in both
  * frames (each read at its harmonic nearest the band, nearest_harmonic())
- * keeps it. One whose state differs is voiced at mid-frame if and only if M(k)
+ * keeps it; in P25's rendering, whose frames' own models are voiced by the
+ * columns (p25_column_voicing()), each state is the one that frame's own model
+ * plays there, by the columns, so that two own models that read alike play
+ * that reading at mid-frame (the clause on the decoded states, and no clause,
+ * measured worse on DVSI's decodes: docs/dvsi-parity.md). One whose state differs is voiced at mid-frame if and only if M(k)
  * or M(k') holds, k the 500 Hz column of the band's frequency and k' the
  * column of the frequency 250 Hz higher:
  *
@@ -681,12 +875,16 @@ voiced_from(const mbe_parms* mp, double position, int last) {
  * than P25_FULL_BANDS_L harmonics, voiced while harmonic P25_LAST_BAND - 1 is
  * not, reads as unvoiced (a fit to the labels of DVSI's decodes, which mostly
  * do not sound such a band at mid-frame where a column it covers would:
- * docs/dvsi-parity.md); the frame's own model still voices it. The edges'
- * positions among the frame's harmonics are quotients formed in
- * double from its stored pitch, positive and normal: for every P25 pitch code
- * (and ProVoice's nominal pitch) each lies at least 1.5e-4 of a harmonic from a
- * whole number (test_p25_onset_edges in test_subframe_synthesis.c), far past
- * any difference the arithmetic of a build (x87 excess precision, fast-math's
+ * docs/dvsi-parity.md). In P25's rendering the frame's own model is voiced
+ * by these samples too (p25_column_voicing()), so it plays that band unvoiced
+ * as well, and a model voiced there alone plays with no voiced band; the
+ * decoded voicing, and ProVoice's own model, keep it. The edges' positions
+ * among the frame's harmonics are quotients formed in double from its stored
+ * pitch, positive and normal: for every P25 pitch code each lies at least
+ * 5.97e-5 of a harmonic from a whole number (b0 152 at 2005 Hz, 23.99994
+ * harmonics), and at ProVoice's nominal pitch at least 1.58e-4 (b0 160 at
+ * 2005 Hz; test_p25_onset_edges in test_subframe_synthesis.c), far past any
+ * difference the arithmetic of a build (x87 excess precision, fast-math's
  * reordering) can make. */
 static void
 p25_samples(const mbe_parms* mp, struct column_samples* samples) {
@@ -710,6 +908,120 @@ p25_column(double hz) {
         k++;
     }
     return k;
+}
+
+/*
+ * A P25 own model's voicing by the 500 Hz columns (docs/dvsi-parity.md, "P25:
+ * the bands that start with the frame"): DVSI's P25 decoder voices a frame's
+ * own model, as it voices the mid-frame model, by the columns of its bands,
+ * not by the bands of three harmonics: the frame's samples (p25_samples(),
+ * the mid-frame rule's, the isolated last band read as unvoiced) and harmonic
+ * l, at l w0 4000 / pi Hz in double, voiced if the column of that frequency or
+ * of 250 Hz more (COLUMN_REACH_HZ, p25_column()) is. A band that turns voiced
+ * takes its magnitude with the unvoiced factor taken out, one that turns
+ * unvoiced with it put in (magnitude_across()). Not for a model with no voiced
+ * band (it keeps its bands and its pulsed state), nor a tone model
+ * (p25_tone_model()); a band with no state keeps none. A model whose voiced
+ * bands all lie off the samples (a voiced band between two sample harmonics,
+ * or only the isolated last band) reads with none. The decoded model, its
+ * voicing and the prediction history are not touched: this is the rendering.
+ * Measured on DVSI's decodes of its own P25 encodings: the unvoiced harmonics
+ * just above the voiced region of a steady mixed frame are not DVSI's noise
+ * (its decode is incoherent with ours there), and the column reading agrees
+ * with per-harmonic labels of DVSI's decodes where the bands disagree.
+ * What reads which voicing: the models' bands, so the voiced train and its
+ * pulses, the unvoiced synthesis's bands and the pulse train's carrying
+ * (train_runs_on(): the last frame's own model as rendered), read the column
+ * reading; the decoded (smoothed) voicing of the parameter sets still decides
+ * the mark of the model rendered (mark_rendered_model()), the mid-frame pitch's
+ * cases, whether the mid-frame rule applies (column_rule()), the reserved
+ * codes of the pulsed state (pulsed_code(): a model with no voiced band, which
+ * this leaves alone) and the low band's tracker (low_cut_moves(): a column
+ * reading there measured no better on DVSI's decodes, so the low band's rule
+ * stands). A model emptied by the columns (no DVSI encoding has one; channel
+ * errors' smoothing makes a few) plays with no voiced band: kept decoded, it
+ * measured farther from DVSI's decodes of the channel-error vectors.
+ */
+/* Whether P25's column reading voices harmonic l of a frame of pitch w0
+ * (positive and normal) whose samples are `samples` (p25_samples()): the
+ * column of its frequency, l w0 4000 / pi Hz in double, or of 250 Hz more. */
+static int
+p25_column_reads(const struct column_samples* samples, float w0, int l) {
+    const double hz = ((double)w0 * (double)l * 4000.0) / M_PI;
+    return samples->voiced[p25_column(hz)] || samples->voiced[p25_column(hz + COLUMN_REACH_HZ)];
+}
+
+/* Whether P25's rendering reads a model's own voicing by the columns: a model
+ * with a voiced band (as the synthesis renders it) that is no tone model. */
+static int
+p25_reads_by_columns(const mbe_parms* mp) {
+    return model_has_voiced_band(mp) && !p25_tone_model(mp);
+}
+
+static void
+p25_column_voicing(const mbe_parms* mp, struct mbe_subframe_model* model) {
+    if (!model->any_voiced || !p25_reads_by_columns(mp)) {
+        return;
+    }
+    struct column_samples samples;
+    p25_samples(mp, &samples);
+    const float factor = unvoiced_factor(model->w0);
+    for (int l = 1; l <= model->L; l++) {
+        const int state = model->voiced[l];
+        if (state != BAND_VOICED && state != BAND_UNVOICED) {
+            continue;
+        }
+        const int voiced = p25_column_reads(&samples, model->w0, l);
+        if (voiced != (state == BAND_VOICED)) {
+            model->voiced[l] = (unsigned char)(voiced ? BAND_VOICED : BAND_UNVOICED);
+            model->magnitude[l] = magnitude_across(model->magnitude[l], factor, voiced);
+        }
+    }
+    note_voiced(model);
+}
+
+/* mbe_subframe_own_model() in P25's rendering: the phases from
+ * p25_phase_log2_inputs() (decided by the voicing the frame holds, before the
+ * columns), the voicing by the columns (p25_column_voicing()). A body of its
+ * own, so that the other renderings' code stays as it was. */
+static void
+p25_own_model(const mbe_parms* mp, struct mbe_subframe_model* model) {
+    double log2_amplitudes[57] = {0};
+    float envelope[57] = {0};
+
+    memset(model, 0, sizeof(*model));
+    if (!mbe_harmonic_count_is_valid(mp->L)) {
+        return;
+    }
+    model->L = mp->L;
+    if (!positive_normal(&mp->w0)) {
+        for (int l = 1; l <= model->L; l++) {
+            model->voiced[l] = BAND_NONE;
+        }
+        return;
+    }
+    model->w0 = mp->w0;
+    for (int l = 1; l <= mp->L; l++) {
+        model->voiced[l] = (unsigned char)band_state(mp, l);
+        model->magnitude[l] = positive_normal(&mp->Ml[l]) ? limited_magnitude(mp->Ml[l]) : 0.0f;
+    }
+    note_voiced(model);
+    p25_phase_log2_inputs(mp, log2_amplitudes);
+    for (int l = 1; l <= mp->L; l++) {
+        envelope[l] = (float)log2_amplitudes[l];
+    }
+    mbe_regenerate_phases_log2(envelope, model->L, model->phase);
+    p25_column_voicing(mp, model);
+}
+
+void
+mbe_subframe_rendered_own_model(const mbe_parms* mp, enum mbe_voiced_synthesis rendering,
+                                struct mbe_subframe_model* model) {
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        p25_own_model(mp, model);
+    } else {
+        mbe_subframe_own_model(mp, model);
+    }
 }
 
 /* A D-STAR position among the 500 Hz columns as the decoder forms it to voice
@@ -829,11 +1141,16 @@ columns_voice(const struct column_rule* rule, float w0, int l) {
  * position l w0 / mp->w0 formed in double from the stored pitches, a half
  * added and its whole part taken, so that a position exactly halfway between
  * two harmonics (a tie) takes the upper one. In double because the float
- * quotient harmonic_at() forms rounds a position just under a half (33.4999986
- * of a P25 frame's harmonics at b0 134, its mid-frame harmonic 36 after a
- * frame at b0 161) to the half itself, and so to the wrong neighbour: a band
- * voiced in both frames was taken for one that changes. The index is made on
- * the bit pattern, positive doubles ordering as their patterns do. */
+ * quotient harmonic_at() forms rounds a position just under a half to the
+ * half itself, and so to the wrong neighbour: a band voiced in both frames was
+ * taken for one that changes (found at 33.4999986 of a P25 frame's harmonics
+ * at the pitch the decoder then played for b0 134, its mid-frame harmonic 36
+ * after a frame at b0 161; at the grid pitches and the floored quadratic, b0
+ * 109 then 163, harmonic 3 at 3.49999997 of the second frame's harmonics, and
+ * over the ordered pairs of different codes 50 harmonic and frame
+ * observations on 36 pairs where the two quotients take different
+ * neighbours). The index is made on the bit pattern, positive doubles ordering
+ * as their patterns do. */
 static int
 nearest_harmonic(const mbe_parms* mp, float w0, int l) {
     const double position = (((double)w0 * (double)l) / (double)mp->w0) + 0.5;
@@ -866,6 +1183,40 @@ column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struc
         return now;
     }
     return columns_voice(rule, model->w0, l) ? BAND_VOICED : BAND_UNVOICED;
+}
+
+/* columns_voice() for P25's columns, in P25's rendering: a copy, so that the
+ * other renderings' code keeps its inlining (p25_fill_mid_bands()). */
+static int
+p25_columns_voice(const struct column_rule* rule, float w0, int l) {
+    const double hz = ((double)w0 * (double)l * 4000.0) / M_PI;
+    return column_voiced(rule, p25_column(hz)) || column_voiced(rule, p25_column(hz + COLUMN_REACH_HZ));
+}
+
+/* column_band_state() in P25's rendering (p25_fill_mid_bands()): each frame's
+ * state is the one its own model plays, by the columns (p25_column_voicing()),
+ * for a frame whose own model is read so (p25_reads_by_columns()). */
+static int
+p25_column_band_state(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const struct column_rule* rule,
+                      const struct mbe_subframe_model* model, int l) {
+    const int at_prev = nearest_harmonic(prev_mp, model->w0, l);
+    const int at_cur = nearest_harmonic(cur_mp, model->w0, l);
+    int before = band_state(prev_mp, at_prev);
+    int now = band_state(cur_mp, at_cur);
+    if (before == BAND_NONE || now == BAND_NONE) {
+        return BAND_NONE;
+    }
+    /* Each frame's state as its own model plays it (p25_column_voicing()). */
+    if (p25_reads_by_columns(prev_mp)) {
+        before = p25_column_reads(&rule->prev, prev_mp->w0, at_prev) ? BAND_VOICED : BAND_UNVOICED;
+    }
+    if (p25_reads_by_columns(cur_mp)) {
+        now = p25_column_reads(&rule->cur, cur_mp->w0, at_cur) ? BAND_VOICED : BAND_UNVOICED;
+    }
+    if (before == now) {
+        return now;
+    }
+    return p25_columns_voice(rule, model->w0, l) ? BAND_VOICED : BAND_UNVOICED;
 }
 
 /* Whether the rate-33 rendering's mid-frame model keeps the previous frame's
@@ -940,11 +1291,13 @@ row_voices(const int row[8], const struct mbe_subframe_model* model, int l) {
  * factor (an AMBE decoder builds an ordinary voice frame's unvoiced band as
  * Ml = MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt(w0) times 2^log2Ml; Ml then also
  * carries what log2Ml does not, such as rate 33's further silence scale and
- * spectral enhancement). */
+ * spectral enhancement). P25's rendering has its own copy,
+ * p25_fill_mid_bands(), whose decoded log2Ml of an unvoiced band is the IMBE
+ * magnitude itself. */
 static void
 fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parms* voicing, int late_onset,
                const struct column_rule* columns, const int* row, struct mbe_subframe_model* model) {
-    const double unvoiced = log2((double)MBE_UNVOICED_MAGNITUDE_FACTOR / sqrt((double)model->w0));
+    const double unvoiced = unvoiced_log2_factor(model->w0);
     double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
     float envelope[57] = {0};
 
@@ -955,6 +1308,56 @@ fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parm
     for (int l = 1; l <= model->L; l++) {
         const float w = model->w0 * (float)l;
         int state = (columns != NULL) ? column_band_state(prev_mp, cur_mp, columns, model, l)
+                                      : band_state(voicing, harmonic_at(voicing, w));
+        if (late_onset && state == BAND_VOICED) {
+            state = BAND_UNVOICED;
+        }
+        if (row != NULL && state != BAND_NONE) {
+            state = row_voices(row, model, l) ? BAND_VOICED : BAND_UNVOICED;
+        }
+        const double mean = 0.5 * (log2_magnitude_at(prev_mp, prev_log2, w) + log2_magnitude_at(cur_mp, cur_log2, w));
+        model->voiced[l] = (unsigned char)state;
+        if (mean > LOG2_FLOOR) {
+            /* Limited before it narrows: a caller's state can put it past what a float holds. */
+            const double magnitude = exp2(mean + ((state == BAND_UNVOICED) ? unvoiced : 0.0));
+            model->magnitude[l] = (magnitude < (double)MAGNITUDE_LIMIT) ? (float)magnitude : MAGNITUDE_LIMIT;
+        }
+        envelope[l] =
+            (float)(0.5
+                    * (log2_magnitude_at(prev_mp, prev_phase_log2, w) + log2_magnitude_at(cur_mp, cur_phase_log2, w)));
+    }
+    note_voiced(model);
+    mbe_regenerate_phases_log2(envelope, model->L, model->phase);
+}
+
+/* fill_mid_bands() in P25's rendering, a body of its own: each frame's phase
+ * inputs are p25_phase_log2_inputs() (its unvoiced bands with the unvoiced
+ * factor taken out at its own pitch, before the two are read at the band's
+ * frequency), and the columns are P25's (p25_column_band_state()). Kept apart,
+ * with its own copies of the column helpers, so that the other renderings'
+ * code is the code it was: one body serving both moved D-STAR's and rate 33's
+ * samples in the 32-bit Release build (x87), where a helper with a second
+ * caller is no longer inlined and the protected arithmetic spills otherwise. */
+static void
+p25_fill_mid_bands(const mbe_parms* prev_mp, const mbe_parms* cur_mp, const mbe_parms* voicing, int late_onset,
+                   const struct column_rule* columns, const int* row, struct mbe_subframe_model* model) {
+    const double unvoiced = unvoiced_log2_factor(model->w0);
+    double prev_log2[57], cur_log2[57], prev_phase_log2[57], cur_phase_log2[57];
+    float envelope[57] = {0};
+
+    /* The caller has checked them (mbe_subframe_mid_model()); stated again
+     * here, where the arrays are indexed by them. */
+    if (!mbe_harmonic_count_is_valid(prev_mp->L) || !mbe_harmonic_count_is_valid(cur_mp->L)
+        || !mbe_harmonic_count_is_valid(model->L)) {
+        return;
+    }
+    common_log2_magnitudes(prev_mp, prev_log2);
+    common_log2_magnitudes(cur_mp, cur_log2);
+    p25_phase_log2_inputs(prev_mp, prev_phase_log2);
+    p25_phase_log2_inputs(cur_mp, cur_phase_log2);
+    for (int l = 1; l <= model->L; l++) {
+        const float w = model->w0 * (float)l;
+        int state = (columns != NULL) ? p25_column_band_state(prev_mp, cur_mp, columns, model, l)
                                       : band_state(voicing, harmonic_at(voicing, w));
         if (late_onset && state == BAND_VOICED) {
             state = BAND_UNVOICED;
@@ -988,8 +1391,13 @@ voice_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int late_onse
     memset(&columns, 0, sizeof(columns));
     const int by_columns = column_rule(prev_mp, cur_mp, rendering, &columns);
     const int held = (rendering == MBE_VOICED_SYNTHESIS_DVSI_AMBE2450) && rate33_voicing_holds(prev_mp, cur_mp);
-    fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
-                   mid_row(cur_mp, rendering), model);
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        p25_fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
+                           mid_row(cur_mp, rendering), model);
+    } else {
+        fill_mid_bands(prev_mp, cur_mp, held ? prev_mp : cur_mp, late_onset, by_columns ? &columns : NULL,
+                       mid_row(cur_mp, rendering), model);
+    }
 }
 
 void
@@ -1001,7 +1409,7 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
     }
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {
         /* The previous frame's model stands at mid-frame unchanged. */
-        mbe_subframe_own_model(prev_mp, model);
+        mbe_subframe_rendered_own_model(prev_mp, rendering, model);
         return;
     }
     if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_TONE) {
@@ -1010,7 +1418,7 @@ mbe_subframe_mid_model(const mbe_parms* prev_mp, const mbe_parms* cur_mp, int la
          * first subframe and holds it over the second (a first tone frame is at
          * full level from sample 80; the frame after the last holds the tone
          * fading out over its first 80 samples). */
-        mbe_subframe_own_model(cur_mp, model);
+        mbe_subframe_rendered_own_model(cur_mp, rendering, model);
         return;
     }
     const int shorter = (prev_mp->L < cur_mp->L) ? prev_mp->L : cur_mp->L;
@@ -1093,7 +1501,10 @@ train_runs_on(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, e
  * negative or not-a-number one included) loads nothing, and a count inside the
  * range is truncated to a whole number (a caller's 1.5 plays as 1); a phase
  * outside [0, 1) by its bit pattern reads as 0; a pulse time that is not
- * finite, is positive, or lies more than a frame back is skipped. */
+ * finite, is positive, or lies more than a frame back is skipped. A state no
+ * frame was seen to leave can still play: a caller's pulse at time 0 with a
+ * phase of 0 plays that pulse twice, once kept and once launched at the next
+ * frame's start. */
 static void
 load_pulse_train(const mbe_parms* prev_mp, const struct mbe_subframe_model* prev, enum mbe_voiced_synthesis rendering,
                  struct pulse_train* train) {
@@ -1214,6 +1625,175 @@ advance_interval(struct pulse_train* train, float start, const struct mbe_subfra
         /* A new train: the old one's pulses do not sound through the models after it. */
         train->phase = 0.0;
         train->count = 0;
+    }
+}
+
+/* The steps of 2^-19 cycle per sample from 0 to Nyquist, P25's grid. */
+#define P25_GRID_STEPS   524288L
+#define P25_GRID_NYQUIST 262144L
+
+/* Whether a pitch (positive and normal) lies on P25's grid of 2^-19 cycle per
+ * sample, up to Nyquist: the float 2 pi n / 2^19 formed in double and rounded
+ * to float once, as the decoder forms a code's pitch (imbe_grid_fundamental())
+ * and the mid-frame pitch is formed (imbe_mid_pitch()), equal by its bits for
+ * the whole number n nearest w0 2^19 / (2 pi), n from 1 to 2^18 (Nyquist
+ * included: the float nearest pi lies above it, so n is bounded, not the
+ * position); sets *steps to n. */
+static int
+p25_grid_steps(float w0, long* steps) {
+    const double position = ((double)w0 * 524288.0) / (2.0 * M_PI);
+    if (!(position >= 0.5 && position < (double)P25_GRID_NYQUIST + 0.5)) {
+        return 0;
+    }
+    const long n = (long)floor(position + 0.5);
+    if (n < 1 || n > P25_GRID_NYQUIST) {
+        return 0;
+    }
+    const float grid = mbe_round_to_float((float)(2.0 * M_PI * (double)n / 524288.0));
+    uint32_t want, have;
+    memcpy(&want, &grid, sizeof(want));
+    memcpy(&have, &w0, sizeof(have));
+    *steps = n;
+    return want == have;
+}
+
+/* Whether a step between two ends on the grid, n_a then n_b steps, takes the
+ * train an octave (octave_step()'s brackets, decided on the whole numbers): R =
+ * n_a / n_b, the new period over the old, strictly inside (1.6, 2.4) (down) or
+ * (0.4, 0.6) (up). An exact 8/5 (8736 then 5460) is no octave step in any
+ * build. A pair inside a bracket by whole numbers is inside it by at least
+ * 1 / (5 n_b), at least 7.6e-7 for n_b up to 2^18, while octave_step()'s float
+ * quotient of the stored pitches (each a float rounded once, a relative 6e-8)
+ * lies within about 3e-7 of R: advance_interval(), which then takes the step,
+ * sees it inside too. */
+static int
+p25_octave_steps(long na, long nb) {
+    return (8 * nb < 5 * na && 5 * na < 12 * nb) || (2 * nb < 5 * na && 5 * na < 3 * nb);
+}
+
+/* The pulses of a floored interval from `start`: cycles `first` to `last` of
+ * the train (the whole numbers its exact phase crosses, decided by the caller
+ * in integers), each at the time the linear sweep from `from` to `to` cycles
+ * per sample gives, in the expressions interval_pulses() uses (so that, for
+ * the same entering phase, every pulse that is not at the interval's end gets
+ * the time the form before gave it, bit for bit; across a chain the phase an
+ * interval leaves can differ in its last place from that form's where the
+ * entering phase is finer than the grid, and a later time with it), a
+ * negative radicand read as 0 and the time kept within [0, SUBFRAME]; at most
+ * INTERVAL_PULSES (16) of them, as there (only a caller's pitch reaches the
+ * cap: the codes' highest pitch, b0 0, advances 4.05 cycles an interval, so 5
+ * pulses at most; 131072 steps crosses 20, the grid's Nyquist point 40). A loop of P25's own: the shared function
+ * keeps its callers as they were. */
+static void
+p25_floored_pulses(struct pulse_train* train, float start, double from, double to, long first, long last) {
+    const double slope = (to - from) / (double)SUBFRAME;
+    long cycle = first;
+    for (int pulses = 0; pulses < INTERVAL_PULSES && cycle <= last; pulses++, cycle++) {
+        const double target = (double)cycle - train->phase;
+        double t;
+        if (fabs(slope) * (double)SUBFRAME < 1.0e-9 * from) {
+            t = target / from;
+        } else {
+            double radicand = (from * from) + (2.0 * slope * target);
+            if (!(radicand > 0.0)) {
+                radicand = 0.0;
+            }
+            t = (sqrt(radicand) - from) / slope;
+        }
+        if (!(t > 0.0)) {
+            t = 0.0;
+        } else if (t > (double)SUBFRAME) {
+            t = (double)SUBFRAME;
+        }
+        if (train->count < TRAIN_PULSES) {
+            train->time[train->count++] = start + (float)t;
+        }
+    }
+}
+
+/*
+ * One interval of the train in P25's rendering (docs/dvsi-parity.md, "P25
+ * pitch"): between two voiced models whose fundamentals both lie on the 2^-19
+ * grid, n_a and n_b steps, with no octave step between them (decided on the
+ * whole numbers, p25_octave_steps()), the train advances by exactly 80
+ * floor((n_a + n_b) / 2) steps over the interval, the two ends' mean
+ * fundamental floored to the grid (where the sum is odd half a step a sample
+ * is lost): a rule read from DVSI's decodes of its pulse-train vectors, where
+ * the 37 codes held long enough drift against DVSI's train by a mean that
+ * rounds to 0 steps a frame (within 0.038 at the 15 held 20 frames or more,
+ * 0.137 at the 22 shorter runs) and the four vectors that jitter between
+ * neighbouring codes keep the cumulative advance along each file (in which
+ * opposite errors of single transitions could cancel); not a known part of
+ * DVSI's decoder. Of the two forms the
+ * measurement cannot tell apart within an interval, the library keeps the
+ * linear sweep of the pulse rate and lowers its end by one step where the sum
+ * is odd (a constant rate at the floored mean gives the same total; a
+ * choice).
+ * Which pulses the interval launches is decided from the exact count, in
+ * integers, before any time is solved for, for the phase presented to the
+ * interval: with S the incoming phase in steps
+ * (exact: a power of two), the interval owns the whole numbers c from 1 (from 0
+ * when the phase is 0) with c 2^19 < S + 80 floor((n_a + n_b) / 2) strictly, so
+ * that a pulse falling exactly at the interval's end is the next interval's
+ * first (it starts at phase 0 and launches cycle 0); each owned pulse's time is
+ * then solved for (p25_floored_pulses()). The phase left is the remainder of
+ * the whole steps reached plus the incoming fraction of a step, over 2^19: the
+ * advance is a whole number of steps in every build; the phase it is added to
+ * is a double within a frame and a float between frames, so the result is
+ * exact wherever the incoming phase holds no bit below 2^-53 of a cycle (a
+ * train that started on the grid never does) and is rounded once, by less than
+ * 2^-53 of a cycle, where it does (a phase left by an interval off the grid,
+ * an onset or a caller's; under x87 that one rounding can differ in its last
+ * place between builds); a sum rounded up to a whole cycle leaves 0, the
+ * crossing it stands for lying after the end, not counted here, and launched
+ * by the next interval. So over a chain a fraction of a step finer than the
+ * carried phase holds (a double within a frame, a float between frames) is
+ * rounded away, and a crossing that lies within that rounding of an
+ * interval's end is launched at the next interval's start instead (a caller's
+ * phase of 2^-30 on b0 176 for 64 frames stores 94 launches and ends at phase
+ * 0, the 95th pending): no crossing is launched twice or dropped by it, and a
+ * count taken at a fixed sample can differ by the one pulse on that sample. Every other interval (an onset, an offset, no voiced
+ * model, an octave step, a pitch off the grid, a caller's) is
+ * advance_interval()'s, as before, where the rates are the stored floats over 2
+ * pi: the measurement says nothing of them.
+ */
+static void
+p25_advance_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
+                     const struct mbe_subframe_model* b) {
+    long na = 0, nb = 0;
+    if (!a->any_voiced || !b->any_voiced || !p25_grid_steps(a->w0, &na) || !p25_grid_steps(b->w0, &nb)
+        || p25_octave_steps(na, nb)) {
+        advance_interval(train, start, a, b);
+        return;
+    }
+    const long mean = (na + nb) / 2;  /* both positive: the floor */
+    const long end = (2 * mean) - na; /* n_b, or n_b - 1 where the sum is odd */
+    const long total = (long)SUBFRAME * mean;
+    const double steps = train->phase * 524288.0; /* exact: a power of two */
+    const double whole = floor(steps);
+    const long reach = (long)whole + total;
+    const long first = (train->phase > 0.0) ? 1 : 0;
+    const long last = (steps > whole) ? reach / P25_GRID_STEPS : (reach - 1) / P25_GRID_STEPS;
+    p25_floored_pulses(train, start, (double)na / 524288.0, (double)end / 524288.0, first, last);
+    /* Rounded to the double it is stored as before it is tested: under x87 a
+     * value just under 1 held in an 80-bit register passes the test and then
+     * stores as 1.0, which an octave step after it halves into a lost pulse
+     * (IEEE builds store 0 and launch it). interval_pulses() keeps the same
+     * shape (reached - floor(reached)), the branch below's, unexamined here
+     * and left alone for the other renderings' inlining. */
+    const double left = mbe_round_to_double(((double)(reach % P25_GRID_STEPS) + (steps - whole)) / 524288.0);
+    train->phase = (left < 1.0) ? left : 0.0;
+}
+
+/* An interval of the train in `rendering`: P25's own form (p25_advance_interval()),
+ * the others' as before. */
+static void
+train_interval(struct pulse_train* train, float start, const struct mbe_subframe_model* a,
+               const struct mbe_subframe_model* b, enum mbe_voiced_synthesis rendering) {
+    if (rendering == MBE_VOICED_SYNTHESIS_DVSI_IMBE) {
+        p25_advance_interval(train, start, a, b);
+    } else {
+        advance_interval(train, start, a, b);
     }
 }
 
@@ -1949,9 +2529,9 @@ prepare_frame(const mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_silenc
     if (!frame_accepted(cur_mp, prev_mp)) {
         return 0;
     }
-    mbe_subframe_own_model(prev_mp, &models[0]);
+    mbe_subframe_rendered_own_model(prev_mp, rendering, &models[0]);
     mbe_subframe_mid_model(prev_mp, cur_mp, starts_late(cur_mp, prev_mp, rendering), rendering, &models[1]);
-    mbe_subframe_own_model(cur_mp, &models[2]);
+    mbe_subframe_rendered_own_model(cur_mp, rendering, &models[2]);
     if (from_silence) {
         silence_model(&models[0]);
         if (mbe_frame_mark(cur_mp) == MBE_FRAME_MARK_PREVIOUS_HELD) {
@@ -2021,7 +2601,7 @@ mbe_synthesize_subframes(float* aout_buf, mbe_parms* cur_mp, const mbe_parms* pr
     }
     for (int k = 0; k < 2; k++) {
         const float start = (float)(k * SUBFRAME);
-        advance_interval(&train, start, &models[k], &models[k + 1]);
+        train_interval(&train, start, &models[k], &models[k + 1], rendering);
         render_interval(&aout_buf[(size_t)k * SUBFRAME], start, &train, &renders[k], &renders[k + 1]);
         if (reading.emits[k]) {
             render_emitted_pulse(&aout_buf[(size_t)k * SUBFRAME], &pulsed[k], &pulsed[k + 1]);
@@ -2056,8 +2636,8 @@ mbe_advance_subframes(mbe_parms* cur_mp, const mbe_parms* prev_mp, int from_sile
         return;
     }
     prepare_low_band(cur_mp, prev_mp, rendering, &low);
-    advance_interval(&train, 0.0f, &models[0], &models[1]);
-    advance_interval(&train, (float)SUBFRAME, &models[1], &models[2]);
+    train_interval(&train, 0.0f, &models[0], &models[1], rendering);
+    train_interval(&train, (float)SUBFRAME, &models[1], &models[2], rendering);
     mbe_dvsi_noise_skip_frame(cur_mp);
     /* Where rendering the frame leaves it, the pulsed state too (the emission,
      * the code read, P25's validity counter) and the low cut's tracker. */

@@ -9671,5 +9671,483 @@
         "value": 0.005
       }
     ]
+  },
+  "p25-decoder-development": {
+    "description": "Four rules of DVSI's P25 decoder: this change set is to make the P25 decoder's pitch and P25's subframe rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) follow four rules measured on DVSI's decodes of its own P25 encodings. 1. A frame's own pitch is TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19 cycle per sample, floor(2^21 / (2 b0 + 79)) / 2^19 (the value the library already plays for P25 tones sent as voice frames), in place of eq 46 times the fitted half-octave law now in the decoder; the harmonic and band counts and the bit layout stay on eq 46's nominal value. 2. Between two models that both have a voiced band, the mid-frame pitch is the parabola through the square root at 1, 1.5 and 2 of the mantissa y in [1, 2) of the product of the two fundamentals in cycles per sample, floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19, in place of the geometric mean; at an onset or an offset the voiced model's own pitch stays. 3. The phase kernel reads a band the model holds as unvoiced with the unvoiced factor taken out, its log2 amplitude plus -log2(0.2046 / sqrt(w0)) (2.289 plus half log2 of w0, the half-rate standard's TIA-102.BABA-1 log-magnitude domain, in which the AMBE codecs' decoded unvoiced amplitudes already are), decided by the decoded voicing, for a frame's own model and through the mid-frame envelope alike. 4. The frame's own models (the last frame's and this one's) are voiced by the 500 Hz columns the mid-frame rule already reads for P25: a harmonic is voiced if the column of its frequency, or of its frequency plus 250 Hz, is, a band that turns taking its magnitude across the unvoiced factor; what the mid-frame rule's first clause (a band in the same state in both frames keeps it) compares once the own models read by columns is to be decided on the development and validation vectors. No constant is fitted for any of the four: the grid is the tone path's, the parabola is the interpolant, 2.289 and one half are the half-rate standard's and the columns are the library's existing ones. Rules 2, 3 and 4 are properties of the rendering: the decoded models, their voicing, amplitudes and prediction history and everything the encoders read stay as decoded (the pitch apart, which rule 1 sets). ProVoice (which has no DVSI material: its nominal pitch and its own rendering stay in all four respects), D-STAR, rate 33, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors and of DVSI's synthetic pulse-train vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the lag of DVSI's decode against ours at frame boundaries and its change over each frame (which the mid-frame pitch alone sets), the per-code drift of the pulse train over runs at one pitch code, the phase of DVSI's voiced harmonics against ours by the frame's voiced share and by the distance to the voicing boundary, and the coherence of DVSI's decode with ours in the band of each unvoiced harmonic; each rule was found only once the one before it was in, and what DVSI's decoder computes is not known beyond its output. That scratch build was measured on the development, validation, tone and channel vectors before these sets were declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the rules, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, development vectors (in sample: the rules were found on them). The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of the run's speech vectors changes (the decoded PCM's hash, a vector without a hash on either side counting as changed). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. Neither says anything of other inputs. For P25 decoding DVSI's bits: the increase rule asks for a mean gain in waveform correlation with DVSI's decode, sample against sample at lag 0 (vs_dvsi.waveform_corr_unshifted), of at least 0.003 with its bootstrap 95% interval (resampling whole recordings) above 0, and all_no_decrease 0 lets no vector's correlation fall at all; the decrease rule asks for a mean fall in log-spectral distance from DVSI's decode (vs_dvsi.lsd_db) of at least 0.06 dB with its interval below 0, and all_no_increase 0 lets no vector's distance from DVSI's decode rise at all; the envelope correlation with DVSI's decode may fall by no more than 0.0002 in the mean; the log-spectral distance from the input speech (ours.lsd_db) may rise by no more than 0.012 dB in the mean and 0.04 dB on any vector, which is the change's cost and is allowed, not hidden: the column reading of rule 4 voices harmonics that the analysis of the input left unvoiced, and a decode that follows DVSI's there moves away from the input; the level against DVSI's decode (vs_dvsi.level_offset_db) may move by no more than 0.03 dB in the mean. Every paired check of P25's decode requires a measurement on every vector of the partition (every_vector), which makes a check need the figure everywhere and does not turn a limit on the mean into one on each vector: the envelope correlation, the level and the no_increase limit on ours.lsd_db bound the mean and no single vector. The two encoder measures (encoder.lsd_db, the IMBE encoder's decoded encoding against the input speech, and encoder.vs_dvsi_bits.lsd_db, against DVSI's decode of DVSI's bits) may rise by no more than 0.01 dB in the mean: both runs' encodings are decoded by the candidate's decoder, so with the encoder's bits unchanged the two are equal by construction, and the checks are there to catch a bit that does change. The measures are the scoreboard's, on the frames it measures; they do not say which of the four rules moved which frames, nor how the change sounds against the input beyond the log-spectral distance. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely, encoders on) before these sets were declared: every paired metric checked here is measured in P25 on all 20 vectors of the partition, and all 20 vectors carry an encoder-row hash and every speech vector a decoded-PCM hash in each of the three modes.",
+    "partition": "development",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.003,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.06,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.012,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.04,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "p25-decoder-validation": {
+    "description": "Four rules of DVSI's P25 decoder: this change set is to make the P25 decoder's pitch and P25's subframe rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) follow four rules measured on DVSI's decodes of its own P25 encodings. 1. A frame's own pitch is TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19 cycle per sample, floor(2^21 / (2 b0 + 79)) / 2^19 (the value the library already plays for P25 tones sent as voice frames), in place of eq 46 times the fitted half-octave law now in the decoder; the harmonic and band counts and the bit layout stay on eq 46's nominal value. 2. Between two models that both have a voiced band, the mid-frame pitch is the parabola through the square root at 1, 1.5 and 2 of the mantissa y in [1, 2) of the product of the two fundamentals in cycles per sample, floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19, in place of the geometric mean; at an onset or an offset the voiced model's own pitch stays. 3. The phase kernel reads a band the model holds as unvoiced with the unvoiced factor taken out, its log2 amplitude plus -log2(0.2046 / sqrt(w0)) (2.289 plus half log2 of w0, the half-rate standard's TIA-102.BABA-1 log-magnitude domain, in which the AMBE codecs' decoded unvoiced amplitudes already are), decided by the decoded voicing, for a frame's own model and through the mid-frame envelope alike. 4. The frame's own models (the last frame's and this one's) are voiced by the 500 Hz columns the mid-frame rule already reads for P25: a harmonic is voiced if the column of its frequency, or of its frequency plus 250 Hz, is, a band that turns taking its magnitude across the unvoiced factor; what the mid-frame rule's first clause (a band in the same state in both frames keeps it) compares once the own models read by columns is to be decided on the development and validation vectors. No constant is fitted for any of the four: the grid is the tone path's, the parabola is the interpolant, 2.289 and one half are the half-rate standard's and the columns are the library's existing ones. Rules 2, 3 and 4 are properties of the rendering: the decoded models, their voicing, amplitudes and prediction history and everything the encoders read stay as decoded (the pitch apart, which rule 1 sets). ProVoice (which has no DVSI material: its nominal pitch and its own rendering stay in all four respects), D-STAR, rate 33, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors and of DVSI's synthetic pulse-train vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the lag of DVSI's decode against ours at frame boundaries and its change over each frame (which the mid-frame pitch alone sets), the per-code drift of the pulse train over runs at one pitch code, the phase of DVSI's voiced harmonics against ours by the frame's voiced share and by the distance to the voicing boundary, and the coherence of DVSI's decode with ours in the band of each unvoiced harmonic; each rule was found only once the one before it was in, and what DVSI's decoder computes is not known beyond its output. That scratch build was measured on the development, validation, tone and channel vectors before these sets were declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the rules, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, validation vectors (in sample: the rules were found on them). The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of the run's speech vectors changes (the decoded PCM's hash, a vector without a hash on either side counting as changed). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. Neither says anything of other inputs. For P25 decoding DVSI's bits: the increase rule asks for a mean gain in waveform correlation with DVSI's decode, sample against sample at lag 0 (vs_dvsi.waveform_corr_unshifted), of at least 0.0015 with its bootstrap 95% interval (resampling whole recordings) above 0, and all_no_decrease 0 lets no vector's correlation fall at all; the decrease rule asks for a mean fall in log-spectral distance from DVSI's decode (vs_dvsi.lsd_db) of at least 0.05 dB with its interval below 0, and all_no_increase 0 lets no vector's distance from DVSI's decode rise at all; the envelope correlation with DVSI's decode may fall by no more than 0.0002 in the mean; the log-spectral distance from the input speech (ours.lsd_db) may rise by no more than 0.012 dB in the mean and 0.04 dB on any vector, which is the change's cost and is allowed, not hidden: the column reading of rule 4 voices harmonics that the analysis of the input left unvoiced, and a decode that follows DVSI's there moves away from the input; the level against DVSI's decode (vs_dvsi.level_offset_db) may move by no more than 0.03 dB in the mean. Every paired check of P25's decode requires a measurement on every vector of the partition (every_vector), which makes a check need the figure everywhere and does not turn a limit on the mean into one on each vector: the envelope correlation, the level and the no_increase limit on ours.lsd_db bound the mean and no single vector. The two encoder measures (encoder.lsd_db, the IMBE encoder's decoded encoding against the input speech, and encoder.vs_dvsi_bits.lsd_db, against DVSI's decode of DVSI's bits) may rise by no more than 0.01 dB in the mean: both runs' encodings are decoded by the candidate's decoder, so with the encoder's bits unchanged the two are equal by construction, and the checks are there to catch a bit that does change. The measures are the scoreboard's, on the frames it measures; they do not say which of the four rules moved which frames, nor how the change sounds against the input beyond the log-spectral distance. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely, encoders on) before these sets were declared: every paired metric checked here is measured in P25 on all 5 vectors of the partition, and all 5 vectors carry an encoder-row hash and every speech vector a decoded-PCM hash in each of the three modes.",
+    "partition": "validation",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.0015,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.05,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0002,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.012,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.04,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      },
+      {
+        "mode": "p25",
+        "metric": "encoder.vs_dvsi_bits.lsd_db",
+        "rule": "no_increase",
+        "value": 0.01
+      }
+    ]
+  },
+  "p25-decoder-tones": {
+    "description": "Four rules of DVSI's P25 decoder: this change set is to make the P25 decoder's pitch and P25's subframe rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) follow four rules measured on DVSI's decodes of its own P25 encodings. 1. A frame's own pitch is TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19 cycle per sample, floor(2^21 / (2 b0 + 79)) / 2^19 (the value the library already plays for P25 tones sent as voice frames), in place of eq 46 times the fitted half-octave law now in the decoder; the harmonic and band counts and the bit layout stay on eq 46's nominal value. 2. Between two models that both have a voiced band, the mid-frame pitch is the parabola through the square root at 1, 1.5 and 2 of the mantissa y in [1, 2) of the product of the two fundamentals in cycles per sample, floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19, in place of the geometric mean; at an onset or an offset the voiced model's own pitch stays. 3. The phase kernel reads a band the model holds as unvoiced with the unvoiced factor taken out, its log2 amplitude plus -log2(0.2046 / sqrt(w0)) (2.289 plus half log2 of w0, the half-rate standard's TIA-102.BABA-1 log-magnitude domain, in which the AMBE codecs' decoded unvoiced amplitudes already are), decided by the decoded voicing, for a frame's own model and through the mid-frame envelope alike. 4. The frame's own models (the last frame's and this one's) are voiced by the 500 Hz columns the mid-frame rule already reads for P25: a harmonic is voiced if the column of its frequency, or of its frequency plus 250 Hz, is, a band that turns taking its magnitude across the unvoiced factor; what the mid-frame rule's first clause (a band in the same state in both frames keeps it) compares once the own models read by columns is to be decided on the development and validation vectors. No constant is fitted for any of the four: the grid is the tone path's, the parabola is the interpolant, 2.289 and one half are the half-rate standard's and the columns are the library's existing ones. Rules 2, 3 and 4 are properties of the rendering: the decoded models, their voicing, amplitudes and prediction history and everything the encoders read stay as decoded (the pitch apart, which rule 1 sets). ProVoice (which has no DVSI material: its nominal pitch and its own rendering stay in all four respects), D-STAR, rate 33, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors and of DVSI's synthetic pulse-train vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the lag of DVSI's decode against ours at frame boundaries and its change over each frame (which the mid-frame pitch alone sets), the per-code drift of the pulse train over runs at one pitch code, the phase of DVSI's voiced harmonics against ours by the frame's voiced share and by the distance to the voicing boundary, and the coherence of DVSI's decode with ours in the band of each unvoiced harmonic; each rule was found only once the one before it was in, and what DVSI's decoder computes is not known beyond its output. That scratch build was measured on the development, validation, tone and channel vectors before these sets were declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the rules, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, tone partition. The D-STAR and rate-33 decodes of the run's speech vectors (speech.pcm_changed_vectors) and of the tone vectors (tone.pcm_changed_vectors) must not change at all, and their encoders' tone statistics (tone.encoder_agreement, and tone.encoder_extra_rate on every vector) must not move, as their encoders' bits must not. For P25 decoding DVSI's bits: the relative frequency error may rise on no vector by more than 0.0005; the tone level error and the dual tones' balance error may rise by no more than 0.02 dB in the mean; the share of windows playing a wrong tone may rise on no vector; the detector's agreement may fall on no vector by more than 0.03. That last tolerance is for the call-progress vectors, which P25 plays as decoded speech (the library's tone path leaves call-progress tones out, as DVSI's decoder does not play them as tone models): there the pitch and voicing rules act as on any speech, and a steady window the scoreboard's detector recognises in one decode can be lost in the other; 0.03 lets one window of a vector go, not more. A P25 tone recognised by the tone path plays its tone model, at the pitch of its code, which rule 1 makes the grid value the tone model already plays, and stands at mid-frame itself, so rule 2 does not reach it. The frequency, level, balance and wrong-tone measures see only the windows where both decodes hold a tone the scoreboard's detector recognises, and the agreement every window whose classification in DVSI's decode equals its two neighbours', with or without a tone, so it also sees some voice frames: the checks constrain the detector's results on those windows, not that the voice frames between and around the tones are right; no check here bounds the distance from the input. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely, encoders on) before these sets were declared: in D-STAR and rate 33 every tone vector carries a decoded-PCM hash and every speech vector one, tone.encoder_extra_rate is measured on all 52 vectors and tone.encoder_agreement on 35 (D-STAR) and 51 (rate 33); in P25 the detector's agreement is measured on all 52 vectors, the frequency, level and wrong-tone measures on 49 and the balance on 48: a check that does not require every vector passes on a vector that neither run measures and fails on one that only one run measures (unpaired).",
+    "partition": "tones",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "tone.encoder_extra_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.freq_rel_error",
+        "rule": "all_no_increase",
+        "value": 0.0005
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.level_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.balance_abs_error_db",
+        "rule": "no_increase",
+        "value": 0.02
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.wrong_tone_fraction",
+        "rule": "all_no_increase",
+        "value": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "tone.detector_agreement",
+        "rule": "all_no_decrease",
+        "value": 0.03
+      }
+    ]
+  },
+  "p25-decoder-channel": {
+    "description": "Four rules of DVSI's P25 decoder: this change set is to make the P25 decoder's pitch and P25's subframe rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) follow four rules measured on DVSI's decodes of its own P25 encodings. 1. A frame's own pitch is TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19 cycle per sample, floor(2^21 / (2 b0 + 79)) / 2^19 (the value the library already plays for P25 tones sent as voice frames), in place of eq 46 times the fitted half-octave law now in the decoder; the harmonic and band counts and the bit layout stay on eq 46's nominal value. 2. Between two models that both have a voiced band, the mid-frame pitch is the parabola through the square root at 1, 1.5 and 2 of the mantissa y in [1, 2) of the product of the two fundamentals in cycles per sample, floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19, in place of the geometric mean; at an onset or an offset the voiced model's own pitch stays. 3. The phase kernel reads a band the model holds as unvoiced with the unvoiced factor taken out, its log2 amplitude plus -log2(0.2046 / sqrt(w0)) (2.289 plus half log2 of w0, the half-rate standard's TIA-102.BABA-1 log-magnitude domain, in which the AMBE codecs' decoded unvoiced amplitudes already are), decided by the decoded voicing, for a frame's own model and through the mid-frame envelope alike. 4. The frame's own models (the last frame's and this one's) are voiced by the 500 Hz columns the mid-frame rule already reads for P25: a harmonic is voiced if the column of its frequency, or of its frequency plus 250 Hz, is, a band that turns taking its magnitude across the unvoiced factor; what the mid-frame rule's first clause (a band in the same state in both frames keeps it) compares once the own models read by columns is to be decided on the development and validation vectors. No constant is fitted for any of the four: the grid is the tone path's, the parabola is the interpolant, 2.289 and one half are the half-rate standard's and the columns are the library's existing ones. Rules 2, 3 and 4 are properties of the rendering: the decoded models, their voicing, amplitudes and prediction history and everything the encoders read stay as decoded (the pitch apart, which rule 1 sets). ProVoice (which has no DVSI material: its nominal pitch and its own rendering stay in all four respects), D-STAR, rate 33, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors and of DVSI's synthetic pulse-train vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the lag of DVSI's decode against ours at frame boundaries and its change over each frame (which the mid-frame pitch alone sets), the per-code drift of the pulse train over runs at one pitch code, the phase of DVSI's voiced harmonics against ours by the frame's voiced share and by the distance to the voicing boundary, and the coherence of DVSI's decode with ours in the band of each unvoiced harmonic; each rule was found only once the one before it was in, and what DVSI's decoder computes is not known beyond its output. That scratch build was measured on the development, validation, tone and channel vectors before these sets were declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the rules, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change, channel partition (dam's bits with channel errors, hard and 4-bit soft decisions). The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of the run's speech vectors changes (the decoded PCM's hash, a vector without a hash on either side counting as changed). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. Neither says anything of other inputs. The D-STAR and rate-33 decodes of the channel vectors (channel.pcm_changed_vectors) must not change at all. The eight mute statistics (mute agreement, mute rate, false and missed mute rates, hard and soft decisions) must not move in any mode: per-vector statistics, they do not by themselves say that no frame's mute decision changed. In P25, the log-spectral distance from DVSI's decode on the loud frames that neither run nor DVSI mutes, with hard decisions (channel.hd.lsd_common_db), must fall by at least 0.015 dB in the mean and may rise on no vector, and with soft decisions (channel.sd.lsd_common_db) may not rise in the mean, each on at least a tenth of the frames measured (min_coverage). The eight channel vectors are all one recording (dam's bits), so the scoreboard's bootstrap over recordings gives them no interval: that is why the fall is required on the mean and on each vector instead of with an interval. Under channel errors the adaptive smoothing can voice bands of a frame, and the rendering then plays the voicing as smoothed: these checks say whether the decodes come nearer DVSI's on the frames measured, not which of the four rules moved them; no check here bounds the distance from the input. Coverage, read on the baseline's own scoreboard of the development, validation, tone and channel partitions (a build of git archive f725a66 scoring itself, aligned freely, encoders on) before these sets were declared: the hard-decision measures are measured on the 4 hard-decision vectors and the soft-decision ones on the 4 soft-decision vectors in each mode, and every channel vector carries a decode hash in each mode; encoder.rows_changed_vectors and speech.pcm_changed_vectors count the speech vectors of the run (the development and validation vectors of the combined run), since the channel vectors are not encoded.",
+    "partition": "channel",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "channel.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.hd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_agreement",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.false_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "channel.sd.missed_mute_rate",
+        "rule": "abs_delta_max",
+        "value": 0.0,
+        "worst": 0.0
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "no_increase",
+        "value": -0.015,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.hd.lsd_common_db",
+        "rule": "all_no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      },
+      {
+        "mode": "p25",
+        "metric": "channel.sd.lsd_common_db",
+        "rule": "no_increase",
+        "value": 0.0,
+        "min_coverage": 0.1
+      }
+    ]
+  },
+  "p25-decoder-final": {
+    "description": "Four rules of DVSI's P25 decoder: this change set is to make the P25 decoder's pitch and P25's subframe rendering (MBE_VOICED_SYNTHESIS_DVSI_IMBE) follow four rules measured on DVSI's decodes of its own P25 encodings. 1. A frame's own pitch is TIA-102.BABA eq 46's fundamental cut to a grid of 2^-19 cycle per sample, floor(2^21 / (2 b0 + 79)) / 2^19 (the value the library already plays for P25 tones sent as voice frames), in place of eq 46 times the fitted half-octave law now in the decoder; the harmonic and band counts and the bit layout stay on eq 46's nominal value. 2. Between two models that both have a voiced band, the mid-frame pitch is the parabola through the square root at 1, 1.5 and 2 of the mantissa y in [1, 2) of the product of the two fundamentals in cycles per sample, floor(2^19 sqrt(fa fb) q(y) / sqrt(y)) / 2^19, in place of the geometric mean; at an onset or an offset the voiced model's own pitch stays. 3. The phase kernel reads a band the model holds as unvoiced with the unvoiced factor taken out, its log2 amplitude plus -log2(0.2046 / sqrt(w0)) (2.289 plus half log2 of w0, the half-rate standard's TIA-102.BABA-1 log-magnitude domain, in which the AMBE codecs' decoded unvoiced amplitudes already are), decided by the decoded voicing, for a frame's own model and through the mid-frame envelope alike. 4. The frame's own models (the last frame's and this one's) are voiced by the 500 Hz columns the mid-frame rule already reads for P25: a harmonic is voiced if the column of its frequency, or of its frequency plus 250 Hz, is, a band that turns taking its magnitude across the unvoiced factor; what the mid-frame rule's first clause (a band in the same state in both frames keeps it) compares once the own models read by columns is to be decided on the development and validation vectors. No constant is fitted for any of the four: the grid is the tone path's, the parabola is the interpolant, 2.289 and one half are the half-rate standard's and the columns are the library's existing ones. Rules 2, 3 and 4 are properties of the rendering: the decoded models, their voicing, amplitudes and prediction history and everything the encoders read stay as decoded (the pitch apart, which rule 1 sets). ProVoice (which has no DVSI material: its nominal pitch and its own rendering stay in all four respects), D-STAR, rate 33, the TIA-102.BABA rendering of mbe_synthesizeSpeechf() and every encoder are to stay byte for byte as they are. How it was found: on DVSI's decodes of the 20 development and 5 validation vectors and of DVSI's synthetic pulse-train vectors, by a scratch build of the library (a worktree at 47d8cf3 with environment switches, outside the repository): the lag of DVSI's decode against ours at frame boundaries and its change over each frame (which the mid-frame pitch alone sets), the per-code drift of the pulse train over runs at one pitch code, the phase of DVSI's voiced harmonics against ours by the frame's voiced share and by the distance to the voicing boundary, and the coherence of DVSI's decode with ours in the band of each unvoiced harmonic; each rule was found only once the one before it was in, and what DVSI's decoder computes is not known beyond its output. That scratch build was measured on the development, validation, tone and channel vectors before these sets were declared, with the scoreboard's own measures too, so none of those partitions is out of sample for the rules, and the limits below were set knowing those results; no build of this change was measured on the held-out partition (irstia and mark). The baseline is the head of the branch below, fix/dvsi-low-band (f725a66). The baseline against the change on irstia and mark, held out: a prediction for two recordings no build of this change has seen, to be scored once, after the review. The max 0 check on speech.pcm_changed_vectors says that no D-STAR or rate-33 decode of the run's speech vectors changes (the decoded PCM's hash, a vector without a hash on either side counting as changed). The max 0 check on encoder.rows_changed_vectors says that no encoder row of the run's speech vectors changes in any mode (the hashes of the bits each encoder emits; this counter skips a vector whose baseline holds no row hash, so 'no encoder row changes' rests on every speech vector carrying a row hash in both runs, which is to be counted in both reports and stated with the result): the encoders' bits must not change at all. Neither says anything of other inputs. The prediction that binds is the change on both vectors of P25 decoding DVSI's bits: a mean gain in waveform correlation with DVSI's decode at lag 0 of at least 0.0010 with its bootstrap interval above 0 (with two recordings, a gain on both vectors) and neither vector falling; a mean fall in log-spectral distance from DVSI's decode of at least 0.03 dB with its interval below 0 (a fall on both vectors) and neither vector rising. The envelope correlation may fall by no more than 0.0005 in the mean; the distance from the input speech may rise by no more than 0.02 dB in the mean, the change's cost (the column reading voices harmonics the input's analysis left unvoiced), allowed, not hidden; the level against DVSI's decode may move by no more than 0.05 dB in the mean. Every paired check requires a measurement on both vectors (every_vector).",
+    "partition": "final",
+    "checks": [
+      {
+        "mode": [
+          "dstar",
+          "r33"
+        ],
+        "metric": "speech.pcm_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": [
+          "dstar",
+          "p25",
+          "r33"
+        ],
+        "metric": "encoder.rows_changed_vectors",
+        "rule": "max",
+        "value": 0
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "increase",
+        "value": 0.001,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.waveform_corr_unshifted",
+        "rule": "all_no_decrease",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "decrease",
+        "value": 0.03,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.lsd_db",
+        "rule": "all_no_increase",
+        "value": 0.0,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.env_corr",
+        "rule": "no_decrease",
+        "value": 0.0005,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "ours.lsd_db",
+        "rule": "no_increase",
+        "value": 0.02,
+        "every_vector": true
+      },
+      {
+        "mode": "p25",
+        "metric": "vs_dvsi.level_offset_db",
+        "rule": "abs_delta_max",
+        "value": 0.05,
+        "every_vector": true
+      }
+    ]
   }
 }

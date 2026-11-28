@@ -1113,22 +1113,6 @@ imbe_nominal_w0(int b0) {
     return mbe_round_to_float((float)(4 * M_PI) / (float)((float)b0 + 39.5));
 }
 
-/* The relative offset of the pitch DVSI's P25 decoder plays for b0, in double:
- * a two-harmonic series in 4 pi log2 of the nominal period (b0 + 39.5) / 2. */
-static double
-imbe_dvsi_offset(int b0) {
-    const double t = 4.0 * M_PI * log2(((double)b0 + 39.5) / 2.0);
-    return -1.980564e-4 + 1.263798e-4 * cos(t) + 4.835086e-4 * sin(t) + 2.352386e-5 * cos(2.0 * t)
-           + 7.623621e-5 * sin(2.0 * t);
-}
-
-/* Whether a lies within `ulps` units in the last place of float of b. */
-static int
-within_ulps(float a, double b, double ulps) {
-    const double ulp = (double)nextafterf((float)b, INFINITY) - (double)(float)b;
-    return fabs((double)a - b) <= ulps * ulp;
-}
-
 /* x rounded to double, also under x87 excess precision. */
 static double
 round_to_double(double x) {
@@ -1136,32 +1120,52 @@ round_to_double(double x) {
     return rounded;
 }
 
-/* Whether the library is built with fast-math (CMake defines
- * MBELIB_TEST_LIBRARY_FAST_MATH): it may then evaluate an expression otherwise
- * than this test does. */
-#if defined(MBELIB_TEST_LIBRARY_FAST_MATH) || defined(__FAST_MATH__) || defined(_M_FP_FAST)
-#define LIBRARY_FAST_MATH 1
-#else
-#define LIBRARY_FAST_MATH 0
-#endif
+/* The pitch DVSI's P25 decoder plays for b0: eq 46's f0 = 4 / (2 b0 + 79)
+ * cycles per sample floored to a grid of 2^-19 cycle, as w0, formed in double
+ * from the integers and rounded to float once (as a double first, also under
+ * x87 excess precision: over the 208 codes the value lies at least 4.9e-11 of
+ * itself from a float's rounding edge, so the double's own rounding cannot
+ * move it). */
+static float
+imbe_grid_w0(int b0) {
+    const double steps = floor(2097152.0 / (double)((2 * b0) + 79));
+    return mbe_round_to_float((float)round_to_double(2.0 * M_PI * steps / 524288.0));
+}
 
-/* Whether the stored pitch is `want`: bit for bit, or within an ulp where
- * `tolerant` (the build mode is passed in, not tested around the only use of
- * a value). */
+/* The harmonic count eqs 46 and 47 give each P25 pitch code 0..207, from the
+ * nominal pitch in float, as the decoder has always computed it: pinned here,
+ * so that the pitch on the grid cannot move it (nor K, nor the bit layout). */
+static const unsigned char k_imbe_L[208] = {
+    9,  9,  9,  9,  10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14,
+    14, 14, 15, 15, 15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20, 20, 20,
+    21, 21, 21, 21, 22, 22, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 26, 26,
+    26, 26, 27, 27, 27, 27, 28, 28, 28, 28, 29, 29, 29, 29, 30, 30, 30, 30, 31, 31, 31, 31, 32, 32, 32, 32,
+    33, 33, 33, 33, 34, 34, 34, 34, 35, 35, 35, 35, 36, 36, 36, 36, 37, 37, 37, 37, 37, 37, 37, 37, 38, 38,
+    38, 38, 39, 39, 39, 39, 40, 40, 40, 40, 41, 41, 41, 41, 42, 42, 42, 42, 43, 43, 43, 43, 44, 44, 44, 44,
+    45, 45, 45, 45, 46, 46, 46, 46, 47, 47, 47, 47, 48, 48, 48, 48, 49, 49, 49, 49, 49, 49, 49, 49, 50, 50,
+    50, 50, 51, 51, 51, 51, 52, 52, 52, 52, 53, 53, 53, 53, 54, 54, 54, 54, 55, 55, 55, 55, 56, 56, 56, 56,
+};
+
+/* Whether two floats are the same, by their bit patterns. */
 static int
-pitch_matches(float stored, float want, int tolerant) {
+pitch_matches(float stored, float want) {
     uint32_t a, b;
     memcpy(&a, &stored, sizeof(a));
     memcpy(&b, &want, sizeof(b));
-    return (a == b) || (tolerant && within_ulps(stored, (double)want, 1.0));
+    return a == b;
 }
 
-/* P25 plays every pitch code at DVSI's pitch: the nominal one times 1 + g,
- * while L and K (and so the bit layout) stay the nominal pitch's; ProVoice,
- * through the same data path, keeps the nominal pitch. */
+/* P25 plays every pitch code at DVSI's pitch, eq 46 on the 2^-19 grid, while
+ * L and K (and so the bit layout) stay the nominal pitch's; ProVoice, through
+ * the same data path, keeps the nominal pitch. Bit for bit in every build: the
+ * grid value lies far from a float's rounding edge (imbe_grid_w0()), and the
+ * nominal pitch is the float quotient the decoder has always formed. The grid
+ * of 2^-18 or 2^-20, rounding in place of the floor, or any factor on top of
+ * the grid (the half-octave law it replaces moved the pitch by up to 7.06e-4)
+ * changes the stored pitch at some code. */
 static void
 test_imbe_pitch_law(void) {
-    double low = 1.0, high = -1.0;
+    double deficit = 0.0;
     for (int b0 = 0; b0 <= 207; ++b0) {
         char imbe_d[88];
         mbe_parms cur, prev, enh;
@@ -1174,25 +1178,15 @@ test_imbe_pitch_law(void) {
         const float nominal = imbe_nominal_w0(b0);
         const int L = (int)(0.9254 * (int)((M_PI / nominal) + 0.25));
         const int K = (L < 37) ? ((L + 2) / 3) : 12;
-        const double g = imbe_dvsi_offset(b0);
-        low = (g < low) ? g : low;
-        high = (g > high) ? g : high;
-        /* What the decoder stores: eq 46's nominal pitch as it computes it in
-         * float, times 1 + g in double, rounded to float once. Bit for bit
-         * where the library's arithmetic is IEEE (the x87 build included,
-         * which rounds the nominal pitch to float before the correction; g
-         * comes from the same libm here as in the library); within an ulp
-         * when it is built with fast-math, which may evaluate the library's
-         * expression otherwise than this test. Looser, against the law
-         * evaluated wholly in double (4 pi / (b0 + 39.5) times 1 + g), not
-         * rounded: the nominal float's own rounding stays in the stored
-         * pitch, at most 1.21 ulps from that over the codes (b0 77), within
-         * 1.5. (Rounded once to float, that law differs from the stored pitch
-         * by an ulp at 79 codes.) */
-        const float want = mbe_round_to_float((float)round_to_double((double)nominal * (1.0 + g)));
-        assert(pitch_matches(cur.w0, want, LIBRARY_FAST_MATH));
-        assert(within_ulps(cur.w0, (4.0 * M_PI / ((double)b0 + 39.5)) * (1.0 + g), 1.5));
+        const float want = imbe_grid_w0(b0);
+        assert(pitch_matches(cur.w0, want));
+        assert(L == (int)k_imbe_L[b0]);
         assert(cur.L == L && cur.K == K);
+        /* On the grid at or below eq 46's, less than one step (2^-19 cycle) below it. */
+        const double f0 = (double)cur.w0 / (2.0 * M_PI);
+        const double nominal_f0 = 4.0 / (double)((2 * b0) + 79);
+        assert(f0 <= nominal_f0 * (1.0 + 1.0e-7) && f0 > nominal_f0 - (1.0 / 524288.0));
+        deficit = fmax(deficit, 1.0 - (f0 / nominal_f0));
 
         /* The data path: P25 stores the same pitch, ProVoice the nominal one. */
         for (int provoice = 0; provoice < 2; ++provoice) {
@@ -1205,15 +1199,12 @@ test_imbe_pitch_law(void) {
             const int processed = mbe_processImbe4400Dataf(out, &result, imbe_d, &pcur, &pprev, &penh);
             assert(processed >= 0 && (result.flags & MBE_PROCESS_FLAG_REPEAT) == 0u);
             (void)processed;
-            /* Bit for bit, or within an ulp in a fast-math build. */
-            assert(pitch_matches(pprev.w0, provoice ? nominal : cur.w0, LIBRARY_FAST_MATH));
+            assert(pitch_matches(pprev.w0, provoice ? nominal : want));
             assert(pprev.L == L && pprev.K == K);
-            /* Where g is more than a few ulps, the two pitches differ. */
-            assert(provoice || fabs(g) < 1.0e-6 || !within_ulps(pprev.w0, (double)nominal, 2.0));
         }
     }
-    /* The law's range over the pitch codes. */
-    assert(low > -7.2e-4 && low < -7.0e-4 && high > 3.3e-4 && high < 3.5e-4);
+    /* The grid's largest relative deficit over the codes: 2.26e-4 (b0 201). */
+    assert(deficit > 2.2e-4 && deficit < 2.3e-4);
 }
 
 /* D-STAR's gain is absolute, as DVSI's AMBE-3000 decodes it: gamma =
