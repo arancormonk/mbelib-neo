@@ -418,13 +418,18 @@ The CTest suite includes:
   the review's word `0x01ff0704`, the mark without the word, other harmonics, another flag and
   another band sounding read as speech. The tone model's test through the public paths
   (`test_p25_tone_model_forgeries`): a stream plays a real DTMF 1 frame, quantized by the IMBE
-  encoder's quantizer, and then a voiced b0 80 frame; each of 14 forgeries of its last frame played
-  (the review's, a code with no rows, a row of another code, harmonics no row has, the pitch an ulp
-  off, another code's L, another code's K, another magnitude at 1e-3, another at -0, a tone harmonic
-  unvoiced, voiced at 0 and at a NaN, the mark alone, the word alone) plays exactly as the same
-  history without mark and word, samples and all three returned states, through the P25 data path,
-  ProVoice's frame entry point and the P25 data path with ProVoice's flag, and D-STAR's and rate 33's
-  data paths (their own words kept); the real state acts in P25's alone. The own models by columns
+  encoder's quantizer, and then a voiced b0 80 frame (the tone harmonics at the player's levels,
+  100 times their droops); each of 23 forgeries of its last frame (the review's, a code with no rows,
+  a row of another code, harmonics no row has, the pitch an ulp off, another code's L, another code's
+  K, L one less with K kept (21 -> 20), another magnitude at 1e-3, another at -0, a tone harmonic
+  unvoiced, voiced at 0 and at a NaN, both tone harmonics at 0 and at -0 (in the droops' ratio, so
+  that only the levels' positivity refuses them), the two levels 1 and 100, their ratio off the
+  player's by 1e-3 and by 2e-6 (outside the 2^-20 allowed), a `log2Ml` a NaN, +infinity and
+  -infinity, the mark alone, the word alone) plays exactly as the same history without mark and word,
+  samples and all three returned states, through the P25 data path, ProVoice's frame entry point and
+  the P25 data path with ProVoice's flag, and D-STAR's and rate 33's data paths (their own words
+  kept); the real state, the ratio off by 2e-7 (inside 2^-20) and a `log2Ml` at the smallest
+  subnormal (finite) act in P25's alone, and differ from the history without them. The own models by columns
   (`test_p25_own_columns`): at every code, with the voicing ending after, starting at and lying only
   at each harmonic, against the reading formed in the test, its own models built in the test
   (`reference_own_model()`, not the library's) and its magnitudes moved across the factor rounded to
@@ -434,33 +439,59 @@ The CTest suite includes:
   static functions into the test): over every ordered pair of the 208 codes, each with one of 64
   pairs of eight voicing classes, the copies give what the shared code gives where P25's rules do not
   apply, band states exactly and floats by their bits (in the 32-bit Release build, where the two
-  bodies round apart under x87 excess precision, within 1e-5, 1.34e-6 the largest seen) (43,264 pairs, about 1.36 million mid-frame bands by the columns, 676 fills
-  under the rule). The independent rendering of the waveform tests (`run_waveform()`) takes P25's
+  bodies round apart under x87 excess precision, within 1e-5 with both values finite by their bits,
+  1.34e-6 the largest seen) (43,264 pairs, about 1.36 million mid-frame bands by the columns, 676
+  fills under the rule); the test compiles the file into its own translation unit with the test's
+  flags, so in a library built with fast-math it compares the two bodies as those flags compile them,
+  not the library's object, and the static analyzers see it whole (the models' harmonic counts
+  bounded before the copies are called). The independent rendering of the waveform tests (`run_waveform()`) takes P25's
   mid-frame pitch with the excess, the train's floored means, its phase inputs and its own models'
   voicing from its own arithmetic (`reference_p25_mid_pitch()`, `reference_advance()`,
   `reference_phase_input()`, `reference_own_model()`, `reference_own_voicing()`), over a stream that
   now holds runs of frames at code pitches (80, 81, 53, 54; at the level of the frames before them:
   the tolerance is absolute, and at amplitude 16 a fully voiced frame of 27 harmonics differs by up
-  to 0.055 of a sample's 100 or more with or without the floors).
-  Mutations (the fix round's list, 46, each applied to the head in a copy, the six tests above and
-  `test_golden_pcm` built in Debug and run; every one fails a test, the first-failing assertion
-  named in `build/mut/mutations2-table.txt` outside the repository): the grid 2^-18 and rounding in
-  place of the floor; the mid-frame value rounded, unfloored, in float, with no excess (fails at b0
-  51, 53, 75, 80, 94, 95, 164), with its constant only (53, 75, 94), with twice the excess, with nodes
-  1, 1.4 and 2, only where the pitches differ, in ProVoice's, D-STAR's (also `test_golden_pcm`) or
-  rate 33's rendering (also `test_params`), with no range check and with a range of 2^128; the train's
-  mean unfloored, rounded up, floored only at equal codes, left out, in ProVoice's, D-STAR's or rate
-  33's rendering, across an octave and for pitches off the grid; the phase step with its sign
-  reversed, on voiced bands, on bands whose log2Ml is not finite, left out of the mid-frame envelope,
-  and leaking into ProVoice's, D-STAR's (also `test_golden_pcm`) or rate 33's own phases with the
-  column dispatcher untouched (phase only); the last frame's own model read by the bands; the reach
-  0 and 500 Hz; the first edge 500 Hz; a turned band keeping its magnitude; the unvoiced factor formed
-  in double; P25's copy of the column test with a reach a hertz longer and of the filler with one
-  magnitude moved (`test_p25_rendering_copies`); the tone model's test by structure alone, without the
-  row, without the pitch, without the zero magnitudes, without the positive tone magnitudes, without
-  the mark and without the flag. Four of them (the train in the other renderings, across an octave,
-  and the tone magnitudes' positivity) survived the tests as first written; the tests were
-  strengthened and the four fail now.
+  to 0.055 of a sample's 100 or more with or without the floors). The train's ownership of its
+  pulses (`test_p25_train_ownership`): the review's stream (codes 172, 65 and 203, every band voiced,
+  through `mbe_processImbe4400Dataf()` from a fresh state: the third frame's stored times hold no
+  duplicate) and its second reproduction (code 7, the stored phase `0x1.afp-5f`, then code 52);
+  chains of floored frames over neighbouring codes from nine kinds of incoming phase (0, on the grid,
+  half a step off it, 2^-19 + 2^-30, 2^-100, the smallest subnormal, 1 - 2^-24, a float a frame
+  stores), each frame's stored pulses equal to the test's own count of the whole numbers crossed
+  (`count_crossings()`, one by one in integers), no two stored times nearer than half the shortest
+  period, and rendering and `mbe_advance_subframes()` ending alike (count, times and phase by bits);
+  the grid's last point (262143 then 262144 steps from phase 0 leaves 524208 steps); the octave
+  brackets on the whole numbers: 8736 then 5460 (exactly 8/5) from phase 0.25 floored, the nearest
+  pairs on both sides of all four edges, and each edge exactly at 40 pairs, among them pairs whose
+  floats' ratio a float test would put inside the bracket.
+  Mutations (the second fix round's list, 59, each applied to the head in a copy, the six tests
+  `test_params`, `test_subframe_synthesis`, `test_frame_paths`, `test_p25_tones`, `test_golden_pcm`
+  and `test_p25_rendering_copies` built in Debug and run; on the merged head, `ecb78d0`, all 59 fail a
+  test, the first-failing assertion of each in `build/mut/mutations3-merged.log` outside the
+  repository): the grid 2^-18 and rounding in place of the floor; the mid-frame value rounded,
+  unfloored, in float, with no excess (fails at b0 51, 53, 75, 80, 94, 95, 164), with its constant
+  only (53, 75, 94), with twice the excess, with nodes 1, 1.4 and 2, only where the pitches differ, in
+  ProVoice's, D-STAR's (also `test_golden_pcm`) or rate 33's rendering (also `test_params`), with no
+  range check and with a range of 2^128; the train's mean unfloored, rounded up, floored only at equal
+  codes, left out, in ProVoice's, D-STAR's or rate 33's rendering, across an octave and for pitches off
+  the grid; the pulses owned by the rounded time (the first form); the grid's bound tested before n
+  (refusing 262144) and after it; the octave decided on the two floats' ratio, and each bracket's edge
+  taken inside (down and up); the phase step with its sign reversed, on voiced bands, on bands whose
+  log2Ml is not finite, left out of the mid-frame envelope, and leaking into ProVoice's, D-STAR's
+  (also `test_golden_pcm`) or rate 33's own phases with the column dispatcher untouched (phase only);
+  the last frame's own model read by the bands; the reach 0 and 500 Hz; the first edge 500 Hz; a
+  turned band keeping its magnitude; the unvoiced factor formed in double; P25's copy of the column
+  test with a reach a hertz longer and of the filler with one magnitude moved
+  (`test_p25_rendering_copies`); the tone model's test by structure alone, without the row, without
+  the pitch, without L, without K, without the zero magnitudes, without the positive tone magnitudes,
+  without the levels' ratio, with a ratio tolerance of 1e-5, with the ratio taken without the droops,
+  without the finite `log2Ml`, with a finite test that lets infinities through, without the mark and
+  without the flag. In the first fix round's list (46), five survived the tests as first written (the
+  train in ProVoice's, D-STAR's and rate 33's renderings, across an octave, and the tone magnitudes'
+  positivity; `build/mut/mutations2-first.log`); in this round's first run two more did (an octave
+  bracket's upper edge taken inside, which an exact 3/5 with an even sum cannot show, and the tone
+  magnitudes' positivity again, which the levels' ratio had come to cover) and one edit no longer
+  applied to the code (the unfloored mean, then re-aimed; `build/mut/mutations3-edb277f.log`), and the
+  tests were strengthened before the run above.
   The differential harness (outside the repository, `build/harness/pd_diff2.c`, built against the
   baseline's library and the head's in the ten local configurations) enumerates rather than draws:
   the pitch every D-STAR code (0 to 127) and every rate-33 code at every V/UV row (0 to 31) decodes
@@ -469,28 +500,52 @@ The CTest suite includes:
   the band grid at row 18, and 16 extreme float classes: zeros, subnormals, `FLT_MIN`, `FLT_MAX`,
   infinities, NaNs, a negative, pi, 2^31, 2^70, 2^-32, 1) crossed with each of 12 voicing classes
   (none, all, a low region, alternate bands, a lone harmonic, the top only, the isolated last band,
-  states 2, -1 and 7 among voiced and unvoiced bands, a tone structure, the ends), and with each pair
+  states 2, -1 and 7 among voiced and unvoiced bands, a tone structure, the ends); on each such state
   one of 24 mark-or-word cases (every mark, values that are none, pulsed-row words, tone words real
   and forged with the tone structure, the review's word, other words in `Vl[0]`), one of 12
-  log-magnitude classes (NaN, infinities, -20.1, -40, 1e30, `FLT_MAX`, subnormal, zeros, the last
-  five in a magnitude too) and one of 9 slot cases (slots 34 to 39 and 95, every float class), the
-  case of each factor `(pitch + k voicing) mod count`, so that every voicing class meets every mark,
-  log class and slot case; each of the 12,048 forged states put into one of the three slots of a
-  running stream before one frame of each of 21 paths (the D-STAR, P25 and rate-33 data paths, float
-  and short; D-STAR's and rate 33's frame paths, hard and soft, float and short; ProVoice's four frame
-  paths and the P25 data path with its flag; P25's frame paths), the frames enumerating each path's
-  codes (rate 33's every b0 at every row, ordinary voice frames of rows 18 to 31 included) with their
-  other bits from a fixed sequence and the error counts and flags enumerated; the decode-only frame
-  entry points, D-STAR DV packing, `mbe_classifyAmbe2450Frame()`, the tone, silence and comfort-noise
-  synthesizers, `mbe_spectralAmpEnhance()`, `mbe_applyAdaptiveSmoothing()`, `mbe_useLastMbeParms()`,
+  log-magnitude classes in `log2Ml` (NaN, infinities, -20.1, -40, 1e30, `FLT_MAX`, subnormal, zeros),
+  one of 7 magnitude classes in one `Ml` (none, NaN, +infinity, 1e30, `FLT_MAX`, subnormal, -0), one
+  of 9 slot cases in slots 34, 35, 37 to 39 and 95 and one validity count in slot 36 (-11 to 3), each
+  in its own field; a forged state on every frame of every stream, put into one of the three slots
+  before one frame of each of 23 paths (the D-STAR, P25 and rate-33 data paths, float and short;
+  D-STAR's, rate 33's and P25's frame paths, hard and soft, float and short; ProVoice's four frame
+  paths and the P25 data path with its flag), the frames enumerating each path's codes (rate 33's
+  every b0 at every row, ordinary voice frames of rows 18 to 31 included) with their other bits from
+  a fixed sequence and the error counts and flags enumerated; the decode-only frame entry points,
+  D-STAR DV packing, `mbe_classifyAmbe2450Frame()`, the tone, silence and comfort-noise synthesizers,
+  `mbe_spectralAmpEnhance()`, `mbe_applyAdaptiveSmoothing()`, `mbe_useLastMbeParms()`,
   `mbe_synthesizeSpeechf()` and `mbe_synthesizeSpeech()`, the three encoders through their float,
   short and frame entry points over forged histories, and TETRA (`mbe_tetraDecodeFrame()` over 6,000
-  frames with bad-frame patterns and a reset); every returned state hashed whole, no slot zeroed
-  (ProVoice on states whose low-cut slots differ: samples alike and the returned states equal in
-  every byte, ProVoice writing those slots). Against `f725a66` every PROTECTED line (4,250) is the
-  same in every configuration, and only P25's lines change (208 pitches, its four streams, the IMBE
-  encoder's `cur_mp`). What it leaves out: MSVC and macOS builds, caller states outside these
-  classes (the classes are crossed pairwise, not all together), concurrent threads.
+  frames with bad-frame patterns and a reset); every byte of all three returned states hashed after
+  every frame, no slot zeroed. It prints its own coverage: `COVERAGE forged states 12048 (every frame
+  of every stream), pitches 1004, pairs reached: vm 288/288 vl 144/144 vs 108/108 ml 288/288 ms
+  216/216 ls 108/108 mmc 168/168; pitch x voicing 12048/12048; 1504 states take a tone structure over
+  their voicing class` (v voicing, m mark, l log class, s slot case, mc magnitude class: every pair of
+  those factors met; the 1,504 states whose mark case is a tone word with the tone structure have
+  that structure in place of their voicing class's bands, so those pairs are reached through other
+  states). ProVoice entered from the states the D-STAR and rate-33 streams leave, with the low cut's
+  slots changed in all three, plays the same samples for 200 frames, and every byte of the returned
+  states is compared after every frame: `prev_mp.noiseOverlap[38]` and `[39]` differ after the first
+  frame (they keep the values they entered with), and from the second frame on the states are
+  equal; the baseline (`f725a66`) and the branch below (`1e531f8`) do the same, so
+  it is the branch point's behaviour, not this change set's. Built against the branch below's head `1e531f8` and the merged head `ecb78d0` in the ten local
+  configurations, every PROTECTED line (4,252, the two coverage lines and the ProVoice lines among
+  them) is the same in each configuration, and only P25's lines change (215: the 208 decoded pitches,
+  its six streams and the IMBE encoder's `cur_mp`), P25's stream hashes being those of the head before
+  the merge; in the second fix round each library edit was first run against the commit before it,
+  every line the same: the pulses' ownership (`e249b64` against `f24ed64`, the first form of the
+  harness) in the 32-bit Release and GCC fast-math LTO builds, the analyzers' zeroed arrays (`edb277f`
+  against `e249b64`, this form) in those and the Clang LTO build. What it leaves out: MSVC
+  and macOS builds, concurrent threads, caller states outside these classes, and combinations beyond
+  the pairs crossed (no triple of factors is enumerated in full).
+  Valgrind (memcheck, full leak check, the merged head's dev-debug build) on `test_params`,
+  `test_p25_tones`, `test_frame_paths`, `test_subframe_synthesis`, `test_p25_rendering_copies`,
+  `test_golden_pcm` and `test_ambe_block_lengths`: no invalid access, no uninitialised read, nothing
+  definitely or indirectly lost; the five tests that synthesize through the library report two
+  blocks "possibly lost" (1,095 and 4,167 bytes) and two still reachable (144 and 2,752 bytes), all
+  the thread-local transform plan's (`mbe_fft_plan_alloc()`, which a thread keeps until it exits),
+  which valgrind counts as two errors; a Debug build of the branch below (`1e531f8`) shows the same
+  four blocks in `test_params` and `test_subframe_synthesis`.
   Preflights: `tools/preflight_ci.sh` and `tools/quality_preflight.sh`, both with `--base f725a66`,
   pass on the branch; but the quality preflight's Gitleaks scan covered no commit of it (its log:
   `0 commits scanned`, `scanned ~0 bytes`), because the scanner, run in a container with the
