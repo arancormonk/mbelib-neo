@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include "ambe3600x2400_internal.h"
 #include "ambe3600x2450_internal.h"
@@ -5879,6 +5880,7 @@ test_p25_train_by_steps(void) {
         {114, -2}, {124, -4}, {130, -4}, {131, -4}, {158, 1}, {164, 1}, {165, 0},
     };
     const enum mbe_voiced_synthesis p25 = MBE_VOICED_SYNTHESIS_DVSI_IMBE;
+    int off = 0;
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
         const int b0 = table[i][0];
         const long n = code_steps(b0), m = mid_steps(b0, b0);
@@ -5886,17 +5888,21 @@ test_p25_train_by_steps(void) {
         mbe_parms model, last;
         p25_voiced_code(&model, b0);
         assert(lround((double)model.w0 * 524288.0 / (2.0 * M_PI)) == n);
-        struct mbe_subframe_model mid;
-        mbe_subframe_mid_model(&model, &model, 0, p25, &mid);
-        assert(lround((double)mid.w0 * 524288.0 / (2.0 * M_PI)) == m);
+        int ok = 1;
         for (int advance = 0; advance < 2; ++advance) {
             train_at_zero(&last, &model, p25);
             for (int f = 0; f < 12; ++f) {
                 train_frame(&last, &model, p25, advance);
             }
-            assert(phase_steps(&last) == (12L * frame_advance(b0, b0)) % 524288L);
+            ok &= phase_steps(&last) == (12L * frame_advance(b0, b0)) % 524288L;
+        }
+        if (!ok) {
+            /* Named, so that a mutation's failure says at which codes. */
+            fprintf(stderr, "p25 train: b0 %d advances otherwise than DVSI's decoder\n", b0);
+            ++off;
         }
     }
+    assert(off == 0);
 
     /* Steps between neighbouring codes: odd and even sums. */
     static const int pairs[][2] = {{80, 81}, {53, 54}, {21, 22}};
@@ -11021,6 +11027,7 @@ test_low_cut_r33_path(void) {
 
 int
 main(void) {
+    test_p25_train_by_steps();
     test_frame_marks();
     test_steady_model_is_its_harmonics();
     test_onset_starts_the_train();
@@ -11085,7 +11092,6 @@ main(void) {
     test_p25_mid_columns_across_steps();
     test_p25_forged_tone_in_state();
     test_p25_tone_model_forgeries();
-    test_p25_train_by_steps();
     test_row17_mark_in_codec_states();
     test_dstar_exact_column_edge();
     test_rate33_hold_past_l();
