@@ -24,7 +24,10 @@
  *       +-(32767 * 0.95) as mbe_floattoshort() does (NaN becomes 0). Those of
  *       the D-STAR (AMBE 3600x2400), AMBE 3600x2450 and P25 (IMBE 7200x4400)
  *       paths then round to the nearest integer, halves away from zero, as
- *       DVSI's D-STAR, AMBE 3600x2450 and P25 decoders round; ProVoice (IMBE
+ *       DVSI's D-STAR and AMBE 3600x2450 decoders round (P25's at every
+ *       level, a choice resting on DVSI's quiet P25 frames, where rounding is
+ *       identified, and on louder ones, where it is favoured; see
+ *       docs/dvsi-parity.md "16-bit output"); ProVoice (IMBE
  *       7100x4400, and the IMBE 4400 data path with MBE_PROCESS_FLAG_PROVOICE),
  *       mbe_synthesizeSpeech(), mbe_synthesizeComfortNoise() and
  *       mbe_floattoshort() itself truncate toward zero. So the `short` output

@@ -1602,8 +1602,9 @@ mbe_processImbe4400Dataf(float* aout_buf, mbe_process_result* result, const char
 }
 
 /* P25's 16-bit samples round to nearest (halves away from zero, as D-STAR's
- * and rate 33's): DVSI's P25 decoder rounds (docs/dvsi-parity.md, "16-bit
- * output"). ProVoice, with no DVSI material, keeps truncating, as do its own
+ * and rate 33's) at every level: rounding is identified on DVSI's quiet P25
+ * frames and favoured above them, not established above an rms of about 50
+ * (docs/dvsi-parity.md, "16-bit output"). ProVoice, with no DVSI material, keeps truncating, as do its own
  * frame entry points (imbe7100x4400.c) and the public mbe_floattoshort(). */
 static void
 imbe4400_to_short(const mbe_process_result* result, const float float_buf[160], short aout_buf[160]) {

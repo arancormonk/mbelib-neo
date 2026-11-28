@@ -1044,7 +1044,9 @@ as a departure from Table 9.
 
 ### 16-bit output
 
-DVSI's D-STAR, rate-33 and P25 decoders round their output to the nearest 16-bit step.
+DVSI's D-STAR and rate-33 decoders round their output to the nearest 16-bit step; the library
+rounds P25's 16-bit output at every level too, on the evidence given under **P25** below (rounding
+identified on the quiet frames, favoured above them, not established above an rms of about 50).
 TIA-102.BABA and TIA-102.BABA-1 say nothing on how the synthesized speech becomes 16-bit samples.
 This library truncated toward zero in every `short` entry point (`mbe_floattoshort()`).
 
@@ -1080,15 +1082,37 @@ DVSI's 2.931), its largest falls on `dam80` and `dam40` moving to DVSI's own sco
 
 **P25.** This section said first that DVSI's P25 decoder does not round: P25's `dam80` holds more
 zero samples in DVSI's decode than even truncation gives, and rounding alone lowered the identical
-share. Both are the quiet frames' gain, which DVSI's decoder applies and the library did not: on its
-quiet frames DVSI's sample steps from 0 to 1, 1 to 2 and 2 to 3 at our samples `|v|` in the ratio
-1 : 3 : 5 (rounding of one scaled sample), not 1 : 2 : 3 (truncation). Four models on the library's own decodes
-of the 25 development and validation vectors, every frame, at lag 0 against DVSI's decode:
+share. Both are the quiet frames' gain, which DVSI's decoder applies and the library did not. The
+library now rounds P25's 16-bit output at every level, on three grades of evidence:
+
+- **Identified on the quiet frames.** Pooled per 0.05 bin of the decoded mean over the steady frames
+  with no voiced band, DVSI's sample steps from 0 to 1, 1 to 2 and 2 to 3 at our samples `|v|` in
+  the ratio 1 : 3 : 5 (rounding of one scaled sample), not 1 : 2 : 3 (truncation), with one gain per
+  bin ([P25: quiet frames](#p25-quiet-frames)).
+- **Favoured above them.** DVSI's own zero bin has the width of the others: on `noisy` (no quiet
+  frame; the build of `e345239`'s samples), over the 1,654 frames whose rms of our samples lies in
+  [20, 100), DVSI's zeros over its samples of magnitude 1 are 0.510, our samples truncated 0.992 and
+  rounded 0.484. Truncation there matches more single samples (0.1987 against 0.1671), because
+  DVSI's samples are smaller in magnitude by 1.496 units on average where they are not 0, a level
+  difference truncation partly makes up for. Over the 25 development and validation vectors, the
+  three conversions of the library's final floats: rounding everywhere, identical share 0.2393 and
+  mean absolute whole-vector level error 0.0256 dB; truncation everywhere, 0.1905 and 0.0322 dB;
+  rounding only in the frames the gain reaches (the frame's or the frame before's decoded mean under
+  -1.73) and truncation elsewhere, 0.2371 and 0.0294 dB.
+- **Not established** above our rms of about 50, where these paired comparisons stop telling the two
+  conversions apart (a limit of the measurements, not a threshold observed in DVSI's output).
+
+On `noisy` the rounding raises the scoreboard's distance from DVSI's decode from 1.1217832950 to
+1.1241631488 dB, on the build of `e345239`'s floats and on `d6336af`'s alike (they differ in 2 of
+its 3,588 frames, which do not move the measure): the whole rise is the conversion's, and it is what
+fails the development gate set's per-vector check ([November 2026: P25's quiet
+frames](#november-2026-p25s-quiet-frames)). Four models on the library's own decodes of the 25
+development and validation vectors, every frame, at lag 0 against DVSI's decode:
 
 | Model | Identical samples (mean) | `dam80` zeros (DVSI 0.444) | `clean` zeros (0.215) | `lvl` zeros (0.012) | Correlation (mean) |
 |---|---:|---:|---:|---:|---:|
 | A truncation, no gain (the branch point, `e345239`) | 0.1424 | 0.264 | 0.128 | 0.023 | 0.990006 |
-| D rounding, no gain (`e345239`'s floats rounded) | 0.1081 | 0.141 | 0.066 | 0.012 | 0.989845 |
+| D rounding, no gain (`e345239`'s floats times 7 in binary32, rounded) | 0.1081 | 0.141 | 0.066 | 0.012 | 0.989845 |
 | B truncation, the first form's gain `2^clamp(1.41 (x + 1.80), -1.01, 0)` | 0.2259 | 0.460 | 0.233 | 0.023 | 0.991241 |
 | C rounding, the gain `2^clamp(1.84 (x + 1.73), -2, 0)` (the library) | 0.2393 | 0.437 | 0.214 | 0.012 | 0.991320 |
 
@@ -1096,9 +1120,13 @@ of the 25 development and validation vectors, every frame, at lag 0 against DVSI
 Rounding alone is worse than truncating alone (D against A), which is what this section read first;
 rounding with the gain (C) holds DVSI's share of zeros within 0.007 in these three vectors and the
 most identical samples, and its correlation exceeds B's on `dam80` by 0.0016 and on `dam40` by
-0.0003, the others within 1e-5. A muted P25 frame's noise (TIA-102.BABA 7.8, its own generator) is
-rounded like any sample; what DVSI's P25 decoder plays on a muted frame was not measured (the library
-mutes no P25 frame of these vectors).
+0.0003, the others within 1e-5. A muted P25 frame's noise (TIA-102.BABA 7.8: uniform in [-5, 5] on
+the 16-bit scale before the conversion, its own generator) is rounded like any sample, which gives
+-5 and +5 bins of half the width of the others: over 2,048 muted frames (327,680 samples, the thread's
+generator seeded per frame), truncated 0 on 65,156 samples, -4 to -1 and +1 to +4 on 32,528 to 33,666
+each and +-5 on none; rounded 0 on 32,516, -4 to +4 otherwise on 32,532 to 33,480 each, -5 on 16,876
+and +5 on 16,803. What DVSI's P25 decoder plays on a muted frame was not measured (the library mutes
+no P25 frame of these vectors).
 
 The mute noise of both AMBE paths halves to uniform in [-0.75, 0.75] on the 16-bit scale, so that
 rounding gives the mix truncation gave D-STAR's [-1.5, 1.5]: 0 on two thirds of the samples and +-1
@@ -1480,16 +1508,16 @@ and no cut, as before.
 ### P25: quiet frames
 
 On DVSI's decodes of its own vectors, DVSI's P25 decoder plays a frame whose decoded magnitudes are
-low lower still, and rounds its output to the nearest 16-bit step (shown on the steady frames
-compared below, chiefly those of the two near-silent recordings; not shown for every stream, nor for
-a loud frame of a low mean). P25's data path now multiplies every magnitude of the model it renders
+low lower still, and on those quiet frames its 16-bit samples are our samples scaled and rounded to
+nearest (shown on the steady frames compared below, chiefly those of the two near-silent
+recordings; not shown for every stream, nor for a loud frame of a low mean). P25's data path now multiplies every magnitude of the model it renders
 for a decoded voice frame (voiced, unvoiced and pulsed bands alike) by
 
 `g = 2^clamp(1.84 (x + 1.73), -2, 0)`,
 
 `x` the mean of the frame's decoded log2 magnitudes (`log2Ml[1..L]` as the decode stores them for the
-prediction, before the enhancement), and P25's 16-bit entry points round to nearest
-([16-bit output](#16-bit-output)). A frame at a mean of -1.73 or more plays as before; the gain falls
+prediction, before the enhancement), and the library rounds P25's 16-bit output to nearest at every
+level ([16-bit output](#16-bit-output) gives the evidence and its limits). A frame at a mean of -1.73 or more plays as before; the gain falls
 by a factor of 2^1.84 per unit of `x` below it, down to 1/4 from `x` = -2.816957 on (the floor), where
 the lowest gain level the bits can express (`x` about -2.84) lies. ProVoice (no DVSI material),
 D-STAR, rate 33, TETRA, the public `mbe_synthesizeSpeechf()` and the encoders are byte for byte as
@@ -1502,18 +1530,25 @@ development and validation vectors (below), the floor read from the data.
 division, the knee decided on the mean (a mean of exactly -1.73 in double, or above it, takes no
 gain), its difference from the knee, the product with 1.84, the clamp at -2 before `exp2()`; each
 magnitude times `g` is one stored binary64 product rounded to float (`mbe_synthesizeSpeechScaledf()`
-in `mbelib.c`). A NaN or infinity among `log2Ml[1..L]` (read on its bit pattern) or an `L` outside
-1..56 takes no gain. Under fast-math and reassociation every build computes the same doubles; under
-x87 excess precision a stored double is the extended result rounded to double, which can differ from
-the binary64 result only where the extended result itself was rounded and lies exactly halfway
-between two doubles, which needs an exact sum or product whose bits span more than 64 binary places
-(a sum of 1 and a log2 magnitude of 2^-53 + 2^-70, say): a caller's state can reach that; whether a
-decoded model can was not examined. `test_p25_quiet_frames` checks the knee, the doubles
-beside it, a cancelling history (2^58, -23, -2^58: -32 in binary64, -23 in an extended register),
-the product (a binary64 product exactly halfway between two floats) and a mean of -FLT_MAX by their
-bits in every build. `exp2()` comes from the C library: the floor's 1/4 is exact in every libm;
-between the knee and the floor the golden hashes pin glibc's (2.39 and 2.44 agree on the hashed
-sequences).
+in `mbelib.c`). A `log2Ml[1..L]` beyond 2^20 in magnitude (a NaN or an infinity among them; read on
+its bit pattern), or an `L` outside 1..56, takes no gain, exactly 1. The bound is the one the encoders
+put on that field; the library's decodes of all 103 P25 bit files of DVSI's vectors (never `irstia`
+or `mark`) reach 14.24 at most. It removes the inputs on which builds differ materially: a caller's
+history of `{2^58, 32 + 2^-12, -2^58, -23, 0, ...}` (L 10) sums to 41 in binary64 and to -23 under
+x87, where the extended addition rounds to a midpoint and the store rounds it again, a gain of 1
+against 0.483 on a public repeat; within the bound each stored step errs by under 2^-26 in every
+build. What is guaranteed: the IEEE builds (fast-math and reassociation included) give the same gain
+and the same products given the same libm. Under x87 a stored double can differ from the binary64
+result in its last place, by double rounding, on decoded input too: DVSI's `dtmf`, frame 3185 (L 14),
+gives the gain `0x1.32d283f8e55f5p-2` in binary64 and `0x1.32d283f8e55f6p-2` under x87; a rendered
+magnitude then moves by one float step only where its product lies at a float's rounding edge.
+`exp2()` is the platform's: the floor's 1/4 is exact in every libm; between the knee and the floor
+the golden hashes pin glibc's (2.39 and 2.44 agree on the hashed sequences). `test_p25_quiet_frames`
+checks the knee and the doubles beside it, both cancelling histories (no gain, at the helper and
+through a public repeat), the bound's two sides, the product (a binary64 product exactly halfway
+between two floats) and a mean of -2^20 by their bits in every build, and `dtmf` frame 3185 by its
+bits where `FLT_EVAL_METHOD` is 0 (the eight 64-bit configurations) and within one place on x87 (the
+two 32-bit builds).
 
 **Before.** The library rendered a P25 frame at the magnitudes it decodes (after the enhancement),
 whatever their level. On the library's build of the branch point (`e345239`) the vectors where its
@@ -1559,9 +1594,14 @@ gain each implies under rounding, `(m - 0.5) / |v|`:
 | -2.000 to -1.900 | 107 | 0.68 | 1.97 | 3.31 | 4.82 | 0.733, 0.761, 0.756, 0.727 |
 | -1.900 to -1.800 | 79 | 0.60 | 1.78 | 3.05 | 4.20 | 0.831, 0.844, 0.819, 0.833 |
 | -1.800 to -1.600 | 59 | 0.47 | 1.54 | 2.50 | 3.54 | 1.064, 0.971, 1.000, 0.988 |
+| -1.000 to 0.000 | 108 | 0.02 | 1.17 | | | (27.941, 1.287) |
+| 0.000 to 3.000 | 775 | | 0.97 | 2.16 | 3.27 | (1.546, 1.160, 1.071) |
 
-(blank: no crossing found; the bins -2.4 to -2.3, 28 frames, and above -1.6 have too few samples or
-none.) One gain per row fits every step under rounding; under truncation each row of two or more steps
+(blank: no crossing found; -2.4 to -2.3, 28 frames, -1.6 to -1.3, 27, and -1.3 to -1.0, 26, have
+none.) The two widest bins, from -1.0 up, are shown and not read: they pool frames of every level up
+to an rms of hundreds, the step positions mix those levels (the first step of -1.0 to 0.0 lies at
+`|v|` 0.02, where hardly any samples are, and 0.0 to 3.0 has no first step), and their implied gains
+(in parentheses) disagree with one another and with the per-bin gains above the knee (below). One gain per row fits every step under rounding; under truncation each row of two or more steps
 would need a gain at its first step 1.46 to 1.89 times the gain at its last (-2.2 to -2.1: 1.176,
 0.785, 0.707, 0.670).
 
@@ -1613,30 +1653,36 @@ K 1.8361, X0 -1.7295, FLOOR -1.9981 (rms misfit 0.0564 in log2); FLOOR held at -
 gain of 1/4, because the data are flat there at 0.244 to 0.250 (no document gives it); K and X0 are
 the fit's rounded to 0.01, 1.84 and -1.73. Beside it: the same bins not normalised by the plateau,
 K 1.8229, X0 -1.7128, FLOOR -2.0190 (0.0580; FLOOR -2, 1.8229 and -1.7128, 0.0583); each steady frame's
-own gain under rounding (a grid of 0.002 from 0.20 to 1.40, then 0.0002 about the best, the middle of
-a flat bottom), less the median `log2 g` of the 1,137 frames with no voiced band and `x` above -1.2
-(-0.0439), the 6,086 frames with no voiced band and `x` under -1.3 in 33 bins of 0.05, each bin weighted
-equally: K 1.8090, X0 -1.7216, FLOOR -1.9858 (0.0847; the library's constants 0.0848 there). The three
-fits span K 1.81 to 1.84, X0 -1.73 to -1.71 and FLOOR -2.02 to -1.99. (The change set's first form,
+own gain under rounding (every gain of a grid of 0.0002 from 0.20 to 1.40, the middle of the first
+run of the least squared error), less the median `log2 g` of the 1,137 frames with no voiced band and
+`x` above -1.2 (-0.0442), the 6,086 frames with no voiced band and `x` under -1.3 in 33 bins of 0.05,
+each bin weighted equally: K 1.8051, X0 -1.7217, FLOOR -1.9814 (rms misfit 0.0848; the library's
+constants 0.0855 there). The three fits span K 1.81 to 1.84, X0 -1.73 to -1.71 and FLOOR -2.02 to
+-1.98. (An earlier form of the per-frame estimator searched a grid of 0.002 and then only about its
+best, and missed the least error on 627 of the 8,657 frames; its fit, 1.8090, -1.7216, -1.9858, is
+superseded.) (The change set's first form,
 `2^clamp(1.41 (x + 1.80), -1.01, 0)`, came from the same per-frame reading through truncation: a
 conversion the data do not show, whose gains differ between the steps; two estimators of it, per
 frame and per bin, disagreed, K 1.41 and 1.31, for that reason.)
 
 **The gain index.** By the frame's gain index b2 (frames with no voiced band, each frame's own gain
-as above, the median `log2 g` less -0.0439): b2 0 (level -2.842), 5,105 frames, -1.982; 1 (-2.694), 148,
--1.744; 2 (-2.558), 107, -1.484; 3 (-2.383), 68, -1.242; 4 (-2.221), 84, -0.969; 5 (-2.096), 207, -0.732;
-6 (-1.981), 170, -0.482; 7 (-1.836), 112, -0.248; 8 (-1.646), 59, +0.009. Within one index the gain
-still rises with the mean (slopes of `log2 g` on `x` +0.23, +0.41, +0.60, +0.14, +0.68, +0.48, +0.49,
-+0.40 and +0.43 at b2 0 to 8). Which measure of the frame's level the gain follows, by the rms of
-`log2 g` about its running median (101 frames) against each, on the 6,100 frames with no voiced band
-and our rms under 8: the decoded gain level 0.0724; the mean of the decoded log2 magnitudes 0.0734; log2
-of the mean magnitude 0.1384; of the median 0.1681; of our frame rms 0.2103; of the rendered rms
-amplitude 0.2523; of the rms magnitude 0.2557; the largest log2 magnitude 0.4787. The mean and the gain
+as above, the median `log2 g` less -0.0442): b2 0 (level -2.842), 5,105 frames, -1.978; 1 (-2.694), 148,
+-1.736; 2 (-2.558), 107, -1.484; 3 (-2.383), 68, -1.241; 4 (-2.221), 84, -0.964; 5 (-2.096), 207, -0.730;
+6 (-1.981), 170, -0.482; 7 (-1.836), 112, -0.244; 8 (-1.646), 59, +0.009. Within one index the gain
+still rises with the mean (slopes of `log2 g` on `x` +0.21, +0.45, +0.57, +0.15, +0.64, +0.46, +0.47,
++0.40 and +0.47 at b2 0 to 8). Which measure of the frame's level the gain follows, by the rms of
+`log2 g` about its running median (101 frames, the frames sorted by the measure) against each, on the
+6,100 frames with no voiced band and our rms under 8: the decoded gain level 0.0715 (one level per
+index, so the frames of one index tie: ordered by their place in the corpus, vector then frame, and
+reversed, both 0.0715); the mean of the decoded log2 magnitudes 0.0725; log2 of the mean magnitude
+0.1375; of the median 0.1673; of our frame rms 0.2097; of the rendered rms amplitude 0.2511; of the rms
+magnitude 0.2541; the largest log2 magnitude 0.4767. The mean and the gain
 index's level are not told apart on this selection (the decoded mean follows the gain level closely);
 the library takes the mean, which also orders the frames within one index.
 
 **Frames with a voiced band** follow the same law: of the 58 steady ones under -1.3, each frame's own
-gain as above lies a median 0.0083 above the fit (rms 0.1429); at the floor, the 28 with `x` under
+gain as above (less -0.0442) lies a median 0.0115 above the library's law (rms 0.1390; against the
+per-frame fit, 0.0029 and 0.1468); at the floor, the 28 with `x` under
 -2.7 (-2.902 to -2.840) read own gains of median 0.230 (quartiles 0.207 and 0.243, 0.174 to 0.258), a
 pooled gain of 0.2180. (Through truncation the first form read them a median 0.337 below its fit: an
 artefact of that conversion.) There are too few to fit a rule of their own.
@@ -1644,12 +1690,13 @@ artefact of that conversion.) There are too few to fit a rule of their own.
 **The place in a run.** The residual of each steady frame's own gain (as above, without the bias)
 against the law at its own `x`, `log2 g - clamp(1.84 (x + 1.73), -2, 0)`, by the frame's place in its
 run of consecutive frames whose decoded mean lies under -1.73 (any flags; place 0 the run's first):
-at the floor (`x` under -2.817, 4,585 frames with no voiced band), medians of -0.018 to -0.032 at
+at the floor (`x` under -2.817, 4,585 frames with no voiced band), medians of -0.017 to -0.027 at
 places 1, 2, 3 to 5, 6 to 10, 11 to 20, 21 to 50 and 51 on (38 to 2,028 frames each), the correlation of
-`log(1 + place)` with the residual -0.023; on the slope (1,422 frames), -0.019 to -0.048 at places 1 to
-50 and -0.070 at 51 on (126 frames), the correlation -0.066. A frame's gain does not depend on its
-place in the run beyond a few per cent late in long runs on the slope; the fall of the rms ratio late
-in runs that the first form's record showed is the run's level, not its place.
+`log(1 + place)` with the residual -0.034; on the slope (1,422 frames), -0.015 to -0.046 at places 1 to
+50 and -0.063 at 51 on (126 frames), the correlation -0.058. That is what was found: small residuals
+and weak correlations with the place, the residual lowest late in long runs on the slope; it does not
+establish that a frame's gain is independent of its place. The fall of the rms ratio late in runs
+that the first form's record showed moves with the run's level.
 
 **The plateau** (an observation, not modelled): above the knee, frames with no voiced band play a
 little under the library's level in DVSI's decode, the pooled gain under rounding 0.9676 (52 frames,
@@ -1662,20 +1709,26 @@ more) the shares are 0.01 to 0.19 and change order from bin to bin (1.5 to 2.0: 
 `round(v)` 0.159, the pooled gain 0.132). D-STAR's and rate 33's quietest frames read a few per cent
 under the library's level too (below).
 
-**Not D-STAR, not rate 33.** Each steady frame's own gain (as above, through rounding, as their
-16-bit outputs round; no bias taken off), on frames with no voiced band. D-STAR: 0.983 on the 2,733
-at our rms 1.2 to 1.7; by `x`, 32 frames at -2.9 to -2.7, median 0.984 (0.897 to 1.081), 20 at -2.7 to
--2.5, 1.027 (0.955 to 1.073), together 52 at a median 0.9942, then 0.986 (5 frames, -2.5 to -2.0), 0.983
-(3,801, -2.0 to -1.5), 0.814 (75, -1.5 to -1.0), 0.975 (180, -1.0 to 0) and 0.969 (609, 0 to 3). The
-frames within 0.05 of each vector's lowest mean (a selection of the first form's study, 1,835 frames
-of 25 vectors) read 0.738 to 1.135; `dam40`'s selection is one frame, 487 at `x` -2.867, at 0.935 (the
-first form's record said every such frame read 0.95 or more). Rate 33's quietest frames (`x` under
--4.4, our rms about 0.1, 1,462 frames) round to 0 in both decodes and tell nothing (the grid's lowest
-gain); at `x` -4.4 to -3.9 (150 frames, our rms 0.74) the median is 0.980 (0.675 to 1.197), at -3.9 to
--3.4 (113, 0.78) 0.981 (0.791 to 1.171), and 0.987 to 0.999 above. No law like P25's is shown for
-either.
+**Not D-STAR, not rate 33.** Each steady frame's own gain (through rounding, as their 16-bit outputs
+round; the first form's per-frame estimator, a grid of 0.002 then 0.0002 about the best; no bias taken
+off), on frames with no voiced band. D-STAR: 0.983 on the 2,733 at our rms 1.2 to 1.7; by `x`, 32
+frames at -2.9 to -2.7, median 0.984 (0.897 to 1.081), 20 at -2.7 to -2.5, 1.027 (0.955 to 1.073),
+together 52 at a median 0.9942, then 0.986 (5 frames, -2.5 to -2.0), 0.9827 (3,764, -2.0 to -1.9),
+0.9249 (14, -1.9 to -1.7), 0.9818 (23, -1.7 to -1.5), 0.814 (75, -1.5 to -1.0), 0.975 (180, -1.0 to 0)
+and 0.969 (609, 0 to 3). The frames within 0.05 of each vector's lowest mean (a selection of the first
+form's study, 1,835 frames of 25 vectors) read 0.738 to 1.135; `dam40`'s selection is one frame, 487
+at `x` -2.867, at 0.935 (the first form's record said every such frame read 0.95 or more). Rate 33:
+of the 1,462 frames with `x` under -4.4 (our rms about 0.1), 1,460 are 0 in both decodes and tell
+nothing (the estimate is the grid's lowest gain); the other two hold samples of magnitude 1 (`fambf22c`
+frame 24, +1 in both; `fambm22a` frame 2256, ours +1, DVSI's both signs). At `x` -4.4 to -3.9 (150
+frames) the gains' median is 0.980 (0.675 to 1.197), at -3.9 to -3.4 (113) 0.981 (0.791 to 1.171), our
+rms in the two bins 0.388 to 1.219 frame by frame (medians 0.74 and 0.78; the first form's record gave
+"0.67 to 0.82", rms medians on another binning), and 0.987 to 0.999 above. No law like P25's is shown
+for either.
 
-**The frames that are not a decoded voice frame** are the library's choices; none was measured:
+**The frames that are not a decoded voice frame**: which of them take the gain is the library's
+choice for each kind; of these kinds only the tone models were measured against DVSI's decode (the
+next paragraph):
 
 | Frame | Gain |
 |---|---|
@@ -1684,7 +1737,7 @@ either.
 | The repeat limit's reset model, the first frames of a stream | by their own decoded magnitudes, as any frame (the reset model's `log2Ml` are 0: none) |
 | A frame the error rate mutes | the scaled model is what the synthesis advances unheard (the gain applies before the mute decision), so the state is where rendering leaves it; the frame plays the P25 mute noise as any muted frame |
 | A frame adaptive smoothing changes | the gain read from the decoded `log2Ml`, applied to the magnitudes smoothing left (after smoothing's voicing, which it does not move) |
-| A caller's state | none where a `log2Ml` in 1..L is not finite (read on its bit pattern) or L lies outside 1..56; the exponent is clamped before `exp2()`; the slots past L are not read |
+| A caller's state | none where a `log2Ml` in 1..L lies beyond 2^20 in magnitude (a NaN or an infinity among them; read on its bit pattern) or L lies outside 1..56; the exponent is clamped before `exp2()`; the slots past L are not read |
 | ProVoice | none (its flag, as elsewhere), and its 16-bit output keeps truncating |
 
 **Tone models and loud frames of a low mean.** On the tone vectors (every P25 vector but the 25
@@ -1703,11 +1756,12 @@ the rms magnitude less `x`), bin medians 0.313 to 0.916, at the branch point's c
 level, a little under it in the 12 frames of peakiness 2 to 4 (1.150 and 1.159).
 
 The gain follows the mean, so a loud frame of a low mean is played lower. The library's IMBE encoder
-sends a pure tone as such frames: a 140 Hz tone at -33.5 dBFS goes out at gain indices 0, 1, 2 and 4
-(on 12, 12, 12 and 24 of the 60 frames read), at -53.5 and -73.5 dBFS at index 0 on all 60; the level of
-the models sent lies within 0.9 dB of the input, and the decode plays them 8.7, 12.0 and 12.0 dB under
-it, the loss the rule predicts from their decoded means (`test_imbe7200_encoder`: -41.3, -64.9 and
--84.6 dBFS decoded). DVSI's encoder sends the tone form its decoder plays at full level
+sends a pure tone as such frames: a 140 Hz tone at -33.468 dBFS goes out at gain indices 0, 1, 2 and 4
+(on 12, 12, 12 and 24 of the 60 frames read, 20 to 79), at -53.468 and -73.468 dBFS at index 0 on all
+60. `test_imbe7200_encoder`, measured: the models sent at -32.882, -52.777 and -72.644 dBFS (read from
+their decoded parameters, calibrated on a loud voice), the decode at -41.261, -64.851 and -84.633 dBFS,
+7.793, 11.383 and 11.165 dB under the input; predicted by the test's own copy of the rule from the
+frames' decoded means, 8.693, 12.041 and 12.041 dB (the test allows 2 dB between the two). DVSI's encoder sends the tone form its decoder plays at full level
 ([Known differences](#known-differences)).
 
 **Not known**: what DVSI's decoder computes; whether the level is the mean log2 magnitude or the gain
@@ -5287,8 +5341,9 @@ the input speech than DVSI's (log-spectral distance from the input at 10% bit er
   few per cent under the library's level in DVSI's decode (0.97 to 0.99 up to a mean of 1.5), which is
   not modelled. D-STAR and rate 33 show no law like it.
 - The library's IMBE encoder sends a pure tone as a voice frame of a few strong harmonics and a low
-  mean log2 magnitude, which the rule plays lower: a 140 Hz tone at -33.5, -53.5 and -73.5 dBFS decodes
-  8.7, 12.0 and 12.0 dB under the input (`test_imbe7200_encoder`; the level of the models sent lies
+  mean log2 magnitude, which the rule plays lower: a 140 Hz tone at -33.468, -53.468 and -73.468 dBFS
+  decodes 7.793, 11.383 and 11.165 dB under the input, measured (the rule predicts 8.693, 12.041 and
+  12.041 dB from the frames' decoded means; `test_imbe7200_encoder`; the level of the models sent lies
   within 0.9 dB of the input). DVSI's encoder sends such a tone in the form its decoder plays at full
   level, the tone sent as voice frames ([P25 tones sent as voice frames](#p25-tones-sent-as-voice-frames));
   on DVSI's vectors the 277 loud frames of a low mean that are not tone models (244 of them tone
@@ -7765,13 +7820,17 @@ DVSI's low band's head (`e345239`) against P25's quiet frames ([P25: quiet frame
 every magnitude a P25 frame renders times 2^clamp(1.84 (x + 1.73), -2, 0), x the mean of its decoded
 log2 magnitudes, and P25's 16-bit output rounded to nearest. The change set had a first form,
 `2^clamp(1.41 (x + 1.80), -1.01, 0)` with the output truncating (`dea6b39` to `c7fe112`, scored then:
-all four sets passing, 63 of 63 checks); its review found the gain's arithmetic differing between builds
-and the constants resting on a reading of DVSI's samples through truncation, which their steps do not
-show. The fix round made each step a stored binary64 operation (`0c3e91b`: its decodes of all 85 P25
+all four sets passing, 63 of 63 checks); the final form scores 62 of 63, the development set failing
+one check (below). The first review found the gain's arithmetic differing between builds and the
+constants resting on a reading of DVSI's samples through truncation, which their steps do not show.
+The first fix round made each step a stored binary64 operation (`0c3e91b`: its decodes of all 85 P25
 bit files of the four partitions, floats and 16-bit, equal `c7fe112`'s sample for sample), then read
-the gain through rounding and made P25's 16-bit output round (`d6336af`); the commits after it change a
-test's comments and documents only. The figures below are the library at `d6336af` against
-`e345239`.
+the gain through rounding and made P25's 16-bit output round (`d6336af`). The second made a
+`log2Ml[1..L]` beyond 2^20 in magnitude take no gain (`b5aa889`): the library's decodes of all 103 P25
+bit files of DVSI's vectors (never `irstia` or `mark`), 16-bit samples and the `--params` dump, have
+the same SHA-256 at `4150f21` as at `e6f2e6d`, whose library is `d6336af`'s; the other commits after
+`d6336af` change tests, comments and documents only. The figures below are the library at `d6336af`
+against `e345239`, and hold for the final code.
 
 The study that found the rule read the development and validation vectors, never `irstia` or `mark`;
 its scratch build (outside the repository, a worktree at `47d8cf3` with environment switches, other
@@ -7792,17 +7851,23 @@ the mean paired change and its extremes):
 | Validation | 0.993818 → 0.993821 (+0.000004; 2 up, `tambf32b` +0.000011, `tambf32e` +0.000008; 3 down, the most `t04` -3.4e-7) | 0.8783 → 0.8728 (-0.0055; all 5 fall) | 0.99340 → 0.99397 (+0.00058) | +0.0298 → +0.0316 (+0.0018; all 5 rise, the most `tambf32e` +0.0034) | 4.7763 → 4.7759 (-0.0004; all 5 fall) |
 
 The rounding moves every frame: every P25 16-bit sample that truncation took toward zero by half a
-step or more moves by one, and with it the level of every vector rises by about 0.001 dB and the
-distance from DVSI's decode, the correlation and the distance from the input move by a little on
-vectors with no quiet frame (`noisy`'s floats differ from the branch point's in 2 of its 3,588 frames;
-its distance from DVSI's decode rises by 0.00238 dB, the conversion's). The gain moves the near-silent
+step or more moves by one (on `noisy`, 286,460 of 574,080 samples). Rounding the same final floats
+instead of truncating them raises the whole-vector level by 0.16056 dB on `dam80`, 0.08051 on `dam40`
+and 0.00845 on `dam20`, by 0.00035 to 0.00400 dB on the 22 others; the distance from DVSI's decode, the
+correlation and the distance from the input move by a little on vectors with no quiet frame
+(`noisy`'s floats differ from the branch point's in 2 of its 3,588 frames; its distance from DVSI's
+decode rises by 0.00238 dB, all of it the conversion's, [16-bit output](#16-bit-output)). The gain moves the near-silent
 recordings: `dam80`'s level goes from 0.60 dB over DVSI's to 0.01 dB under it, `dam40`'s from 0.17 to
 0.02 dB over.
 
 **What gets worse**, on the five gated columns: the distance from DVSI's decode on `noisy`, `dam10`,
 `ucarm15a` and `lvl` (above); the correlation on 8 development and 3 validation vectors by at most
-6.7e-7; the level away from DVSI's on 18 development vectors and all 5 validation vectors (+0.0003 to
-+0.0059 dB, the rounding's); the envelope correlation on `noisy` (-0.0000025) and `t03` (-0.0000008);
+6.7e-7; the absolute level error on 13 development vectors (`dam20` +0.0339 → +0.0399 dB the most;
+`tia11`, `noisy`, `clean`, `ucarf15a`, `tambf22a`, `fambf22c`, `t02`, `t01`, `dam10`, `damcar`, `dam`,
+`dam_10ov` by +0.0004 to +0.0013) and all 5 validation vectors (+0.0005 to +0.0033), the rounding's,
+while it falls on 7 (`dam80`, `dam40`, and `fambm22a`, `lvl` -0.0244 → -0.0240, `p01mirs`,
+`ucarm15a` and `ucarm20a`, whose level lies under DVSI's; the signed level rises on 18 development
+vectors); the envelope correlation on `noisy` (-0.0000025) and `t03` (-0.0000008);
 the distance from the input on 11 development vectors (+0.0000007 to +0.00068 dB). Across every other
 measure the scoreboard saves for a speech vector (each per-band level difference from the input and from
 DVSI's decode, the crest factor, the waveform correlation with the input, at lag 0 and at the best lag),
@@ -7821,15 +7886,17 @@ stays as declared; what each set's checks establish and what they allow is in th
 0.743 and the share of zeros 26.4% → 43.7% (DVSI's 44.4%); `dam40` 0.335 → 0.674 and 23.7% → 38.6%
 (39.0%); `dam` 0.180 → 0.340 and 10.4% → 13.9% (13.8%).
 
-**What is left** in the two near-silent recordings (residual energy at lag 0 over DVSI's; runs of frames
-whose residual exceeds both 0.15 of their own energy and 1,000, a run bridging a single frame under the
-limit, as `resrun.py` selects them; the share outside the runs is that of the frames not over the
-limits themselves): `dam80` 0.0733 → 0.0121, 0.935 of it in frames under the limits (noise at the level
-of the output's units; the largest run, frames 770 to 772, 0.027 of it); `dam40` 0.0390 → 0.0238, 0.695
-of it in one run out of line, frames 768 to 784 (DVSI's decode lines up with ours at a lag of -3
-samples there; not this change). `noisy` is unchanged (0.672 of its residual in frames 2795 to 2808).
-(The first form's record gave `dam80`'s share outside the runs as 0.823; as the script selects, it was
-0.738766 for that decode, 0.822573 being the share in frames under the limits.)
+**What is left** in the two near-silent recordings (residual energy at lag 0 over DVSI's, 16-bit
+samples; one selection, `resrun.py`'s: a frame is flagged where its residual exceeds both 0.15 of
+DVSI's energy in it (at least 1) and 1,000, runs of flagged frames bridge a single frame that is not;
+the share outside the runs is the residual of the frames outside them): `dam80` 0.0733 → 0.0121,
+0.934603 of it outside the runs (noise at the level of the output's units; the largest run, frames
+770 to 772, 0.027 of it); `dam40` 0.0390 → 0.0238, 0.695 of it in one run out of line, frames 768 to
+784 (DVSI's decode lines up with ours at a lag of -3 samples there; not this change). `noisy`: the
+largest run's share is 0.672 in both decodes (frames 2795 to 2808), while 286,460 of its samples change
+(the rounding). For the first form's `dam80` decode the same selection leaves 0.822573 outside the
+runs; with the relative threshold alone, 0.738766 outside the flagged frames and 0.736380 outside the
+bridged runs (the first form's record mixed the two).
 
 **Tones.** All 52 of P25's tone decodes change (every frame's 16-bit samples, by the rounding; their
 floats in 9,090 frames, every one a frame under the knee that is not a tone model or the frame after
@@ -7858,11 +7925,12 @@ floats differ from the branch point's, every one a frame the rule names (the pla
 Release with SIMD, fast-math, LTO and `-march=native`; asan-ubsan-debug; notones-debug; a Debug build
 with SIMD; a Debug `-march=x86-64-v3` build; Clang Release with SIMD, fast-math and LTO, once with
 `MBELIB_ENABLE_NATIVE=ON` and once with `-march=x86-64-v3`; and 32-bit Release and Debug), a
-differential harness outside the repository, built against the baseline's library and `d6336af`'s,
-gives the same output byte for byte (4,467 lines each) for: the pitch and harmonic count every D-STAR
+differential harness outside the repository, built against the baseline's library and the final
+library's (`b5aa889`; the run against `d6336af` gave the same), gives the same output byte for byte
+(4,467 lines each) for: the pitch and harmonic count every D-STAR
 and P25 code (and P25's band count) and every rate-33 code at every row decode to; P25's public parameter
 decoder's returned models, both states whole, over 30,000 frames of random bits, 2,727 of them on forged
-histories; 18 streams of 12,048 calls each, D-STAR's and rate 33's data paths (float and 16-bit) and
+histories; 18 of its 24 streams of 12,048 calls each, D-STAR's and rate 33's data paths (float and 16-bit) and
 frame paths (hard and soft, float and 16-bit), ProVoice's four frame entry points and ProVoice through
 the P25 data path with its flag (float and 16-bit), every call on a forged state, each hashed after
 every call over its return status, its float and 16-bit output, its result, the parameter bits it
@@ -7871,13 +7939,16 @@ soft, ProVoice hard and soft, P25 hard and soft on encoded frames with errors), 
 silence and comfort-noise synthesizers, the enhancement and smoothing entry points over 3,000 forged
 states; `mbe_synthesizeSpeechf()` and `mbe_synthesizeSpeech()` on the same 6,024 forged states; the three
 encoders' bits, frames and returned models over 2,000 frames each (286 of them after a forged history;
-every output set to a sentinel first; 175, 164 and 153 calls rejected, alike in both libraries); and the
+the bit and packed-frame buffers set to a sentinel before each call, the returned models initialised
+once and carried from call to call; 175, 164 and 153 calls rejected, alike in both libraries); and the
 TETRA decoder (6,000 frames with bad-frame patterns and a reset). The forged states: the pitch cycling
 through a list of 1,004 (every decoded D-STAR and P25 pitch, rate 33's coded and band-grid pitches,
 extreme float classes), and, drawn independently per call, one of 12 voicing classes, 24 mark or word
-cases, 20 log-magnitude classes and 9 slot cases, into one of the three states; the harness's own count:
-every class of every factor reached in each of the three slots, every pair of voicing and mark (288),
-voicing and log class (240) and mark and log class (480). P25's own six streams (its two data paths and
+cases, 20 log-magnitude classes and 9 slot cases, into one of the three states; the harness's own count
+of what reached a call: every class of every factor in each of the three slots, every pair of voicing
+and mark that can arrive (255 of the 288 drawn: marks 19 to 21, P25 tone words, overwrite the voicing
+with the tone's, which is voicing class 10's pattern, so 33 drawn pairs arrive as class 10's), voicing
+and log class (240) and mark and log class (480). P25's own six streams (its two data paths and
 its four frame paths) change only in frames the rule names and the frame played after each: in every
 configuration no other frame's float output, result or returned bits differ, and no other frame's state
 but in magnitudes past the state's own harmonic count, which nothing reads; their 16-bit output moves on
@@ -7910,7 +7981,7 @@ e345239` scoring itself, was read for each measure's coverage, every check evalu
 itself), and evaluated in one combined run over the development, validation, tone and channel
 partitions, `e345239` against `d6336af`: 62 of 63 checks pass; **`p25-quiet-frames-development` fails
 one check**, `vs_dvsi.lsd_db all_no_increase` (no vector's distance from DVSI's decode to rise by more
-than 0.002 dB: `noisy` rises by 0.00238, the rounding's, above); the other three sets pass. The
+than 0.002 dB: `noisy` rises by 0.00238, the rounding's: truncating and rounding the same floats of either build give 1.1217832950 and 1.1241631488 dB, [16-bit output](#16-bit-output)); the other three sets pass. The
 constants were not changed to pass it. Each report holds 255 vector records and 330 hash values (75
 speech PCM, 75 encoder-row, 156 tone and 24 channel-error decode hashes); all 75 speech entries carry an
 encoder-row hash in both reports, every one equal; all 25 D-STAR and 25 rate-33 speech PCM hashes and
@@ -7919,7 +7990,7 @@ form's runs, `e345239` against `dea6b39` and against `70bbfb7`, passed 63 of 63.
 
 | Gate set | Result | What it establishes |
 |---|---|---|
-| `p25-quiet-frames-development` | fails 1 of 13 checks | on the vectors the rule was found and fitted on: a mean gain in correlation with DVSI's decode of at least 0.0010 (+0.001609), no vector falling by more than 0.00002 (the least -6.7e-7, `ucarm15a`), the distance from DVSI's decode falling by at least 0.10 dB in the mean (-0.2250) but **rising on `noisy` by 0.00238 dB, over the 0.002 allowed** (the failed check), the envelope correlation rising by at least 0.0010 (+0.002633), the distance from the input not rising in the mean (-0.0709) nor by more than 0.002 dB on any vector (the most +0.00068), the level moving by no more than 0.08 dB in the mean (-0.0364) and 0.75 on any vector (`dam80` -0.612); D-STAR's and rate 33's speech decodes and every encoder row unchanged |
+| `p25-quiet-frames-development` | fails 1 of 13 checks | on the vectors the rule was found and fitted on: a mean gain in correlation with DVSI's decode of at least 0.0010 (+0.001609), no vector falling by more than 0.00002 (the least -6.7e-7, `ucarm15a`), the distance from DVSI's decode falling by at least 0.10 dB in the mean (-0.2250) but **rising on `noisy` by 0.00238 dB, over the 0.002 allowed** (the failed check; all of it the conversion's, 1.1217832950 truncating and 1.1241631488 rounding the same floats of either build), the envelope correlation rising by at least 0.0010 (+0.002633), the distance from the input not rising in the mean (-0.0709) nor by more than 0.002 dB on any vector (the most +0.00068), the level moving by no more than 0.08 dB in the mean (-0.0364) and 0.75 on any vector (`dam80` -0.612); D-STAR's and rate 33's speech decodes and every encoder row unchanged |
 | `p25-quiet-frames-validation` | passes all 12 checks | nothing worse where no near-silent recording is, within the limits: the correlation (+0.000004) and its least vector (-3.4e-7), the distance from DVSI's decode (-0.0055) and its largest change (-0.00015), the envelope (+0.00058), the distance from the input (-0.0004) and the level (+0.0018, the worst +0.0034) |
 | `p25-quiet-frames-tones` | passes all 7 checks | D-STAR's and rate 33's tone decodes unchanged; P25's tone measures within their limits on every vector measured (49 pairs for frequency, level and wrong tone, 48 for balance, 52 for the detector's agreement); not that the quiet frames between the tones are right |
 | `p25-quiet-frames-channel` | passes all 31 checks | the mute statistics unchanged in every mode, P25's mean distance on the loud frames within its limit (+0.0000095 hard, +0.000144 soft), D-STAR's and rate 33's decodes and every encoder row unchanged; not that P25's quiet frames under errors are right |
