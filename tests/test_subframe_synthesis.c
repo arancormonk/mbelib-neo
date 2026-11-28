@@ -6041,7 +6041,11 @@ check_floored_frame(mbe_parms* last, const mbe_parms* model) {
  * numbers: 8736 then 5460 (exactly 8/5) from phase 0.25 is floored, (2^17 +
  * 567840 + 436800) modulo 2^19 steps, and the nearest pairs on both sides of
  * all four edges (5 n_a = 8, 12, 2 or 3 n_b, off by one either way) floored
- * outside a bracket and taken an octave inside, against the reference's sweep.
+ * outside a bracket and taken an octave inside, against the reference's sweep;
+ * and each edge exactly at 40 pairs, floored, some of them pairs whose two
+ * floats' ratio a float test would put inside the bracket (an exact 3/5 or
+ * 2/5 with an even sum floors to the same total as the sweep, so only such a
+ * pair tells a decision on the floats from one on the whole numbers).
  */
 static void
 test_p25_train_ownership(void) {
@@ -6118,14 +6122,27 @@ test_p25_train_ownership(void) {
         assert(phase_steps(&last) == (131072L + 567840L + 436800L) % 524288L);
         static const int edges[] = {8, 12, 2, 3};
         for (size_t e = 0; e < sizeof(edges) / sizeof(edges[0]); ++e) {
-            for (int d = -1; d <= 1; ++d) {
-                /* 5 n_a = edges[e] n_b + d, the nearest pair near n_b 5000 */
-                long nb = 5000, na = 0;
+            int float_inside = 0; /* exact edges a float ratio test would put inside */
+            for (int t = 0; t < 42; ++t) {
+                /* t 0 and 1: 5 n_a = edges[e] n_b -+ 1, the nearest pair near
+                 * n_b 5000; t 2..41: the edge exactly, n_b = 5 k, k = 1000..1039
+                 * (on some of them the two floats' ratio falls inside the
+                 * bracket, so that only the decision on the whole numbers
+                 * keeps them floored) */
+                const int d = (t == 0) ? -1 : ((t == 1) ? 1 : 0);
+                long nb = (t < 2) ? 5000 : 5L * (1000 + (t - 2)), na = 0;
                 while (((long)edges[e] * nb + d) % 5 != 0) {
                     ++nb;
                 }
                 na = ((long)edges[e] * nb + d) / 5;
                 const int octave = (8 * nb < 5 * na && 5 * na < 12 * nb) || (2 * nb < 5 * na && 5 * na < 3 * nb);
+                if (d == 0) {
+                    /* the stored floats (volatile: rounded to float under x87 too) */
+                    volatile float wa = (float)(2.0 * M_PI * (double)na / 524288.0);
+                    volatile float wb = (float)(2.0 * M_PI * (double)nb / 524288.0);
+                    const double r = (double)wa / (double)wb;
+                    float_inside += (r > 1.6 && r < 2.4) || (r > 0.4 && r < 0.6);
+                }
                 grid_model(&a, na);
                 grid_model(&b, nb);
                 mbe_set_frame_mark(&b, MBE_FRAME_MARK_TONE);
@@ -6153,6 +6170,7 @@ test_p25_train_ownership(void) {
                        == (((edges[e] == 8 || edges[e] == 2) && d == 1)
                            || ((edges[e] == 12 || edges[e] == 3) && d == -1)));
             }
+            assert(float_inside > 0);
         }
     }
 }
@@ -7191,6 +7209,8 @@ enum tone_forgery {
     TONE_HALF_VOICED,   /* tone harmonic 7 unvoiced */
     TONE_SILENT_TONE,   /* tone harmonic 7 voiced at 0 */
     TONE_NAN_TONE,      /* tone harmonic 7 voiced at a NaN */
+    TONE_BOTH_SILENT,   /* both tone harmonics at 0 (in the ratio: only positivity refuses it) */
+    TONE_BOTH_NEG_ZERO, /* both at -0 (likewise) */
     TONE_LEVELS_APART,  /* the two levels 1 and 100 */
     TONE_RATIO_1E3,     /* the levels' ratio off the player's by 1e-3 */
     TONE_RATIO_2E6,     /* by 2e-6 */
@@ -7263,6 +7283,14 @@ forge_tone(mbe_parms* mp, enum tone_forgery kind) {
         case TONE_NEGATIVE_ZERO: mp->Ml[10] = -0.0f; break;
         case TONE_HALF_VOICED: mp->Vl[7] = 0; break;
         case TONE_SILENT_TONE: mp->Ml[7] = 0.0f; break;
+        case TONE_BOTH_SILENT:
+            mp->Ml[4] = 0.0f;
+            mp->Ml[7] = 0.0f;
+            break;
+        case TONE_BOTH_NEG_ZERO:
+            mp->Ml[4] = -0.0f;
+            mp->Ml[7] = -0.0f;
+            break;
         case TONE_NAN_TONE: {
             const uint32_t nan_bits = 0x7FC00000u;
             memcpy(&mp->Ml[7], &nan_bits, sizeof(nan_bits));
