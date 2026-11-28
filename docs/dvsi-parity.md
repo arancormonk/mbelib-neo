@@ -1225,11 +1225,13 @@ so the trace is not independent evidence for the rate.
    and a phase of pi / 4 at +infinity, and a NaN gain from 1e30 Hz on, where its square overflows);
    the limits, a gain of 1 and a phase of 0, at +infinity; and above 76.8 kHz (x over 1024) the phase
    as `atan(1 / x) + atan2(x, x^2 - 1)`, the same angle with nothing cancelled (the difference form gave
-   0 at 1e30 Hz, where the phase is 1.5e-28 rad). Nothing the renderings form reaches those branches:
-   a harmonic's frequency is formed only under Nyquist of a positive normal pitch (about 4 kHz at the
-   most, x under 54), the transform's bins lie at 0 to 4 kHz and the tones' frequencies come from a
-   table, so no caller state brings a non-finite or absurd frequency to either function or to
-   `mbe_low_cut_gain()` (whose corner is one the renderer read, 50 to 200 Hz);
+   0 at 1e30 Hz, where the phase is 1.5e-28 rad). What the renderings form reaches only two of those
+   classes: a harmonic's frequency is formed only under Nyquist of a positive normal pitch (a positive
+   normal value of about 4 kHz at the most, x under 54) and the tones' frequencies come from a table,
+   while the transform's table is formed at its bins, 0 to 4 kHz, bin 0 at zero, which takes the zero
+   class's 0 for both (as the functions before gave there; the shaping never reads bin 0). No caller
+   state brings a non-finite or absurd frequency to either function or to `mbe_low_cut_gain()` (whose
+   corner is one the renderer read, 50 to 200 Hz);
    `test_low_cut_caller_pitches` drives the three data paths with models of every float class of
    pitch at harmonic counts 1 and 56 in all three states and finds every sample finite.
 6. **What it does not touch.** The decoded models, their regenerated phases, `log2Ml`, the stored
@@ -1272,7 +1274,7 @@ mean of the lowest sounding frequency of every voiced frame 1.351 at best of 432
 log frequency with rates up and down on voiced frames 1.324; the same with energy weighting and frames
 with no voiced band pulling 1.295; frames weighted by (voiced share)^2 / ^6 1.093 / 0.956; fully voiced
 frames only with a ceiling of 200 Hz, in log frequency, 0.807 (0.765 with its rates and ceiling
-refined); the library's rule 0.651. By the size of the predicted deficit, every reading in one bin
+refined); the library's rule 0.652 at its ceiling of 200 Hz (0.651 at 198). By the size of the predicted deficit, every reading in one bin
 (the library's constants, ceiling 200): predicted 0, 45,977 readings, measured -0.019 dB (rms of the
 difference 0.390); predicted -1 to 0 dB, 10,980 (8 of them between -0.001 and 0), predicted -0.346,
 measured -0.183 (+0.163; rms 0.660); -3 to -1, 10,541, -1.966 and -1.972 (-0.006; 0.693); -6 to -3,
@@ -1349,38 +1351,41 @@ fundamental, P25's harmonic 1 over ours on the steady frames (17,139; the bands 
 3's 0.641 (0.640).
 
 **Which frames move the tracker.** The rule reads the model the synthesis renders or advances, so a
-frame moves the tracker exactly when it renders or advances a fully voiced model that is not a tone
-model, not marked as a silence frame and not an AMBE silence model. Frame by frame, through each
-codec's public entry points, with clean and forged histories and error rates on both sides of each
-threshold (each row a test of `test_subframe_synthesis.c`; where DVSI's vectors do not isolate the
-case the behaviour is the library's choice, not a measurement):
+frame moves the tracker exactly when it renders or advances a model that is *eligible*: every band
+voiced, no mark that holds it (`MBE_FRAME_MARK_TONE`, or `MBE_FRAME_MARK_PREVIOUS_HELD` outside P25's
+rendering) and no AMBE silence model. A frame that repeats, copies or renders a model therefore moves
+it only where that model is eligible; "as that model" below means exactly that, on whatever history
+the stream holds. Frame by frame, through each codec's public entry points, with clean and forged
+histories and error rates on both sides of each threshold (each row tested in
+`test_subframe_synthesis.c`, the histories named; where DVSI's vectors do not isolate the case the
+behaviour is the library's choice, not a measurement):
 
-| Codec | Frame | Can it be fully voiced? | Tracker | Test |
+| Codec | Frame | Can it be fully voiced? | Tracker | Test, and the histories it uses |
 |---|---|---|---|---|
-| all | a decoded voice frame, every band voiced as rendered; one with a band unvoiced, or none | as decoded or after smoothing | moves; holds | `test_low_cut_tracker`, the path tests |
+| all | a decoded voice frame | as decoded or after smoothing | moves if the rendered model is eligible, else holds | `test_low_cut_tracker` (15 kinds of model), the path tests |
 | D-STAR | b0 124, the silence model (250 Hz, 14 bands, no mark) | yes: under an error rate above 0.0125, at a high gain and a history that flattens its spectrum, smoothing voices all 14 | holds (the AMBE silence model) | `test_low_cut_dstar_smoothed`, `test_low_cut_range` |
-| D-STAR | a frame with no voiced band at a reserved code (b0 64..119) | yes, the same way | moves (a fully voiced rendered model) | `test_low_cut_dstar_smoothed` |
-| D-STAR | a lost frame (b0 125, 127, a C0 word with four errors) | as the model it repeats, the prediction history's | as that model: moves after a voiced frame; holds on a caller's `PREVIOUS_HELD` there | `test_low_cut_dstar_path`, `test_low_cut_dstar_smoothed` |
-| D-STAR | the repeat limit's 4th lost frame, its fade to a silent copy of the repeated model (voicing kept), and the muted repeats after it | as that model | moves, each frame | `test_low_cut_dstar_path` |
+| D-STAR | a frame with no voiced band at a reserved code (b0 64..119) | yes, the same way | moves when smoothing voices it throughout | `test_low_cut_dstar_smoothed` |
+| D-STAR | a lost frame (b0 125, 127, a C0 word with four errors), repeating the prediction history's model | as that model | as that model: moves after fully voiced frames; holds on a caller's `PREVIOUS_HELD` on that history | `test_low_cut_dstar_path` (fully voiced history), `test_low_cut_dstar_smoothed`, `test_low_cut_conditional_rows` (the forged mark) |
+| D-STAR | the repeat limit's 4th lost frame, its fade to a silent copy of the repeated model (voicing and mark kept), and the muted repeats after it | as that model | as that model, each frame: moves after fully voiced frames; holds through the fade and the muted repeat after it on a caller's `PREVIOUS_HELD` | `test_low_cut_dstar_path`, `test_low_cut_conditional_rows` |
 | D-STAR | a voice frame the error level mutes (hard decisions), synthesized first | as decoded or smoothed | as its model | `test_low_cut_dstar_path` |
 | D-STAR | the first voice frame after the repeat limit's mute | as decoded | by its own model; the resumed history in the last frame moves nothing | `test_low_cut_dstar_path` |
-| D-STAR | a tone's first frame | the repeat of the last frame under it | after an audible frame the repeat is rendered into the state and moves it; after an inaudible one (muted by the error level or the repeat limit) none is, and it holds | `test_low_cut_dstar_path` |
+| D-STAR | a tone's first frame | the repeat of the last frame under it | after an audible frame the repeat is rendered into the state, as that frame's model: moves after a fully voiced frame, holds after one with no voiced band (b0 40, b1 0); after an inaudible frame (muted by the error level or the repeat limit) no repeat is rendered, and it holds | `test_low_cut_dstar_path`, `test_low_cut_conditional_rows` |
 | D-STAR | a tone's later frames; lost frames playing a dual tone on | no model rendered | holds | `test_low_cut_dstar_path` |
-| D-STAR | lost frames after a single tone (the tail over a silent copy of the last speech model, voicing kept), and after a dual tone from the repeat limit's 4th frame | as the last speech model | moves | `test_low_cut_dstar_path` |
-| P25 | a frame with no voiced band at a reserved code (b0 128..183) | yes: under an error rate, a loud flat spectrum is voiced throughout | moves | `test_low_cut_p25_path` |
-| P25 | a tone model (two voiced harmonics, `MBE_FRAME_MARK_TONE`) | no (and the mark holds a forged fully voiced one) | holds | `test_tone_model` (`test_p25_tones.c`), `test_low_cut_tracker` |
-| P25 | a lost frame's first three repeats, and the 4th, muted and advanced | as the decoded model repeated | as that model | `test_low_cut_p25_path` |
+| D-STAR | lost frames after a single tone (the tail over a silent copy of the last speech model, voicing kept), and after a dual tone from the repeat limit's 4th frame | as the last speech model | as that model: moves after fully voiced speech; holds, all five, when the speech before the tone had no voiced band | `test_low_cut_dstar_path`, `test_low_cut_conditional_rows` |
+| P25 | a frame with no voiced band at a reserved code (b0 128..183) | yes: under an error rate, a loud flat spectrum is voiced throughout | moves when smoothing voices it throughout | `test_low_cut_p25_path` |
+| P25 | a tone model (`MBE_FRAME_MARK_TONE`: one voiced harmonic for a single tone, two for a dual one) | no (and the mark holds a forged fully voiced one) | holds | `test_tone_model` (`test_p25_tones.c`, a dual tone), `test_low_cut_tracker` |
+| P25 | a lost frame's first three repeats, and the 4th, muted and advanced | as the decoded model repeated | as that model | `test_low_cut_p25_path` (fully voiced history) |
 | P25 | the repeat limit's reset model, from the 5th lost frame | no: every amplitude 1, where the smoothing's threshold is at least 1.414 E^(3/8) with E at least 10,000, about 44.7 (eq 112-113); tried at error rates 0.004, 0.01, 0.05, 0.085 and 0.1 with the energy at its floor | holds | `test_low_cut_p25_path` |
 | P25 | a voice frame the error rate mutes, advanced | as decoded or smoothed | as its model | `test_low_cut_p25_path` |
-| P25 | a caller's `PREVIOUS_HELD` on a voiced model | the rendering gives the model its own mark first | moves | `test_low_cut_p25_path`, `test_low_cut_tracker` |
-| rate 33 | a silence frame (b0 124, 15 bands, `PREVIOUS_HELD`), heard or synthesized unheard under a mute | yes: under an error rate of 0.08 and a loud history smoothing voices all 15 | holds (its mark, and the silence model) | `test_low_cut_r33_smoothed` |
-| rate 33 | a voice frame of V/UV rows 18 to 31 (the pulsed rows) | yes, the same way (row 18 at b0 37) | moves (a fully voiced rendered model) | `test_low_cut_r33_smoothed` |
-| rate 33 | a lost frame's repeat of the last synthesized model (its mark kept, the marks of rows 13, 15 and 17 dropped) | as that model | as that model; a repeat of a silence frame and a caller's `PREVIOUS_HELD` hold | `test_low_cut_r33_path`, `test_low_cut_r33_smoothed` |
-| rate 33 | a valid voice frame the error rate mutes (synthesized unheard), the first, second and third in a row | as decoded or smoothed | moves, each frame | `test_low_cut_r33_mutes` |
-| rate 33 | the first muted frame after a heard one that is no valid voice or silence frame (an invalid frame, the repeat limit's 4th, a tone at a muting error rate): its fade to a silent copy of the last model (voicing kept, no mark) | as the last model | moves; a silent copy of a silence frame holds (the silence model) | `test_low_cut_r33_mutes`, `test_low_cut_r33_path`, `test_low_cut_r33_smoothed` |
-| rate 33 | a muted invalid frame after a muted one | nothing rendered | holds | `test_low_cut_r33_mutes`, `test_low_cut_r33_path` |
-| rate 33 | a tone's first frame at an ordinary error rate (the repeat under it in a scratch state), its later frames, a lost frame while a tone is held | no model rendered into the state | holds | `test_low_cut_r33_path`, `test_low_cut_r33_mutes` |
-| rate 33 | a lost frame after a tone the error rate muted (no tone held): a repeat of the kept model from silence | as that model | moves | `test_low_cut_r33_mutes` |
+| P25 | a caller's `PREVIOUS_HELD` on a voiced model | the rendering gives the model its own mark first | as the model without the mark: moves when it is fully voiced | `test_low_cut_p25_path`, `test_low_cut_tracker` |
+| rate 33 | a silence frame (b0 124 or 125, 15 bands, `PREVIOUS_HELD`), heard or synthesized unheard under a mute | yes: under an error rate of 0.08 and a loud history smoothing voices all 15 | holds (its mark, and the silence model) | `test_low_cut_r33_smoothed` (b0 124), `test_low_cut_range` (both codes) |
+| rate 33 | a voice frame of V/UV rows 18 to 31 (the pulsed rows) | yes, the same way (row 18 at b0 37) | moves when smoothing voices it throughout | `test_low_cut_r33_smoothed` |
+| rate 33 | a lost frame's repeat of the last synthesized model (its mark kept, the marks of rows 13, 15 and 17 dropped) | as that model | as that model; a repeat of a silence frame and of a model with a caller's `PREVIOUS_HELD` hold | `test_low_cut_r33_path`, `test_low_cut_r33_smoothed` |
+| rate 33 | a valid voice frame the error rate mutes (synthesized unheard), one after another | as decoded or smoothed | as its model, each frame: three fully voiced ones in a row move it three times; frames of V/UV row 16 (no voiced band as decoded) hold it | `test_low_cut_r33_mutes`, `test_low_cut_conditional_rows` |
+| rate 33 | the first muted frame after a heard one that is no valid voice or silence frame (an invalid frame, the repeat limit's 4th, a tone at a muting error rate): its fade to a silent copy of the last model (voicing kept, no mark) | as the last model | as the copy: moves after a fully voiced model, a caller's `PREVIOUS_HELD` on it included (the copy drops the mark); a copy of a silence model holds | `test_low_cut_r33_mutes`, `test_low_cut_r33_path`, `test_low_cut_r33_smoothed` |
+| rate 33 | a muted invalid frame after a muted frame | nothing rendered | holds | `test_low_cut_r33_mutes`, `test_low_cut_r33_path`, `test_low_cut_conditional_rows` |
+| rate 33 | a tone's first frame at an ordinary error rate (the repeat under it in a scratch state), its later frames, lost frames while a tone is held, and the repeat limit's 4th under a held tone (a mute with the tone's tail) | no model rendered into the state | holds | `test_low_cut_r33_path`, `test_low_cut_r33_mutes`, `test_low_cut_conditional_rows` |
+| rate 33 | a lost frame after a tone the error rate muted (no tone held) | with the error rate cleared, a repeat of the kept model from silence, as that model; with it still high, a muted invalid frame after a muted one | moves after fully voiced speech when cleared; holds while the rate mutes | `test_low_cut_r33_mutes`, `test_low_cut_conditional_rows` |
 | rate 33 | the frame after a mute or a tone, from silence | as decoded | by its own model; the tracker goes on (it is no part of the pulse train) | `test_low_cut_r33_path` |
 
 The silent copies that a fade renders and the lost frames after a single D-STAR tone count as the
@@ -7151,8 +7156,10 @@ never `irstia` or `mark`; its scratch build (outside the repository, a worktree 
 environment switches) was measured on the development, validation, tone, channel and pulse-train
 vectors, with the scoreboard's own measures too, before the gate sets were declared in the branch's
 first commit, `4677a41`, so none of those partitions is out of sample here. The baseline is a build
-of `git archive 9a101f8`, the candidate one of the branch's library commit, `0e3463e` (the later
-commits change tests and documents only); both aligned freely first and were then scored at their
+of `git archive 9a101f8`, the candidate one of the branch's library commit, `0e3463e` (the commits
+after it up to `f725a66` change tests and documents only; after the review `cebeafd` changed the
+library, and the four stages were scored again against `8fce556`, which holds it: "Scored again after
+the review", below); both aligned freely first and were then scored at their
 joint lags, both runs' encodings decoded by the candidate's decoder (Release, SIMD, IEEE
 arithmetic).
 
@@ -7246,8 +7253,10 @@ in the mean, the most on `t04` (+0.120 to +0.156), the lowest voice of the set: 
 frames with harmonic 1 voiced and an rms over 100 is 85 to 86 Hz (628 to 675 such frames by codec).
 Its energy under 150 Hz (3.4 to 4.9% of the branch point's decode) rises by 1.6 dB and that from 150 to
 300 Hz (23 to 27% of it) by 0.21 dB, the third-order filter at 75 Hz passing more there than the
-second-order one at 100 Hz while its corner follows its own low pitch; weighted by the branch point's
-shares those add 0.12 to 0.16 dB.
+second-order one at 100 Hz while its corner follows its own low pitch. Weighted by the branch point's
+shares, the two bands under 300 Hz add about 0.114, 0.133 and 0.150 dB (P25, rate 33, D-STAR: 0.066 +
+0.048, 0.084 + 0.049 and 0.093 + 0.057, each to the three decimals computed), the band above 0.006 to
+0.008 more (the contributions sum to about the whole file's +0.120, +0.139 and +0.156).
 
 **Tones.** By the scoreboard's hashes every tone decode of the three codecs changes (the AMBE tones
 start at the new filter's phase; P25's tones are voice frames and its tone models play through the
@@ -7324,13 +7333,25 @@ encoders' other wrappers that reach the same code (the frame-level IMBE 7200x440
 encoders, the parameter decoders and the frame packers), MSVC and macOS, and caller states other than
 those listed. The D-STAR, P25 and rate-33 streams of the harness (random frames, forged states)
 equal the first candidate's in eight configurations; in the two Clang builds with fast-math and LTO
-they move, by at most 5.7e-7 (D-STAR), 5.9e-7 (P25) and 6.6e-7 (rate 33) of the peak of the
-160-sample frame, which turns 3 D-STAR, 2 P25 and 2 rate-33 samples of 480,000 each by one unit under
-their codecs' 16-bit conversions: with the first candidate's `mbelib.c` (its filter helpers) put back
-into the new head, the Clang LTO build's streams are the first candidate's byte for byte, so the
-helpers' new form (the class test in front of the same formula) changed how Clang compiled the
-formula under fast-math there. Neither the scoreboard's tools nor the golden hashes are such a build
-(both IEEE), and their decodes are the first candidate's (below).
+they move (480,000 samples per codec; the 16-bit samples through the library's own converters, the
+codec's output scale of 7 in, D-STAR's and rate 33's rounding to nearest and P25's truncating, each
+changed sample by one unit):
+
+| Clang, fast-math, LTO | D-STAR: largest change / frame peak, changed 16-bit samples | P25 | Rate 33 |
+|---|---:|---:|---:|
+| `MBELIB_ENABLE_NATIVE=ON` | 5.7261e-7, 16 | 5.8545e-7, 16 | 6.6273e-7, 13 |
+| `-march=x86-64-v3` | 6.8840e-7, 16 | 5.8545e-7, 13 | 6.6273e-7, 10 |
+
+(the frame peak is the largest magnitude of the 160-sample frame's float output). With the first
+candidate's `mbelib.c` (its filter helpers) put back into the new head, both builds' streams are the
+first candidate's float for float; with the first candidate's helpers and only the new phase's switch
+to the uncancelled form above 76.8 kHz added (no class test), the native build's floats still move (127
+D-STAR and 36 rate-33 samples, by at most 2.4e-7 of the peak, no 16-bit sample): the helpers' rewrite
+changed how Clang compiled them under fast-math there, the class test and the switch both taking part;
+which part does what was not established further. ProVoice's and the other protected outputs are the
+baseline's in both builds. Neither the scoreboard's tools nor the golden hashes are such a build (both
+IEEE), and their decodes are the first candidate's (below). (The record of this comparison at `5443ac2`
+gave 3, 2 and 2 changed samples: those were the floats rounded without the scale of 7.)
 
 **Cost.** The median complete hard-decision frame decode, `bench_replay hard <codec> 60 5` on DVSI's
 `dam` stream of each codec, seven alternating invocations pinned to one CPU, a portable Release build
@@ -7363,22 +7384,37 @@ combined run over the development, validation, tone and channel partitions, `9a1
 **Scored again after the review**, the same scripts and the same combined run, `9a101f8` against
 `8fce556` (library `cebeafd`; the commits after it change comments, tests and documents only): all
 four sets pass, 102 of 102 checks, every check's line the first run's to the digit, all 75 speech
-entries carrying an encoder-row hash in both reports, every one equal. No decode differs between the
-two candidates: all 255 entries of the candidate's report (75 speech PCM hashes, 156 tone and 24
-channel PCM hashes, 75 encoder-row hashes) equal the first candidate's, and so do the baseline's; on
-those streams no silence frame is voiced throughout by adaptive smoothing, and the helpers' new
-branches are never reached. Of the 315 bit files of the three modes (the held-out vectors left out),
-the second candidate's decodes equal the first's by hash as well (below, "Other modes").
+entries carrying an encoder-row hash in both reports, every one equal. On these vectors no decode
+differs between the two candidates: all 255 entries of the candidate's report (75 speech PCM hashes,
+156 tone and 24 channel PCM hashes, 75 encoder-row hashes) equal the first candidate's, and so do the
+baseline's; their streams hold no silence frame voiced throughout by adaptive smoothing, and of the
+helpers' classes they reach only the positive normal one and, at bin 0 of the transform's table, the
+zero class, which returns the 0 the functions before returned there. Of the 315 bit files of the three
+modes (the held-out vectors left out), the second candidate's decodes equal the first's by hash as
+well (above, "Other modes"). Off these vectors the fixes do change behaviour: a silence frame that
+smoothing voices throughout, as in `test_low_cut_r33_smoothed` and the review's public reproduction
+of it, now holds the tracker where the first candidate moved it.
 
 **Notes on the declarations.** The channel set's description says the log-spectral distance on the
 loud frames may not rise "on at least a tenth of the frames measured (min_coverage)"; the scorer's
 coverage is another share (`channel_lsd()`): the frames it counts, those loud in DVSI's clean decode
-and not muted by DVSI, measured by every run, with no frame DVSI or a run muted at or next to them,
-over all the loud frames DVSI leaves unmuted, so that frames a run did not measure count as lost.
+and not muted by DVSI, measured by every run, with neither a loud frame DVSI muted nor a frame under
+which a run muted any of its samples at or next to them (a quiet frame DVSI muted does not exclude its
+neighbour: 9 of the frames counted in the second scoring, in 6 of the 24 channel entries, have one,
+D-STAR `dam_e5_hd` frame 625 among them), over all the loud frames DVSI leaves unmuted, so that frames
+a run did not measure count as lost.
 The check is `no_increase` with a limit of 0, which equality passes; the means measured fell in all
 six, each measured on both runs (coverage 0.750 to 1.000, above). The description of the
 tracker in every set ("speech only: a positive pitch, no tone model") predates the silence rule; the
 gates file stays as declared.
+
+**Notes on the commit messages**, which stand as made. `cebeafd`'s says no frequency the renderings
+form reaches the helpers' new branches: bin 0 of the transform's table reaches the zero class, with
+the value the functions before gave. `8fce556`'s says a tracker is compared to half an ulp, which a
+value an ulp off fails, and leaves out the near-tie exception (`docs/testing.md`, `track_is()`).
+`c449a2d`'s says lost frames after a single D-STAR tone move the tracker, and after a muted rate-33
+tone that a lost frame does: each only where the model it repeats or copies is eligible, and the
+rate-33 case only with the error rate cleared (the table above).
 
 ### Scoring history
 
@@ -7545,10 +7581,12 @@ their fixes, the build of `2b6b6c2` against the build of `1502dc0`: `r33-pulsed-
 D-STAR's and P25's decodes and every encoder row unchanged ([November 2026: rate 33's pulsed
 rows](#november-2026-rate-33s-pulsed-rows)).
 
-DVSI's low band was scored once, `9a101f8` against the branch's library code at `0e3463e`, on the
-development, validation, tone and channel partitions in one combined run with the four gate sets
-declared in `4677a41`, the branch's first commit, before any build of the branch was scored; all four
-pass, 102 of 102 checks ([November 2026: DVSI's low band](#november-2026-dvsis-low-band)). Before that
+DVSI's low band's four non-final stages were scored twice, each time against the baseline `9a101f8`,
+on the development, validation, tone and channel partitions in one combined run with the four gate
+sets declared in `4677a41`, the branch's first commit, before any build of the branch was scored:
+first against the branch's library code at `0e3463e` (its `src` tree that of `f725a66`), then, after
+the review's fixes, against `8fce556` (library `cebeafd`); both runs pass, 102 of 102 checks, every
+check's line the same in both ([November 2026: DVSI's low band](#november-2026-dvsis-low-band)). Before that
 declaration the study's scratch build had been measured on the development, validation, tone, channel
 and pulse-train vectors, with the scoreboard's own measures too, and the baseline alone was scored on
 the four partitions (a build of `git archive 9a101f8`, its own encodings decoded by its own decoder) to

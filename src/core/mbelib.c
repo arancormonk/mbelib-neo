@@ -698,8 +698,11 @@ mbe_low_band_phase(float hz) {
  * subnormal pitch), a negative value and a NaN give 0 for both (the
  * second-order pair gives 0 for both at a NaN too, and is left as it is);
  * +infinity gives the limits, a gain of 1 and a phase of 0; every positive
- * normal value the formulas below. Near zero x^3 underflows in double to 0
- * (never a division by zero) and the phase tends to 3 pi / 2.
+ * normal value the formulas below. Near zero the gain is x^3 over a
+ * denominator of about 1 (never a division by zero): at FLT_MIN x^3 is about
+ * 3.85e-120 in double, which converts to 0 in float; the phase tends to
+ * 3 pi / 2. Bin 0 of the transform's table (mbe_unvoiced_fft.c) calls both at
+ * zero and takes 0 from them, as from the functions before.
  */
 enum dvsi_filter_class { DVSI_FILTER_NONE, DVSI_FILTER_FINITE, DVSI_FILTER_INFINITE };
 
@@ -742,15 +745,16 @@ mbe_low_band_dvsi_phase(float hz) {
     const double x = (double)hz / MBE_LOW_BAND_DVSI_CORNER_HZ;
     if (x <= DVSI_PHASE_DIRECT_MAX_X) {
         /* arg s^3 = 3 pi / 2, arg (s + 1) = atan x, arg (s^2 + s + 1) = atan2(x, 1 - x^2).
-         * The result there is at least about 2 / x, 0.00195 rad at x 1024, and
-         * the difference's rounding error a few ulps of 3 pi / 2 in double
-         * (under 1e-15 rad): far under a float ulp of the result. Every
-         * frequency the renderings give (under 4 kHz, x under 54) is formed so. */
+         * The phase falls with x, toward its high-frequency asymptote 2 / x:
+         * here it is at least its value at x 1024, about 0.00195 rad, and the
+         * difference's rounding error a few ulps of 3 pi / 2 in double (under
+         * 1e-15 rad), far under a float ulp of the result. Every frequency the
+         * renderings give (under 4 kHz, x under 54) is formed so. */
         return (float)((1.5 * M_PI) - atan(x) - atan2(x, 1.0 - (x * x)));
     }
     /* The same angle with nothing cancelled: pi / 2 - atan x = atan(1 / x) and
-     * pi - atan2(x, 1 - x^2) = atan2(x, x^2 - 1) for x > 1; about 2 / x, so
-     * 1.5e-28 rad at 1e30 Hz rather than 0 from the difference above. */
+     * pi - atan2(x, 1 - x^2) = atan2(x, x^2 - 1) for x > 1; it tends to 2 / x,
+     * so 1.5e-28 rad at 1e30 Hz rather than 0 from the difference above. */
     return (float)(atan(1.0 / x) + atan2(x, (x * x) - 1.0));
 }
 

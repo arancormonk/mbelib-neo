@@ -296,16 +296,18 @@ The CTest suite includes:
   tolerance), and bands above both corners playing the same bits cut and uncut
   (`test_dvsi_subframes_match_equations`); the tracker's rule (`test_low_cut_tracker`, in D-STAR's,
   P25's and rate 33's renderings, none in ProVoice's): 110 Hz on a fresh state and as the first
-  frame's corner, then thirteen kinds of model (fully voiced; a top, bottom or middle band unvoiced; a
+  frame's corner, then fifteen kinds of model (fully voiced; a top, bottom or middle band unvoiced; a
   band with no state; no voiced band; a tone mark; a silence mark on a fully voiced model; the AMBE
   silence model fully voiced; the silence pitch with the other codec's harmonic count; a reserved
-  code with and without every band voiced), each moving it or not as the rule says in that rendering
+  code with and without every band voiced; every band voiced at a subnormal and at an infinite pitch,
+  no pitch by the library's class), each moving it or not as the rule says in that rendering
   and each advanced (`mbe_advance_subframes()`) storing what rendering stores, the stored corner the
   tracker before capped at 200 Hz, the ceiling while a 252 Hz stream takes the tracker past 240 Hz and
   the plateau coming down to 180 Hz, a caller's pitch keeping the tracker at 500 and 50 Hz; the range
   and the silence models (`test_low_cut_range`: every pitch code of the three codecs, the pulsed rows'
-  grid included, decoding to 50 to 500 Hz, and no voice code at the silence pitch with a silence
-  model's count); the knee (`test_low_cut_knee`); the cut's level (`test_low_cut_level`); the unvoiced
+  grid and every D-STAR voicing included, decoding to 50 to 500 Hz; D-STAR's b0 124 at the silence
+  pitch with 14 harmonics, rate 33's b0 124 and 125 with 15 and the silence mark, and no voice code of
+  either at the silence pitch whatever its harmonic count); the knee (`test_low_cut_knee`); the cut's level (`test_low_cut_level`); the unvoiced
   cut through the rendering (`test_low_cut_unvoiced_frame`); the slots as caller state
   (`test_untrusted_low_cut`: 24 bit patterns in each slot, each playing and storing as the value it
   reads as, and every value read, the bounds 50 and 500 (tracker), 50 and 200 (corner) among them,
@@ -324,8 +326,12 @@ The CTest suite includes:
   muted invalid frame after them and after a heard frame, tone entry at an ordinary and at a muting
   error rate (`test_low_cut_r33_mutes`), a silence frame voiced throughout heard and muted, its repeat
   and the fade after it, a pulsed row voiced throughout and a caller's silence mark
-  (`test_low_cut_r33_smoothed`, the review's reproductions among them); and caller states of every
-  float class of pitch at harmonic counts 1 and 56 playing finite samples
+  (`test_low_cut_r33_smoothed`, the review's reproductions among them); the table's conditional rows
+  on the histories that hold the tracker (`test_low_cut_conditional_rows`: D-STAR's tone entry and
+  single-tone tails after a frame with no voiced band, a caller's silence mark through D-STAR's fade
+  and muted repeat, rate 33's muted row-16 frames, a fade that drops a caller's mark, the lost frame
+  after a muted tone with the error rate still high, the repeat limit under a held tone); and caller
+  states of every float class of pitch at harmonic counts 1 and 56 playing finite samples
   (`test_low_cut_caller_pitches`). The independent rendering of the waveform tests (`run_waveform()`)
   renders the low band in its own arithmetic in all four subframe renderings (the filters from their
   factors at the one float frequency the library forms, the cut at each model's corner, the knee at
@@ -336,11 +342,15 @@ The CTest suite includes:
   asan-ubsan-debug, notones-debug and the Debug build with SIMD), and elsewhere (dev-release and both
   Clang LTO builds with fast-math, the Debug `-march=x86-64-v3` build, which fuses multiply-adds, and
   both 32-bit builds, whose evaluation method is 2) the stored value must be the exact step rounded to
-  nearest within half its spacing and a millionth of it, which a value one ulp off fails unless the
-  exact step lies within a millionth of an ulp of a tie; what that bound cannot catch is a step formed
+  nearest, within half its spacing and 1e-7 of it, which a value one ulp off fails unless the
+  exact step lies within 1e-7 of a spacing from a tie (`TRACK_TIE_BAND`), where either float passes:
+  every compared step is checked for that, and none of the file's 741 steps lies there
+  (`test_low_cut_ties`, which also takes a case inside the band: T 110 Hz, pitch bits 0x3d8504c0, 3.9e-8
+  of a spacing from the tie); what that bound cannot catch is a step formed
   otherwise that rounds to the same float on every frame of the streams (none found: the step formed
   in float rather than double and the tracker an ulp off fail both in the Debug build and in the Debug
-  `-march=x86-64-v3` build, where the bound applies). Mutations, each failing a test (`test_subframe_synthesis` unless named; the table, run
+  `-march=x86-64-v3` build, where the bound applies, and so does the pitch's class weakened to
+  "greater than zero"). Mutations, each failing a test (`test_subframe_synthesis` unless named; the table, run
   in the Debug build, is in the change's report): the power 1 and 3; a Butterworth magnitude for the
   knee; the ceiling removed or on the tracker; a first value of 100 and of 120; the rate halved and
   doubled; the tracker moved by a frame with one band unvoiced, by one with no voiced band, by a tone
@@ -351,7 +361,8 @@ The CTest suite includes:
   in rate 33's, P25's or D-STAR's rendering, or in P25's unvoiced bins alone; the last frame's own model
   at this frame's corner and the mid-frame model at the last frame's; the stored tracker read without
   its range or without the subframe mark; stored corners of exactly 50 and of exactly 200 Hz
-  rejected; the pulsed bands not cut; the tracker not kept in range, an ulp off or its step formed in float; the unvoiced bins
+  rejected; the pulsed bands not cut; the tracker not kept in range, an ulp off or its step formed in float;
+  the pitch's class weakened to "greater than zero"; the unvoiced bins
   scaled instead of zeroed, zeroed under 0.9 of the corner, the bin at the corner removed, the old
   table in DVSI's bins, the new one in ProVoice's (`test_unvoiced_subframes`); the unvoiced cut on the
   mid-frame subframe only; the filter's gain at +infinity, subnormals and NaNs taken as frequencies,
