@@ -1139,10 +1139,10 @@ columns_voice(const struct column_rule* rule, float w0, int l) {
  * half itself, and so to the wrong neighbour: a band voiced in both frames was
  * taken for one that changes (found at 33.4999986 of a P25 frame's harmonics
  * at the pitch the decoder then played for b0 134, its mid-frame harmonic 36
- * after a frame at b0 161; at the grid pitches and the floored parabola, b0
+ * after a frame at b0 161; at the grid pitches and the floored quadratic, b0
  * 109 then 163, harmonic 3 at 3.49999997 of the second frame's harmonics, and
- * over the ordered pairs of different codes 54 harmonic and frame
- * observations on 38 pairs where the two quotients take different
+ * over the ordered pairs of different codes 50 harmonic and frame
+ * observations on 36 pairs where the two quotients take different
  * neighbours). The index is made on the bit pattern, positive doubles ordering
  * as their patterns do. */
 static int

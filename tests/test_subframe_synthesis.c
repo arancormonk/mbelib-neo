@@ -5580,10 +5580,10 @@ set_pitch_bits(mbe_parms* mp, uint32_t bits) {
  * it stays voiced. A float quotient rounds the position to 3.5 and takes
  * harmonic 4, unvoiced, and the columns would decide the band. Over the
  * ordered pairs of different codes, the float and the double quotient take
- * different nearest harmonics in 54 observations (a mid-frame harmonic read
- * in one of the two frames) on 38 ordered pairs, two of them at an exact half
- * (b0 22 then 206, and 206 then 22: harmonic 13 at 6.5 of b0 22's harmonics,
- * which the tie rule gives harmonic 7). Then, in ProVoice's rendering (the geometric
+ * different nearest harmonics in 50 observations (a mid-frame harmonic read
+ * in one of the two frames) on 36 ordered pairs, none at an exact half
+ * (without the mid-frame quadratic's excess, 54 on 38, two of them at an
+ * exact half, b0 22 and 206 in either order). Then, in ProVoice's rendering (the geometric
  * mean), the case the rule was found on: b0 134, word 000000000010, then b0
  * 161, word 111111111101, at the pitches P25's decoder played for them before
  * the grid (0x3D9441C4 and 0x3D806171, now a caller's pitches), where harmonic
@@ -6060,9 +6060,14 @@ phases_agree(const float* a, const float* b, int L, int tolerant) {
  * (Vl 0) with the unvoiced factor taken out, log2Ml + p25_phase_step(w0)
  * (2.289 + 0.5 log2(w0) more), a voiced band and a band with no state as
  * decoded, on a frame's own model, against the kernel run here on that input:
- * bit for bit in IEEE builds, the floor (MBE_PHASE_LOG2_FLOOR) taking the
- * shifted value (an unvoiced band at -20.5 rises above it, one at -40 stays
- * under it) and the tail past L following band L, unvoiced and shifted. The
+ * by bits where the library is built without fast-math (the Debug builds,
+ * both 32-bit builds), within 1e-6 rad where it is built with it
+ * (dev-release, the two Clang LTO builds; there the tolerance would not
+ * catch a step formed in float instead of double); the order of step and
+ * floor (an unvoiced band at -20.1 the step lifts across the floor, against
+ * the same band floored first, one at -40 that stays under it, and a log2Ml
+ * that is not finite entering at the floor exactly, the step not added) and
+ * the tail past L following band L, unvoiced and shifted. The
  * other renderings (D-STAR's, rate 33's, ProVoice's) read every band as
  * decoded, as mbe_subframe_own_model() does. On a frame voiced in harmonics 1
  * to 20 of 40 with a flat log2Ml, P25's phases differ from the plain kernel's
