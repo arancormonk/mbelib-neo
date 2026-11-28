@@ -127,8 +127,11 @@ same_ints(const int* a, const int* b, int n) {
     return 1;
 }
 
-/* Two states alike, every field by its bits; with uw_and_mute 0, previousUw (which only a rendered frame fills)
- * and mutingThreshold (which the replica of a muted frame raises) are left out. */
+/* Two states alike, every field by its bits. With uw_and_mute 0 two fields are left out, for the muted case alone:
+ * previousUw, because a frame the core mutes is advanced, not rendered, and advancing leaves no unvoiced overlap
+ * (mbe_advance_subframes(), by design: the muted frame's own subframe is never heard), while the replica renders
+ * the frame and fills it; and mutingThreshold, because the replica sets it to 1e9 so that it renders the frame
+ * the stream muted. */
 static int
 same_parms(const mbe_parms* a, const mbe_parms* b, int uw_and_mute) {
     return same_float(a->w0, b->w0) && a->L == b->L && a->K == b->K && same_ints(a->Vl, b->Vl, 57)
@@ -667,9 +670,10 @@ test_repeats(void) {
 
 /*
  * A quiet frame the error rate mutes (the history's error rate set high): the
- * state it leaves is the one rendering the scaled model leaves (but for
- * previousUw, which only a rendered frame fills, and the muting threshold the
- * replica raises), its magnitudes scaled. A quiet frame whose smoothing voices
+ * state it leaves is the one rendering the scaled model leaves, its magnitudes
+ * scaled, every field by its bits but two (same_parms() says which and why:
+ * previousUw, which advancing a muted frame leaves empty by design, and the
+ * muting threshold the replica raises to render the frame). A quiet frame whose smoothing voices
  * harmonics it decoded unvoiced (a moderate error rate, the local energy at
  * its lowest): the rendered magnitudes are what smoothing left, times the gain
  * read from the decoded log2Ml.
