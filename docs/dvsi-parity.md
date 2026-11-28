@@ -8718,7 +8718,7 @@ overwrite others' fields, and compared ProVoice's returned states after 200 fram
 fourth byte; its results then (built against `f725a66` and `d3bb326` in the ten configurations,
 4,250 protected lines identical; against `57746c3` it showed the hoist of `b46a5a0` moving P25's four
 streams in the 32-bit Release build alone, which is why it was reverted) hold for what it covered. In
-its second form: built against the branch below's head `1e531f8` and the merged head `ecb78d0` in the ten local
+its second form: built against the branch below's head `1e531f8` and the merged head `ecb78d0`, and again against `5369c52` (the tone predicate's loop moved into a helper), in the ten local
 configurations, its 4,252 protected lines are identical in each and the 215 that change are P25's
 (the 208 decoded pitches, its six streams, the IMBE encoder's `cur_mp`). ProVoice entered from the D-STAR and rate-33 streams' end states with
 the low cut's slots changed plays the same samples, and its returned states differ after the first
@@ -10609,7 +10609,7 @@ speech, within 0.00003 of correlation and 0.0004 dB of distance on either partit
 **The third scoring**, after the second review's fixes and the merge of the branch below
 (`fix/ambe-block-lengths` at `1e531f8`, PR #205, which holds DVSI's low band's final head `e345239`,
 PR #204; merged in `ecb78d0`): the same four stages against a new baseline, a clean build of `git
-archive 1e531f8`, and a build of the merged head `ecb78d0` (the later commits change documents
+archive 1e531f8`, and a build of the merged head `ecb78d0` (of the later commits, `5369c52` moves the tone predicate's loop into a helper and decodes every permitted P25 vector byte for byte as `ecb78d0`, the others change tests and documents
 only), in a new output directory, scored the same way. `1e531f8` decodes every permitted P25 vector
 (the 103 bit files, `irstia` and `mark` left out) byte for byte as `f725a66` (PCM and parameter
 dumps, by hash), and the merged head decodes all 103 byte for byte as `d3bb326`. All four sets pass,
