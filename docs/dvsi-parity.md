@@ -161,8 +161,11 @@ appear here.
   was scored, so none of those partitions is out of sample for it, and the rule's two fitted constants
   (and the floor it reads) come from the library's samples of the development and validation vectors
   together, against DVSI's decodes. The change was measured and gated on the development, validation,
-  tone and channel partitions; the final partition is not yet scored ([November 2026: P25's quiet
-  frames](#november-2026-p25s-quiet-frames)).
+  tone and channel partitions; the final partition was scored once for it, on 2026-11-28, after the
+  two reviews, their fix rounds and the merge onto `fix/p25-decoder`, against `p25-quiet-frames-final`
+  (the build of `git archive 0724a02` against the build of `a2b99c0`): passed, 10 of 10 checks, P25's
+  correlation 0.99795452 → 0.99795457, the conversion's: the held-out recordings show no harm and
+  cannot show the gain ([November 2026: P25's quiet frames](#november-2026-p25s-quiet-frames)).
 - **A level error no parameter explains.** Before fitting a law to a level error that none of the
   frame's or the harmonic's parameters explains (no correlation with the level, the frequency, the
   enhancement weight or the frame-to-frame step), split it by every discrete parameter of the frame,
@@ -9494,7 +9497,7 @@ form's runs, `e345239` against `dea6b39` and against `70bbfb7`, passed 63 of 63.
 | `p25-quiet-frames-validation` | passes all 12 checks | nothing worse where no near-silent recording is, within the limits: the correlation (+0.000004) and its least vector (-3.4e-7), the distance from DVSI's decode (-0.0055) and its largest change (-0.00015), the envelope (+0.00058), the distance from the input (-0.0004) and the level (+0.0018, the worst +0.0034) |
 | `p25-quiet-frames-tones` | passes all 7 checks | D-STAR's and rate 33's tone decodes unchanged; P25's tone measures within their limits on every vector measured (49 pairs for frequency, level and wrong tone, 48 for balance, 52 for the detector's agreement); not that the quiet frames between the tones are right |
 | `p25-quiet-frames-channel` | passes all 31 checks | the mute statistics unchanged in every mode, P25's mean distance on the loud frames within its limit (+0.0000095 hard, +0.000144 soft), D-STAR's and rate 33's decodes and every encoder row unchanged; not that P25's quiet frames under errors are right |
-| `p25-quiet-frames-final` | not scored | on `irstia` and `mark`, held out: that nothing gets worse; it cannot show the gain |
+| `p25-quiet-frames-final` | passes all 10 checks, scored once after the merge (below) | on `irstia` and `mark`, held out, a prediction of no harm that asked for no gain: D-STAR's and rate 33's decodes and every encoder row unchanged, P25's correlation not falling on either vector (+9.6e-8, +1.6e-8), its distance from DVSI's decode not rising on either (-0.00063, -0.00136 dB), its envelope not falling, its distance from the input not rising in the mean beyond the limit (+0.000506 dB) and its level within its bound (+0.00127, +0.00106 dB); it cannot show the gain |
 
 The descriptions in the gate file were written for the first form: they speak of a truncating
 conversion and of DVSI's samples as the library's "at a gain of at most 1" (the first form's per-frame
@@ -9534,6 +9537,47 @@ as before the merge, and now falls under the 0.002 allowed. Each report holds 25
 330 hash values (75 speech PCM, 75 encoder-row, 156 tone and 24 channel-error decode hashes); all 75
 speech entries carry an encoder-row hash in both, every one equal; D-STAR's and rate 33's 25 + 52 + 8
 decode hashes each equal and P25's all changed.
+
+**The declared check on `noisy`**, in one place: `p25-quiet-frames-development`'s
+`vs_dvsi.lsd_db all_no_increase` (no vector's distance from DVSI's decode rising by more than 0.002 dB)
+failed before the merge, on `e345239` (`noisy` +0.00238 dB, 62 of 63), and passes after it, on
+`0724a02` (`noisy` +0.001958 dB, 63 of 63). The cause is the same in both, the conversion (truncating
+and rounding the same floats give 1.1217832950 and 1.1241631488 dB on `e345239`, 0.8115803788 and
+0.8135383272 dB on `0724a02`), and its size about the same; no constant changed between the two.
+
+**The final partition**, scored once, on 2026-11-28 at 05:25, after the two reviews, their fix rounds
+and the merge onto `fix/p25-decoder`, by `build/score-final.sh` (outside the repository) with its
+defaults: the build of `git archive 0724a02` (`build/baseline-tools-merged`) against the build of
+`a2b99c0` (`build/tools-final`, the head), both aligning freely first, then at their joint lags, gate
+set `p25-quiet-frames-final` (declared in `f7b8975` with the four in-sample sets):
+
+```
+PASS dstar/final speech.pcm_changed_vectors max: value=0
+PASS r33/final speech.pcm_changed_vectors max: value=0
+PASS dstar/final encoder.rows_changed_vectors max: value=0
+PASS p25/final encoder.rows_changed_vectors max: value=0
+PASS r33/final encoder.rows_changed_vectors max: value=0
+PASS p25/final vs_dvsi.waveform_corr_unshifted all_no_decrease: mean delta=+5.586e-08 ci95=(1.5541039566357995e-08, 9.618793694876615e-08) worst=('irstia', 9.618793694876615e-08) min=+1.554e-08
+PASS p25/final vs_dvsi.lsd_db all_no_increase: mean delta=-0.0009946 ci95=(-0.0013557285028518162, -0.000633501119018276) worst=('mark', -0.0013557285028518162) max=-0.0006335
+PASS p25/final vs_dvsi.env_corr no_decrease: mean delta=+8.554e-05 ci95=(6.160895074325268e-06, 0.00016492893898645278) worst=('mark', 0.00016492893898645278)
+PASS p25/final ours.lsd_db no_increase: mean delta=+0.0005056 ci95=(0.0003685063627409946, 0.0006425984241431593) worst=('mark', 0.0006425984241431593)
+PASS p25/final vs_dvsi.level_offset_db abs_delta_max: mean delta=+0.001164 ci95=(0.0010593261171557566, 0.001268265724219439) worst=('irstia', 0.001268265724219439)
+gate set p25-quiet-frames-final: PASS
+```
+
+Passed, 10 of 10 checks. P25: the correlation with DVSI's decode 0.99795452 → 0.99795457 (+5.6e-8;
+`irstia` +9.6e-8 and `mark` +1.6e-8, 0.998109 and 0.997800 in both runs to six decimals), the distance
+from DVSI's decode 0.782175 → 0.781181 dB (-0.000995; `irstia` 0.678648 → 0.678014, `mark` 0.885702
+→ 0.884347), the distance from the input 5.384729 → 5.385234 dB (+0.000506; `irstia` +0.000369,
+`mark` +0.000643), the envelope correlation +0.000086 (`irstia` +0.000006, `mark` +0.000165), the level
+over DVSI's 0.029305 → 0.030469 dB (+0.001164; `irstia` +0.001268, `mark` +0.001059). D-STAR and rate
+33: every measurement equal in both runs, their four speech PCM hashes (`ours.pcm_fnv1a`) equal; P25's
+two differ. All six entries carry a PCM hash and an encoder-row hash (`encoder.rows_sha256`) in both
+reports; all six row hashes are equal. What it shows: the held-out recordings hold almost no frame
+under the knee, so the result is the conversion's (rounding instead of truncation), and it shows no
+harm; it cannot show the gain, whose evidence is the development vectors', in sample (`dam80`,
+`dam40`). The final set was declared as a prediction of no harm and asked for no gain. Later commits
+change documents only.
 
 **Notes on the commit messages**, which stand as made. `7f04d22` (the constants `IMBE_QUIET_KNEE` and
 `IMBE_QUIET_FLOOR` in parentheses, for clang-tidy, a change of C source) says the object code of
@@ -9766,5 +9810,10 @@ values in each report, D-STAR's and rate 33's all equal, every encoder row equal
 hashes all changed. Before the declaration the study's scratch build had been measured on the development, validation, tone and
 channel vectors, and the baseline alone was scored on the four partitions (a build of `git archive
 e345239`, its own encodings decoded by its own decoder) to record each measure's coverage, every check
-being evaluated on that scoreboard paired with itself. The final partition is not yet scored
-([November 2026: P25's quiet frames](#november-2026-p25s-quiet-frames)).
+being evaluated on that scoreboard paired with itself. The final partition was scored once, on
+2026-11-28, after the two reviews, their fix rounds and the merge, the build of `git archive 0724a02`
+against the build of `a2b99c0`: `p25-quiet-frames-final` passed, 10 of 10 checks, P25's correlation
+0.99795452 → 0.99795457 (`irstia` +9.6e-8, `mark` +1.6e-8), the distance from DVSI's decode -0.000995
+dB, D-STAR's and rate 33's measurements and every encoder row unchanged, all six entries carrying both
+hashes: the conversion's, showing no harm and unable to show the gain ([November 2026: P25's quiet
+frames](#november-2026-p25s-quiet-frames)).
