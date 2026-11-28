@@ -733,8 +733,9 @@ enc_test_quiet_tone_level(const struct enc_codec* c, void* enc) {
         const struct enc_levels tone = enc_tone_levels(c, enc, amplitudes[k], 1);
         const double sent = tone.model + calibration;
         const double want = input_db - tone.loss;
-        printf("%s quiet tone: %.1f dBFS sent at %.1f (its model's level), predicted loss %.1f dB, decodes at %.1f\n",
-               c->name, input_db, sent, tone.loss, tone.decoded);
+        printf("%s quiet tone: %.3f dBFS sent at %.3f (its models' level), decodes at %.3f: %.3f dB under the input "
+               "(the rule predicts %.3f)\n",
+               c->name, input_db, sent, tone.decoded, input_db - tone.decoded, tone.loss);
         /* A NaN fails both comparisons. */
         fails += !(fabs(sent - input_db) <= 3.0);
         fails += !(fabs(tone.decoded - want) <= 2.0);
