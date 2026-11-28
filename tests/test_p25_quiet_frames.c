@@ -995,6 +995,10 @@ expect_gain(const mbe_parms* mp, int quiet_want, uint64_t gain_bits, const char*
  *   magnitudes equal those of the same model with every log2Ml 0 by their
  *   bits, and differ from those of the model with every log2Ml -3.2 (the
  *   floor).
+ * - A history within the bound, {2^20, -2^-40, -2^20, -3.2 x 7}, whose
+ *   binary64 sum loses the -2^-40 that an extended register keeps: the gain
+ *   0x1.0b2ad7ecc9836p-1 (by its bits where FLT_EVAL_METHOD is 0, within one
+ *   place under x87; a sum kept in an extended register gives ...9614p-1).
  * - A decoded frame on which x87 rounds twice: DVSI's `dtmf`, frame 3185 (L 14,
  *   its log2Ml as the decode stores them): the gain 0x1.32d283f8e55f5p-2 by
  *   its bits where FLT_EVAL_METHOD is 0 (the eight 64-bit configurations), and
@@ -1052,6 +1056,30 @@ test_exact_arithmetic(void) {
 #endif
         mp = arithmetic_model(20, 0.15f, huge, 20);
         expect_gain(&mp, 0, UINT64_C(0x3FF0000000000000), "a mean of -FLT_MAX");
+    }
+    /* A history within the bound whose binary64 sum loses a term an extended register keeps: 2^20, -2^-40,
+     * -2^20 and seven -3.2f (L 10). In binary64 the -2^-40 is lost in the first sum (the mean
+     * -0x1.1eb8523333333p+1, the gain 0x1.0b2ad7ecc9836p-1); a sum kept in an 80-bit register keeps it (the
+     * gain 0x1.0b2ad7ecc9614p-1). By its bits where FLT_EVAL_METHOD is 0, within one place under x87 (each
+     * stored step is exact there, but exp2() is the platform's). */
+    {
+        float logs[10];
+        logs[0] = 0x1p20f;
+        logs[1] = -0x1p-40f;
+        logs[2] = -0x1p20f;
+        for (int l = 3; l < 10; ++l) {
+            logs[l] = -3.2f;
+        }
+        mp = arithmetic_model(10, 0.28f, logs, 10);
+        double g = -1.0;
+        const int quiet = mbe_imbe4400_quiet_gain(&mp, &g);
+        const uint64_t want = UINT64_C(0x3FE0B2AD7ECC9836);
+        assert(quiet == 1);
+#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == 0
+        assert(bits_of_double(g) == want);
+#else
+        assert(bits_of_double(g) == want || bits_of_double(g) == want + 1u || bits_of_double(g) == want - 1u);
+#endif
     }
     /* DVSI's dtmf, frame 3185, as decoded (the stored floats by their bits). */
     {
