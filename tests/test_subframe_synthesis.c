@@ -931,7 +931,9 @@ reference_advance(struct reference_train* train, double start, const struct mbe_
         && reference_grid_steps(a->w0, &na) && reference_grid_steps(b->w0, &nb) && !(from / to > 1.6 && from / to < 2.4)
         && !(from / to > 0.4 && from / to < 0.6)) {
         from = (double)na / 524288.0;
-        to = (double)(((na + nb) / 2) * 2 - na) / 524288.0;
+        const long mean = (na + nb) / 2; /* both positive: the floor */
+        const long end = (2 * mean) - na;
+        to = (double)end / 524288.0;
     }
     if (!a->any_voiced && !b->any_voiced) {
         /* A new train starts after this subframe: nothing of the old one sounds on. */
@@ -5843,12 +5845,22 @@ train_at_zero(mbe_parms* last, const mbe_parms* model, enum mbe_voiced_synthesis
     last->noiseOverlap[PHASE_SLOT] = 0.0f;
 }
 
+/* Whether two doubles have the same bits. */
+static int
+same_double_bits(double a, double b) {
+    uint64_t x, y;
+    memcpy(&x, &a, sizeof(x));
+    memcpy(&y, &b, sizeof(y));
+    return x == y;
+}
+
 /* The stored pulse phase in steps of 2^-19 cycle, which must be a whole
  * number: returns it, or -1 where it is not. */
 static long
 phase_steps(const mbe_parms* mp) {
     const double steps = pulse_phase(mp) * 524288.0;
-    return (steps == floor(steps)) ? (long)steps : -1;
+    const double whole = floor(steps);
+    return same_double_bits(steps, whole) ? (long)whole : -1;
 }
 
 /*
