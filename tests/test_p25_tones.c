@@ -19,6 +19,7 @@
  * log2 amplitudes, and decoded as the library decodes P25.
  */
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +27,7 @@
 
 #include "imbe4400_internal.h"
 #include "mbe_adaptive.h"
+#include "mbe_p25_tone_model.h"
 #include "mbe_subframe.h"
 #include "mbelib-neo/mbelib.h"
 
@@ -971,8 +973,92 @@ test_tone_table_pinned(void) {
     assert(hash == P25_TONE_TABLE_HASH);
 }
 
+/* Whether two states are alike but for the tone word in Vl[0]. */
+static int
+same_state_but_word(const mbe_parms* a, const mbe_parms* b) {
+    mbe_parms x = *a, y = *b;
+    x.Vl[0] = 0;
+    y.Vl[0] = 0;
+    return same_state(&x, &y);
+}
+
+/* `s` with the tone harmonics' history magnitudes at `level` and every other
+ * magnitude 1..L at 0. */
+static void
+history_at_level(struct stream* s, int l1, int l2, float level) {
+    for (int l = 1; l <= s->prev.L; ++l) {
+        s->prev.Ml[l] = (l == l1 || l == l2) ? level : 0.0f;
+    }
+}
+
+/*
+ * The levels the tone player writes are decided where the tone is taken: a
+ * repeat of a real DTMF 1 history (b0 53, harmonics 4 and 7) whose two tone
+ * magnitudes a caller set to FLT_MIN, the others 0, would be played at
+ * subnormal levels (0.988 FLT_MIN times each droop, about 0.987 FLT_MIN),
+ * which the predicate refuses: the tone is not taken, and the repeat plays
+ * as the same history with the tone word cleared, sample for sample, the
+ * three returned states alike but for the word itself (which a repeat
+ * carries), unmarked. Over every one of the 116 rows and a ladder of levels
+ * from FLT_MIN to 1e30, every model the player marks passes the predicate
+ * (mbe_imbe4400_tone_model()), and every repeat not marked carries no tone
+ * mark; both kinds occur. Above the renderer's magnitude limit (1e30 here
+ * near it) the predicate passes and the rendering caps the magnitudes as it
+ * caps any.
+ */
+static void
+test_tone_levels_decided_once(void) {
+    struct stream base;
+    stream_after_tone(&base);
+    struct stream forged = base;
+    history_at_level(&forged, 4, 7, FLT_MIN);
+    struct stream plain = forged;
+    plain.prev.Vl[0] = 0;
+    float with_word[160], without[160];
+    play_repeat(with_word, &forged, 0);
+    play_repeat(without, &plain, 0);
+    assert(mbe_frame_mark(&forged.enhanced) != MBE_FRAME_MARK_TONE);
+    assert(same_samples(with_word, without, 160));
+    assert(same_state_but_word(&forged.cur, &plain.cur) && same_state_but_word(&forged.prev, &plain.prev)
+           && same_state_but_word(&forged.enhanced, &plain.enhanced));
+
+    int i = 0, b0, b1, l1, l2, marked = 0, refused = 0;
+    while (mbe_imbe4400_tone_row(i, &b0, &b1, &l1, &l2)) {
+        struct stream row;
+        char imbe_d[88];
+        float logm[57], out[160];
+        int K;
+        stream_init(&row);
+        tone_amplitudes(logm, harmonics_of(b0, &K), l1, l2, 11.0f, 2.0f);
+        for (int f = 0; f < 4; ++f) {
+            build_frame(imbe_d, b0, (unsigned)b1, logm, &row.prev);
+            play(out, &row, imbe_d, 0);
+        }
+        assert(row.prev.Vl[0] == tone_word(b0, l1, l2));
+        for (double level = (double)FLT_MIN; level <= 1.0e30; level *= 31.0) {
+            for (int step = 0; step < 3; ++step) {
+                /* FLT_MIN itself, and the two floats above it at each rung */
+                const float at = (float)(level * (1.0 + (double)step * 1.0e-6));
+                struct stream t = row;
+                history_at_level(&t, l1, l2, at);
+                play_repeat(out, &t, 0);
+                const int plays = mbe_frame_mark(&t.enhanced) == MBE_FRAME_MARK_TONE;
+                const int passes = mbe_imbe4400_tone_model(&t.enhanced);
+                assert(plays == passes);
+                marked += plays;
+                refused += !plays;
+            }
+        }
+        ++i;
+    }
+    assert(i == 116 && marked > 0 && refused > 0);
+    printf("p25 tones: the levels decided once (%d played models pass the predicate, %d refused unmarked)\n", marked,
+           refused);
+}
+
 int
 main(void) {
+    test_tone_levels_decided_once();
     test_tone_test();
     test_tone_model();
     test_tone_run_renders();

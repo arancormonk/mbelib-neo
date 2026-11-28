@@ -1282,8 +1282,19 @@ struct imbe_tone {
     int b0;
     int l1;
     int l2;
-    double amplitude; /* the rms of the tone harmonics' decoded magnitudes, times IMBE_TONE_LEVEL */
+    float level1; /* the magnitudes imbe4400_play_tone() writes at l1 and l2: the rms of */
+    float level2; /* the decoded magnitudes, times IMBE_TONE_LEVEL, times the droop at l */
 };
+
+/* sinc^2(pi l / 256), sinc(x) = sin(x) / x: the droop of DVSI's synthesis
+ * table (US 8,200,497's K = 256 table read with linear interpolation) at
+ * harmonic l. */
+static double
+imbe_tone_droop(int l) {
+    const double x = M_PI * (double)l / 256.0;
+    const double sinc = sin(x) / x;
+    return sinc * sinc;
+}
 
 /* Whether the model is at the pitch, harmonic count and band count P25 pitch
  * code b0 decodes to (the pitch by its bits). */
@@ -1319,8 +1330,15 @@ imbe4400_take_tone(const mbe_parms* mp, struct imbe_tone* tone) {
     tone->l1 = word & 0xFF;
     const double p1 = (double)mp->Ml[tone->l1] * (double)mp->Ml[tone->l1];
     const double p2 = (double)mp->Ml[tone->l2] * (double)mp->Ml[tone->l2];
-    tone->amplitude = IMBE_TONE_LEVEL * sqrt((tone->l1 == tone->l2) ? p1 : 0.5 * (p1 + p2));
-    return 1;
+    const double amplitude = IMBE_TONE_LEVEL * sqrt((tone->l1 == tone->l2) ? p1 : 0.5 * (p1 + p2));
+    /* The two magnitudes the player writes, decided here once: the tone is
+     * taken only if both are positive normal floats (a subnormal level is no
+     * magnitude, and mbe_imbe4400_tone_model() would refuse the model), so
+     * the model played and the model the predicate reads are one. A refused
+     * tone plays as the decoded or repeated speech it is. */
+    tone->level1 = mbe_round_to_float((float)(amplitude * imbe_tone_droop(tone->l1)));
+    tone->level2 = mbe_round_to_float((float)(amplitude * imbe_tone_droop(tone->l2)));
+    return imbe_positive_normal(&tone->level1) && imbe_positive_normal(&tone->level2);
 }
 
 /* Whether pitch code b0 (0..IMBE_TONE_LAST_CODE) has a row of harmonics l1
@@ -1333,16 +1351,6 @@ imbe_tone_row_exists(int b0, int l1, int l2) {
         }
     }
     return 0;
-}
-
-/* sinc^2(pi l / 256), sinc(x) = sin(x) / x: the droop of DVSI's synthesis
- * table (US 8,200,497's K = 256 table read with linear interpolation) at
- * harmonic l. */
-static double
-imbe_tone_droop(int l) {
-    const double x = M_PI * (double)l / 256.0;
-    const double sinc = sin(x) / x;
-    return sinc * sinc;
 }
 
 /* The largest relative departure of a tone model's two levels from the ratio
@@ -1379,28 +1387,6 @@ imbe_tone_levels(const mbe_parms* mp, int l1, int l2) {
     return fabs((m2 * d1) - (m1 * d2)) <= IMBE_TONE_RATIO_TOLERANCE * m1 * d2;
 }
 
-/*
- * Whether a model is a tone model as imbe4400_play_tone() leaves it
- * (mbe_p25_tone_model.h), for P25's rendering, which spares a tone model the
- * phase step and the column reading (mbe_subframe.c) and reads the previous
- * model from caller state. Each condition is one that function's frame meets
- * and that the decoder's own functions decide: the mark (only
- * imbe4400_play_tone() sets it, and the data path clears it elsewhere), the
- * word imbe4400_take_tone() found (its flag, a code with rows, the harmonics
- * of one of its rows), the model at that code's pitch, L and K
- * (imbe_model_at_code(): imbe_code_pitch(), the decode's own body, the pitch
- * by its bits), the voicing and magnitudes imbe4400_play_tone() writes (the
- * tone harmonics voiced at positive normal levels, two of them in the ratio
- * of their droops within IMBE_TONE_RATIO_TOLERANCE, every other harmonic
- * 1..L unvoiced at 0 by its bits), and log2Ml[1..L] finite. What stays free:
- * the common level of the two harmonics (any positive normal value plays as a
- * tone at that level), the finite values of log2Ml (the decoded frame's,
- * which the phase source reads as for any model), Vl above L and every field
- * the player does not write. A model the adaptive smoothing of channel errors
- * has changed after the tone was played is no longer one, as before this
- * check. Not inlined, so that the readers in the synthesizer and any later
- * caller run one body.
- */
 /* Whether harmonics 1..L of a model are exactly a tone's structure: l1 and
  * l2 voiced at positive normal magnitudes, every other harmonic unvoiced at 0
  * by its bits (mbe_imbe4400_tone_model()). */
@@ -1417,6 +1403,33 @@ imbe_tone_structure(const mbe_parms* mp, int l1, int l2) {
     return 1;
 }
 
+/*
+ * Whether a model is a tone model as imbe4400_play_tone() leaves it
+ * (mbe_p25_tone_model.h), for P25's rendering, which spares a tone model the
+ * phase step and the column reading (mbe_subframe.c) and reads the previous
+ * model from caller state. Each condition is one that function's frame meets
+ * and that the decoder's own functions decide: the mark (only
+ * imbe4400_play_tone() sets it, and the data path clears it elsewhere), the
+ * word imbe4400_take_tone() found (its flag, a code with rows, the harmonics
+ * of one of its rows), the model at that code's pitch, L and K
+ * (imbe_model_at_code(): imbe_code_pitch(), the decode's own body, the pitch
+ * by its bits), the voicing and magnitudes imbe4400_play_tone() writes (the
+ * tone harmonics voiced at positive normal levels, two of them in the ratio
+ * of their droops within IMBE_TONE_RATIO_TOLERANCE, every other harmonic
+ * 1..L unvoiced at 0 by its bits), and log2Ml[1..L] finite. What the test
+ * does not constrain: the common level of the two harmonics (any positive
+ * normal value plays as a tone at that level; one past the renderer's
+ * magnitude limit is capped there as any magnitude is), the finite values of
+ * log2Ml (the decoded frame's, which the phase source reads as for any
+ * model), Vl and Ml above L, gamma, the pulse train and the rest of the
+ * synthesis state. Those are state like any other: changing them changes the
+ * next frame as it would after a played tone. imbe4400_take_tone() takes a
+ * tone only where both levels the player will write are positive normal
+ * floats, so every model the player marks passes this test. A model the adaptive smoothing of channel errors
+ * has changed after the tone was played is no longer one, as before this
+ * check. Not inlined, so that the readers in the synthesizer and any later
+ * caller run one body.
+ */
 MBE_NOINLINE int
 mbe_imbe4400_tone_model(const mbe_parms* mp) {
     if (mbe_frame_mark(mp) != MBE_FRAME_MARK_TONE) {
@@ -1471,7 +1484,7 @@ imbe4400_play_tone(mbe_parms* mp, const struct imbe_tone* tone) {
     for (int l = 1; l <= mp->L; l++) {
         const int sounds = (l == tone->l1) || (l == tone->l2);
         mp->Vl[l] = sounds ? 1 : 0;
-        mp->Ml[l] = sounds ? (float)(tone->amplitude * imbe_tone_droop(l)) : 0.0f;
+        mp->Ml[l] = sounds ? ((l == tone->l1) ? tone->level1 : tone->level2) : 0.0f;
     }
     mbe_set_frame_mark(mp, MBE_FRAME_MARK_TONE);
 }
@@ -1524,8 +1537,11 @@ imbe4400_synthesize_frame(float* aout_buf, mbe_process_result* result, enum mbe_
         imbe4400_play_tone(cur_mp, &tone);
     }
     /* As DVSI's P25 decoder, without eq 116's scaling; ProVoice, which plays
-     * through the same path, likewise, in P25's rendering without the pulsed
-     * state (no DVSI ProVoice material shows one). */
+     * through the same path, likewise, in its own rendering: the IMBE
+     * rendering without the pulsed state and without the four rules of DVSI's
+     * P25 decoder (the grid pitch, the floored mid-frame quadratic and train,
+     * the phase step, the own models by columns), which are P25's alone (no
+     * DVSI ProVoice material shows any of them). */
     const enum mbe_voiced_synthesis rendering =
         imbe4400_is_provoice(result) ? MBE_VOICED_SYNTHESIS_DVSI_PROVOICE : MBE_VOICED_SYNTHESIS_DVSI_IMBE;
     mbe_synthesizeSpeechWithPreEnhRm0f(aout_buf, cur_mp, prev_mp_enhanced, pre_enh_rm0, mute_noise, rendering,

@@ -32,9 +32,12 @@
  * other harmonic 1..L unvoiced (Vl 0); the tone harmonics' magnitudes
  * positive, finite and normal, a dual tone's two in the ratio of their droops
  * sinc^2(pi l / 256) the player writes (within 2^-20 of it), and every other
- * magnitude 0 by its bit pattern; log2Ml[1..L] finite. Free: the tone's
- * common level, the finite values of log2Ml, Vl above L and every field the
- * player does not write.
+ * magnitude 0 by its bit pattern; log2Ml[1..L] finite. Not constrained: the
+ * tone's common level, the finite values of log2Ml, Vl and Ml above L,
+ * gamma, the pulse train and the rest of the synthesis state, which are state
+ * like any other (changing them changes the next frame). Every model the
+ * player marks passes (imbe4400_take_tone() takes a tone only where the two
+ * levels it will write are positive normal floats).
  * @param mp A model; any state (its harmonic count is checked).
  * @return 1 for a tone model, 0 otherwise.
  */
