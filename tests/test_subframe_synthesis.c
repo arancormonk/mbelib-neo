@@ -6138,9 +6138,13 @@ check_floored_frame(mbe_parms* last, const mbe_parms* model) {
  * frame's stored times hold no value twice (at f24ed64 -80, -80, -145.573 in
  * the tools and both Debug builds). Its second reproduction: code 7, the
  * stored phase 0x1.afp-5f, then code 52. Chains of floored frames over
- * neighbouring codes from every kind of incoming phase (0, on the grid, half
- * a step off it, 2^-19 + 2^-30, 2^-100, the smallest subnormal, 1 - 2^-24, a
- * float a frame stores): per frame, the pulses stored equal the test's own
+ * neighbouring codes from nine stored phases (0; 0.25 and 2^-18, on the grid;
+ * 2^-19 + 2^-30, 2^-11 of a step past a grid point; the smallest subnormal;
+ * 2^-100; 1 - 2^-24, 31/32 of a step past one; 0x3ED5D3A1, 218958.516 steps;
+ * 0x3605F5E1, 1.047 steps), the test's reference restarting each frame from
+ * the phase the library stored (so it checks each interval's ownership for
+ * the phase presented to it, not a chain's exact count): per frame, the
+ * pulses stored equal the test's own
  * count of the crossings (count_crossings(), one by one in integers), no two
  * stored times nearer than half the shortest period, and rendering and
  * mbe_advance_subframes() ending alike (count, times and phase by bits). The
