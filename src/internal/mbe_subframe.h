@@ -25,7 +25,7 @@
  *    the next's across an interval, after taking the train an octave down or
  *    up first where the new period is within 20% of twice or of half the old
  *    (in P25's rendering, between two voiced models on the 2^-19 grid with no
- *    octave step, the interval advances the train by exactly its two ends'
+ *    octave step, decided on their whole numbers of steps, the interval advances the train by exactly its two ends'
  *    mean fundamental floored to the grid, 80 floor((n_a + n_b) / 2) steps,
  *    the rate's end lowered by a step where the sum is odd);
  *  - the unvoiced part is mbe_synthesizeUnvoicedSubframes().

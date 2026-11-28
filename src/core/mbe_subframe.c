@@ -368,9 +368,9 @@ ambe2450_mid_pitch(float a, float b) {
  * the mid-frame fundamental is
  *   floor(2^19 sqrt(fa fb) (q(y) + e(y)) / sqrt(y)) / 2^19:
  * the geometric mean times (q(y) + e(y)) / sqrt(y), which lies within 1 -
- * 1.17e-3 .. 1 + 8.30e-4 (q(y) / sqrt(y) alone is 1 at the octave's ends and
- * at y = 1.5 and reaches -1.2035e-3 at y = 1.1869 and +7.7104e-4 at
- * y = 1.7701 between them), then floored. The interpolant was found on
+ * 1.17e-3 .. 1 + 8.30e-4 (q(y) / sqrt(y) - 1 alone is 0 at the octave's ends
+ * and at y = 1.5 and reaches -1.2035e-3 at y = 1.1869 and +7.7104e-4 at
+ * y = 1.7701 between them; the ratio itself stays near 1), then floored. The interpolant was found on
  * DVSI's decodes of its own P25 encodings, from the change over a frame of
  * the lag between DVSI's decode and ours read at the frame's two boundaries,
  * which the mid-frame pitch alone sets (one curve in the fractional part of
@@ -398,9 +398,14 @@ ambe2450_mid_pitch(float a, float b) {
  * fundamentals is an exact power of two (where q's ends meet and the excess
  * jumps, from 3 2^-15 to 2^-15); and 2 pi times any whole number of steps
  * from 3,000 to 27,000 lies at least 7.57e-13 of itself from a float's
- * rounding edge. A caller's pitches can put the value anywhere within the
- * range below: each build then floors as its arithmetic gives, the pitch
- * staying within a step.
+ * rounding edge. A caller's pitches can put the unfloored count anywhere
+ * within the range below, within a double's rounding of a whole number too:
+ * each build then floors as its arithmetic gives, the counts at most a step
+ * apart. The pitch is that count times 2 pi 2^-19 rounded to float, which
+ * keeps the count exactly (the float nearer it than any other count's) while
+ * the count is below 2^23, a fundamental under 16 cycles per sample, far
+ * above any codec's; past that the rounding moves the result by up to 2^-24
+ * of itself (both pitches 0x1.921fb4p+34: about 8.7 million steps).
  * Its range. The two pitches are positive normal floats (the caller checks,
  * mbe_subframe_mid_model()); the product of the two fundamentals, P = a b /
  * (2 pi)^2 in cycles per sample squared (the codecs' lie below 1/4), is
@@ -415,9 +420,9 @@ ambe2450_mid_pitch(float a, float b) {
  * lies within 1 - 1.17e-3 .. 1 + 8.30e-4, so the step count before the floor
  * is below 2^32 2^19 (1 + 8.30e-4) < 2^52, where a double holds every half step and
  * floor() returns a whole number exactly; a count under 1 (P below about
- * 2^-38, a mean under 2^-19 cycle) floors to 0, no pitch; and the pitch, 2 pi
- * times fewer than 2^52 steps over 2^19, is below 5.5e10 and, when not 0, at
- * least 2 pi 2^-19: a normal float either way.
+ * 2^-38, a mean under 2^-19 cycle) floors to 0 and returns 0, no pitch; and
+ * any other pitch, 2 pi times 1 to fewer than 2^52 steps over 2^19, is at
+ * least 2 pi 2^-19 and below 5.5e10, a normal float.
  */
 #define MID_PITCH_PRODUCT_MAX 18446744073709551616.0 /* 2^64 */
 /* The excess of DVSI's mid-frame quadratic over the interpolating one,

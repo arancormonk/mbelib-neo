@@ -30,7 +30,11 @@
  * code); the model at the pitch (by bit pattern), harmonic count and band
  * count that code decodes to; exactly harmonics l1 and l2 voiced (Vl 1), every
  * other harmonic 1..L unvoiced (Vl 0); the tone harmonics' magnitudes
- * positive, finite and normal and every other magnitude 0 by its bit pattern.
+ * positive, finite and normal, a dual tone's two in the ratio of their droops
+ * sinc^2(pi l / 256) the player writes (within 2^-20 of it), and every other
+ * magnitude 0 by its bit pattern; log2Ml[1..L] finite. Free: the tone's
+ * common level, the finite values of log2Ml, Vl above L and every field the
+ * player does not write.
  * @param mp A model; any state (its harmonic count is checked).
  * @return 1 for a tone model, 0 otherwise.
  */
